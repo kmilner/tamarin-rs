@@ -1428,6 +1428,38 @@ fn input_manifest_distinguishes_syntax_rejection_from_missing_inputs() {
     for (source, expected) in [
         ("theory T begin end", 0),
         ("theory T begin ? end", 3),
+        // The load's parse-time duplicate-rule check: a conflicting rule is a
+        // syntax rejection, while a `let`-written rule equal to its expansion
+        // is not.
+        (
+            "theory T begin rule A: [ ] --> [ Out('a') ] rule A: [ ] --> [ Out('b') ] end",
+            3,
+        ),
+        (
+            "theory T begin rule A: [ Fr(~k) ] --> [ Out(<~k, ~k>) ] \
+             rule A: let x = ~k in [ Fr(~k) ] --> [ Out(pair(x, ~k)) ] end",
+            0,
+        ),
+        // The check stops where the load stops, at the first declaration
+        // that does not elaborate; the load reports that one.
+        (
+            "theory T begin functions: h/1 equations: h(x) = y \
+             rule A: [ ] --> [ Out('a') ] rule A: [ ] --> [ Out('b') ] end",
+            0,
+        ),
+        // The check builds an [AC] symbol applied to nothing as a constant:
+        // the fAppAC error belongs to the load, not to the manifest, and a
+        // later syntax error is still the one reported.
+        (
+            "theory T begin functions: f/2 [AC] \
+             rule A: [ ] --> [ Out(f()) ] rule A: [ ] --> [ Out(f()) ] end",
+            0,
+        ),
+        (
+            "theory T begin functions: f/2 [AC] \
+             rule A: [ ] --> [ Out(f()) ] rule A: [ ] --> [ Out(f()) ] ? end",
+            3,
+        ),
         ("theory T begin #include \"missing.spthy\" end", 1),
         ("theory T begin #include \"fragment.inc\" end", 1),
     ] {

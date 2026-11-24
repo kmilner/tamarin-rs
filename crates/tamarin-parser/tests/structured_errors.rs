@@ -383,14 +383,36 @@ fn delayed_semantic_errors_point_at_the_declaration() {
         );
     }
 
+    // The CLI's check compares elaborated rules; any check that reports a
+    // difference yields this diagnostic at the second rule's name.
     let source =
         "theory T begin\nrule R: [ ] --> [ Out('a') ]\nrule R: [ ] --> [ Out('b') ]\nend\n";
-    let error = parse_theory(source, &[]).expect_err("conflicting rule must fail");
+    #[derive(Default)]
+    struct AnyRepeat(Vec<String>);
+    impl tamarin_parser::RuleConflictCheck for AnyRepeat {
+        fn declare(&mut self, item: &tamarin_parser::ast::TheoryItem) {
+            if let tamarin_parser::ast::TheoryItem::Rule(r) = item {
+                self.0.push(r.name.clone());
+            }
+        }
+        fn conflicts(&mut self, new: &tamarin_parser::ast::Rule) -> bool {
+            self.0.contains(&new.name)
+        }
+    }
+    let error = tamarin_parser::parse_theory_with_rule_check(
+        source,
+        &[],
+        None,
+        Box::new(AnyRepeat::default()),
+    )
+    .expect_err("conflicting rule must fail");
     assert!(matches!(
         error.kind(),
         ParseErrorKind::ConflictingDeclaration { .. }
     ));
     common::assert_span(&error, source, "R");
+    let label = &error.diagnostic_labels_with_source(source)[0];
+    assert_eq!(label.span.start, source.rfind("R:").unwrap());
 }
 
 #[test]

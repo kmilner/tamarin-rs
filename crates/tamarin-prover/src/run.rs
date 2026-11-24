@@ -233,6 +233,9 @@ fn run_input_manifest(args: &Args) -> Result<i32, RunError> {
         &flags,
         root.clone(),
         args.diff,
+        // The load's parse-time `duplicate rule` check, so a theory the load
+        // rejects is a syntax rejection here too.
+        Some(Box::new(tamarin_theory::elaborate::RuleConflicts::default())),
     ) {
         Ok(manifest) => manifest,
         Err(error) => {

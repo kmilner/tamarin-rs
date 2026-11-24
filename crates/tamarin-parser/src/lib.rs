@@ -8,9 +8,9 @@
 //! This is a *syntax-level* parser: it produces a loose AST that mirrors
 //! the surface syntax. Variables carry the `tamarin_term::lterm::LSort`
 //! the Haskell parser assigns them, but the rest of the semantic
-//! enrichment the Haskell parser does inline (arity validation,
-//! `_restrict` expansion, macro expansion, scope analysis) is deferred to
-//! a later elaboration pass. The goal is to recognise every well-formed
+//! enrichment the Haskell parser does inline (arity validation, rule `let`
+//! substitution, `_restrict` expansion, macro expansion, scope analysis) is
+//! deferred to a later elaboration pass. The goal is to recognise every well-formed
 //! `.spthy` file that Tamarin's Haskell parser accepts, with one deliberate
 //! preprocessor restriction: `#ifdef`, `#else`, and `#endif` occupy standalone
 //! physical lines (indentation and trailing comments are allowed). Active code
@@ -31,6 +31,7 @@ pub use ast::*;
 pub use parse_error::{DiagnosticLabel, IllegalDiffReason, ParseContext, ParseErrorKind};
 pub use parser::{
     parse_diff_theory, parse_diff_theory_with_base, parse_intruder_rules, parse_theory,
-    parse_theory_with_base, parse_theory_with_manifest, InputAlias, ParseError,
+    parse_theory_with_base, parse_theory_with_manifest, parse_theory_with_rule_check, InputAlias,
+    ParseError, RuleConflictCheck,
 };
 pub use proof_tree::parse_proof_tree;

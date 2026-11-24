@@ -203,7 +203,8 @@ pub fn load_theory(
     src: &str,
     base_dir: Option<PathBuf>,
 ) -> Result<tamarin_parser::Theory, tamarin_parser::ParseError> {
-    let parsed = tamarin_parser::parse_theory_with_base(src, &opts.parser_flags(), base_dir)?;
+    let parsed =
+        tamarin_theory::elaborate::parse_theory_checked(src, &opts.parser_flags(), base_dir)?;
     theory_marker(&parsed.name, "Theory loaded");
     Ok(parsed)
 }

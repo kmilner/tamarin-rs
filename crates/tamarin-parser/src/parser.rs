@@ -87,6 +87,10 @@ fn diagnostic_lexeme(text: &str) -> String {
 /// Anything after the closing `end` is ignored: Tamarin theories are commonly
 /// followed by analysis banners and other free text that the official parser
 /// also tolerates.
+///
+/// A protocol rule that reuses an earlier rule's name with a different body
+/// parses here; elaboration rejects it. Use [`parse_theory_with_rule_check`]
+/// to reject it while parsing, positioned as HS reports it.
 pub fn parse_theory(input: &str, flags: &[&str]) -> Result<Theory, ParseError> {
     let mut p = Parser::new(input, flags, false);
     p.theory()
@@ -109,6 +113,10 @@ pub fn parse_diff_theory(input: &str, flags: &[&str]) -> Result<Theory, ParseErr
 /// signature, known functions, flags thread through), and nested includes
 /// resolve relative to the included file's own directory.  `base_dir` is the
 /// directory of the file `input` was read from (`takeDirectory inFile0`).
+///
+/// A protocol rule that reuses an earlier rule's name with a different body
+/// parses here; elaboration rejects it. Use [`parse_theory_with_rule_check`]
+/// to reject it while parsing, positioned as HS reports it.
 pub fn parse_theory_with_base(
     input: &str,
     flags: &[&str],
@@ -116,6 +124,37 @@ pub fn parse_theory_with_base(
 ) -> Result<Theory, ParseError> {
     let mut p = Parser::new(input, flags, false);
     p.base_dir = base_dir;
+    p.theory()
+}
+
+/// HS `addOpenProtoRule`'s comparison of a protocol rule with an earlier one
+/// of the same name (OpenTheory.hs). HS compares the open rules after the
+/// `let` substitution and term construction, which belong to elaboration, so
+/// the caller supplies the comparison and keeps the theory state it needs.
+pub trait RuleConflictCheck {
+    /// Called in source order, includes included, for every item that shapes
+    /// the signature or the predicates (`builtins`, `functions`, `equations`,
+    /// `macros`, `predicates`) and every protocol rule.
+    fn declare(&mut self, item: &TheoryItem);
+    /// Whether `new` differs from the earlier declared rule of its name,
+    /// which is a `duplicate rule`. Called before `new` is declared.
+    fn conflicts(&mut self, new: &Rule) -> bool;
+}
+
+/// Like [`parse_theory_with_base`], but runs `check` on each protocol rule
+/// whose name an earlier one already took, and fails with the positioned
+/// conflict at the second rule's name when it reports a difference — during
+/// parsing, as HS's `liftedAddProtoRule` does (Theory/Text/Parser.hs).  The
+/// other entry points leave that comparison to elaboration.
+pub fn parse_theory_with_rule_check(
+    input: &str,
+    flags: &[&str],
+    base_dir: Option<PathBuf>,
+    check: Box<dyn RuleConflictCheck>,
+) -> Result<Theory, ParseError> {
+    let mut p = Parser::new(input, flags, false);
+    p.base_dir = base_dir;
+    p.state.rule_conflict = Some(check);
     p.theory()
 }
 
@@ -141,12 +180,15 @@ pub struct InputAlias {
 /// Parse a theory while recording the root and every active include. This is
 /// the dependency authority for cache keys and web staging: inactive branches,
 /// comments and text after `end` are interpreted by the real grammar rather
-/// than a second scanner.
+/// than a second scanner.  `rule_check` is as in
+/// [`parse_theory_with_rule_check`], so the manifest rejects the theories the
+/// load rejects.
 pub fn parse_theory_with_manifest(
     input: &str,
     flags: &[&str],
     root: PathBuf,
     is_diff: bool,
+    rule_check: Option<Box<dyn RuleConflictCheck>>,
 ) -> Result<(Theory, Vec<InputAlias>), ParseError> {
     let staged = root.file_name().map(PathBuf::from);
     let inputs = vec![InputAlias {
@@ -159,6 +201,7 @@ pub fn parse_theory_with_manifest(
     parser.staged_file = staged;
     parser.state.input_aliases = inputs;
     parser.state.emit_warnings = false;
+    parser.state.rule_conflict = rule_check;
     let theory = parser.theory()?;
     Ok((theory, parser.state.input_aliases))
 }
@@ -334,37 +377,31 @@ fn function_option_difference(previous: FunOptions, requested: FunOptions) -> St
 /// `reliable-channel` is absent on purpose: it maps to `Nothing`
 /// (Theory/Text/Parser/Signature.hs), so it neither merges a signature nor
 /// reserves anything.
-macro_rules! builtin_maude_sigs {
-    ($($name:literal => $sig:path),+ $(,)?) => {
-        /// Names whose parser builtin contributes a Maude signature.
-        ///
-        /// Exposed so elaboration can test that its independently maintained
-        /// name-to-signature dispatch remains complete.
-        #[doc(hidden)]
-        pub const BUILTIN_MAUDE_SIG_NAMES: &[&str] = &[$($name),+];
+const BUILTIN_MAUDE_SIGS: &[(&str, fn() -> MaudeSig)] = &[
+    ("locations-report", location_report_maude_sig),
+    ("diffie-hellman", dh_maude_sig),
+    ("bilinear-pairing", bp_maude_sig),
+    ("multiset", mset_maude_sig),
+    ("xor", xor_maude_sig),
+    ("symmetric-encryption", sym_enc_maude_sig),
+    ("asymmetric-encryption", asym_enc_maude_sig),
+    ("signing", signature_maude_sig),
+    ("dest-pairing", pair_dest_maude_sig),
+    ("dest-symmetric-encryption", sym_enc_dest_maude_sig),
+    ("dest-asymmetric-encryption", asym_enc_dest_maude_sig),
+    ("dest-signing", signature_dest_maude_sig),
+    ("revealing-signing", reveal_signature_maude_sig),
+    ("hashing", hash_maude_sig),
+    ("natural-numbers", nat_maude_sig),
+];
 
-        const BUILTIN_MAUDE_SIGS: &[(&str, fn() -> MaudeSig)] = &[
-            $(($name, $sig)),+
-        ];
-    };
-}
-
-builtin_maude_sigs! {
-    "locations-report" => location_report_maude_sig,
-    "diffie-hellman" => dh_maude_sig,
-    "bilinear-pairing" => bp_maude_sig,
-    "multiset" => mset_maude_sig,
-    "xor" => xor_maude_sig,
-    "symmetric-encryption" => sym_enc_maude_sig,
-    "asymmetric-encryption" => asym_enc_maude_sig,
-    "signing" => signature_maude_sig,
-    "dest-pairing" => pair_dest_maude_sig,
-    "dest-symmetric-encryption" => sym_enc_dest_maude_sig,
-    "dest-asymmetric-encryption" => asym_enc_dest_maude_sig,
-    "dest-signing" => signature_dest_maude_sig,
-    "revealing-signing" => reveal_signature_maude_sig,
-    "hashing" => hash_maude_sig,
-    "natural-numbers" => nat_maude_sig,
+/// The `MaudeSig` a `builtins:` name enables (HS `builtinsNames`'
+/// `Maybe MaudeSig`), or `None` for `reliable-channel` and unknown names.
+pub fn builtin_maude_sig(name: &str) -> Option<MaudeSig> {
+    BUILTIN_MAUDE_SIGS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, sig)| sig())
 }
 
 /// The `stFunSyms` of every [`BUILTIN_MAUDE_SIGS`] row, i.e. the free function
@@ -396,7 +433,7 @@ fn builtin_st_fun_syms(name: &str) -> Option<&'static [NoEqSym]> {
 }
 
 fn is_builtin_name(name: &str) -> bool {
-    name == "reliable-channel" || BUILTIN_MAUDE_SIG_NAMES.contains(&name)
+    name == "reliable-channel" || BUILTIN_MAUDE_SIGS.iter().any(|(n, _)| *n == name)
 }
 
 /// A builtin symbol's name as text.  Every name the builtin `MaudeSig`s carry
@@ -560,13 +597,14 @@ struct ParserState {
     sig_enable_xor: bool,
     sig_enable_mset: bool,
     sig_enable_nat: bool,
-    seen_rules: Vec<Rule>,
     seen_restriction_names: Vec<String>,
     seen_lemma_names: Vec<String>,
     seen_diff_left_lemma_names: Vec<String>,
     seen_diff_right_lemma_names: Vec<String>,
     seen_diff_lemma_names: Vec<String>,
     seen_predicates: Vec<(bool, String, usize)>,
+    /// The comparison [`parse_theory_with_rule_check`] installs.
+    rule_conflict: Option<Box<dyn RuleConflictCheck>>,
 }
 
 struct FunctionSite {
@@ -659,13 +697,13 @@ impl<'a> Parser<'a> {
                 sig_enable_xor: false,
                 sig_enable_mset: false,
                 sig_enable_nat: false,
-                seen_rules: Vec::new(),
                 seen_restriction_names: Vec::new(),
                 seen_lemma_names: Vec::new(),
                 seen_diff_left_lemma_names: Vec::new(),
                 seen_diff_right_lemma_names: Vec::new(),
                 seen_diff_lemma_names: Vec::new(),
                 seen_predicates: vec![(false, "Smaller".to_string(), 2)],
+                rule_conflict: None,
             },
             is_diff,
             base_dir: None,
@@ -1042,6 +1080,19 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let item = self.theory_item()?;
+            if let Some(check) = self.state.rule_conflict.as_mut()
+                && matches!(
+                    item,
+                    TheoryItem::Builtins(_)
+                        | TheoryItem::Functions(_)
+                        | TheoryItem::Equations { .. }
+                        | TheoryItem::Macros(_)
+                        | TheoryItem::Predicates(_)
+                        | TheoryItem::Rule(_)
+                )
+            {
+                check.declare(&item);
+            }
             items.push(item);
         }
         if !branches.is_empty() {
@@ -2555,10 +2606,12 @@ impl<'a> Parser<'a> {
     /// The name guards HS `liftedAddProtoRule` (Theory/Text/Parser.hs) runs
     /// per protocol rule, in order: each minted `Restr_<rule>_<i>` must be a
     /// new restriction name (`addRestriction`, TheoryObject.hs), then
-    /// `addOpenProtoRule` (OpenTheory.hs) rejects a name bound to a DIFFERENT
-    /// rule; an identical duplicate is appended again, which the corpus relies
-    /// on.  Diff mode is exempt (`liftedAddDiffRule` is not ported).  Rules
-    /// compare as parsed ASTs without the discarded `(modulo E)` head.
+    /// `addOpenProtoRule` (OpenTheory.hs) requires distinct names within the
+    /// rule's family and rejects a name bound to a DIFFERENT rule; an
+    /// identical duplicate is appended again, which the corpus relies on.
+    /// That comparison is the installed [`RuleConflictCheck`]; without one,
+    /// elaboration runs it.  Diff mode is exempt (`liftedAddDiffRule` is not
+    /// ported).
     fn guard_duplicate_rule(&mut self, r: &Rule, name_start: Pos) -> Result<(), ParseError> {
         if self.is_diff {
             return Ok(());
@@ -2593,27 +2646,20 @@ impl<'a> Parser<'a> {
                 r.name.len(),
             ));
         }
-        if let Some(first) = self.state.seen_rules.iter().find(|p| p.name == r.name) {
-            let differs = first.attributes != r.attributes
-                || first.premises != r.premises
-                || first.actions != r.actions
-                || first.conclusions != r.conclusions
-                || first.embedded_restrictions != r.embedded_restrictions
-                || first.variants != r.variants
-                || first.left_right != r.left_right;
-            if differs {
-                let diagnostic_name = diagnostic_lexeme(&r.name);
-                return Err(self.semantic_error(
-                    ParseErrorKind::ConflictingDeclaration {
-                        name: diagnostic_name,
-                        context: ParseContext::Rule,
-                    },
-                    name_start,
-                    r.name.len(),
-                ));
-            }
-        } else {
-            self.state.seen_rules.push(r.clone());
+        if self
+            .state
+            .rule_conflict
+            .as_mut()
+            .is_some_and(|check| check.conflicts(r))
+        {
+            return Err(self.semantic_error(
+                ParseErrorKind::ConflictingDeclaration {
+                    name: diagnostic_lexeme(&r.name),
+                    context: ParseContext::Rule,
+                },
+                name_start,
+                r.name.len(),
+            ));
         }
         for i in 1..=r.embedded_restrictions.len() {
             self.state
@@ -2837,7 +2883,7 @@ impl<'a> Parser<'a> {
     /// the name, the attribute list and the closing colon of `protoRuleInfo` /
     /// `protoRuleACInfo` (Theory/Text/Parser/Rule.hs), then
     /// `option emptySubst letBlock`, the premises, the actions and embedded
-    /// restrictions, the conclusions and the `apply subst` of the bindings.
+    /// restrictions, and the conclusions.  Elaboration does the `apply subst`.
     /// `variants` and `left_right` are empty; only `protoRule` has them, and
     /// [`Self::parse_rule`] fills them in.
     fn rule_after_kw(&mut self) -> Result<(Rule, Pos), ParseError> {
@@ -2853,22 +2899,16 @@ impl<'a> Parser<'a> {
         } else {
             vec![]
         };
-        let mut premises = self.fact_list()?;
+        let premises = self.fact_list()?;
         // Actions / restrictions either `--[..]->` or `-->`
-        let (mut actions, mut embedded_restrictions) = self.parse_actions_and_restrictions()?;
-        let mut conclusions = self.fact_list()?;
-        apply_let_bindings(
-            &lets,
-            &mut premises,
-            &mut actions,
-            &mut conclusions,
-            &mut embedded_restrictions,
-        );
+        let (actions, embedded_restrictions) = self.parse_actions_and_restrictions()?;
+        let conclusions = self.fact_list()?;
         Ok((
             Rule {
                 name,
                 modulo,
                 attributes,
+                lets,
                 premises,
                 actions,
                 conclusions,
@@ -5500,292 +5540,6 @@ impl<'a> Parser<'a> {
             sort: LSort::Node,
             typ: None,
         })
-    }
-}
-
-// =============================================================================
-// `let` inlining
-// =============================================================================
-
-/// Substitute a rule's `let` bindings into its body — HS
-/// `apply subst (ps0,as0,cs0,rs0)` (Theory/Text/Parser/Rule.hs).
-///
-/// `letBlock` folds the bindings with `foldr1 compose` over singleton
-/// substitutions (Theory/Text/Parser/Let.hs) and `compose s1 s2` has the
-/// effect of `s1(s2(t))` (Term/Substitution/SubstVFree.hs), so the
-/// bindings apply in REVERSE source order.  A binding's right-hand side is
-/// therefore rewritten by the bindings that precede it (`let a = ~k  b = h(a)`
-/// puts `h(~k)` in the body), while a reference to a LATER binding survives as
-/// a free variable (`let a = h(b)  b = ~k` puts `h(b)` in the body).
-fn apply_let_bindings(
-    bindings: &[(VarSpec, Term)],
-    premises: &mut [Fact],
-    actions: &mut [Fact],
-    conclusions: &mut [Fact],
-    restrictions: &mut [Formula],
-) {
-    for (var, value) in bindings.iter().rev() {
-        for f in premises
-            .iter_mut()
-            .chain(actions.iter_mut())
-            .chain(conclusions.iter_mut())
-        {
-            subst_let_fact(f, var, value);
-        }
-        for phi in restrictions.iter_mut() {
-            subst_let_formula(phi, var, value);
-        }
-    }
-}
-
-/// Rule elaboration identifies variables by name, sort and index. Type
-/// annotations are retained in the AST but do not affect rule-let substitution.
-fn same_rule_var(a: &VarSpec, b: &VarSpec) -> bool {
-    a.name == b.name && a.sort == b.sort && a.idx == b.idx
-}
-
-fn subst_let_fact(f: &mut Fact, key: &VarSpec, val: &Term) {
-    for a in f.args.iter_mut() {
-        *a = subst_let_term(a, key, val);
-    }
-}
-
-fn subst_let_term(t: &Term, key: &VarSpec, val: &Term) -> Term {
-    if matches!(t, Term::Var(v) if same_rule_var(v, key)) {
-        return val.clone();
-    }
-    match t {
-        Term::App(name, args) => Term::App(
-            name.clone(),
-            args.iter().map(|a| subst_let_term(a, key, val)).collect(),
-        ),
-        Term::AlgApp(name, a, b) => Term::AlgApp(
-            name.clone(),
-            Box::new(subst_let_term(a, key, val)),
-            Box::new(subst_let_term(b, key, val)),
-        ),
-        Term::Pair(args) => Term::Pair(args.iter().map(|a| subst_let_term(a, key, val)).collect()),
-        Term::Diff(a, b) => Term::Diff(
-            Box::new(subst_let_term(a, key, val)),
-            Box::new(subst_let_term(b, key, val)),
-        ),
-        Term::BinOp(op, a, b) => Term::BinOp(
-            *op,
-            Box::new(subst_let_term(a, key, val)),
-            Box::new(subst_let_term(b, key, val)),
-        ),
-        Term::PatMatch(a) => Term::PatMatch(Box::new(subst_let_term(a, key, val))),
-        Term::Var(_)
-        | Term::PubLit(_)
-        | Term::FreshLit(_)
-        | Term::NatLit(_)
-        | Term::Number(_)
-        | Term::NumberOne
-        | Term::NatOne
-        | Term::DhNeutral => t.clone(),
-    }
-}
-
-fn subst_let_formula(phi: &mut Formula, key: &VarSpec, val: &Term) {
-    match phi {
-        Formula::False | Formula::True => {}
-        Formula::Atom(a) => subst_let_atom(a, key, val),
-        Formula::Not(p) => subst_let_formula(p, key, val),
-        Formula::And(a, b) | Formula::Or(a, b) | Formula::Implies(a, b) | Formula::Iff(a, b) => {
-            subst_let_formula(a, key, val);
-            subst_let_formula(b, key, val);
-        }
-        Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
-            // A rule-let substitution is a free-variable substitution. A
-            // quantifier for its domain shadows every occurrence below it.
-            if vars.iter().any(|v| same_rule_var(v, key)) {
-                return;
-            }
-
-            // Parser formulas still carry named variables. Alpha-rename any
-            // binder that occurs free in the replacement before descending,
-            // otherwise `let x = y in Ex y. ...x...` captures the inserted y.
-            let mut replacement_vars = Vec::new();
-            collect_term_vars(val, &mut replacement_vars);
-            let mut used_vars = replacement_vars.clone();
-            collect_formula_vars(body, &mut used_vars);
-            for var in vars.iter() {
-                if !used_vars.iter().any(|v| same_rule_var(v, var)) {
-                    used_vars.push(var.clone());
-                }
-            }
-            if !used_vars.iter().any(|v| same_rule_var(v, key)) {
-                used_vars.push(key.clone());
-            }
-            for var in vars.iter_mut() {
-                if replacement_vars.iter().any(|v| same_rule_var(v, var)) {
-                    let old = var.clone();
-                    let fresh = fresh_formula_var(&used_vars, &old);
-                    rename_bound_formula(body, &old, &fresh);
-                    used_vars.push(fresh.clone());
-                    *var = fresh;
-                }
-            }
-            subst_let_formula(body, key, val);
-        }
-    }
-}
-
-fn collect_term_vars(term: &Term, out: &mut Vec<VarSpec>) {
-    match term {
-        Term::Var(v) => {
-            if !out.iter().any(|used| same_rule_var(used, v)) {
-                out.push(v.clone());
-            }
-        }
-        Term::App(_, args) | Term::Pair(args) => {
-            for arg in args {
-                collect_term_vars(arg, out);
-            }
-        }
-        Term::AlgApp(_, a, b) | Term::Diff(a, b) | Term::BinOp(_, a, b) => {
-            collect_term_vars(a, out);
-            collect_term_vars(b, out);
-        }
-        Term::PatMatch(t) => collect_term_vars(t, out),
-        Term::PubLit(_)
-        | Term::FreshLit(_)
-        | Term::NatLit(_)
-        | Term::Number(_)
-        | Term::NumberOne
-        | Term::NatOne
-        | Term::DhNeutral => {}
-    }
-}
-
-fn collect_formula_vars(formula: &Formula, out: &mut Vec<VarSpec>) {
-    match formula {
-        Formula::False | Formula::True => {}
-        Formula::Atom(atom) => collect_atom_vars(atom, out),
-        Formula::Not(body) => collect_formula_vars(body, out),
-        Formula::And(a, b) | Formula::Or(a, b) | Formula::Implies(a, b) | Formula::Iff(a, b) => {
-            collect_formula_vars(a, out);
-            collect_formula_vars(b, out);
-        }
-        Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
-            for var in vars {
-                if !out.iter().any(|used| same_rule_var(used, var)) {
-                    out.push(var.clone());
-                }
-            }
-            collect_formula_vars(body, out);
-        }
-    }
-}
-
-fn collect_atom_vars(atom: &Atom, out: &mut Vec<VarSpec>) {
-    match atom {
-        Atom::Eq(a, b) | Atom::Less(a, b) | Atom::LessMset(a, b) | Atom::Subterm(a, b) => {
-            collect_term_vars(a, out);
-            collect_term_vars(b, out);
-        }
-        Atom::Action(fact, node) => {
-            for arg in &fact.args {
-                collect_term_vars(arg, out);
-            }
-            collect_term_vars(node, out);
-        }
-        Atom::Last(node) => collect_term_vars(node, out),
-        Atom::Pred(fact) => {
-            for arg in &fact.args {
-                collect_term_vars(arg, out);
-            }
-        }
-    }
-}
-
-fn fresh_formula_var(used: &[VarSpec], old: &VarSpec) -> VarSpec {
-    let mut fresh = old.clone();
-    // Search from zero so an existing u64::MAX index cannot pin the search.
-    // A finite in-memory list cannot occupy every u64 index.
-    fresh.idx = 0;
-    while used.iter().any(|v| same_rule_var(v, &fresh)) {
-        fresh.idx += 1;
-    }
-    fresh
-}
-
-/// Rename occurrences bound by the current quantifier. A nested quantifier
-/// for the same variable starts a new scope and stops the traversal there.
-fn rename_bound_formula(formula: &mut Formula, old: &VarSpec, new: &VarSpec) {
-    match formula {
-        Formula::False | Formula::True => {}
-        Formula::Atom(atom) => rename_atom_var(atom, old, new),
-        Formula::Not(body) => rename_bound_formula(body, old, new),
-        Formula::And(a, b) | Formula::Or(a, b) | Formula::Implies(a, b) | Formula::Iff(a, b) => {
-            rename_bound_formula(a, old, new);
-            rename_bound_formula(b, old, new);
-        }
-        Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
-            if !vars.iter().any(|v| same_rule_var(v, old)) {
-                rename_bound_formula(body, old, new);
-            }
-        }
-    }
-}
-
-fn rename_atom_var(atom: &mut Atom, old: &VarSpec, new: &VarSpec) {
-    match atom {
-        Atom::Eq(a, b) | Atom::Less(a, b) | Atom::LessMset(a, b) | Atom::Subterm(a, b) => {
-            rename_term_var(a, old, new);
-            rename_term_var(b, old, new);
-        }
-        Atom::Action(fact, node) => {
-            for arg in &mut fact.args {
-                rename_term_var(arg, old, new);
-            }
-            rename_term_var(node, old, new);
-        }
-        Atom::Last(node) => rename_term_var(node, old, new),
-        Atom::Pred(fact) => {
-            for arg in &mut fact.args {
-                rename_term_var(arg, old, new);
-            }
-        }
-    }
-}
-
-fn rename_term_var(term: &mut Term, old: &VarSpec, new: &VarSpec) {
-    match term {
-        Term::Var(v) if same_rule_var(v, old) => v.idx = new.idx,
-        Term::App(_, args) | Term::Pair(args) => {
-            for arg in args {
-                rename_term_var(arg, old, new);
-            }
-        }
-        Term::AlgApp(_, a, b) | Term::Diff(a, b) | Term::BinOp(_, a, b) => {
-            rename_term_var(a, old, new);
-            rename_term_var(b, old, new);
-        }
-        Term::PatMatch(t) => rename_term_var(t, old, new),
-        Term::Var(_)
-        | Term::PubLit(_)
-        | Term::FreshLit(_)
-        | Term::NatLit(_)
-        | Term::Number(_)
-        | Term::NumberOne
-        | Term::NatOne
-        | Term::DhNeutral => {}
-    }
-}
-
-fn subst_let_atom(a: &mut Atom, key: &VarSpec, val: &Term) {
-    match a {
-        Atom::Eq(x, y) | Atom::Less(x, y) | Atom::LessMset(x, y) | Atom::Subterm(x, y) => {
-            *x = subst_let_term(x, key, val);
-            *y = subst_let_term(y, key, val);
-        }
-        Atom::Action(f, t) => {
-            subst_let_fact(f, key, val);
-            *t = subst_let_term(t, key, val);
-        }
-        Atom::Last(t) => *t = subst_let_term(t, key, val),
-        Atom::Pred(f) => subst_let_fact(f, key, val),
     }
 }
 

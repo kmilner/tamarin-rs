@@ -1172,18 +1172,23 @@ mod tests {
         assert_eq!(parsed("Ex ~k. Made(k)"), want);
     }
 
-    #[test]
-    fn rule_let_freshening_preserves_typed_free_variables() {
-        let theory = tamarin_parser::parse_theory(
-            "theory T begin rule R: let x = y.1 in []
-             --[_restrict(Ex y.1 #i. A(x,y.1,y:foo) @ i)]-> [] end",
-            &[],
-        )
-        .unwrap();
+    /// The first `_restrict` formula of a one-rule theory's elaborated rule,
+    /// after its `let` substitution and before predicate expansion.
+    fn rule_restriction(src: &str) -> SyntacticLNFormula {
+        let theory = tamarin_parser::parse_theory(src, &[]).unwrap();
         let tamarin_parser::ast::TheoryItem::Rule(rule) = &theory.items[0] else {
             panic!("expected a rule");
         };
-        let formula = from_parser(&rule.embedded_restrictions[0], &pair_maude_sig()).unwrap();
+        let rule = crate::elaborate::rule_to_proto_rule_e(rule, &pair_maude_sig()).unwrap();
+        rule.info.restrictions[0].clone()
+    }
+
+    #[test]
+    fn rule_let_substitution_keeps_typed_free_variables() {
+        let formula = rule_restriction(
+            "theory T begin rule R: let x = y.1 in []
+             --[_restrict(Ex y.1 #i. A(x,y.1,y:foo) @ i)]-> [] end",
+        );
         assert_eq!(
             formula_frees(&formula),
             vec![LVar::new("y", LSort::Msg, 0), LVar::new("y", LSort::Msg, 1)]
@@ -1205,14 +1210,9 @@ mod tests {
             ),
             ("x=z", "Ex #x. A(x,x.1) @ x", "Ex #x. A(z,x.1) @ x"),
         ] {
-            let source = format!(
+            let actual = rule_restriction(&format!(
                 "theory T begin rule R: let {binding} in [] --[_restrict({input})]-> [] end"
-            );
-            let theory = parse_theory(&source, &[]).unwrap();
-            let tamarin_parser::ast::TheoryItem::Rule(rule) = &theory.items[0] else {
-                panic!("expected a rule");
-            };
-            let actual = from_parser(&rule.embedded_restrictions[0], &pair_maude_sig()).unwrap();
+            ));
             assert_eq!(actual, parsed(expected), "{binding}: {input}");
         }
     }

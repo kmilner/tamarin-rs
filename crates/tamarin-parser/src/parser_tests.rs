@@ -1732,224 +1732,32 @@ fn structural_mode_resolves_nullary_names_from_the_signature() {
 }
 
 // =========================================================================
-// Rule `let` inlining
+// Rule `let` blocks
 // =========================================================================
 //
-// HS applies the `let` substitution to `(ps, as, cs, rs)` inside the rule
-// parsers themselves (Theory/Text/Parser/Rule.hs), so a parsed
-// rule carries no `let`-bound names.  `letBlock` folds the bindings with
-// `foldr1 compose` over singletons (Theory/Text/Parser/Let.hs) and
-// `compose s1 s2` means `s1(s2(t))` (Term/Substitution/SubstVFree.hs),
-// so the bindings apply in reverse source order.
+// HS applies the `let` substitution inside the rule parsers
+// (Theory/Text/Parser/Rule.hs); the port keeps the bindings on the rule and
+// elaboration applies them (see `elaborate_tests`).
 
-/// The single rule of a one-rule theory.
-fn only_rule(src: &str) -> Rule {
-    let thy = parse_theory(src, &[]).expect("parses");
-    thy.items
-        .iter()
-        .find_map(|i| match i {
-            TheoryItem::Rule(r) => Some(r.clone()),
-            _ => None,
-        })
-        .expect("one rule")
-}
-
+/// The parser records the bindings in source order and leaves the body as
+/// written.  HS identifiers start with any alphanumeric character, so
+/// upstream's ccs18-5G models bind `let 5G_AV = ...`.
 #[test]
-fn let_inlining_substitutes_in_premises() {
-    // rule R: let r = ~k in [In(r), Fr(~k)] --[]-> []
-    // The In premise holds ~k, not the local `r`.
-    let r = only_rule(
+fn rule_let_bindings_are_kept_unapplied() {
+    let thy = parse_theory(
         r#"theory T begin
-            rule R: let r = ~k in [In(r), Fr(~k)] --[]-> []
+            rule R: let 5G_AV = <'a', ~k> b = 5G_AV in [Fr(~k)] --[]-> [Out(b)]
         end"#,
-    );
-    let in_fact = &r.premises[0];
-    assert_eq!(in_fact.name, "In");
-    match &in_fact.args[0] {
-        Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
-        other => panic!("expected ~k after subst, got {other:?}"),
-    }
-}
-
-#[test]
-fn let_inlining_is_sequential() {
-    // let a = ~k; b = h(a) in [In(b)] --[]-> [] gives In(h(~k)): `b`'s
-    // singleton applies first, then `a`'s rewrites the `a` it introduced.
-    // `builtins: hashing` declares `h/1` — the parser resolves prefix
-    // applications through `lookupArity` and an undeclared head would
-    // reparse as a variable and fail (oracle probes p05/p25).
-    let r = only_rule(
-        r#"theory T begin
-            builtins: hashing
-            rule R: let a = ~k b = h(a) in [In(b), Fr(~k)] --[]-> []
-        end"#,
-    );
-    match &r.premises[0].args[0] {
-        Term::App(name, args) if name == "h" => match &args[0] {
-            Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
-            other => panic!("expected h(~k), got h({other:?})"),
-        },
-        other => panic!("expected h(~k), got {other:?}"),
-    }
-}
-
-#[test]
-fn let_binder_may_start_with_a_digit() {
-    // HS identifiers start with any alphanumeric character, so upstream's
-    // ccs18-5G models bind `let 5G_AV = ...`.
-    let r = only_rule(
-        r#"theory T begin
-            rule R: let 5G_AV = <'a', ~k> in [Fr(~k)] --[]-> [Out(5G_AV)]
-        end"#,
-    );
-    match &r.conclusions[0].args[0] {
-        Term::Pair(items) => match items.last() {
-            Some(Term::Var(vs)) if vs.name == "k" && vs.sort == LSort::Fresh => {}
-            other => panic!("expected <'a', ~k>, got <.., {other:?}>"),
-        },
-        other => panic!("expected <'a', ~k> after subst, got {other:?}"),
-    }
-}
-
-#[test]
-fn let_inlining_leaves_a_forward_reference_free() {
-    // A binding whose right-hand side names a LATER binding keeps that name as
-    // a free variable: by the time `a`'s singleton introduces `b` into the
-    // body, `b`'s singleton has already been applied.
-    //   let a = h(b) b = ~k in [In(a), Fr(~k)]
-    // gives In(h(b)) with `b` a free Msg-var, NOT h(~k).
-    // `builtins: hashing` declares `h/1` — see `let_inlining_is_sequential`.
-    let r = only_rule(
-        r#"theory T begin
-            builtins: hashing
-            rule R: let a = h(b) b = ~k in [In(a), Fr(~k)] --[]-> []
-        end"#,
-    );
-    match &r.premises[0].args[0] {
-        Term::App(name, args) if name == "h" => match &args[0] {
-            Term::Var(vs) if vs.name == "b" && vs.sort != LSort::Fresh => {}
-            other => panic!("expected h(b) with free b, got h({other:?})"),
-        },
-        other => panic!("expected h(b), got {other:?}"),
-    }
-}
-
-#[test]
-fn let_inlining_substitutes_in_actions_and_conclusions() {
-    let r = only_rule(
-        r#"theory T begin
-            rule R: let r = ~k in [Fr(~k)] --[Use(r)]-> [Out(r)]
-        end"#,
-    );
-    match &r.actions[0].args[0] {
-        Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
-        other => panic!("expected Use(~k), got Use({other:?})"),
-    }
-    match &r.conclusions[0].args[0] {
-        Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
-        other => panic!("expected Out(~k), got Out({other:?})"),
-    }
-}
-
-/// HS substitutes into `rs0`, the rule's `_restrict` formulas, alongside the
-/// three fact rows (Theory/Text/Parser/Rule.hs).
-#[test]
-fn let_inlining_reaches_an_embedded_restriction() {
-    let r = only_rule(
-        r#"theory T begin
-            builtins: hashing
-            rule R: let m = h(~k) in [Fr(~k)] --[ _restrict(m = ~k) ]-> []
-        end"#,
-    );
-    match &r.embedded_restrictions[0] {
-        Formula::Atom(Atom::Eq(lhs, _)) => match lhs {
-            Term::App(name, args) if name == "h" => match &args[0] {
-                Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
-                other => panic!("expected h(~k), got h({other:?})"),
-            },
-            other => panic!("expected h(~k), got {other:?}"),
-        },
-        other => panic!("expected an equality atom, got {other:?}"),
-    }
-}
-
-#[test]
-fn let_inlining_respects_quantifier_shadowing() {
-    let r = only_rule(
-        r#"theory T begin
-            rule R: let x = 'value' in []
-              --[ _restrict(Ex x #i. A(x) @ i) ]-> []
-        end"#,
-    );
-    match &r.embedded_restrictions[0] {
-        Formula::Exists(vars, body) => {
-            let x = vars.iter().find(|v| v.name == "x").expect("bound x");
-            match body.as_ref() {
-                Formula::Atom(Atom::Action(fact, _)) => {
-                    assert_eq!(fact.args, vec![Term::Var(x.clone())]);
-                }
-                other => panic!("expected an action atom, got {other:?}"),
-            }
-        }
-        other => panic!("expected an existential, got {other:?}"),
-    }
-}
-
-#[test]
-fn let_inlining_avoids_capture_by_quantifiers() {
-    let r = only_rule(
-        r#"theory T begin
-            rule R: let x = y in []
-              --[ _restrict(Ex y #i. A(x,y) @ i) ]-> []
-        end"#,
-    );
-    match &r.embedded_restrictions[0] {
-        Formula::Exists(vars, body) => {
-            let bound_y = vars.iter().find(|v| v.name == "y").expect("bound y");
-            match body.as_ref() {
-                Formula::Atom(Atom::Action(fact, _)) => {
-                    let [Term::Var(inserted_y), Term::Var(original_y)] = fact.args.as_slice()
-                    else {
-                        panic!("expected two variable arguments, got {:?}", fact.args);
-                    };
-                    assert_ne!(inserted_y, bound_y, "replacement y was captured");
-                    assert_eq!(original_y, bound_y, "bound occurrence was not renamed");
-                }
-                other => panic!("expected an action atom, got {other:?}"),
-            }
-        }
-        other => panic!("expected an existential, got {other:?}"),
-    }
-}
-
-#[test]
-fn let_inlining_avoids_capture_with_maximum_variable_index() {
-    let r = only_rule(
-        r#"theory T begin
-            rule R: let x = y.18446744073709551615 in []
-              --[ _restrict(Ex y.18446744073709551615 #i.
-                A(x,y.18446744073709551615,y.0,y.1) @ i) ]-> []
-        end"#,
-    );
-    let Formula::Exists(vars, body) = &r.embedded_restrictions[0] else {
-        panic!("expected an existential");
+        &[],
+    )
+    .expect("parses");
+    let Some(TheoryItem::Rule(r)) = thy.items.first() else {
+        panic!("expected one rule");
     };
-    let bound_y = vars.iter().find(|v| v.name == "y").unwrap();
-    let Formula::Atom(Atom::Action(fact, _)) = body.as_ref() else {
-        panic!("expected an action atom");
-    };
-    let [Term::Var(inserted), Term::Var(renamed), Term::Var(zero), Term::Var(one)] =
-        fact.args.as_slice()
-    else {
-        panic!("expected four variable arguments");
-    };
-    assert_eq!(inserted.idx, u64::MAX);
-    assert_eq!(zero.idx, 0);
-    assert_eq!(one.idx, 1);
-    assert_eq!(renamed, bound_y);
-    for free in [inserted, zero, one] {
-        assert_ne!(free, bound_y, "free variable was captured");
-    }
+    let names: Vec<&str> = r.lets.iter().map(|(v, _)| v.name.as_str()).collect();
+    assert_eq!(names, ["5G_AV", "b"]);
+    assert!(matches!(&r.lets[0].1, Term::Pair(items) if items.len() == 2));
+    assert!(matches!(&r.conclusions[0].args[0], Term::Var(v) if v.name == "b"));
 }
 
 #[test]
@@ -2257,7 +2065,6 @@ fn conflict_progress_includes_trailing_comments() {
         "functions: h/2 builtins: hashing",
         "macros: h(x) = x builtins: hashing",
         "macros: m(x) = x, m(y) = y",
-        "rule R: [] --> [] rule R: [] --> [A()]",
     ] {
         let source = format!("theory T begin {body} /* trailing */ end");
         let error = parse_theory(&source, &[]).unwrap_err();

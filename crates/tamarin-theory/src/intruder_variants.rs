@@ -249,6 +249,13 @@ fn ast_rule_to_intr_rule_ac(msig: &MaudeSig, r: &p::Rule) -> Result<IntrRuleAC, 
             r.name
         ));
     }
+    // HS `intrRule` reads no `letBlock` (Theory/Text/Parser/Rule.hs).
+    if !r.lets.is_empty() {
+        return Err(format!(
+            "intruder rule {} unexpectedly has a let block",
+            r.name
+        ));
+    }
     if !r.variants.is_empty() {
         return Err(format!(
             "intruder rule {} unexpectedly has variants",

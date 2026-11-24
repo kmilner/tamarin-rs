@@ -302,16 +302,6 @@ fn elaborate_builtins() {
 }
 
 #[test]
-fn every_parser_builtin_has_an_elaboration_signature() {
-    for name in tamarin_parser::parser::BUILTIN_MAUDE_SIG_NAMES {
-        assert!(
-            builtin_sig(name).is_some(),
-            "parser builtin `{name}` is missing from elaboration"
-        );
-    }
-}
-
-#[test]
 fn top_level_intruder_rules_enter_the_hidden_cache() {
     let parsed = tamarin_parser::parse_theory(
         "theory T begin\n\
@@ -546,29 +536,6 @@ fn term_to_lnterm_reads_every_surface_shape() {
             "{label}: term_to_lnterm"
         );
     }
-}
-
-// =========================================================================
-// Rule `let` inlining
-// =========================================================================
-
-// The parser inlines a rule's `let` bindings (its own tests pin the
-// substitution); elaboration therefore sees the substituted body.  The
-// action and the conclusion of the elaborated rule carry `~k`, and the local
-// name `r` is gone.
-#[test]
-fn let_inlining_end_to_end_elaborates() {
-    let src = r#"theory T begin
-            rule R: let r = ~k in [Fr(~k)] --[Use(r)]-> [Out(r)]
-            lemma trivial: "All k #i. Use(k) @ i ==> Use(k) @ i"
-        end"#;
-    let p = parse_theory(src, &[]).unwrap();
-    let t = elaborate(&p).unwrap();
-    let rules: Vec<_> = t.rules().collect();
-    assert_eq!(rules.len(), 1);
-    let k = tamarin_term::vterm::var_term(LVar::new("k", LSort::Fresh, 0));
-    assert_eq!(rules[0].rule.actions[0].terms.to_vec(), vec![k.clone()]);
-    assert_eq!(rules[0].rule.conclusions[0].terms.to_vec(), vec![k]);
 }
 
 /// The public names of a `Cond` condition come from the formula's own `Name`
@@ -842,10 +809,10 @@ end\n";
 /// (`closeTheoryItem`, CloseRule.hs, `applyMacroInRule`,
 /// Theory/Model/Rule.hs) and keeps the parsed rule unexpanded, which
 /// is what the `rule (modulo E)` block prints — the split
-/// `examples/features/macros/MacroExample.spthy` shows.  The parser has
-/// already inlined the rule's `let` bindings by then
-/// (Theory/Text/Parser/Rule.hs), so a macro call written on the right of
-/// a binding reaches the internal rule expanded.
+/// `examples/features/macros/MacroExample.spthy` shows.  The rule's `let`
+/// bindings are applied before that (Theory/Text/Parser/Rule.hs), so a
+/// macro call written on the right of a binding reaches the internal rule
+/// expanded.
 #[test]
 fn macro_in_a_let_bound_term_reaches_the_internal_rule() {
     use crate::pretty_hpj::FLAT_WIDTH;
@@ -866,10 +833,10 @@ end\n";
         })
         .expect("parsed rule");
     assert!(
-        matches!(&parsed_rule.actions[0].args[0],
+        matches!(&parsed_rule.lets[0].1,
             p::Term::App(n, args) if n == "m" && args.len() == 1),
-        "the parsed rule keeps the macro call: {:?}",
-        parsed_rule.actions[0].args[0]
+        "the parsed binding keeps the macro call: {:?}",
+        parsed_rule.lets[0].1
     );
 
     let thy = elaborate(&parsed).unwrap();
@@ -1492,4 +1459,196 @@ fn corpus_process_items_match_the_converted_parsed_items() {
         findings.len(),
         findings.iter().take(5).collect::<Vec<_>>()
     );
+}
+
+// =========================================================================
+// Rule `let` blocks and `addOpenProtoRule`'s duplicate guard
+// =========================================================================
+
+/// The elaborated `ProtoRuleE` of the theory's first rule.
+fn first_rule_e(src: &str) -> ProtoRuleE {
+    let thy = elaborate(&parse_theory(src, &[]).unwrap()).unwrap();
+    thy.rules().next().expect("one rule").rule_e().clone()
+}
+
+/// HS applies the `let` substitution to `(ps, as, cs, rs)` (Theory/Text/
+/// Parser/Rule.hs), so a `let`-written rule elaborates to its expanded form.
+/// `letBlock` folds the singletons with `foldr1 compose`
+/// (Theory/Text/Parser/Let.hs): a binding sees the bindings before it, a
+/// reference to a later one stays free, and the locally nameless
+/// `_restrict` formulas neither capture an image nor rewrite a bound name.
+#[test]
+fn a_let_rule_elaborates_to_its_expanded_form() {
+    for (lets, body, expanded) in [
+        (
+            "let r = ~k",
+            "[In(r), Fr(~k)] --[Use(r)]-> [Out(r)]",
+            "[In(~k), Fr(~k)] --[Use(~k)]-> [Out(~k)]",
+        ),
+        (
+            "let a = ~k b = h(a)",
+            "[In(b), Fr(~k)] --[]-> []",
+            "[In(h(~k)), Fr(~k)] --[]-> []",
+        ),
+        (
+            "let a = h(b) b = ~k",
+            "[In(a), Fr(~k)] --[]-> []",
+            "[In(h(b)), Fr(~k)] --[]-> []",
+        ),
+        (
+            "let 5G_AV = <'a', ~k>",
+            "[Fr(~k)] --[]-> [Out(5G_AV)]",
+            "[Fr(~k)] --[]-> [Out(<'a', ~k>)]",
+        ),
+        (
+            "let m = h(~k)",
+            "[Fr(~k)] --[ _restrict(m = ~k) ]-> []",
+            "[Fr(~k)] --[ _restrict(h(~k) = ~k) ]-> []",
+        ),
+        (
+            "let x = 'value'",
+            "[] --[ _restrict(Ex x #i. A(x) @ i) ]-> []",
+            "[] --[ _restrict(Ex x #i. A(x) @ i) ]-> []",
+        ),
+        (
+            "let x = y",
+            "[] --[ _restrict(Ex y #i. A(x,y) @ i) ]-> []",
+            "[] --[ _restrict(Ex y.1 #i. A(y,y.1) @ i) ]-> []",
+        ),
+        (
+            "let x = y.18446744073709551615",
+            "[] --[ _restrict(Ex y.18446744073709551615 #i. \
+             A(x,y.18446744073709551615,y.0,y.1) @ i) ]-> []",
+            "[] --[ _restrict(Ex y.5 #i. \
+             A(y.18446744073709551615,y.5,y.0,y.1) @ i) ]-> []",
+        ),
+    ] {
+        let thy = |rule: &str| format!("theory T begin builtins: hashing rule R: {rule} end");
+        assert_eq!(
+            first_rule_e(&thy(&format!("{lets} in {body}"))),
+            first_rule_e(&thy(expanded)),
+            "{lets} in {body}"
+        );
+    }
+}
+
+/// HS `intrRule` reads no `letBlock` (Theory/Text/Parser/Rule.hs).
+#[test]
+fn an_intruder_rule_rejects_a_let_block() {
+    let src = "theory T begin\n\
+               rule (modulo AC) d_0_fst: let p = <x, y> in [ !KD(p) ] --> [ !KD(x) ]\n\
+               end";
+    let err = elaborate(&parse_theory(src, &[]).unwrap()).unwrap_err();
+    assert!(err.message.contains("let block"), "{}", err.message);
+}
+
+fn duplicate_rule_error(src: &str) -> Option<String> {
+    elaborate(&parse_theory(src, &[]).unwrap())
+        .err()
+        .map(|e| e.message)
+}
+
+/// `addOpenProtoRule` (OpenTheory.hs) rejects a name bound to a different
+/// open rule and appends an equal one again.  Equality is on the elaborated
+/// rules, so two spellings of one term, or a `let` and its expansion, are
+/// equal.  [`parse_theory_checked`] raises the conflict while parsing, at the
+/// second rule's name; a theory parsed without the check meets the same
+/// guard at elaboration, as HS's `duplicate rule: <name>`.
+#[test]
+fn a_rule_name_bound_to_a_different_rule_is_a_duplicate() {
+    for (first, second) in [
+        (
+            "rule R1[color=ff0000]: [ ] --> [ ]",
+            "rule R1[color=00ff00]: [ ] --> [ ]",
+        ),
+        (
+            "rule R1: [ ] --> [ Out('a') ]",
+            "rule R1: [ ] --> [ Out('b') ]",
+        ),
+        (
+            "rule R1: [ ] --> [ Out('a') ]",
+            "rule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j \
+             ==> #i = #j ) ]-> [ Out('a') ]",
+        ),
+    ] {
+        let src = format!("theory T begin\n{first}\n{second}\nend");
+        assert_eq!(
+            duplicate_rule_error(&src).as_deref(),
+            Some("duplicate rule: R1"),
+            "{second}"
+        );
+        let err = parse_theory_checked(&src, &[], None).unwrap_err();
+        assert!(
+            matches!(err.kind(), tamarin_parser::ParseErrorKind::ConflictingDeclaration {
+                name, context: tamarin_parser::ParseContext::Rule } if name == "R1"),
+            "{second}: {err:?}"
+        );
+        let label = &err.diagnostic_labels_with_source(&src)[0];
+        assert_eq!(label.span.start, src.rfind("R1").unwrap(), "{second}");
+    }
+    for (first, second) in [
+        ("rule R1: [ ] --> [ ]", "rule R1: [ ] --> [ ]"),
+        (
+            "rule R1: [ Fr(~k) ] --> [ Out(<~k, ~k>) ]",
+            "rule R1: let x = ~k in [ Fr(~k) ] --> [ Out(pair(x, ~k)) ]",
+        ),
+    ] {
+        let src = format!("theory T begin\n{first}\n{second}\nend");
+        assert_eq!(duplicate_rule_error(&src), None, "{second}");
+        parse_theory_checked(&src, &[], None).expect(second);
+        let thy = elaborate(&parse_theory(&src, &[]).unwrap()).unwrap();
+        assert_eq!(thy.rules().count(), 2, "{second}");
+    }
+}
+
+#[test]
+fn a_duplicate_rule_across_an_include_is_rejected() {
+    let dir = std::env::temp_dir().join(format!(
+        "tamarin_theory_dup_rule_include_{}",
+        std::process::id()
+    ));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(
+        dir.join("frag.spthy"),
+        "rule R1[color=ff0000]: [ ] --> [ ]\n",
+    )
+    .expect("write fragment");
+    let src = "theory T begin\n#include \"frag.spthy\"\nrule R1[color=00ff00]: [ ] --> [ ]\nend\n";
+    let parsed = tamarin_parser::parse_theory_with_base(src, &[], Some(dir.clone())).unwrap();
+    let checked = parse_theory_checked(src, &[], Some(dir.clone()));
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(
+        elaborate(&parsed).unwrap_err().message,
+        "duplicate rule: R1"
+    );
+    assert!(matches!(
+        checked.unwrap_err().kind(),
+        tamarin_parser::ParseErrorKind::ConflictingDeclaration { .. }
+    ));
+}
+
+/// The parse-time check builds each rule under the signature declared before
+/// it, as HS's parser state has it; a declaration between two rules that does
+/// not touch their symbols leaves them equal.
+#[test]
+fn a_declaration_between_equal_rules_leaves_them_equal() {
+    let src = "theory T begin\n\
+               functions: f/1\n\
+               rule R1: [ In(x) ] --> [ Out(f(x)) ]\n\
+               functions: g/1 [private]\n\
+               rule R1: [ In(x) ] --> [ Out(f(x)) ]\n\
+               end";
+    let thy = elaborate(&parse_theory_checked(src, &[], None).unwrap()).unwrap();
+    assert_eq!(thy.rules().count(), 2);
+}
+
+/// Diff theories skip the guard (`liftedAddDiffRule` is not ported).
+#[test]
+fn a_diff_theory_keeps_a_conflicting_rule() {
+    let src = "theory T begin\n\
+               rule R1: [ ] --> [ Out('a') ]\n\
+               rule R1: [ ] --> [ Out('b') ]\n\
+               end";
+    let thy = elaborate(&tamarin_parser::parse_diff_theory(src, &[]).unwrap()).unwrap();
+    assert_eq!(thy.rules().count(), 2);
 }

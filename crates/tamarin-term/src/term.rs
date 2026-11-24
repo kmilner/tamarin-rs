@@ -225,10 +225,48 @@ pub fn hs_error_text(payload: &(dyn std::any::Any + Send)) -> Option<&str> {
         .strip_prefix(HS_ERROR_MARKER)
 }
 
+thread_local! {
+    static EMPTY_AC_AS_CONSTANT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `f` with [`f_app_ac`] building an empty argument list as an inert
+/// constant instead of raising HS's `fAppAC` error.
+///
+/// HS builds terms lazily, so a term nobody inspects never raises. A caller
+/// that builds terms speculatively, ahead of the load that raises the error,
+/// uses this so that it never raises. The constant's name is the error text,
+/// which no parsed identifier can spell, so it equals only another empty
+/// application.
+pub fn with_empty_ac_as_constant<T>(f: impl FnOnce() -> T) -> T {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            EMPTY_AC_AS_CONSTANT.with(|cell| cell.set(self.0));
+        }
+    }
+    let _reset = Reset(EMPTY_AC_AS_CONSTANT.with(|cell| cell.replace(true)));
+    f()
+}
+
+fn empty_ac_sym() -> NoEqSym {
+    static SYM: std::sync::OnceLock<NoEqSym> = std::sync::OnceLock::new();
+    *SYM.get_or_init(|| {
+        NoEqSym::new(
+            FAPP_AC_EMPTY_MSG,
+            0,
+            crate::function_symbols::Privacy::Private,
+            crate::function_symbols::Constructability::Constructor,
+        )
+    })
+}
+
 /// AC smart constructor: flattens nested same-symbol applications, sorts
 /// the resulting argument list, and unwraps singletons.
 pub fn f_app_ac<A: Ord + Clone>(sym: AcSym, args: Vec<Term<A>>) -> Term<A> {
     if args.is_empty() {
+        if EMPTY_AC_AS_CONSTANT.with(std::cell::Cell::get) {
+            return f_app_no_eq(empty_ac_sym(), vec![]);
+        }
         hs_error(
             FAPP_AC_EMPTY_MSG,
             format!(

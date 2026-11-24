@@ -169,6 +169,10 @@ pub struct Rule {
     pub name: String,
     pub modulo: Option<String>, // E or AC
     pub attributes: Vec<RuleAttr>,
+    /// HS `letBlock`'s bindings, in source order.  The body below is as
+    /// written; elaboration applies the bindings (HS `apply subst`,
+    /// Theory/Text/Parser/Rule.hs).
+    pub lets: Vec<(VarSpec, Term)>,
     pub premises: Vec<Fact>,
     pub actions: Vec<Fact>,
     pub conclusions: Vec<Fact>,

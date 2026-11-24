@@ -7,7 +7,9 @@
 //! second, DIFFERENT rule under an existing name via `addOpenProtoRule`
 //! (OpenTheory.hs); batch mode's `handleError` `die`s on the
 //! resulting parser error. The port renders a semantic diagnostic on stderr
-//! and exits 1. An identical duplicate is accepted and appended again.
+//! and exits 1, before the `Theory loaded` marker. Rules compare as HS's
+//! open rules do, so a `let`-written rule equals its expansion. An identical
+//! duplicate is accepted and appended again.
 //!
 //! Translate time: SAPIC's `translate` folds its generated rules through the
 //! same guard (`foldM liftedAddProtoRule`, lib/sapic/src/Sapic.hs), so a user rule named
@@ -59,6 +61,24 @@ fn duplicate_rule_prints_a_diagnostic_and_exits_1() {
             "`R1` was already declared incompatibly",
         ],
     );
+    assert!(!stderr.contains("Theory loaded"), "{stderr}");
+}
+
+/// A `let`-written rule and its expansion are one rule (HS applies the `let`
+/// substitution before `addOpenProtoRule` compares), so the duplicate loads.
+#[test]
+fn a_let_rule_and_its_expansion_are_not_a_conflict() {
+    if !maude_available() {
+        return;
+    }
+    let (code, _stdout, stderr) = run_binary(
+        "dup_let",
+        "theory DupLet\nbegin\n\
+         rule A: [ Fr(~k) ] --> [ Out(<~k, ~k>) ]\n\
+         rule A: let x = ~k in [ Fr(~k) ] --> [ Out(pair(x, ~k)) ]\n\
+         end\n",
+    );
+    assert_eq!(code, 0, "{stderr}");
 }
 
 /// An identical duplicate loads with exit 0 and renders BOTH copies.
