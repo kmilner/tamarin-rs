@@ -2651,44 +2651,21 @@ pub(crate) fn dispatch_solve_goal(
     //
     // During saturation only KU source picks use `solveWithSource`; safe
     // premise goals go directly through `solveGoal`.
-    if !crate::constraint::solver::sources::in_precompute_mode() && !red.ctx.full_sources.is_empty()
+    if !crate::constraint::solver::sources::in_precompute_mode()
+        && let Some(mut branches) =
+            crate::constraint::solver::sources::solve_with_source(red.ctx, &red.sys, g, &red.maude)?
     {
         use crate::constraint::solver::reduction::GoalCases;
-        use crate::constraint::solver::sources::SourceMatch;
-        let source_result = match g {
-            Goal::Action(i, fa) => {
-                crate::constraint::solver::sources::solve_with_source_cases_action(
-                    red.ctx, None, &red.sys, i, fa, &red.maude, None,
-                )
+        return Ok(match branches.len() {
+            0 => GoalCases::Contradictory,
+            1 => {
+                let branch = branches.pop().unwrap();
+                red.sys = branch.sys;
+                red.maude.reset_counter_to(branch.counter);
+                GoalCases::LinearNamed(branch.name)
             }
-            Goal::Premise(p, fa) => {
-                crate::constraint::solver::sources::solve_with_source_cases_ctx(
-                    red.ctx,
-                    &red.sys,
-                    &p.0,
-                    p.1,
-                    fa,
-                    Some(&red.maude),
-                )
-            }
-            _ => Ok(SourceMatch::NoMatch),
-        }?;
-        if let SourceMatch::Matched(case_pairs) = source_result {
-            if case_pairs.is_empty() {
-                return Ok(GoalCases::Contradictory);
-            }
-            if case_pairs.len() == 1 {
-                let (name, sys, branch_counter) = case_pairs.into_iter().next().unwrap();
-                red.sys = sys;
-                red.maude.reset_counter_to(branch_counter);
-                return Ok(GoalCases::LinearNamed(name));
-            }
-            let mut out = Vec::with_capacity(case_pairs.len());
-            for (name, sys, counter) in case_pairs {
-                out.push(crate::constraint::solver::reduction::GoalBranch { name, sys, counter });
-            }
-            return Ok(GoalCases::Cases(out));
-        }
+            _ => GoalCases::Cases(branches),
+        });
     }
     red.mark_goal_as_solved(g);
     Ok(match g {

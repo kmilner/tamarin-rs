@@ -1243,7 +1243,7 @@ impl ProverSession {
             move || {
                 let mut ctx = session.fresh_context(&maude);
                 if kind == SourceKind::RawSources {
-                    return ctx.build_sources();
+                    return ctx.build_raw_sources();
                 }
                 let assumptions = session.source_assumptions.as_ref().clone()?;
                 let raw = session.sources(SourceKind::RawSources, &ctx.maude)?;

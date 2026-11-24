@@ -160,21 +160,6 @@ impl<'ctx> Reduction<'ctx> {
         }
     }
 
-    /// Clone the complete reduction state for speculative work, but give the
-    /// clone an independent FreshT counter.  The caller may atomically adopt
-    /// the returned value on success or drop it without leaking partial
-    /// system, counter, change-indicator, or fan-out state.
-    pub(crate) fn speculative_branch(&self) -> Self {
-        Reduction {
-            ctx: self.ctx,
-            sys: self.sys.clone(),
-            maude: self
-                .maude
-                .with_fresh_counter_next(self.maude.fresh_counter_peek()),
-            changed: self.changed,
-        }
-    }
-
     /// Mark the system contradictory via the eq-store *and* via gfalse
     /// in formulas.  Mirrors Haskell's `contradictoryIf True` /
     /// `mzero`-via-`contradictoryIf` semantics: in Haskell, hitting
@@ -2973,10 +2958,6 @@ fn close_guarded_ex_eq(
 /// the Haskell `Reduction` monad's case-split.
 #[derive(Debug)]
 pub enum GoalCases {
-    /// One continuation, no case name; `self.sys` was mutated in
-    /// place.  Used for trivial collapses (Disj-singleton, mark-as-
-    /// solved) where Haskell's printer emits no `case` heading.
-    Linear,
     /// One continuation tagged with a case name; `self.sys` was
     /// mutated in place.  Used for rule-instantiation goals whose
     /// candidate enumeration narrowed to exactly one rule — Haskell
@@ -4701,7 +4682,7 @@ impl<'ctx> Reduction<'ctx> {
             self.mark_goal_as_solved(&g);
             // Push the resulting free subst back into the system.
             self.subst_system()?;
-            return Ok(GoalCases::Linear);
+            return Ok(GoalCases::LinearNamed("split".to_string()));
         }
         let mut out = Vec::with_capacity(cases.len());
         // `solveSplit` (Goals.hs) forks DisjT below FreshT. Each arm starts

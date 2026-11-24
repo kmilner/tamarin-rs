@@ -1,0 +1,52 @@
+theory SaturationKdLoopBreaker
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, h/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) Init:
+   [ Fr( ~a ) ] --[ Start( ~a ) ]-> [ St( ~a ), Out( h(~a) ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) L:
+   [ !KD( h(x) ), St( x ) ] --[ Step( x ) ]-> [ !KD( h(x) ), St( h(x) ) ]
+
+  // loop breakers: [1,0]
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) M:
+   [ St( x ), In( x ) ] --[ Fin( x ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+lemma l:
+  all-traces "∀ x #i. (Fin( x ) @ #i) ⇒ (∃ y #j. Start( y ) @ #j)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ x #i. (Fin( x ) @ #i) ∧ ∀ y #j. (Start( y ) @ #j) ⇒ ⊥"
+*/
+simplify
+solve( St( x ) ▶₀ #i )
+  case Init
+  by contradiction /* from formulas */
+qed
+
+lemma l2:
+  exists-trace "∃ x #i. Fin( x ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ x #i. (Fin( x ) @ #i)"
+*/
+simplify
+solve( St( x ) ▶₀ #i )
+  case Init
+  by solve( !KU( ~a ) @ #vk )
+qed
+
+
+
+end

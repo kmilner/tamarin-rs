@@ -1445,8 +1445,8 @@ mod tests {
         use std::fmt::Write;
 
         let Some(ctx) = ctx() else { return };
-        // A long linear prefix puts the first fork several depth rounds into
-        // the proof. no_precomp keeps source construction from collapsing it.
+        // The Gate and Work premises fork; as in HS, saturation applies the
+        // [no_precomp] premises' sources, so the Step prefix collapses.
         let mut src = String::from(
             "theory DeepFork begin\n\
              rule A_Quick: [] --[ Choice('a'), Seed(), Quick() ]-> [ Gate('x') ]\n\
@@ -1515,7 +1515,7 @@ mod tests {
             .unwrap();
         assert_eq!(proof_status(&exhaustive), ProofStatus::Complete);
         // Finishing the earlier siblings frees budget for all eight Work1 cases.
-        assert_eq!(entered.try_iter().count(), 2 + 2 + 4 + 8);
+        assert_eq!(entered.try_iter().count(), 18);
         let nested = pool
             .install(|| prove_lemma_in_session(&session, "nested", usize::MAX))
             .unwrap();

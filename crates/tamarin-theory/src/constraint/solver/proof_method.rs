@@ -300,7 +300,6 @@ pub fn exec_proof_method(
             // `process (solve goal)`: each goal case continues with its own
             // fresh counter through `simplifySystem`, which may fan out.
             let cases: Vec<(String, System, u64)> = match outcome {
-                GoalCases::Linear => vec![("".to_string(), r.sys, adopted_counter)],
                 GoalCases::LinearNamed(name) => vec![(name, r.sys, adopted_counter)],
                 GoalCases::Cases(cases) => cases
                     .into_iter()

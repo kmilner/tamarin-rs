@@ -2176,7 +2176,7 @@ fn execute_captured_actions(
         let outcome = red.solve_action_goal(i, fa)?;
         match outcome {
             GoalCases::Contradictory => return Ok(SystemOutcome::Contradictory),
-            GoalCases::Linear | GoalCases::LinearNamed(_) => {
+            GoalCases::LinearNamed(_) => {
                 // `red.sys` is already mutated in place by `solve_action_goal`.
                 remaining = suffix;
             }

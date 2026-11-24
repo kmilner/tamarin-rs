@@ -255,15 +255,19 @@ fn oracle_branches_overlap_and_match_sequential_proofs() {
         "exists-trace \"Ex x #i. End(x) @ i\"",
     );
     // These branches fork in the first depth round and reach L and R in a later one.
+    // Saturation applies only single-case sources to [no_precomp] premises
+    // (HS `goodTh`), so two rules per step keep each step a separate proof step.
     let mut deep = witness.clone();
     for side in ["L", "R"] {
-        let mut rules = String::new();
+        let mut rules = format!("rule Gen{side}b: [ Fr(~x) ] --> [ {side}(~x) ]\n");
         let mut fact = side.to_string();
         for i in 1..=5 {
             let next = format!("{side}{i}");
-            rules.push_str(&format!(
-                "rule Step{next}: [ {fact}(x)[no_precomp] ] --> [ {next}(x) ]\n"
-            ));
+            for alt in ["a", "b"] {
+                rules.push_str(&format!(
+                    "rule Step{next}{alt}: [ {fact}(x)[no_precomp] ] --> [ {next}(x) ]\n"
+                ));
+            }
             fact = next;
         }
         deep = deep.replace(

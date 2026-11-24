@@ -321,7 +321,7 @@ fn restrict_eq_store_keeps_only_stable_keyed_bindings() {
         (sk28, Term::Lit(Lit::Var(t2))),
     ]);
 
-    restrict_eq_store_to_stable_vars(&mut sys, &[t1, t2]);
+    restrict_eq_store_to_stable_vars(&mut sys, &[t1, t2].into());
 
     // t1 binding kept; m19 + sk28 bindings dropped.
     assert!(
@@ -363,7 +363,7 @@ fn restrict_eq_store_does_not_chain_chase() {
         (e10, Term::Lit(Lit::Var(blind_arg))),
     ]);
 
-    restrict_eq_store_to_stable_vars(&mut sys, &[t1]);
+    restrict_eq_store_to_stable_vars(&mut sys, &[t1].into());
 
     // t.1's binding must be exactly e.10 (the var), NOT chain-chased
     // to blind_arg.
@@ -396,7 +396,7 @@ fn restrict_eq_store_empties_subst_when_no_keys_are_stable() {
 
     restrict_eq_store_to_stable_vars(
         &mut sys,
-        &[LVar::new("t", LSort::Msg, 1), LVar::new("t", LSort::Msg, 2)],
+        &[LVar::new("t", LSort::Msg, 1), LVar::new("t", LSort::Msg, 2)].into(),
     );
 
     assert!(
@@ -835,28 +835,27 @@ fn source_probe_distinguishes_no_match_from_matched_empty() {
         Goal::Action(nvar(0), crate::fact::ku_fact(mterm(0))),
         Vec::new(),
     );
+    let goal = Goal::Action(node, live);
     let probe = |sources: &[Source]| {
-        solve_with_source_cases_action(
+        apply_first_source(
             &ctx,
-            Some(sources),
+            sources.iter().enumerate(),
             &System::empty(),
-            &node,
-            &live,
+            &goal,
             &ctx.maude,
-            None,
         )
     };
 
     assert!(matches!(
         probe(&[matched]),
-        Ok(SourceMatch::Matched(cases)) if cases.is_empty()
+        Ok(Some((0, cases))) if cases.is_empty()
     ));
     assert!(matches!(
         probe(&[Source::eager(
             Goal::Action(nvar(0), LNFact::new(FactTag::Out, vec![mterm(0)])),
             Vec::new(),
         )]),
-        Ok(SourceMatch::NoMatch)
+        Ok(None)
     ));
 }
 
@@ -934,14 +933,9 @@ fn premise_source_conjoin_preserves_ac_fanout() {
     live.add_goal(goal.clone());
     let mut case = System::empty();
     case.eq_store_mut().subst = Subst::from_list(vec![(shared, product(3, 4))]);
-    let arm = RefineArm {
-        freshened_case: case.clone(),
-        branch_counter: ctx.maude.fresh_counter_peek(),
-    };
-
     let _precompute = PrecomputeModeGuard::enter();
     let outputs =
-        conjoin_refine_arm(&ctx, &live, &goal, arm, Some(&ctx.maude)).expect("solver operation");
+        conjoin_source_case(&ctx, &live, &goal, &case, &ctx.maude).expect("solver operation");
     assert!(outputs.len() > 1, "premise conjoin collapsed AC arms");
 }
 
@@ -968,14 +962,9 @@ fn source_application_uses_complete_conjoin_state() {
         substs: vec![SubstVFresh::from_list(vec![(mvar(25), mterm(26))])],
     });
     let expected_substs = case.eq_store().conj[0].substs.clone();
-    let arm = RefineArm {
-        freshened_case: case.clone(),
-        branch_counter: ctx.maude.fresh_counter_peek(),
-    };
-
     let _precompute = PrecomputeModeGuard::enter();
     let output =
-        conjoin_refine_arm(&ctx, &live, &goal, arm, Some(&ctx.maude)).expect("solver operation");
+        conjoin_source_case(&ctx, &live, &goal, &case, &ctx.maude).expect("solver operation");
     assert_eq!(output.len(), 1);
     let joined = &output[0].sys;
     assert_eq!(joined.last_atom, Some(nvar(22)));

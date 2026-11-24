@@ -280,6 +280,29 @@ fn solve_split_prunes_non_normal_arms_before_returning_cases() {
     assert!(!red.sys.eq_store().is_false());
 }
 
+/// `solveSplit` (Goals.hs) returns "split" even when the split has a single
+/// alternative.
+#[test]
+fn solve_split_single_alternative_is_named_split() {
+    use crate::constraint::constraints::Goal;
+    use tamarin_term::builtin::msg_var;
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::subst_vfresh::SubstVFresh;
+
+    let Some(ctx) = ctx() else { return };
+    let x = LVar::new("x", LSort::Msg, 0);
+    let mut sys = System::empty();
+    let split = sys
+        .eq_store_mut()
+        .add_disj(vec![SubstVFresh::from_list(vec![(x, msg_var("y", 1))])]);
+    let mut red = Reduction::new(&ctx, sys);
+    red.insert_goal(Goal::Split(split));
+    assert!(matches!(
+        red.solve_split_goal(split).expect("split solve"),
+        GoalCases::LinearNamed(ref name) if name == "split"
+    ));
+}
+
 #[test]
 fn solve_term_eqs_trivial_equation_no_change() {
     let Some(ctx) = ctx() else { return };
@@ -820,23 +843,6 @@ fn solve_disj_goal_empty_is_contradictory() {
     let d = Disj(Vec::<Guarded>::new());
     let out = r.solve_disj_goal(&d).expect("solver operation");
     assert!(matches!(out, GoalCases::Contradictory));
-}
-
-#[test]
-fn speculative_branch_isolates_reduction_state() {
-    let Some(ctx) = ctx() else { return };
-    let r = Reduction::new(&ctx, System::empty());
-    let counter = r.maude.fresh_counter_peek();
-
-    let mut trial = r.speculative_branch();
-    trial.maude.fresh_idx();
-    trial.sys.add_goal(Goal::Action(
-        tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0),
-        crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]),
-    ));
-
-    assert_eq!(r.maude.fresh_counter_peek(), counter);
-    assert!(r.sys.goals.is_empty());
 }
 
 #[test]

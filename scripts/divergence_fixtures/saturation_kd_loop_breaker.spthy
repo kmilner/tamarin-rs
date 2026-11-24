@@ -1,0 +1,27 @@
+theory SaturationKdLoopBreaker
+begin
+
+/* Rule L's KD premise lies on a KD cycle, so the loop-breaker analysis
+   marks it. Haskell's solveAllSafeGoals still solves loop-breaker KD
+   premises first (kdPremGoals reads all open goals); only safeGoal and
+   usefulGoal skip loop breakers. KD premises in protocol rules are
+   reserved names, so no corpus theory reaches this. */
+
+builtins: hashing
+
+rule Init:
+  [ Fr(~a) ] --[ Start(~a) ]-> [ St(~a), Out(h(~a)) ]
+
+rule L:
+  [ KD(h(x)), St(x) ] --[ Step(x) ]-> [ KD(h(x)), St(h(x)) ]
+
+rule M:
+  [ St(x), In(x) ] --[ Fin(x) ]-> [ ]
+
+lemma l:
+  "All x #i. Fin(x) @ i ==> Ex y #j. Start(y) @ j"
+
+lemma l2: exists-trace
+  "Ex x #i. Fin(x) @ i"
+
+end

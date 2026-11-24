@@ -10,7 +10,6 @@ use std::time::Duration;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Work {
     Search,
-    InitialSources,
     Sources,
     Terminal,
 }

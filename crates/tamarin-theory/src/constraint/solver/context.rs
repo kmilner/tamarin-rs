@@ -514,6 +514,14 @@ impl ProofContext {
     pub(crate) fn build_source_sets(
         mut self,
     ) -> Result<(SharedSources, SharedSources), ProveError> {
+        let raw = self.build_raw_sources()?;
+        let refined =
+            super::sources::refine_with_source_asms(raw.to_vec(), &self.typing_assumptions, &self)?;
+        Ok((raw, Arc::new(refined)))
+    }
+
+    /// Saturate the raw sources (HS `precomputeSources`).
+    pub(crate) fn build_raw_sources(&mut self) -> Result<SharedSources, ProveError> {
         self.sources = ContextSources::Materialized;
         // Source refinement uses local fresh variables. A cancelled build can
         // drop its entire working set without touching a proof's counter or cases.
@@ -527,25 +535,16 @@ impl ProofContext {
                 .collect(),
         );
         for src in self.full_sources.iter() {
-            src.set_cases(super::sources::initial_source_cases(&src.goal, &self)?);
+            src.set_cases(super::sources::initial_source_cases(&src.goal, self)?);
         }
         let saturated = super::sources::saturate_sources_with_simp(
             self.full_sources.to_vec(),
             self.parameters.saturation_limit(),
-            &self,
+            self,
         )?;
         let raw = Arc::new(saturated);
-        self.full_sources = if self.typing_assumptions.is_empty() {
-            raw.clone()
-        } else {
-            Arc::new(super::sources::refine_with_source_asms(
-                raw.to_vec(),
-                &self.typing_assumptions,
-                &self,
-            )?)
-        };
-        self.dump_sources();
-        Ok((raw, self.full_sources))
+        Self::dump_sources(&raw);
+        Ok(raw)
     }
 
     pub(crate) fn use_materialized_sources(&mut self, sources: SharedSources) {
@@ -727,12 +726,12 @@ impl ProofContext {
     /// Debug dump of this context's precomputed sources — one line per
     /// source, with its goal and its materialised case names — gated by
     /// `TAM_RS_DBG_SOURCES_DUMP`.
-    fn dump_sources(&self) {
+    fn dump_sources(sources: &[Source]) {
         if !tamarin_utils::env_gate!("TAM_RS_DBG_SOURCES_DUMP") {
             return;
         }
         use crate::constraint::constraints::Goal;
-        for (i, src) in self.full_sources.iter().enumerate() {
+        for (i, src) in sources.iter().enumerate() {
             let goal = match &src.goal {
                 Goal::Action(_, fa) => format!("Action {}", crate::pretty_system::pretty_fact(fa)),
                 Goal::Premise(_, fa) => {

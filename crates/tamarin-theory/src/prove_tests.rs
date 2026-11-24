@@ -813,10 +813,10 @@ fn standalone_workers_can_choose_assumptions_before_forcing_sources() {
         .as_ref()
         .unwrap()
         .clone();
-    for (ctx, expected) in [
-        (&refined, SourceKind::RefinedSources),
-        (raw, SourceKind::RawSources),
-    ] {
+    // HS `refineWithSourceAsms` marks the cases refined even when there
+    // are no assumptions.
+    for ctx in [&refined, raw] {
+        let expected = SourceKind::RefinedSources;
         let cases = ctx.source_cases().unwrap();
         let kinds: Vec<_> = cases
             .iter()
@@ -1465,81 +1465,6 @@ fn scratch_proof_checks_return_backend_errors() {
 }
 
 #[test]
-fn initial_source_cases_overlap_and_preserve_sequential_results() {
-    use crate::constraint::solver::cancellation_tests::{Work, WorkerGate};
-    use std::time::Duration;
-    let Some(session) = session_from(
-        "theory T begin
-         rule Left: [] --> [ F('left') ]
-         rule Right: [] --> [ F('right') ]
-         rule Use: [ F(x) ] --[ A(x) ]-> []
-         lemma goal: \"All x #i. A(x) @ i ==> F\"
-         end",
-    ) else {
-        return;
-    };
-    let mut ctx = session.fresh_context(&session.template_ctx.maude);
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(2)
-        .build()
-        .unwrap();
-    // Hold the eager worker so only a cold slot is available during the build.
-    let maude_pool = std::sync::Arc::new(
-        tamarin_term::maude_proc::MaudePool::new(
-            &require_maude_path().unwrap(),
-            pair_maude_sig(),
-            2,
-            Default::default(),
-        )
-        .unwrap(),
-    );
-    let _held = maude_pool.try_take_idle_owned().unwrap();
-    ctx.maude_pool = Some(maude_pool.clone());
-    let (gate, entered) = WorkerGate::new(Work::InitialSources, 2);
-    *ctx.worker_gate.lock().unwrap() = Some(gate.clone());
-    let ctx = std::sync::Arc::new(ctx);
-    std::thread::scope(|scope| {
-        let worker_ctx = ctx.clone();
-        let worker = scope.spawn(|| {
-            pool.install(move || {
-                tamarin_utils::parallel::try_map(vec![Some(worker_ctx), None], |active| {
-                    if let Some(ctx) = active {
-                        ctx.ensure_saturated()?;
-                    }
-                    Ok::<_, ProveError>(())
-                })
-            })
-        });
-        let first = entered.recv_timeout(Duration::from_secs(10)).unwrap();
-        let second = entered.recv_timeout(Duration::from_secs(10)).unwrap();
-        gate.release();
-        assert_ne!(first, second, "initial cases must use distinct workers");
-        worker.join().unwrap().unwrap();
-    });
-    *ctx.worker_gate.lock().unwrap() = None;
-    assert_eq!(
-        maude_pool.spawned(),
-        1,
-        "a source task started a cold Maude"
-    );
-    let parallel = ctx.source_cases().unwrap();
-    let serial_ctx = session.fresh_context(&session.template_ctx.maude);
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(1)
-        .build()
-        .unwrap()
-        .install(|| serial_ctx.ensure_saturated())
-        .unwrap();
-    let serial = serial_ctx.source_cases().unwrap();
-    assert_eq!(parallel.len(), serial.len());
-    for (parallel, serial) in parallel.iter().zip(&serial) {
-        // System equality excludes process-local cache stamps and compares
-        // the actual constraints, fresh variable identities and case order.
-        assert_eq!(parallel, serial);
-    }
-}
-
-#[test]
 fn cold_sources_get_both_workers_when_dfs_siblings_need_them() {
     use crate::constraint::solver::cancellation_tests::{Work, WorkerGate};
     use std::time::Duration;
@@ -1555,7 +1480,7 @@ fn cold_sources_get_both_workers_when_dfs_siblings_need_them() {
     ) else {
         return;
     };
-    let (gate, entered) = WorkerGate::new(Work::InitialSources, 2);
+    let (gate, entered) = WorkerGate::new(Work::Sources, 2);
     *session.template_ctx.worker_gate.lock().unwrap() = Some(gate.clone());
     let pool = rayon::ThreadPoolBuilder::new()
         .num_threads(2)
