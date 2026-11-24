@@ -61,7 +61,7 @@ Rust and rechecks the result with Haskell:
 ./prove_and_reverify.sh theory.spthy > proof.spthy
 ```
 
-Use this branch's Haskell oracle for proof replay; see
+Replay needs a Haskell build from upstream's `develop` branch; see
 [compatibility notes](docs/STATUS.md#proof-reverification).
 
 ## Status and performance

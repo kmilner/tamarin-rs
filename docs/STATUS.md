@@ -42,9 +42,10 @@ the verification policy.
 ## Proof reverification
 
 Use `./setup.sh testing` to build the pristine pinned Haskell prover used for
-internal testing. Released Haskell versions may lack fixes required to replay
-some proofs; [patches/README.md](../patches/README.md) documents the oracle's
-patch series. Please report output differences even if the proofs cross-verify.
+internal testing. Haskell 1.12.0 lacks fixes required to replay some proofs;
+these are now merged upstream, so builds from upstream's `develop` branch
+should replay all Rust proofs. Please report output differences even if the
+proofs cross-verify.
 
 ## Implemented
 

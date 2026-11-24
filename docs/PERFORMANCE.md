@@ -9,8 +9,8 @@ port (RS) on a 24-vCPU x86_64 Linux host with Maude 3.5.1.
 Both provers ran all lemmas with `--derivcheck-timeout=30`, a 1,200-second
 timeout and a 16 GiB memory limit with swap disabled. Each pair ran back to
 back, alternating which prover ran first across rows.
-These recorded measurements use the Haskell release, not the oracle pinned
-for parity testing; they do not measure the current upstream patch series.
+These recorded measurements use the Haskell 1.12.0 release, not the oracle
+pinned for parity testing.
 
 
 RS+HS measures the time to prove with Rust and replay the proof with Haskell.
@@ -96,11 +96,11 @@ serially, apart from `Joux` (1.6×). Both provers agreed on every lemma verdict.
 All 18 supported replays passed. The other six reached the Haskell 1.12
 replay limitation described below.
 
-The `not supported` entries in the RS+HS column mean that unpatched 1.12.0
+The `not supported` entries in the RS+HS column mean that Haskell 1.12.0
 could not replay the emitted `Joux` and `wireguard` proofs in these measurements
 (`analysis incomplete`). The associated issues concern thread-dependent proof
-shape and stored-formula normalisation. Use the patched `./setup.sh testing`
-oracle for parity checks, rather than this benchmark's release baseline.
+shape and stored-formula normalisation. These are fixed upstream; use
+`./setup.sh testing` for parity checks.
 
 ## Parallel proof search
 
