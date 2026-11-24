@@ -3,25 +3,12 @@
 
 //! Port of `Theory.Constraint.Solver.Reduction`.
 //!
-//! In Haskell, `Reduction` is a state-fresh-disjunction monad over a
-//! `ProofContext` reader:
-//!
-//! ```haskell
-//! type Reduction = StateT System (FreshT (DisjT (Reader ProofContext)))
-//! ```
-//!
-//! Each constraint-reduction rule runs as a `Reduction`, possibly
-//! producing multiple cases. The monad provides primitives like
-//! `insertNode`, `insertEdge`, `insertGoal`, `solveTermEqs`, etc.
-//!
-//! For the Rust port we model `Reduction` as a struct holding mutable
-//! `System` state plus a `ProofContext` reference, with its own
-//! fresh-variable supply (see `Reduction::maude`). Disjunctive results
-//! are surfaced as `Vec`s rather than a monad-level `DisjT` layer. This
-//! module implements the full reduction surface: `substSystem`,
-//! `conjoinSystem`, the `solve*Eqs` family, `insertFormula`, and the
-//! associated CR-rules. See `constraint/solver/BRANCHING.md` for the
-//! branch-state and fresh-counter invariants.
+//! Haskell's `Reduction` is `StateT System (FreshT (DisjT (Reader
+//! ProofContext)))`. The port models it as a struct holding the mutable
+//! `System`, the `ProofContext` and its own fresh counter
+//! (`Reduction::maude`); a split returns its branches explicitly. See
+//! `constraint/solver/BRANCHING.md` for the branch-state and fresh-counter
+//! invariants.
 
 use crate::constraint::constraints::{Disj, Edge, Goal, LessAtom, NodeId};
 use crate::constraint::solver::context::ProofContext;
@@ -160,26 +147,11 @@ impl<'ctx> Reduction<'ctx> {
         }
     }
 
-    /// Mark the system contradictory via the eq-store *and* via gfalse
-    /// in formulas.  Mirrors Haskell's `contradictoryIf True` /
-    /// `mzero`-via-`contradictoryIf` semantics: in Haskell, hitting
-    /// `contradictoryIf` in any CR-rule pass calls `mzero`, which
-    /// removes the case from the surrounding `runReduction` Disj.
-    /// Our port doesn't have monad-level mzero, so we have two markers:
-    ///
-    ///   - `gfalse` in `sys.formulas` — picked up by post-simplify
-    ///     `contradictions(ctx, sys)` as `FormulasFalse`, drives
-    ///     `is_finished` to return `Contradictory`.
-    ///   - `eq_store.is_false` — the simplify-time filter in
-    ///     `exec_proof_method`'s SolveGoal arm uses this as the Haskell-
-    ///     faithful proxy for mzero, dropping the case from the resulting
-    ///     case map so the proof tree mirrors Haskell's shape.
-    ///
-    /// Use this helper at every CR-rule failure point that corresponds
-    /// to a `contradictoryIf` in Haskell (`solveFactEqs` tag/arity
-    /// mismatch, `solveRuleEqs` rInfo mismatch, `solveSubstEqs`
-    /// failure, `noContradictoryEqStore` firing, etc.).  Idempotent:
-    /// only flags `Changed` if at least one marker actually toggled.
+    /// Mark the system contradictory, the port's stand-in for Haskell's
+    /// `contradictoryIf` / `mzero`: `gfalse` in the formulas (reported by
+    /// `contradictions` as `FormulasFalse`) and a false equation store (the
+    /// case filter in `exec_proof_method` drops such cases, as `mzero`
+    /// would). Raises `changed` only if a marker toggled.
     pub fn mark_contradictory(&mut self) {
         let bot = crate::guarded::gfalse();
         let added_bot = self.sys.insert_open_formula(bot);
@@ -205,22 +177,8 @@ impl<'ctx> Reduction<'ctx> {
         }
     }
 
-    /// Insert an edge — HS-faithful port of `insertEdges` (Reduction.hs):
-    /// ```haskell
-    /// insertEdges edges = do
-    ///     void (solveFactEqs SplitNow [Equal fa1 fa2 | (_, fa1, fa2, _) <- edges])
-    ///     modM sEdges (\es -> foldr S.insert es ...)
-    /// ```
-    /// Order matters: HS calls `solveFactEqs SplitNow` BEFORE adding to
-    /// sEdges. If the unification fails (eq_store becomes false), HS
-    /// mzero's the branch via `noContradictoryEqStore` — the edge is
-    /// never added to the contradicted state. We mirror this: unify
-    /// first via `solve_fact_eqs`, fail-fast via `mark_contradictory`
-    /// + early return, then add to `sys.edges` only on success.
-    ///
-    /// Returns `Ok(Contradictory)` when the fact unification fails so
-    /// callers can skip the case cleanly (matches HS Disj-monad mzero
-    /// semantics on the caller side).
+    /// `insertEdges [(c, faConc, faPrem, p)]` (Reduction.hs) with both facts
+    /// read from the endpoint nodes; see [`insert_edge_with_facts`](Self::insert_edge_with_facts).
     pub fn insert_edge(&mut self, e: Edge) -> Result<SolveOutcome, crate::prove::ProveError> {
         // HS `nodeConcFact` / `nodePremFact` (System.hs) fail unless both
         // endpoints are system nodes with the indexed facts.
@@ -297,18 +255,8 @@ impl<'ctx> Reduction<'ctx> {
         self.insert_edge_tail(e, fa_conc, fa_prem)
     }
 
-    /// `insertLast` — HS-faithful port of Reduction.hs:
-    /// ```haskell
-    /// insertLast i = do
-    ///     lst <- getM sLastAtom
-    ///     case lst of
-    ///       Nothing -> setM sLastAtom (Just i) >> return Unchanged
-    ///       Just j  -> solveNodeIdEqs [Equal i j]
-    /// ```
-    /// When no last atom is set, install this one.  When one is
-    /// already set, equate the new node id to the existing last via
-    /// `solveNodeIdEqs` — failure routes through `mark_contradictory`
-    /// to keep the mzero-proxy in sync with HS `noContradictoryEqStore`.
+    /// `insertLast` (Reduction.hs): set the last atom, or equate `i` with
+    /// the existing one by `solveNodeIdEqs`.
     pub fn insert_last(
         &mut self,
         i: crate::constraint::constraints::NodeId,
@@ -337,16 +285,8 @@ impl<'ctx> Reduction<'ctx> {
         }
     }
 
-    /// `substSystem`: apply the eq-store's current substitution to
-    /// every part of the constraint system that holds free variables —
-    /// nodes (both ids and rule contents), edges, last-atom, less
-    /// atoms, formulas, solved formulas, lemmas, and goals. Mirrors
-    /// Haskell's `substSystem` from `Theory.Constraint.Solver.Reduction`.
-    ///
-    /// Without this, graph-based contradiction checks (cycles in `<`,
-    /// edge-induced ordering) miss real contradictions and create phantom
-    /// ones — Haskell avoids both by calling `substSystem` after every
-    /// successful `solveTermEqs`.
+    /// `substSystem` (Reduction.hs): apply the equation store's
+    /// substitution to every part of the system.
     pub fn subst_system(&mut self) -> Result<(), crate::prove::ProveError> {
         // Only the node-ID phase runs to a fixed point. Applying the rest
         // of the system between its rounds can merge goals prematurely,
@@ -442,35 +382,10 @@ impl<'ctx> Reduction<'ctx> {
             return Ok(true);
         }
         let subst = self.sys.eq_store().subst.clone();
-        // Substitution rewrites every term/fact/rule under the current
-        // subst — vars in the domain get replaced (possibly by vars
-        // with smaller idx), so max-var-idx can LOWER.  Invalidation of
-        // `max_var_idx_cache` is CONDITIONAL per section below: most
-        // passes are idempotent re-applications (the subst was already
-        // applied by an earlier pass), where every rewrite is a value
-        // no-op and the pass only re-sorts / dedups EQUAL values —
-        // neither of which can change the max free-var idx.  Each
-        // section tracks "did any value actually change" (via the same
-        // COW `None`-when-unchanged contracts the rewrites already use)
-        // and invalidates only then, so an identity pass keeps both
-        // caches valid and the dozens of `bounds_max` calls per proof
-        // step stay O(1) hits instead of full re-walks.
-        // Build the chain-chased substitution ONCE for the whole pass.  It
-        // is derived purely from `subst` (fixed above), so it is identical
-        // for every `Disj` goal AND the formula/lemma substitution below.
-        // Building this once avoids O(num_disj_goals × subst_size) cost:
-        // spdm's attack lemmas carry ~15 `All…==>#x=#y` uniqueness
-        // disjuncts, so a per-goal rebuild was the single largest
-        // avoidable cost in the proof/refine hot path (~7.5% of the whole
-        // run in `perf`). Built once here, reused everywhere.
-        //
-        // Further: it is consumed ONLY by `Disj` goals (the goal loop
-        // below) and the formula/solved-formula/lemma rewrites (after the
-        // loop).  `chase_eq_store_subst` chain-chases EVERY eq-store entry,
-        // which is pure waste when the system carries none of those —
-        // common in deep proof states where the lemma's formulas are
-        // already discharged.  Gate the build so it only runs when a
-        // consumer exists.
+        // A section invalidates the max-var caches only when it changed a
+        // value: re-sorting or deduplicating equal values cannot change the
+        // maximum. The chased substitution is built once per pass, and only
+        // when a disjunction goal or a stored formula can consume it.
         let needs_formula_subst = !self.sys.formulas.is_empty()
             || !self.sys.solved_formulas.is_empty()
             || !self.sys.lemmas.is_empty()
@@ -516,18 +431,9 @@ impl<'ctx> Reduction<'ctx> {
         let mut new_nodes = std::sync::Arc::unwrap_or_clone(std::mem::take(
             &mut self.sys.content_mut_untracked().nodes,
         ));
-        // Pass 2: NOW apply the full term substitution to the surviving
-        // rules' fact terms (mirrors HS's `M.map . apply` AFTER
-        // substNodeIds).  A rule the substitution does not touch keeps its
-        // value, sharing its `Arc`s with no rebuild.
-        //
-        // The rewritten facts are NOT normalised: HS's `substSystem`
-        // (Reduction.hs) does not, and `normDG` (System.hs)
-        // runs only inside `impliedOrInitial` (System.hs) and the
-        // diff-mode mirror.  A normalise here would reduce e.g.
-        // `checksign(sign(m,k), pk(k))` to `m`, losing the head shape
-        // source-case matching reads, and would erase the non-normal term
-        // shapes `has_non_normal_terms` contradicts on.
+        // Then `M.map . apply` over the surviving rules. The facts are not
+        // normalised, as in Haskell: normalising would erase the non-normal
+        // shapes that source matching and `has_non_normal_terms` read.
         for (_, rule) in new_nodes.iter_mut() {
             if let Some(new_rule) = rule.apply_changed(&pass) {
                 nodes_value_changed = true;
@@ -642,14 +548,9 @@ impl<'ctx> Reduction<'ctx> {
         // (System.hs).
         // Track semantic changes separately from rebuilding the goal map.
         let mut goals_value_changed = false;
-        // Mirrors Haskell's `substGoals` (Reduction.hs) — for
-        // KU action goals whose pre-subst term is a msg-var, product,
-        // or union AND whose term actually changes via substitution,
-        // re-insert via `insert_action`-equivalent so the pair/inv/prod
-        // auto-decomp fires retroactively.  This re-insert path is sound
-        // only because the system's max-index accounting walks
-        // goals/formulas/eq_store; an incomplete maximum lets later fresh
-        // instances collide and conflate Maude witnesses.
+        // `substGoals` (Reduction.hs) re-inserts a KU action whose
+        // message variable, product or union changed, so `insertAction`
+        // decomposes it again.
         let mut had_insert_action = false;
         for (g, st) in goals {
             // Haskell re-inserts changed KU terms even when the old goal
@@ -678,27 +579,10 @@ impl<'ctx> Reduction<'ctx> {
                     self.insert_goal(Goal::Action(i, fa.clone()));
                 }
             } else {
-                // HS-faithful merge: mirror `M.insertWith combineGoalStatus`
-                // (Reduction.hs).  When subst rewrites
-                // two pre-subst goals to the same post-subst form, merge
-                // their statuses:
-                //   solved  = solved_old  || solved_new
-                //   gsNr    = min age_old age_new        ← HS-faithful!
-                //   looping = looping_old || looping_new
-                //
-                // HS uses `Data.Map.insertWith combineGoalStatus`: when
-                // the key matches an existing entry, `combineGoalStatus`
-                // is called with the OLD value and the NEW value, and
-                // its `min age1 age2` chooses the SMALLER nr regardless
-                // of iteration order.
-                //
-                // Comparison key: the goal itself, mirroring HS's Map-key
-                // equality on Goal, which is structural Eq; `Guarded` binders
-                // are DeBruijn on both sides, so alpha-equivalent Disjs
-                // already compare `==`.
-                // Rebuild in one pass, as HS's forM over M.toList does.
-                // Deferring action insertion until after all ordinary goals
-                // changes which pre-existing status wins a collision.
+                // `M.insertWith combineGoalStatus` (Reduction.hs): goals the
+                // substitution makes equal merge their statuses (solved and
+                // looping ORed, the smaller number kept). Rebuilt in one
+                // pass in Goal order, as HS's forM over M.toList.
                 self.sys.bump_cache_goal(&g2);
                 let new_goals =
                     std::sync::Arc::make_mut(&mut self.sys.content_mut_untracked().goals);
@@ -715,19 +599,7 @@ impl<'ctx> Reduction<'ctx> {
         if goals_value_changed && !reinserts_actions {
             self.sys.invalidate_max_var_idx_cache();
         }
-        // Formulas / solved formulas / lemmas: port of Haskell's
-        // `substFormulas`, `substSolvedFormulas`, `substLemmas` (all
-        // run inside `substSystem`), each `apply subst` over the stored
-        // `Guarded` (which already respects quantifier shadowing: `Bound`
-        // leaves carry no variable identity).  Without this, free variables
-        // in formulas (e.g. a lemma's outer Skolem `key` after the
-        // proof has unified `key = ~k15`) never get substituted, and
-        // simplify-time formula-evaluation (eval_formula_atoms,
-        // insert_implied_formulas) misses contradictions like a
-        // surviving `All r. Rev(?key) @ r ==> ⊥` when the trace
-        // contains `Rev(~k15) @ vr_14` — that's a soundness gap.
-        // Hoisted out of the `if` below so it is in scope for the `raised`
-        // return: set true iff a formula/solved-formula/lemma value changed.
+        // `substFormulas`, `substSolvedFormulas`, `substLemmas`.
         let mut formulas_value_changed = false;
         if !formula_subst.is_empty() {
             formulas_value_changed |=
@@ -741,31 +613,10 @@ impl<'ctx> Reduction<'ctx> {
                 self.changed = ChangeIndicator::Changed;
             }
         }
-        // 5b. SubtermStore substitution — port of Haskell's
-        // `instance Apply LNSubst SubtermStore` (`SubtermStore.hs`):
-        // ```haskell
-        // apply subst (SubtermStore a b c d e) =
-        //   SubtermStore (apply subst a) (apply subst b) (apply subst c) d e
-        // ```
-        // HS's `substSystem` (Reduction.hs) applies the substitution
-        // to the whole `System` via the `Apply` instance, which threads
-        // through every component including the subterm store.  Without
-        // this, an eq-store binding like `a → $x` (introduced by unifying
-        // a lemma's `a` with a rule's `PubValue($x)` conclusion) never
-        // gets propagated to `subterm_store.subterms`, so a constraint
-        // `(b, a)` remains as `(b, a:Msg)` even after `a` should be
-        // `$x:Pub`.  Downstream `propagate_subterm_obvious` then misses
-        // the pub-var trivially-false case → spurious "trace found"
-        // verdict on `Sinvalid`-class lemmas (HS reports `simplify, by
-        // contradiction /* contradictory subterm store */`).
-        //
-        // HS's `Apply LNSubst SubtermStore` does not normalise, and neither
-        // does this.  COW probe + compare-on-rebuild: `apply_changed == None` means
-        // applying the subst leaves the term unchanged, so an `!=` compare
-        // could not hold — both the pre-apply clone and the deep compare
-        // are skipped on unchanged terms.  On `Some`, the value compare is
-        // KEPT (an AC re-sort can rebuild a value-equal term, and
-        // `changed_sst` must track VALUE change exactly as before).
+        // `instance Apply LNSubst SubtermStore` (SubtermStore.hs): the
+        // positive, negative and solved subterms, not the old negative ones,
+        // and without normalising. A rebuilt term is compared by value, since
+        // an AC re-sort can rebuild an equal term.
         let mut changed_sst = false;
         let mut apply_constraints =
             |cs: Vec<crate::tools::subterm_store::SubtermConstraint>| -> Vec<_> {
@@ -830,27 +681,11 @@ impl<'ctx> Reduction<'ctx> {
         Ok(raised)
     }
 
-    /// Install a rule's variant disjunction as a SplitG goal — mirrors
-    /// Haskell's `solveRuleConstraints` (Reduction.hs):
-    /// ```haskell
-    /// solveRuleConstraints (Just eqConstr) = do
-    ///     (eqs, splitId) <- addRuleVariants eqConstr <$> getM sEqStore
-    ///     insertGoal (SplitG splitId) False
-    ///     setM sEqStore =<< simp hnd ...
-    /// solveRuleConstraints Nothing = return ()
-    /// ```
-    ///
-    /// Adds `substs` as a new disjunction to the eq-store, allocates a
-    /// fresh `SplitId`, and inserts a `Goal::Split(id)` so the search
-    /// (or simplify) layer enumerates the variant choice lazily. A `None`
-    /// or empty `substs` is a no-op returning `false`.
-    ///
-    /// Returns `true` when the resulting eq_store is false (the caller
-    /// should mzero — drop the branch). Mirrors HS `solveRuleConstraints`'
-    /// final `noContradictoryEqStore` (Reduction.hs, called at
-    /// Reduction.hs). HS's mzero here kills rule branches whose variants
-    /// conflict with the live eq_store — so `exploitPrems`/`solveGoal`
-    /// never fires for them.
+    /// `solveRuleConstraints` (Reduction.hs): add the rule's variants as a
+    /// new disjunction, insert its `SplitG` goal and simplify the store. A
+    /// `None` or empty `substs` is a no-op. Returns `true` when the store
+    /// became false (`noContradictoryEqStore`), so the caller drops the
+    /// branch.
     pub fn solve_rule_constraints(
         &mut self,
         substs: Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
@@ -864,32 +699,9 @@ impl<'ctx> Reduction<'ctx> {
         // supported there either. We don't enforce it; the worst case
         // is a redundant SplitG entry that simplify will discharge.
         let id = self.sys.eq_store_mut().add_disj(substs);
-        // HS-faithful order (Reduction.hs): `solveRuleConstraints
-        // (Just eqConstr)` is
-        //   (eqs, splitId) <- addRuleVariants eqConstr <$> getM sEqStore
-        //   insertGoal (SplitG splitId) False               -- BEFORE simp!
-        //   setM sEqStore =<< simp hnd (const (const False)) eqs
-        //   noContradictoryEqStore                          (Reduction.hs)
-        // — the `insertGoal` happens BEFORE `simp` and ALWAYS bumps
-        // `sNextGoalNr`, even when simp later folds the singleton variant
-        // disj into the free subst (`simpSingleton` collapses
-        // `Disj [emptySubstVFresh]` for non-destructor rules, so the
-        // SplitG ends up orphaned and `removeSolvedSplitGoals` deletes
-        // it later — but the gsNr bump persists).  Doing simp FIRST and
-        // skipping `insert_goal` when folded under-bumps the counter,
-        // desynchronising RS's gsNr sequence from HS's at every
-        // destructor-free `labelNodeId` call.
-        //
-        // Do NOT call apply_eq_store(maude, empty_subst) here to drop
-        // variants conflicting with the existing free subst: that is
-        // HS-unfaithful: HS lets simp's own passes (simp_singleton +
-        // friends) handle the propagation.
-        //
-        // simp_abstract_sorted_var (EquationStore.hs) no-ops on
-        // protocol variants until the Maude bridge returns Fresh-sorted
-        // `~mw`: it returns variant range vars as `~mw:Msg`, so the
-        // `sortCompare(v.sort, lx.sort)` strict-GT guard fails when both
-        // are Msg.  The fix lives in the Maude bridge, not here.
+        // `insertGoal (SplitG splitId)` comes before `simp` and always
+        // advances the goal number, even when simp folds a singleton variant
+        // disjunction into the substitution and orphans the goal.
         self.insert_goal(Goal::Split(id));
         {
             let maude = self.maude.clone();
@@ -899,32 +711,11 @@ impl<'ctx> Reduction<'ctx> {
                 .set_eq_store(std::sync::Arc::new(store.simp(&maude, |_, _| false)?));
             // eq_store simp can rewrite/drop subst entries → max may lower.
             self.sys.invalidate_max_var_idx_cache();
-            // HS leaves the orphaned SplitG goal in `sGoals` until the
-            // next `removeSolvedSplitGoals` call (Reduction.hs),
-            // which the simplifier loop invokes — so we don't strip the
-            // goal here, matching HS's lazy cleanup.
-            // HS-faithful: `solveRuleConstraints` (Reduction.hs) is
-            //   addRuleVariants → insertGoal (SplitG …) → setM sEqStore =<< simp …
-            //   → noContradictoryEqStore
-            // — it does NOT call `substSystem`, even when `simp` folds the
-            // singleton variant disjunction into the free subst.  The
-            // goal/node re-key from the new free-subst bindings is DEFERRED
-            // to the next simplify-loop `substSystem` pass (Simplify.hs).
-            //
-            // Deferring the re-key (matching HS) keeps the `GoalStatus.nr`
-            // ordering of graft-minted witnesses ahead of re-keyed KU
-            // msg-var goals, preserving `smartRanking`'s min-nr tie-break
-            // order for fresh-nonce KU goals.
+            // The orphaned SplitG goal stays until the next
+            // `removeSolvedSplitGoals`, and no `substSystem` runs here: the
+            // simplifier's next iteration re-keys goals and nodes, as in HS.
         }
         self.changed = ChangeIndicator::Changed;
-        // HS-faithful: `noContradictoryEqStore` (Reduction.hs,
-        // called from solveRuleConstraints at Reduction.hs) fires
-        // mzero if the eq_store ended up
-        // contradictory after adding variants + simp.  Return that
-        // signal so the caller can drop the rule branch BEFORE
-        // exploit_prems fires — matching HS, which never reaches
-        // `exploitPrems` for rules whose variants conflict with the
-        // live state.
         Ok(self.sys.eq_store().is_false())
     }
 
@@ -951,16 +742,9 @@ impl<'ctx> Reduction<'ctx> {
         if matches!(&g, Goal::Action(_, _)) && self.sys.goals.iter().any(|(old, _)| old == &g) {
             return;
         }
-        // Auto-decompose `KU(pair(a,b))` / `KU(inv(x))` / `KU(prod(...))`
-        // into sub-KU goals on the components, each at a fresh
-        // pre-ordered node (mirrors Haskell's `insertAction` in
-        // `Reduction.hs` which inserts sub-KU actions at fresh
-        // node-ids with a `i_sub < i_outer` less-atom before
-        // marking the outer KU goal solved).  Without this,
-        // `is_open` (which marks pair/inv-topped KU goals as
-        // not-open assuming the decomposition already happened)
-        // would hide the actual unsolved sub-goals, leaving the
-        // search stuck with "no method".
+        // `insertAction` (Reduction.hs): `KU` of a pair, inverse, product
+        // or union inserts the outer goal, then a `KU` goal per component at
+        // a fresh node ordered before it.
         if let Goal::Action(node_id, fa) = &g
             && fa.tag == crate::fact::FactTag::Ku
             && let Some(top) = fa.terms.first()
@@ -1033,15 +817,6 @@ impl<'ctx> Reduction<'ctx> {
         use crate::atom::ProtoAtom;
         match a {
             ProtoAtom::EqE(x, y) => {
-                // Haskell `insertAtom (EqE x y) = void (solveTermEqs
-                // SplitNow [Equal x y])`.  The monadic `void` ignores
-                // the ChangeIndicator but the monad propagates
-                // Contradictory via mzero/MonadPlus (the inner
-                // `noContradictoryEqStore` at Reduction.hs fires
-                // mzero on `eqsIsFalse`).  In our pass form, route
-                // both markers via `mark_contradictory` so the
-                // SolveGoal-arm mzero proxy AND post-simplify
-                // contradictions check both fire.
                 let branch_base = self.sys.clone();
                 let res = self.solve_term_eqs(
                     SplitStrategy::SplitNow,
@@ -1118,18 +893,8 @@ impl<'ctx> Reduction<'ctx> {
         Ok(SystemOutcome::Linear)
     }
 
-    /// Decompose a guarded formula via the structural cases of
-    /// `insertFormula` from `Theory.Constraint.Solver.Reduction`.
-    ///
-    /// Implemented cases (mark-as-solved on the *outermost* call only):
-    /// - `Conj fms`     → recurse on each subformula (CR-rule *S_∧*)
-    /// - `Disj`         → store + insert `Goal::Disj` (defer split, CR *S_∨*)
-    /// - `Atom`         → `insert_atom` via `gatom_to_atom` (atom insertion)
-    /// - `Ex`           → CR-rule *S_∃*: allocate fresh LVars, `substBound`,
-    ///   recurse on `gconj([guards…, body])`
-    /// - `All` (¬, single guard, body=⊥) → CR-rules for `Less`/`Eq`/`Last`
-    ///   (split into ordering disjunctions), `Subterm`
-    ///   (`insertNegSubterm`); otherwise kept in `formulas`
+    /// HS `insertFormula` (Reduction.hs): normalise `g`, then insert it
+    /// with `mark` set.
     pub fn insert_formula(
         &mut self,
         g: Guarded,
@@ -1568,27 +1333,8 @@ impl<'ctx> Reduction<'ctx> {
         }
     }
 
-    /// Remove all `Split` goals whose split id is no longer valid in
-    /// the equation store. Matches Haskell's `removeSolvedSplitGoals`
-    /// at `Reduction.hs`:
-    ///
-    /// ```haskell
-    /// removeSolvedSplitGoals = do
-    ///     goals    <- getM sGoals
-    ///     existent <- splitExists <$> getM sEqStore
-    ///     sequence_ [ modM sGoals $ M.delete goal
-    ///               | goal@(SplitG i) <- M.keys goals, not (existent i) ]
-    /// ```
-    ///
-    /// HS removes EVERY `SplitG i` whose `i` is no longer in the eq
-    /// store — regardless of the goal's solved-status flag.  An
-    /// earlier `simp` pass on the eq store can drop disjunctions
-    /// (e.g. via `simpRemoveRenamings`, `simpEmptyDisj`, or by
-    /// substituting one disj's content into the global subst), which
-    /// leaves the `SplitG i` goal behind referring to a no-longer-
-    /// existent split-id.  When HS prunes those, the goal-rank input
-    /// shrinks, which on exists-trace lemmas like CH07::executable
-    /// changes which `split_case_N` the DFS picks first.
+    /// `removeSolvedSplitGoals` (Reduction.hs): drop every `SplitG` goal
+    /// whose split no longer exists in the equation store, solved or not.
     pub fn remove_solved_split_goals(&mut self) {
         use crate::constraint::constraints::Goal as G;
         let valid: std::collections::BTreeSet<_> = self
@@ -1796,14 +1542,9 @@ impl<'ctx> Reduction<'ctx> {
         // produce non-normal subterms structurally so the check is
         // pure overhead.  See contradictions.rs::subst_creates_non_normal_terms.
         let has_reducible = !maude.maude_sig().reducible_fun_syms.is_empty();
-        // The checker is consumed ONLY by the `if has_reducible` arm of
-        // `do_simp` below.  It snapshots the `maybeNonNormalTerms` walk
-        // of `self.sys` ONCE here — mirroring HS's curried
-        // `substCreatesNonNormalTerms hnd se` (Reduction.hs), which
-        // captures `se` at the `simp` call and shares the walk across
-        // every candidate subst probed (see `SubstNfChecker`).  Gated on
-        // `has_reducible` so pair-only signatures pay nothing on this hot
-        // unification path.
+        // HS's curried `substCreatesNonNormalTerms hnd se` (Reduction.hs):
+        // one walk of the system, shared by every candidate substitution.
+        // Signatures without reducible symbols skip it.
         let nf_checker = has_reducible.then(|| {
             crate::constraint::solver::contradictions::SubstNfChecker::new(&maude, &self.sys)
         });
@@ -1828,26 +1569,11 @@ impl<'ctx> Reduction<'ctx> {
 
         match (split, strategy) {
             (Some(id), SplitStrategy::SplitNow) => {
-                // HS-faithful: perform_split FIRST, then simp + is_false
-                // check PER ARM.  Mirrors Haskell `solveTermEqs`
-                // (Reduction.hs):
-                //   setM sEqStore =<< simp ... =<<
-                //       case (maySplitId, splitStrat) of
-                //         (Just splitId, SplitNow) -> disjunctionOfList
-                //                $ performSplit eqs2 splitId
-                //         ...
-                //   noContradictoryEqStore
-                // The `disjunctionOfList performSplit` returns each arm
-                // in the Disj monad; `simp` and `noContradictoryEqStore`
-                // then run per arm.  Arm-specific subst can trigger
-                // contradictions that the un-split pre-simp store
-                // doesn't show (the subst composition into existing
-                // disjs may produce empty disjs in some arms but not
-                // others).  Without per-arm simp, those arms slip
-                // through to downstream consumers as live cases.
-                // `removePermutations` (#883): for AC-constructor equalities,
-                // drop split cases that only permute the two premise
-                // variables before fanning out.
+                // `disjunctionOfList (performSplit eqs2 splitId)`, then
+                // `simp` and `noContradictoryEqStore` in each arm
+                // (Reduction.hs `solveTermEqs`). For an AC-constructor
+                // equality, `removePermutations` (#883) first drops arms
+                // that only permute the rule's two premise variables.
                 let store = match is_ac {
                     IsAcConstructor::AcConstructor(v1, v2) => {
                         store.remove_permutations(&maude, id, &v1, &v2)?
@@ -1947,21 +1673,9 @@ impl<'ctx> Reduction<'ctx> {
         self.solve_term_eqs(SplitStrategy::SplitNow, &term_eqs)
     }
 
-    /// `solveFactEqs` — equate two fact lists. Returns
-    /// `Contradictory` if any pair of facts has different tags or
-    /// arities.
-    ///
-    /// Mirrors Haskell `solveFactEqs` (Reduction.hs):
-    /// ```haskell
-    /// solveFactEqs split eqs = do
-    ///     contradictoryIf (not $ all evalEqual $ map (fmap factTag) eqs)
-    ///     solveListEqs (solveTermEqs split) $ ...
-    /// ```
-    /// The `contradictoryIf` fires mzero on tag/arity mismatch.  We
-    /// emulate mzero by flipping `eq_store.is_false` AND returning
-    /// `Contradictory` — the proof_method.rs SolveGoal arm uses
-    /// `eq_store.is_false` as the mzero proxy when filtering cases,
-    /// so without the flip a tag-mismatch case would slip through.
+    /// `solveFactEqs` (Reduction.hs): `contradictoryIf` on a tag or arity
+    /// mismatch (which also marks the store false, the `mzero` proxy), then
+    /// `solveTermEqs` over the argument lists.
     #[track_caller]
     pub fn solve_fact_eqs(
         &mut self,
@@ -1999,20 +1713,9 @@ impl<'ctx> Reduction<'ctx> {
         self.solve_term_eqs_ac(strategy, is_ac, &flat)
     }
 
-    /// `solveRuleEqs` — equate two rule instances.  Mirrors
-    /// `Reduction.hs`: checks rInfo equality, then runs
-    /// `solveFactEqs` on conclusions, premises, actions.
-    ///
-    /// Mirrors Haskell `solveRuleEqs` (Reduction.hs):
-    /// ```haskell
-    /// solveRuleEqs split eqs = do
-    ///     contradictoryIf (not $ all evalEqual $ map (fmap (get rInfo)) eqs)
-    ///     solveListEqs (solveFactEqs split) ...
-    /// ```
-    /// `contradictoryIf` fires mzero on rInfo mismatch.  Set
-    /// `eq_store.is_false` here so the SolveGoal-arm mzero proxy
-    /// catches the contradiction, mirroring the helper for
-    /// `solve_fact_eqs`.
+    /// `solveRuleEqs` (Reduction.hs): `contradictoryIf` on differing rule
+    /// infos (or fact-list lengths), then `solveFactEqs` over all
+    /// conclusions, then all premises, then all actions.
     pub fn solve_rule_eqs(
         &mut self,
         strategy: SplitStrategy,
@@ -2051,14 +1754,9 @@ impl<'ctx> Reduction<'ctx> {
         self.solve_fact_eqs(strategy, &fact_eqs)
     }
 
-    /// `setNodes` — normalise node list so node ids are unique,
-    /// updating `sNodes` and emitting rule-eqs for collisions.
-    /// Mirrors `Reduction.hs`.
-    ///
-    /// Takes the FULL desired node list (caller is responsible for
-    /// concatenating case + live nodes).  Groups by id; for each
-    /// group, keeps the first as canonical and emits rule-eqs for
-    /// the rest.  Runs `solveRuleEqs SplitLater` on accumulated eqs.
+    /// `setNodes` (Reduction.hs): keep the first rule per node id and solve
+    /// `solveRuleEqs SplitLater` between colliding rules. `nodes` is the
+    /// complete node list.
     pub fn set_nodes(
         &mut self,
         nodes: Vec<(crate::constraint::constraints::NodeId, RuleACInst)>,
@@ -2079,24 +1777,8 @@ impl<'ctx> Reduction<'ctx> {
         self.solve_rule_eqs(SplitStrategy::SplitLater, &rule_eqs)
     }
 
-    /// `conjoinSystem` — port of `Reduction.hs`.  Merges the
-    /// information in `sys` (typically a freshened source-case) into
-    /// `self.sys`, faithfully following Haskell's step order:
-    ///
-    /// 1. joinSets sSolvedFormulas
-    /// 2. joinSets sLemmas
-    /// 3. joinSets sEdges
-    /// 4. insertLast for each lastAtom (unifies if already set)
-    /// 5. insertLess for each lessAtom
-    /// 6. insertGoalStatus for each non-split goal
-    /// 7. insertFormula for each formula
-    /// 8. setNodes on (case_nodes ++ live_nodes) — emits rule-eqs on
-    ///    id collisions, runs solveRuleEqs SplitLater
-    /// 9. addDisj for each conj-disj-eq entry
-    /// 10. conjoinSubtermStores
-    /// 11. insertGoal(Split) for each new disj-id
-    /// 12. solveSubstEqs SplitNow on case's subst
-    /// 13. substSystem
+    /// `conjoinSystem` (Reduction.hs): merge `sys`, typically an
+    /// instantiated source case, into this system in Haskell's step order.
     pub fn conjoin_system(
         &mut self,
         sys: &System,
@@ -2131,20 +1813,9 @@ impl<'ctx> Reduction<'ctx> {
         for l in &sys.less_atoms {
             self.insert_less(l.clone());
         }
-        // 6. insertGoalStatus: skip split goals (their split-ids are
-        // not valid in the merged system).  Mirrors Haskell's
-        // `mapM_ (uncurry insertGoalStatus) $ filter (not . isSplitGoal . fst)
-        //   $ M.toList $ get sGoals sys`.
-        // For already-present goals, combine status: `solved = solved1 || solved2`,
-        // `looping = loops1 || loops2`.  Direct port of
-        // `combineGoalStatus` (Reduction.hs).
-        //
-        // HS iterates `M.toList` (Goal-derived Ord), so the freshly
-        // assigned `gsNr`s for NEW goals follow Goal-Ord — within a
-        // single graft batch an `ActionG` therefore gets a smaller nr
-        // than a `PremiseG`.  Iterate in `Ord Goal` order to match
-        // (RS's `sys.goals` is a Vec in production/push order, which
-        // would otherwise assign the nrs in the wrong relative order).
+        // 6. insertGoalStatus for every non-split goal (split ids are not
+        // valid here), in Goal order as HS's `M.toList`, so new goals are
+        // numbered in that order.
         let mut conjoin_goals: Vec<&(
             crate::constraint::constraints::Goal,
             crate::constraint::system::GoalStatus,
@@ -2170,19 +1841,7 @@ impl<'ctx> Reduction<'ctx> {
                 slot.solved = true;
             }
         }
-        // 7. insertFormula.  Haskell-faithful: `insertFormula` in
-        // `conjoinSystem` (Reduction.hs) DECOMPOSES guarded formulas
-        // via the full CR-rule dispatch (Reduction.hs) — GAto →
-        // insertAtom, GConj → recurse on conjuncts, GDisj → insertGoal
-        // DisjG, GGuarded Ex → freshen + substBound, GGuarded All []
-        // [Less|Subterm|EqE|Last] gf | gf==gfalse → markAsSolved +
-        // negative-atom decomposition.  Without this dispatch, a
-        // grafted case's `GGuarded All [] [Less i j] gfalse` formula
-        // (the canonical encoding of `¬(i<j)`) stays raw in
-        // `sys.formulas` instead of becoming the disjunction
-        // `EqE i j ∨ Less j i`, so downstream FormulasFalse /
-        // cyclic-LessAtom checks miss the contradiction even though
-        // the algebra is already incompatible.
+        // 7. insertFormula, decomposing each formula by the CR-rules.
         let formulas = sys
             .formulas
             .iter()
@@ -2320,14 +1979,9 @@ impl<'ctx> Reduction<'ctx> {
 // Helpers used by goal solving.
 // =============================================================================
 
-/// Build the canonical `RuleACInst` for an `OpenProtoRule`.
-///
-/// Uses the abstracted form (Haskell `variantsProtoRule`'s output with
-/// reducible-headed sub-terms abstracted to fresh `z_i` vars) so the
-/// equality-restriction firing during simplify doesn't contradict on
-/// the un-narrowed form.  Mirrors Haskell's `someRuleACInst`
-/// (Model/Rule.hs) extracting the `RuleACInst` half
-/// from a `RuleAC`.
+/// The `RuleACInst` of an `OpenProtoRule` (HS `someRuleACInst`,
+/// Model/Rule.hs): its abstracted form, with reducible-headed subterms
+/// replaced by fresh variables, when it has one.
 pub(crate) fn canonical_rule_inst(o: &crate::theory::OpenProtoRule) -> RuleACInst {
     // Always prefer the abstracted rule (reducible-headed sub-terms
     // narrowed to fresh `z_i` vars) when present, falling back to the
@@ -2517,17 +2171,8 @@ fn chase_eq_store_subst(
     crate::tools::equation_store::LNSubst::from_map(out)
 }
 
-/// Build the implicit `ISend` rule instance:
-/// `[KU(m)] --[K(m)]-> [In(m)]`. Mirrors Haskell's `mkISendRuleAC`
-/// at `Reduction.hs`: `[kuFactAnn ann m] [inFact m] [kLogFact m]`.
-///
-/// `kLogFact` in Haskell is `protoFact Linear "K"` — a regular
-/// ProtoFact tag named "K", *not* `DedFact`.  So ISend's action is
-/// a ProtoFact.  A user-written `K(t) @ j` (which also parses to
-/// `protoFact "K"` per the parser's fall-through) matches the ISend
-/// action directly — that's how `K(t)` atoms in lemmas get satisfied
-/// through adversary forwarding (Out → IRecv → KD → Coerce → KU →
-/// ISend).
+/// HS `mkISendRuleAC` (Reduction.hs): `[KU(m)] --[K(m)]-> [In(m)]`, where
+/// `K` is the protocol fact `kLogFact`.
 fn make_isend_rule(m: tamarin_term::lterm::LNTerm) -> RuleACInst {
     let info = crate::rule::RuleInfo::Intr(crate::rule::IntrRuleACInfo::ISend);
     let prem = crate::fact::ku_fact(m.clone());
@@ -2691,14 +2336,8 @@ pub(crate) fn bm_goal(g: &Goal, max: &mut u64) {
     }
 }
 
-/// Cached entry point for the max free-var idx walk over the system.
-///
-/// Hot path: many sites (`Reduction::new`, `insert_goal_with_loop_flag`'s
-/// auto-decompose, `solve_chain_goal`, `freshen_rule`, etc.) call this
-/// dozens of times per proof-step.  `System` maintains an exact-max
-/// cache (`max_var_idx_cache`) maintained incrementally on additive
-/// mutations and invalidated on substitution / eq-store simp / node
-/// removal.  Cache hit = O(1); miss = full walk.
+/// The largest free variable index in the system (0 if none), through
+/// the system's max-var cache.
 pub fn bounds_max(sys: &System) -> u64 {
     if let Some(v) = sys.max_var_idx_cache.get() {
         return v;
@@ -2715,15 +2354,8 @@ pub fn bounds_max(sys: &System) -> u64 {
     v
 }
 
-/// HS `avoid` (LTerm.hs): `avoid = maybe 0 (succ . snd) . boundsVarIdx`
-/// — the `FreshState` (= NEXT index to draw) avoiding `sys`'s free vars:
-/// **0 when the system has NO free variables**, max idx + 1 otherwise.
-/// `bounds_max` alone returns 0 for both "no frees" and "frees at idx 0",
-/// so an unconditional `bounds_max + 1` seed off-by-ones every allocation
-/// at a lemma's root step (closed formula, no nodes ⇒ HS seeds 0) — the
-/// uniform +1 witness-index shift visible on web sequent pages (proven on
-/// cav13/DH_example: RS lemma existentials tid.3/key.4 vs HS tid.2/key.3
-/// at the first substantive applyEqStore call).
+/// HS `avoid` (LTerm.hs), `maybe 0 (succ . snd) . boundsVarIdx`: the next
+/// index to draw, 0 when the system has no free variable.
 pub fn avoid_fresh_state(sys: &System) -> u64 {
     let bm = bounds_max(sys);
     if bm > 0 || tamarin_term::lterm::bounds_var_idx(sys).is_some() {
@@ -2772,15 +2404,8 @@ pub fn bounds_max_rest(sys: &System) -> u64 {
     if let Some(la) = &sys.last_atom {
         bm_lvar(la, &mut max);
     }
-    // HS-faithful: `HasFrees System` folds field `e` = `_sSubtermStore`
-    // (System.hs), and `HasFrees SubtermStore` (SubtermStore.hs) folds `negSt <> st <> solvedSt`.  RS's SubtermStore is a
-    // 3-field subset (subterms = HS's `st`, solved_subterms = HS's
-    // `solvedSt`), so walk both here.  Without this, `avoid sys` (the
-    // per-step Maude-counter reset seed in `exec_proof_method` ≈ HS
-    // `runReduction … (avoid sys)`) under-counts when a lemma has live
-    // subterm constraints (e.g. `Ex x. x << t`), so RS could mint a
-    // witness colliding with a subterm-store var that HS's `avoid`
-    // reserves above.
+    // HS `HasFrees SubtermStore` folds `negSt <> st <> solvedSt`, not the
+    // old negative subterms.
     for c in &sys.subterm_store.subterms {
         bm_term(&c.small, &mut max);
         bm_term(&c.big, &mut max);
@@ -2817,17 +2442,8 @@ pub fn bounds_max_rest(sys: &System) -> u64 {
     for t in sys.eq_store().subst.range() {
         bm_term(t, &mut max);
     }
-    // Walk eq_store.conj (disjunctive substitutions).  HS-faithful:
-    // `avoid sys = freshAvoiding (frees sys)`, and `frees` over the variant
-    // disj uses `foldFrees (SubstVFresh n LVar) = foldFrees f . M.keys`
-    // (SubstVFresh.hs) — i.e. ONLY the DOMAIN keys, NOT the range
-    // (witnesses).  Walking the range here would over-count `avoid sys`, so
-    // the per-step Maude-counter reset (`exec_proof_method` ≈ HS
-    // `runReduction … (avoid sys)`) would seed too high, inflating witnesses
-    // minted by `someInst`/`applyBound` (e.g. Responder_secrecy: the
-    // Setup_Key `~k` nonce at ~k.31 against HS's ~k.3, rotating the
-    // 3-way split via `Ord LNSubstVFresh`).  Match `rename_precise_system`
-    // and count keys only.
+    // HS `foldFrees` over a `SubstVFresh` visits only its keys
+    // (SubstVFresh.hs): the range variables are fresh.
     for d in &sys.eq_store().conj {
         for s in &d.substs {
             for v in s.dom() {
@@ -2841,25 +2457,11 @@ pub fn bounds_max_rest(sys: &System) -> u64 {
     max
 }
 
-/// Freshen a `(RuleACInst, Option<Vec<LNSubstVFresh>>)` pair: one uniform
-/// index shift moves the rule's free variables and the substitutions' DOMAIN
-/// keys together, so the disjunction stays aligned with the renamed rule while
-/// its range terms — whose variables count as fresh (SubstVFresh.hs) —
-/// are carried over untouched, which is what keeps an AC-narrowed variant in
-/// HS's argument order (`Mult(lkI.N, lkR.N)`, not `Mult(lkI.X, lkR.Y)`).
-/// Mirrors HS `someRuleACInst = fmap extractInsts . rename`
-/// (Theory/Model/Rule.hs), where the variant
-/// disjunction sits inside the rule's info and `rename` (LTerm.hs)
-/// reaches it through `HasFrees`.
-///
-/// The shift is drawn from the MaudeHandle's counter, the port's `MonadFresh`
-/// for the solver.  Two calls made against one system — parallel source-case
-/// enumeration updates it only afterwards — see the same `avoid_max`, so a
-/// per-call counter would shift both rules into the same index range and
-/// produce the cross-call `~mw:Pub:N` / `~mw:Msg:N` collision that breaks
-/// TESLA::authentic_reachable.  `ensure_above` lifts the counter over the
-/// system's own indices before the shift; a pair with no free variable leaves
-/// it where it stands, as `rename` draws no index for one.
+/// HS `someRuleACInst = fmap extractInsts . rename` (Model/Rule.hs): one
+/// index shift, drawn from the counter after lifting it above `avoid_max`,
+/// renames the rule and the keys of its variant substitutions together.
+/// The ranges count as fresh (SubstVFresh.hs) and are left as they are. A
+/// pair without free variables draws nothing.
 fn freshen_rule_with_constrs(
     rule: RuleACInst,
     constrs: Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
@@ -3020,20 +2622,9 @@ pub fn default_case_name(i: usize) -> String {
     format!("case_{}", i + 1)
 }
 
-/// Haskell-faithful direct-close case name for a chain.  Mirrors
-/// Haskell `caseName mPrem` (Goals.hs) where `mPrem` is the
-/// chain conc's KD term:
-///   * `Lit (Var v)`  → `Var_<sortSuffix>_<idx-or-name>` (see Haskell
-///     `showLitName`, LTerm.hs).
-///   * `Lit (Con c)`  → `Const_<sortSuffix>_<n>` (Haskell `showLitName`
-///     LTerm.hs).  Currently we don't emit constants on the
-///     direct path; the variant covers it defensively.
-///   * `FApp o _`     → function symbol name (e.g. `senc`).  Mirrors
-///     Haskell `showFunSymName` (Term/Term.hs).
-///
-/// Returns `None` when the fact isn't a KD-tagged fact (the chain
-/// must be a destruction chain to be naming-relevant); callers should
-/// fall back to `rule_case_name(c_rule)` in that case.
+/// HS `caseName mPrem` (Goals.hs `solveChain`) for a direct chain edge:
+/// `showLitName` of a literal, `showFunSymName` of an application. `None`
+/// unless `fa_conc` is a `KD` fact.
 pub fn chain_direct_case_name(fa_conc: &crate::fact::LNFact) -> Option<String> {
     use crate::fact::FactTag;
     use tamarin_term::term::Term;
@@ -3125,26 +2716,9 @@ pub fn rule_case_name(rule: &crate::rule::RuleACInst) -> String {
 }
 
 impl<'ctx> Reduction<'ctx> {
-    /// `solveDisjunction` from `Solver.Goals`:
-    ///
-    /// > In contrast to the paper, we use n-ary disjunctions and also
-    /// > split over all of them at once.
-    ///
-    /// For each `gfm` in the disjunction, fork a system in which the
-    /// disj-goal is marked solved and `gfm` is inserted as an open
-    /// formula. The empty disjunction is `False` → `Contradictory`.
-    /// A singleton disjunction continues linearly (mutating `self.sys`
-    /// in place) but still carries the case name `case_1`: Haskell
-    /// `solveDisjunction` (Goals.hs) has no singleton special
-    /// case — `disjunctionOfList $ zip [1..] $ getDisj disj` returns
-    /// `"case_" ++ show i`, so a lone alternative is `case_1`, and
-    /// `ppCases` (Theory/Proof.hs) only elides the heading for the
-    /// EMPTY name, NOT for `case_1`.  Hence `LinearNamed("case_1")`
-    /// in the common case.  If the lone disjunct opens to an `Atom::Eq`
-    /// that fans into multiple AC unifier arms, HS's `DisjT` monad forks
-    /// the continuation per arm (the inner `disjunctionOfList` in
-    /// `solveTermEqs`), so we instead return `GoalCases::Cases` with one
-    /// `case_1` entry per arm — exactly like the multi-disjunct path.
+    /// `solveDisjunction` (Goals.hs): one case `case_i` per alternative,
+    /// inserting it with `insertFormula`. A lone alternative is still
+    /// named `case_1`.
     pub fn solve_disj_goal(
         &mut self,
         disj: &Disj<Guarded>,
@@ -3222,32 +2796,17 @@ impl<'ctx> Reduction<'ctx> {
         })
     }
 
-    /// `exploitPrems` — port of Haskell's `labelNodeId.exploitPrems`.
-    ///
-    /// For each premise of a freshly-instantiated rule node `i`, expand
-    /// according to the fact tag:
-    ///
-    /// - `Fr(m)` → allocate a fresh node `j`, instantiate the implicit
-    ///   Fresh-rule with conclusion `Fr(m)`, add edge `(j,0) → (i,p)`.
-    /// - `In(m)` → allocate a fresh `j`, instantiate the implicit
-    ///   `ISend` rule (premise `KU(m)`, conclusion `In(m)`, action
-    ///   `K(m)`), add edge.
-    /// - `KU(_)` (or `K(_)`/`KD(_)` k-fact) → add a KU-action goal at a
-    ///   fresh node `j` with `j < i`.
-    /// - Otherwise → insert a `Goal::Premise((i, idx), fact)`.
+    /// `exploitPrems` of `labelNodeId` (Reduction.hs): a `Fr` premise gets
+    /// a fresh-rule supplier, an `In` premise an `ISend` supplier, a `KU`
+    /// premise a `KU` action goal before `i`, and any other premise a
+    /// premise goal.
     pub fn exploit_prems(
         &mut self,
         i: &crate::constraint::constraints::NodeId,
         rule: &RuleACInst,
     ) -> Result<(), crate::prove::ProveError> {
-        // HS-faithful (Reduction.hs): `exploitPrem i ru (v, fa)`
-        // uses `fa` from `enumPrems ru` directly — no substitution
-        // applied at this point.  The substitution is applied later
-        // via `substSystem` (or implicit lookup).  This preserves
-        // fresh rule vars in vk stored action terms, enabling the
-        // binding-based merge mechanism in
-        // `enforce_ku_action_uniqueness` to operate on the same
-        // structure as HS.
+        // The premises as the rule states them; the next substSystem
+        // substitutes them.
         let prems: Vec<(crate::rule::PremIdx, crate::fact::LNFact)> = rule
             .enumerate_premises()
             .map(|(p, f)| (p, f.clone()))
@@ -3298,34 +2857,10 @@ impl<'ctx> Reduction<'ctx> {
         Ok(())
     }
 
-    /// Add a fresh-rule supplier node for a `Fr(m)` premise. The
-    /// Fresh-rule has `[] --[]-> [Fr(m)]`.
-    ///
-    /// Haskell-faithful port of `exploitPrem` for FreshFact
-    /// (`Reduction.hs`):
-    ///
-    /// ```haskell
-    /// Fact FreshFact _ [m] -> do
-    ///     j <- freshLVar "vf" LSortNode
-    ///     modM sNodes (M.insert j (mkFreshRuleAC m))
-    ///     unless (isFreshVar m) $ do
-    ///         -- 'm' must be of sort fresh ==> enforce via unification
-    ///         n <- varTerm <$> freshLVar "n" LSortFresh
-    ///         void (solveTermEqs SplitNow [Equal m n])
-    ///     modM sEdges (S.insert $ Edge (j, ConcIdx 0) (i,v))
-    /// ```
-    ///
-    /// The `unless (isFreshVar m)` branch narrows m's sort to Fresh
-    /// via a unification equation `m = ~n` (where ~n is freshly
-    /// allocated Fresh-sorted).  Without this, when a user writes
-    /// `Fr(x)` (where x is the default Msg sort), the supplier
-    /// rule's conclusion would carry x:Msg through the whole proof
-    /// — leaving `KU(x:Msg)` goals that get auto-solved (filtered
-    /// out by `is_open_in_sys`) because they look like an
-    /// unconstrained Msg variable, when in fact x is the fresh
-    /// value Step1 generated.  CSF12::Artificial's
-    /// Keys_must_be_revealed lemma wrong-falsifies exactly because
-    /// of this.
+    /// `exploitPrem` of a `Fr(m)` premise (Reduction.hs): a fresh-rule
+    /// node `[] --[]-> [Fr(m)]` with an edge to the premise, and, unless `m`
+    /// is already fresh-sorted, `solveTermEqs SplitNow [m = ~n]` for a fresh
+    /// `~n`.
     fn add_fresh_supplier_for(
         &mut self,
         i: &crate::constraint::constraints::NodeId,
@@ -3340,19 +2875,8 @@ impl<'ctx> Reduction<'ctx> {
         let j = tamarin_term::lterm::LVar::new("vf", tamarin_term::lterm::LSort::Node, next);
         let rule = make_fresh_rule(m.clone());
         self.sys.add_node(j, rule);
-        // HS-faithful (Reduction.hs): `exploitPrem FreshFact` does
-        // a raw `modM sEdges (S.insert $ Edge (j, ConcIdx 0) (i,v))` —
-        // NO `insertEdges`, so NO solveFactEqs.  `insert_edge` would unify
-        // the supplier's conc fact with the consumer's prem fact and add
-        // bindings HS does not have; on NSPK3 those bindings transitively
-        // chain `~ltkA = ~nr`, so `enforce_fresh_node_uniqueness` (DG4)
-        // merges two distinct Fresh suppliers, fires a false-positive
-        // `enforce_edge_uniqueness:prem_idx_clash` and drops the
-        // Lowe-attack cases as FormulasFalse.  `add_edge` (dedup +
-        // incremental cache bump) mirrors Haskell's `S.insert` semantics.
-        // `j` is freshly minted so a duplicate is impossible in practice;
-        // this matches the `add_isend_supplier_for` path and avoids a full
-        // cache recompute.
+        // A raw `S.insert` into sEdges, not insertEdges: no fact
+        // unification between the supplier and the premise.
         self.sys.add_edge(crate::constraint::constraints::Edge {
             src: (j, crate::rule::ConcIdx(0)),
             tgt: (*i, idx),
@@ -3399,18 +2923,9 @@ impl<'ctx> Reduction<'ctx> {
         Ok(())
     }
 
-    /// Add an ISend-rule supplier node for an `In(m)` premise.
-    /// `ISend` has `[KU(m)] --[K(m)]-> [In(m)]`.
-    ///
-    /// Mirrors Haskell's `labelNodeId.exploitPrem` for `InFact` — it
-    /// adds the ISend node, edges it to the consuming premise, then
-    /// recursively exploits the ISend's premises.  Since ISend's only
-    /// premise is `KU(m)`, the recursive exploit dispatches to
-    /// `add_ku_action_before` (Haskell's `requiresKU`), creating a
-    /// `KU(m)` action goal at a fresh predecessor.  ISend's action is
-    /// `K(m)` (the log fact, FactTag::Ded), not `KU(m)`, so the new
-    /// fresh node and the ISend node don't collide via
-    /// `enforce_ku_action_uniqueness`.
+    /// `exploitPrem` of an `In(m)` premise (Reduction.hs): an `ISend` node
+    /// `[KU(m)] --[K(m)]-> [In(m)]` with an edge to the premise, then its
+    /// own `KU(m)` premise exploited as a `KU` action goal.
     fn add_isend_supplier_for(
         &mut self,
         i: &crate::constraint::constraints::NodeId,
@@ -3496,21 +3011,12 @@ impl<'ctx> Reduction<'ctx> {
         GoalCases::Cases(cases)
     }
 
-    /// `solveAction` — port of the Action arm of `solveGoal`.
-    ///
-    /// Three cases:
-    /// 1. **Node `i` already exists** in the graph and `fa` is among
-    ///    its actions ⇒ Linear (already satisfied).
-    /// 2. **Node `i` already exists** but `fa` is *not* in its actions
-    ///    ⇒ fork once per existing action, unifying `fa` against each.
-    /// 3. **Node `i` doesn't exist** ⇒ fork once per non-silent rule,
-    ///    fresh-instantiating the rule and unifying `fa` against each
-    ///    of its actions.
-    ///
-    /// A `KU` goal headed by an AC operator is solved by the generic rule
-    /// enumeration like any other, with `IsAcConstructor` threaded through
-    /// so redundant AC-permutation unifier arms are pruned
-    /// (`removePermutations`; mirrors HS `solveAction`, Goals.hs).
+    /// `solveAction` (Goals.hs). If node `i` is labelled, unify `fa` with
+    /// each of its actions unless `fa` is already one of them; otherwise
+    /// label `i` with each non-silent rule and unify `fa` with each of the
+    /// rule's actions. For a `KU` goal headed by an AC operator,
+    /// `removePermutations` prunes arms that only permute the rule's `KU`
+    /// premise variables.
     pub(crate) fn solve_action_goal(
         &mut self,
         i: &crate::constraint::constraints::NodeId,
@@ -3525,28 +3031,9 @@ impl<'ctx> Reduction<'ctx> {
             .map(|(_, ru)| ru.clone());
         Ok(match existing {
             Some(ru) => {
-                // HS-faithful (Goals.hs):
-                //
-                //   Just ru -> do
-                //     unless (fa `elem` get rActs ru) $ do
-                //         act <- disjunctionOfList $ get rActs ru
-                //         void (solveFactEqs SplitNow [Equal fa act])
-                //     return ru
-                //
-                // HS RETURNS THE RULE every time (the `return ru` is at
-                // the bottom, after the `unless`), so the surrounding
-                // `solveAction` always emits `showRuleCaseName ru` as
-                // its step name.  HS uses `unless` (= `when . not`)
-                // purely to SKIP the action-fork unification when
-                // `fa` is already among `rActs ru` — the case-name
-                // emission is unconditional.
-                //
-                // Do NOT short-circuit to `GoalCases::Linear` here: the
-                // proof-method printer renders that as a bare `solve` with
-                // NO `case <rule>` child, whereas HS renders this situation
-                // as `case <rule_name>` followed by SOLVED (or the next
-                // step).  Emit `LinearNamed(rule_name)` so the proof
-                // skeleton matches.
+                // `Just ru -> do unless (fa `elem` rActs ru) ...; return ru`:
+                // the case is named after the rule even when no
+                // unification is needed.
                 let rule_name = rule_case_name(&ru);
                 if ru.actions.contains(fa) {
                     self.mark_goal_as_solved(&g);
@@ -3775,73 +3262,20 @@ impl<'ctx> Reduction<'ctx> {
     }
 
     /// `solvePremise` (Goals.hs).
-    ///
-    /// For a goal `Premise(p, faPrem)` where `p = (i, PremIdx j)`, fork
-    /// once per (rule, conclusion-index) pair whose conclusion is
-    /// shape-compatible with `faPrem`. In each case:
-    ///   - allocate a fresh node id
-    ///   - fresh-rename the chosen rule
-    ///   - add the node and the edge
-    ///   - unify the conclusion fact with `faPrem`
-    ///
-    /// The KD-fact branch inserts an `IRecv` learning step and a chain
-    /// constraint targeting the premise.
     pub(crate) fn solve_premise_goal(
         &mut self,
         p: &crate::constraint::constraints::NodePrem,
         fa_prem: &crate::fact::LNFact,
     ) -> Result<GoalCases, crate::prove::ProveError> {
-        // KD premises route through the chain machinery — direct port
-        // of Haskell's `solvePremise rules p faPrem | isKDFact faPrem`:
-        //   1. Allocate fresh node `iLearn`
-        //   2. Insert IRecv rule `[Out(m)] → [KD(m)]` at `iLearn`
-        //   3. `insertChain (cLearn, p)` — chain goal connecting IRecv
-        //      conc to the live KD premise (resolved by `solveChain`)
-        //   4. Mark the live KD premise solved (it's now a chain target)
-        //   5. Insert the IRecv's `Out(m)` as a regular Premise goal
-        //      (search will pick it up later).
-        // Haskell's `solvePremise` recurses immediately on `pLearn`; we
-        // defer via `insert_goal` to keep each call bounded — the
-        // search driver enumerates the goal in its own `expand` step.
+        // `solvePremise rules p faPrem | isKDFact faPrem`: an `IRecv` node
+        // `[Out(t)] --> [KD(t)]` for a fresh message variable `t`, a chain
+        // from it to `p`, and then `solvePremise` on its `Out(t)` premise.
+        // The fresh `t` lets the Out premise unify with any protocol
+        // output; `solveChain` later closes the chain.
         if matches!(fa_prem.tag, crate::fact::FactTag::Kd) {
             if fa_prem.terms.is_empty() {
                 return Ok(GoalCases::Contradictory);
             }
-            // Haskell `solvePremise rules p faPrem | isKDFact faPrem`:
-            //   iLearn <- freshLVar "vl" LSortNode
-            //   mLearn <- varTerm <$> freshLVar "t" LSortMsg
-            //   let ruLearn = Rule IRecvRule [outFact mLearn] [kdFact mLearn] [] []
-            //   modM sNodes (M.insert iLearn ruLearn)
-            //   insertChain (iLearn, ConcIdx 0) p
-            //   solvePremise rules pLearn (outFact mLearn)
-            //
-            // The crucial detail is that `mLearn` is a FRESH msg-sorted
-            // variable — *not* the concrete term `m` from `faPrem`.  When
-            // the recursive `solvePremise` enumerates protocol rules
-            // whose Out conclusion is e.g. `Out(<h(...), ~nb>)`, that
-            // unifies against `Out(mLearn)` (since mLearn is fresh),
-            // substituting `mLearn := <h(...), ~nb>` and giving the
-            // case name of the upstream protocol rule (e.g. "responder").
-            // The chain `KD(<h(...), ~nb>) → KD(h(t1))` is then closed
-            // separately by `solveChain` via destructor extension
-            // (d_fst → KD(h) → unifies with KD(h(t1))).
-            //
-            // refineSource's `combine` ([Sources.hs]) then
-            // strips leading "coerce" from the accumulated case-name
-            // list, leaving "responder" as the final source case name.
-            //
-            // Using `m` directly instead of a fresh `mLearn` would
-            // pin the IRecv's Out-premise term to the concrete `m`,
-            // which cannot unify with `<h(...), ~nb>` (head mismatch
-            // h vs pair) — the chain-up to responder never
-            // materialises and the case name stays at `coerce_irecv`.
-            // HS `solvePremise` KD branch (Goals.hs):
-            //   iLearn <- freshLVar "vl" LSortNode
-            //   mLearn <- varTerm <$> freshLVar "t" LSortMsg
-            // Both draw from — and ADVANCE — the shared MonadFresh counter,
-            // in that order, so the recursive `solvePremise` (and the chain
-            // extension it feeds) numbers its `#vr` / rule variables in
-            // step with HS.
             let avoid = bounds_max(&self.sys);
             self.maude.ensure_above(avoid);
             let vl_idx = self.maude.fresh_idx();
@@ -3863,19 +3297,9 @@ impl<'ctx> Reduction<'ctx> {
             self.insert_goal(Goal::Chain(c_learn, *p));
             self.mark_goal_as_solved(&Goal::Premise(*p, fa_prem.clone()));
             self.changed = ChangeIndicator::Changed;
-            // Recurse on the Out(mLearn) premise — Haskell does this
-            // immediately, inline, before any chain solving.  This is
-            // also where source-case short-circuiting will fire at
-            // runtime (the Out premise routes through the `solveWithSource`
-            // path below since Out is not KD).
             let p_learn: crate::constraint::constraints::NodePrem =
                 (i_learn, crate::rule::PremIdx(0));
             let prem_learn = crate::fact::out_fact(m_learn);
-            // HS-faithful (Goals.hs): solvePremise KD path ends
-            // with `solvePremise rules pLearn premLearn` — NO substSystem
-            // after the recursive solve.  HS leaves the eq-store update
-            // unpropagated; the next simplify iteration's substSystem
-            // (`Simplify.hs`) handles it.
             return self.solve_premise_goal(&p_learn, &prem_learn);
         }
         let g = Goal::Premise(*p, fa_prem.clone());
@@ -4040,29 +3464,10 @@ impl<'ctx> Reduction<'ctx> {
         Ok(self.finish_goal_cases(cases, name))
     }
 
-    /// `solveChain` — direct port of Haskell's `Goals.solveChain`
-    /// (CR-rule *DG2_chain*).
-    ///
-    /// For a chain goal `(c, p)` we explore two branches and return
-    /// their disjunction:
-    ///
-    /// 1. **Direct edge.** Add an edge `c → p`, unify the conclusion
-    ///    fact with the premise fact, and (for the prem-rule already
-    ///    in the system) check `forbidden_edge` and `illegal_coerce`.
-    /// 2. **Extend by one destructor step.** For each destructor rule
-    ///    in `ctx.intruder_rules`, instantiate it as a fresh node `i`,
-    ///    add an edge `c → (i, prem 0)` (unifying `fa_conc` with the
-    ///    destructor's first KD premise), wire the destructor's other
-    ///    premises via `exploit_prems`, mark `(i, prem 0)` solved
-    ///    (the chain now feeds it directly), and insert a fresh chain
-    ///    `(i, conc 0) → p` for the next step.  Skipped when
-    ///    `is_msg_var fa_conc` (open chain — Haskell's
-    ///    `contradictoryIf (isMsgVar m)`).
-    ///
-    /// Each successful case becomes one entry in `GoalCases::Cases`.
-    /// The union-message (FUnion) sub-branch (Goals.hs,
-    /// `viewTerm2 -> FUnion args` → `mkDUnionRule`) is handled below via
-    /// the `funion_args` block.
+    /// `solveChain` (Goals.hs), CR-rule *DG2_chain*: close the chain with a
+    /// direct edge, or extend it by one destructor step (by the bespoke
+    /// union destructors when the message is a multiset union). An open
+    /// chain, whose message is a variable, is not extended.
     pub fn solve_chain_goal(
         &mut self,
         c: &crate::constraint::constraints::NodeConc,
@@ -4084,14 +3489,8 @@ impl<'ctx> Reduction<'ctx> {
         if let Some(p_rule) = &p_rule_opt {
             let fa_prem_opt = p_rule.lookup_premise(p.1).cloned();
             if let Some(_fa_prem) = fa_prem_opt {
-                // Haskell (Goals.hs `illegalCoerce`) tests `illegalCoerce pRule
-                // mPrem` where `mPrem = case kFactView faConc of
-                // Just (DnK, m') -> m'` — i.e. the CHAIN CONCLUSION's
-                // down-K message, NOT the premise fact `faPrem`.  The
-                // Coerce rule's premise is the bare var `KD(x)`, so
-                // testing `faPrem` would never fire; we must test the
-                // chain conc's KD term, which `illegal_coerce` reads from
-                // `fa_conc.terms[0]` (== mPrem, since fa_conc is a KD fact).
+                // `illegalCoerce pRule mPrem` tests the chain conclusion's
+                // KD message, which `illegal_coerce` reads from `fa_conc`.
                 if !forbidden_edge(&c_rule, p_rule) && !illegal_coerce(p_rule, &fa_conc) {
                     // HS-faithful `insertEdges` (Reduction.hs):
                     // route through `insert_edge` so unification fires
@@ -4138,38 +3537,16 @@ impl<'ctx> Reduction<'ctx> {
             }
         }
 
-        // ---------------- Branch 2: extend by destructor ----------------
-        // Skip ONLY when the chain's term is a message variable
-        // (Haskell `contradictoryIf (isMsgVar m)`, Goals.hs).
-        //
-        // We also fire during precompute: the chain-extend branch is
-        // needed here so saturate explores destructor alternatives like
-        // `R_1d_0_adecd_0_sndd_0_fstRegister_pkRegister_pk`.
-        // Without these alternatives, HS produces 6 cases for KU(aenc)
-        // but Rust produces 4 — and the trace work-count gap stays
-        // 10-30× off.  HS Goals.hs runs both branches via
-        // `disjunction` unconditionally.
+        // Extend by one destructor step, in saturation as well
+        // (`contradictoryIf (isMsgVar m)` skips an open chain).
         let conc_term_is_msg_var = fa_conc
             .terms
             .first()
             .map(tamarin_term::lterm::is_msg_var)
             .unwrap_or(false);
-        // HS-faithful FUnion special branch (Goals.hs).  When the
-        // chain conc's KD term is a literal multiset `Union(t1,...,tn)`,
-        // HS bypasses the generic destructor pool and builds bespoke
-        // per-arg destructors `mkDUnionRule args arg_i` for each arg.
-        // Each bespoke rule has premise `KD(Union(t1..tn))` (identical
-        // to faConc by construction — no AC unification, no fanout) and
-        // conclusion `KD(arg_i)`.  This produces one case per arg with
-        // no AC-induced sibling cases.
-        //
-        // Without this branch, RS routes `KD(Union(...))` through the
-        // generic multiset destructor `mkDUnionRule [x_var,y_var] x_var`
-        // in `multiset_intruder_rules` — AC unification of `KD(x++y)`
-        // against `KD(~x++y)` produces 2 matchings (x↦~x,y↦y) and
-        // (x↦y,y↦~x), giving two `_case_1`/`_case_2` siblings that HS
-        // produces as a single case.  Manifests in
-        // `issue519.spthy::secret_freshVar` / `::secret_msgVar`.
+        // A multiset union `KD(t1 ++ ... ++ tn)` uses the bespoke rules
+        // `mkDUnionRule args arg_i`, whose premise is the message itself, so
+        // there is no AC unification and one case per component.
         let funion_args: Option<Vec<tamarin_term::lterm::LNTerm>> = match fa_conc.terms.first() {
             Some(tamarin_term::term::Term::App(
                 tamarin_term::function_symbols::FunSym::Ac(
@@ -4450,28 +3827,9 @@ impl<'ctx> Reduction<'ctx> {
         Ok(self.finish_goal_cases(all_cases, name))
     }
 
-    /// `solveSubterm` — full port of Haskell `solveSubterm`
-    /// (Goals.hs `solveSubterm`):
-    /// ```haskell
-    /// solveSubterm st = do
-    ///   modM (posSubterms . sSubtermStore) (st `S.delete`)
-    ///   modM (solvedSubterms . sSubtermStore) (st `S.insert`)
-    ///   reducible <- reducibleFunSyms . mhMaudeSig <$> getMaudeHandle
-    ///   splitList <- splitSubterm reducible True st
-    ///   (i, split) <- disjunctionOfList $ zip [1..] splitList
-    ///   case split of
-    ///     TrueD                 -> return ()
-    ///     SubtermD st1          -> modM sSubtermStore (addSubterm st1)
-    ///     NatSubtermD (s,t)     -> -- solve s + newVar = t; refine a Msg s
-    ///                             -- to a fresh Nat first (upstream #958)
-    ///     EqualD (l, r)         -> insertFormula $ GAto $ EqE (lTermToBTerm l) (lTermToBTerm r)
-    ///     ACNewVarD ((smallPlus, big), newVar) ->
-    ///                              insertFormula $ closeGuarded Ex [newVar] [EqE smallPlus big] gtrue
-    ///   return $ "SubtermSplit" ++ show i
-    /// ```
-    /// `disjunctionOfList` over `[]` yields no branches ⇒ the goal is
-    /// contradictory (the subterm is trivially false).  A singleton list
-    /// still produces one branch named `SubtermSplit1`.
+    /// `solveSubterm` (Goals.hs): move the subterm to the solved ones,
+    /// split it with `splitSubterm`, and make one case `SubtermSplit<i>`
+    /// per split.
     pub fn solve_subterm_goal(
         &mut self,
         st: &(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm),
@@ -4644,18 +4002,9 @@ impl<'ctx> Reduction<'ctx> {
             return Ok(GoalCases::Contradictory);
         }
         let g = Goal::Split(id);
-        // After picking a case, run `simp_with_fresh` so the resulting
-        // singleton disjunction (the picked variant subst) folds into
-        // eq_store.subst via `simp_singleton` — matching Haskell's
-        // `solveSplit`'s `simp hnd substCheck store` call (Goals.hs).
-        // Without this the picked subst stays in the conjunction and
-        // never propagates to rule terms.
-        //
-        // The is_contr predicate is Haskell's `substCreatesNonNormalTerms hnd`:
-        // it drops variants where applying the variant subst to a
-        // maybe-non-NF subterm in the system produces a non-NF term.
-        // Critical for SplitG variant filtering (e.g. drop verify=sign(...)
-        // variants against a live Eq(verify, true) restriction).
+        // `solveSplit` (Goals.hs) simplifies the chosen store with
+        // `substCreatesNonNormalTerms` as the contradiction check, which
+        // folds the chosen variant into the substitution.
         let maude = self.maude.clone();
         let has_reducible = !maude.maude_sig().reducible_fun_syms.is_empty();
         // One `maybeNonNormalTerms` walk of `self.sys`, shared across every

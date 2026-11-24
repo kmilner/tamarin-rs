@@ -107,34 +107,9 @@ impl HasFrees for EqDisj {
 
 /// `orderedSubsts = sortOnMemo dropNameHintsLNSubstVFresh . S.toList`
 /// (EquationStore.hs): a disjunction's cases in canonical split
-/// order.  The single source of truth for case ordering — `perform_split`
-/// and `pretty_system::pp_disj` (HS `ppDisj`, EquationStore.hs)
-/// both go through it, so the numbering shown for a disjunction matches
-/// the `split_case_i` labels a split of it emits.
-///
-/// Two stages, in this order:
-///  1. `sort()` is the `Data.Set LNSubstVFresh` `S.toList` raw-`Ord` order
-///     (RS stores the disjunction as an insertion-ordered `Vec`, so the
-///     set's enumeration order has to be materialised here).
-///  2. the stable `sort_by_cached_key(drop_name_hints)` re-sorts by the
-///     α-canonical key (`drop_name_hints` = `dropNameHintsLNSubstVFresh`,
-///     EquationStore.hs), which renumbers each subst's fresh
-///     witness range-vars by first appearance in domain-key order.  This
-///     makes `split_case_i` order independent of the Maude
-///     fresh-allocation counter (Rust's witness indices need not equal
-///     HS's), so case order is α-canonical and does not regress to the
-///     `analysis incomplete` symptom.
-///
-/// Ordering borrows rather than owned substs is order-identical: `Ord for
-/// &T` forwards to `T::cmp` and the key closure auto-derefs, so both
-/// stages see exactly the comparators they would see on owned values.
-///
-/// HS's `dropNameHintsBound` does NOT reach here: it is mapped only over
-/// the throwaway `addNormSys` copy in `removeRedundantCases`
-/// (Sources.hs, `map (fst . snd) ...` keeps the ORIGINAL case and
-/// discards the name-hint-dropped system; gated on `enableBP ||
-/// enableMSet`), so it never mutates the live `sEqStore` that
-/// `performSplit` later splits.
+/// order, shared by `perform_split` and `pretty_system::pp_disj` (HS
+/// `ppDisj`). The plain sort is `S.toList`; the stable re-sort by
+/// `drop_name_hints` makes the order independent of witness indices.
 pub(crate) fn ordered_substs(substs: &[LNSubstVFresh]) -> Vec<&LNSubstVFresh> {
     let mut out: Vec<&LNSubstVFresh> = substs.iter().collect();
     out.sort();
@@ -213,17 +188,7 @@ impl EquationStore {
     /// the resulting store and the new split id.
     pub fn add_disj(&mut self, substs: Vec<LNSubstVFresh>) -> SplitId {
         let id = self.next_split;
-        // HS-faithful Set ordering of variant substs.
-        // HS's `addDisj` (EquationStore.hs) does `addDisj eqStore
-        // (S.fromList substs)` — substs go into a Set, sorted by Ord
-        // LNSubstVFresh.  Without sorting here, RS's `Vec`-based disj
-        // preserves insertion order from `maude.variants()`, putting
-        // the identity-rename variant first.  HS's Set-based disj puts
-        // STRUCTURED variants first (where convertpcs is reduced to
-        // sign via Maude equations).  Downstream `simp_identify`
-        // iterates the FIRST subst's entries — HS finds same-image
-        // pairs in the structured variant, RS sees only the identity
-        // variant's unreduced entries and finds none.
+        // HS stores the disjunction as a `Set`: sort and deduplicate.
         let mut substs = substs;
         substs.sort();
         substs.dedup();
@@ -247,10 +212,7 @@ impl EquationStore {
             .map(|d| (d.split_id, d.substs.len()))
             .collect();
         indexed.sort_by_key(|(_, sz)| *sz);
-        // Mirrors Haskell's `nub`, but split-ids in `conj` are unique by
-        // construction (`add_disj` assigns a fresh incrementing id and never
-        // reuses one; the only other id is the lone `SplitId(-1)` false_conj),
-        // so the dedup is provably a no-op and is elided.
+        // HS's `nub` is a no-op: split ids in `conj` are unique.
         indexed.into_iter().map(|(id, _)| id).collect()
     }
 
@@ -324,13 +286,7 @@ impl EquationStore {
     pub fn perform_split(&self, id: SplitId) -> Option<Vec<EquationStore>> {
         let pos = self.conj.iter().position(|d| d.split_id == id)?;
         let disj = &self.conj[pos];
-
-        // For each substitution in the chosen disjunction, build a new
-        // store that drops `id` and adds a fresh single-case
-        // disjunction containing just that subst.
-        //
-        // Mirrors Haskell `performSplit` (EquationStore.hs):
-        //   mkNewEqStore before after <$> orderedSubsts disj
+        // `mkNewEqStore before after <$> orderedSubsts disj`
         let sorted_substs = ordered_substs(&disj.substs);
         let mut out = Vec::with_capacity(sorted_substs.len());
         for subst in sorted_substs {
@@ -459,11 +415,8 @@ impl EquationStore {
 type DisjStep = Option<(LNSubst, Option<Vec<LNSubstVFresh>>)>;
 
 impl EquationStore {
-    /// HS-faithful Set ordering: sort each disj's substs by Ord and
-    /// dedupe (mirrors `S.fromList` invariant in HS's `Disj`).  Called
-    /// after every simp pass that mutates substs so the FIRST subst
-    /// (used by simp_identify/simp_abstract_fun probing) matches HS's
-    /// Set-first variant.
+    /// Restore HS's `Set` invariant on every disjunction: sorted, no
+    /// duplicates.
     pub fn sort_disj_substs(&mut self) {
         for d in self.conj.iter_mut() {
             d.substs.sort();
@@ -515,16 +468,9 @@ impl EquationStore {
         let mut changed = false;
         let empty = LNSubstVFresh::empty();
         for d in self.conj.iter_mut() {
-            // Fast path: if no duplicate, no empty, and no contradictory subst
-            // exists, this disj is left untouched (no change, no clone).  This
-            // is the common case.  `simp` keeps every disj
-            // sorted and deduplicated (`sort_disj_substs`), so a strictly
-            // ascending disj, checked in n - 1 comparisons, has no duplicate.
-            // Otherwise duplicates are found through an ordered set (`Ord`
-            // agrees with `Eq`, both derived).  A pairwise scan was O(n^2)
-            // whole-substitution comparisons per disj per `simp` round, which
-            // dominated `splitEqs` on large AC-unifier disjunctions
-            // (bilinear-pairing `Joux`: ~90 s for one 160-case split).
+            // Fast path: a strictly ascending disjunction (as `simp` keeps
+            // them) has no duplicate; leave it alone unless it holds the
+            // empty or a contradictory substitution.
             let sorted = d.substs.windows(2).all(|w| w[0] < w[1]);
             let needs_special = d.substs.iter().any(|s| s == &empty || is_contr(s));
             if sorted && !needs_special {
@@ -539,15 +485,8 @@ impl EquationStore {
                 // `insert` returns `false` if the element was already present.
                 d.substs.iter().filter(|s| distinct.insert(*s)).collect()
             };
-            // Haskell-faithful `simpMinimize` (EquationStore.hs):
-            // if any subst is empty (vacuously true) OR contradictory,
-            // reduce the disj.  If empty present → singleton empty
-            // (next pass simpSingleton folds it into the free subst).
-            // Otherwise filter out contradictory substs.
-            //
-            // The variant-SplitG-preservation case is handled upstream
-            // in `apply_eq_store` via `renameAvoiding`, which prevents
-            // the narrowing variant from collapsing to an empty subst.
+            // `minimize`: the empty substitution subsumes the rest;
+            // otherwise drop the contradictory ones.
             if needs_special {
                 if seen.iter().any(|s| **s == empty) {
                     seen = vec![&empty];

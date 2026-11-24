@@ -1,42 +1,16 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Proof-search driver — port of the `Theory.Proof` step loop.
+//! Proof-search driver: the automatic prover of Theory/Proof.hs.
 //!
-//! In Haskell, a proof tree (`LTreeProof`) grows by repeatedly:
-//! 1. Picking a `ProofMethod` via the heuristic ranking.
-//! 2. Executing it to produce zero or more child sub-systems.
-//! 3. Recursing on each child.
-//!
-//! `rank_proof_methods` builds the FULL heuristic-ranked candidate list
-//! (Simplify + every open goal as `SolveGoal`, plus `Induction` in the
-//! initial state per `pcUseInduction`) and picks the first method whose
-//! `exec_proof_method` succeeds — mirroring `rankProofMethods` /
-//! `execMethods`.  The driver dispatches on `ProofContext::cut`: the
-//! default runs iterative-deepening DFS with memoized re-expansion
-//! (only `Sorry: depth limit` leaves are re-run across iterations),
-//! optional per-child parallel expansion, oracle handling, and
-//! solved-path extraction — a port of HS's `cutOnSolvedDFS`; the
-//! `--stop-on-trace=seqdfs` strategy instead runs a single serial
-//! unbounded-depth pass — HS's `cutOnSolvedSingleThreadDFS` (see
-//! `run_proof_search`).
-//!
-//! Under the default `Dfs` strategy, termination is bounded by the
-//! ID-DFS depth alone (`Search::max_depth`,
-//! doubling from 4) — `cutOnSolvedDFS` (Theory/Proof.hs) has only
-//! `dMax` and no step/node budget, doubling `dMax` from 4 with no
-//! upper bound.  HS terminates because it deepens over a finite proof
-//! tree (any TERMINATING lemma's tree is finite, so once `dMax`
-//! exceeds its depth `findSolved` returns `NoSolution` and HS stops);
-//! the effective bound is the actual proof depth, tens-to-low-hundreds
-//! of single-path steps for any real lemma.  We mirror the unbounded
-//! doubling, retaining only a far-out cap (`cap = usize::MAX / 4`)
-//! as a Rust-only loop-termination guard so a genuinely
-//! non-terminating proof strategy aborts rather than overflows.  No
-//! realistic Tamarin proof approaches this cap, so it never flips a
-//! verdict.  The per-search wall-clock deadline is a Rust-only
-//! addition, OFF by default (opt in via `TAM_PROVE_DEADLINE_MS`); see
-//! `ProofTimeLimit`.
+//! Each node takes the first method of `rankProofMethods` that applies
+//! (`execMethods`) and recurses on its cases. The default `Dfs` cut is
+//! `cutOnSolvedDFS`: iterative deepening from depth 4, doubling without a
+//! bound, re-expanding only the `depth limit` frontier between rounds, with
+//! optional parallel sibling expansion. `seqdfs` is
+//! `cutOnSolvedSingleThreadDFS`, one serial unbounded pass. The Rust-only
+//! guards are a far-out depth cap (`usize::MAX / 4`) and an opt-in wall-clock
+//! deadline (`TAM_PROVE_DEADLINE_MS`, see `ProofTimeLimit`).
 
 use std::collections::BTreeMap;
 use tamarin_term::maude_proc::OwnedPooledMaude;
@@ -1006,27 +980,10 @@ fn force_method(
     // (proof_method.rs). Bound-cut nodes above remain wholly unevaluated,
     // matching HS's `boundProofDepth`.
     crate::constraint::solver::trace::trace_state(&node.sys);
-    // ID-DFS depth limit (Haskell `cutOnSolvedDFS` Theory/Proof.hs).
-    //
-    // Haskell's `findSolved` checks `d >= dMax` BEFORE checking the
-    // node's method type:
-    //
-    //   findSolved d node
-    //     | d >= dMax = MaybeNoSolution
-    //     | otherwise = case node of
-    //         LNode (ProofStep (Finished Solved) ...) _  -> Solution path
-    //         ...
-    //
-    // So a Solved leaf at depth d == dMax becomes MaybeNoSolution, NOT
-    // Solution.  This is critical for correct alphabetical-first selection
-    // during iterative deepening: if a shorter Solved (case_2 at d=8)
-    // exists alongside a longer one (case_1 at d=15), Haskell needs to
-    // iterate dMax up to >= 16 before EITHER returns Solution, at which
-    // point alphabetical-first (case_1) wins.  Checking is_finished
-    // before the depth limit would make our case_2 close at max_depth=8
-    // and short-circuit before case_1 is reachable at deeper iterations.
-    //
-    // KAS2_eCK::eCK_key_secrecy is the lemma this ordering decides.
+    // HS `findSolved` (cutOnSolvedDFS, Theory/Proof.hs) tests `d >= dMax`
+    // before the node's method, so a Solved leaf at the limit is not yet a
+    // solution. Deeper rounds can then still select an alphabetically
+    // earlier, longer witness (KAS2_eCK::eCK_key_secrecy).
     if depth >= search.max_depth {
         search.depth_limit_hit = true;
         node.method = ProofMethod::Sorry(Some("depth limit".into()));
@@ -1114,26 +1071,8 @@ fn expand_inner(
     let Some(mut cases) = force_method(ctx, search, node, depth)? else {
         return Ok(());
     };
-    // Early-break-on-Solved (Haskell `foldMap` semantics):
-    //
-    // Haskell's Disj-monad is lazy — once any branch returns
-    // `TraceFound` (Solved), the monad short-circuits and siblings
-    // aren't forced.  Haskell's proof tree renders only what was
-    // forced: the Solved branch and its ancestors.  Our search does
-    // the same — once any child closes Solved, parent's status is
-    // Solved (per rollup) and remaining siblings are wasted work.
-    //
-    // Critical for NSPK3::nonce_secrecy and other attack lemmas:
-    // Haskell finds the trace at one specific case (e.g. `c_aenc`)
-    // after the lazy Disj-monad short-circuits other paths.
-    //
-    // Case iteration order: `execProofMethod`'s `process` helper
-    // (ProofMethod.hs) builds a `Data.Map` keyed by case name
-    // via `M.fromListWith` (ProofMethod.hs), so
-    // entries are alphabetically ordered.  `proveSystemDFS` /
-    // `cutOnSolvedDFS` then walk in map order (Theory/Proof.hs —
-    // `foldMap`, `M.map`).  Our `Vec` preserves creation order
-    // (source-file rule order), so sort by name to match Haskell.
+    // Cases are visited in case-name order, as HS's case map is
+    // (`M.fromListWith` in `execProofMethod`, ProofMethod.hs).
     cases.sort_by(|a, b| a.0.cmp(&b.0));
     // Speculative DFS siblings run on Rayon's bounded pool. Retain the
     // sequential prefix through the first Solved child or error: a later
@@ -1192,33 +1131,8 @@ fn expand_inner(
             node.children.insert(name, child);
         }
     }
-    // Rollup follows Haskell's `Semigroup ProofStatus`
-    // (`Theory/Proof.hs`):
-    //
-    //   TraceFound <> _ = TraceFound
-    //   _ <> TraceFound = TraceFound
-    //   IncompleteProof <> _ = IncompleteProof
-    //   _ <> IncompleteProof = IncompleteProof
-    //   UnfinishableProof <> _ = UnfinishableProof
-    //   _ <> UnfinishableProof = UnfinishableProof
-    //   CompleteProof <> _ = CompleteProof
-    //   _ <> CompleteProof = CompleteProof
-    //
-    // `TraceFound` (a Solved leaf was found) absorbs every other
-    // status — once *any* branch finds a witness, the whole proof
-    // is TraceFound (witness exists).  This is what makes the
-    // automatic prover correctly identify exists-trace verdicts
-    // even when sibling branches remain Sorry.
-    //
-    // `CompleteProof` (all branches closed without finding a
-    // witness) corresponds to our `Contradictory` — every path
-    // exhausts to ⊥.
-    // (`Contradictory` = all children closed without a Solved; the
-    // empty-children fallback is `Sorry`, but the empty case-set was
-    // already handled earlier as `Contradictory`.)
+    // HS `Semigroup ProofStatus` (Theory/Proof.hs); see `rollup_status`.
     node.status = rollup_status(&node.children);
-    // Note: `Contradictory` is only reached when no child is
-    // Solved/Sorry/Unfinishable — i.e. every branch closed to ⊥.
     Ok(())
 }
 

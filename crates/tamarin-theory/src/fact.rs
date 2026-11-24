@@ -46,37 +46,19 @@ pub enum FactTag {
     Term,
 }
 
-/// Variable fingerprint bit (cached-bloom skip).
-///
-/// SINGLE SHARED hashing site: both [`fact_fingerprints`] and the per-pass
-/// `dom_bloom` fold in `subst_system_once` call this — never introduce a
-/// second, ad-hoc var-hashing site (a divergent hash silently breaks the
-/// `bloom ⊇ frees` superset invariant the skip's soundness rests on).
-///
-/// `LVar`'s derived `Hash` is content-based (`&str` contents + sort + idx),
-/// so two independently-constructed content-equal vars hash equal (one from
-/// `subst.dom()`, one from a fact's `for_each_free`); `FxBuildHasher` is
-/// zero-seed deterministic, so the bit is stable process-wide. The hash is a
-/// FILTER only — it never reaches observable output, so byte-determinism is
-/// preserved. Do NOT "optimise" `LVar::Hash` to hash the interned name
-/// *pointer*: the superset invariant depends on content-based hashing.
+/// A variable's fingerprint bit.  Fact blooms and the substitution-domain
+/// bloom must both use it: the bloom skip is sound only while a fact's bloom
+/// covers the bits of its free variables.  `LVar`'s hash is content-based and
+/// unseeded, so the bit is stable.
 #[inline]
 pub fn var_bit(v: &LVar) -> u64 {
     1u64 << (tamarin_utils::fx_hash_one(v) & 63)
 }
 
-/// Both cached fingerprints over a term slice in a SINGLE `for_each_free`
-/// walk: the superset variable bloom (`.0`) and the EXACT maximum free-`LVar`
-/// index (`.1`).  `O(number of free-var occurrences)`.
-///
-/// - Bloom (`.0`): a 1 in every bit position any free `LVar` hashes to, so
-///   `bloom ⊇ frees` by construction.
-/// - Max idx (`.1`): the largest `v.idx` over the same free leaves, folded
-///   directly (NOT derived from the bloom), so it is EXACT — a no-free slice
-///   yields `0`.  The fold mirrors, bit-for-bit, `bm_term`'s max fold over
-///   the same `Var` leaves (reduction.rs).  This function is the sole
-///   computation site of the `max_var` cache that `bm_fact` reads for the
-///   `bounds_max` fresh-index seed.
+/// Both fact caches over `terms` from one walk: the bloom of the free
+/// variables' [`var_bit`]s (`.0`) and the exact maximum free-variable index
+/// (`.1`, `0` when there is none), which `bm_fact` (reduction.rs) seeds fresh
+/// indices from.
 #[inline]
 pub fn fact_fingerprints<T: HasFrees>(terms: &[T]) -> (u64, u64) {
     let mut b = 0u64;
@@ -99,57 +81,21 @@ pub struct Fact<T> {
     pub tag: FactTag,
     pub annotations: BTreeSet<FactAnnotation>,
     pub terms: Arc<[T]>,
-    /// Cached variable fingerprint over `terms`.  `u64::MAX` =
-    /// "unknown, always descend" — the never-wrong-skip default (a fact that
-    /// reaches the skip with `MAX` simply descends: `MAX & dom != 0` while
-    /// `dom` is non-empty).  NOT read by the manual `Eq`/`Ord` impls, so it is
-    /// invisible to equality, ordering, and dedup.  NEVER copy this across a
-    /// frees-changing rebuild — recompute or `MAX`.
-    ///
-    /// MODULE-PRIVATE (not `pub(crate)`): a stale-copy like `bloom: fa.bloom`
-    /// in a frees-changing rebuild is the classic soundness bug (a bloom that
-    /// no longer covers the rebuilt terms' frees breaks the `bloom ⊇ frees`
-    /// skip invariant).  Keeping the field private to this module makes such a
-    /// copy UNEXPRESSIBLE anywhere else — every out-of-module `Fact` must be
-    /// built through a constructor (`new`/`fresh`/`fresh_annotated`/`map`) that
-    /// sets the bloom correctly (computed, or the safe `MAX`), and any
-    /// post-construction `.terms` edit must call `recompute_bloom()`.
+    /// Cached bloom of the terms' free variables, or `u64::MAX` for unknown.
+    /// Not part of the fact's value.  Private so only the constructors and
+    /// `recompute_bloom` set it: a bloom copied across a rebuild that changes
+    /// the free variables would make the skip unsound.
     bloom: u64,
-    /// Cached EXACT maximum free-`LVar` index over `terms`, or `u64::MAX` =
-    /// "unknown, walk the terms".  Computed in the SAME `for_each_free` walk
-    /// as `bloom` (see [`fact_fingerprints`]); a no-free fact caches `0`
-    /// (folding `0` is the same no-op the per-term walk performs).
-    ///
-    /// UNLIKE `bloom`, this value is used as an EXACT max, never an
-    /// over-approximation: `bounds_max` (reduction.rs) seeds fresh-variable
-    /// drawing from it, so a value larger than the true max would draw a
-    /// different fresh index and CHANGE observable output.  Every producer
-    /// therefore stores the exact max or the `u64::MAX` sentinel — never a
-    /// looser bound.  Consumed by `bm_fact` (reduction.rs) via
-    /// [`Fact::max_var_cached`].
-    ///
-    /// Same MODULE-PRIVATE + never-stale-copy discipline as `bloom`: set only
-    /// by the constructors and recomputed alongside `bloom` on every
-    /// frees-changing rebuild.
+    /// Cached exact maximum free-variable index of the terms (`0` with none),
+    /// or `u64::MAX` for unknown.  It must be exact, not a bound: fresh
+    /// variables are drawn above it.  Set together with `bloom`.
     max_var: u64,
 }
 
-// Equality, ordering and hashing read `tag` and `terms` only.  `annotations` is
-// excluded because HS `Eq`/`Ord LNFact` treat it as metadata (Theory/Model/Fact.hs,
-// whose line-169 comment reads "Ignore annotations in equality and ord
-// testing"); `bloom` is excluded because it is an out-of-band skip fingerprint
-// of the terms' frees (a superset of them, or the `u64::MAX` sentinel), not
-// part of a fact's value — HS `LNFact` carries no such field.  All four impls
-// read [`Fact::cmp_key`], so one field list drives equality, ordering and
-// hashing together.
-//
-// `Hash` is hand-written rather than derived so it reads EXACTLY the fields
-// `PartialEq` reads: equal values must hash equal, because the implied-formula
-// dedup skips its deep comparison on hash inequality
-// (`insert_implied_formulas_pass`, constraint/solver/simplify.rs).  A `Hash`
-// that folded in `annotations` would let two equal formulas hash apart, the
-// dedup would never fire, and the pass would re-insert the same formula on
-// every simplifier round.
+// Equality, ordering and hashing read only `tag` and `terms`, through
+// `cmp_key`: HS ignores annotations in `Eq`/`Ord LNFact` (Theory/Model/Fact.hs)
+// and the caches are not part of the value.  `Hash` must read what
+// `PartialEq` reads, since the implied-formula dedup compares hashes first.
 impl<T> Fact<T> {
     /// The fields the comparison impls read, in comparison order.  Destructured
     /// without `..` so a new `Fact` field forces an inclusion decision here.
@@ -188,10 +134,8 @@ impl<T: std::hash::Hash> std::hash::Hash for Fact<T> {
 }
 
 impl<T> Fact<T> {
-    /// Generic constructor: stores `bloom = u64::MAX` (no `HasFrees` bound, so
-    /// the fingerprint cannot be computed here).  For LNFact producers whose
-    /// output reaches `subst_system_once`, prefer [`Fact::fresh`] so the
-    /// fast-path fires (a `MAX` bloom is SOUND but never skips).
+    /// A fact with unknown caches, which the bloom skip never skips; prefer
+    /// [`Fact::fresh`] where the terms have free variables.
     pub fn new(tag: FactTag, terms: Vec<T>) -> Self {
         Fact {
             tag,
@@ -205,10 +149,8 @@ impl<T> Fact<T> {
         self.annotations = ann;
         self
     }
-    /// Rebuild over an already-built term slice, keeping `tag` and
-    /// `annotations`.  Both cached fingerprints become `u64::MAX` — the
-    /// never-wrong-skip default [`Fact::new`] stores — because the new terms'
-    /// frees are unknown here.
+    /// The fact over other terms, tag and annotations kept; both caches
+    /// become unknown.
     pub fn with_terms(&self, terms: Arc<[T]>) -> Fact<T> {
         Fact {
             tag: self.tag,
@@ -225,16 +167,12 @@ impl<T> Fact<T> {
     pub fn arity(&self) -> usize {
         self.terms.len()
     }
-    /// Cached variable fingerprint.  `u64::MAX` means "not
-    /// computed — always descend".
+    /// The cached bloom; `u64::MAX` when unknown.
     #[inline]
     pub fn bloom(&self) -> u64 {
         self.bloom
     }
-    /// Cached EXACT maximum free-var index, or `None` when unknown (the
-    /// `u64::MAX` sentinel).  `bm_fact` (reduction.rs) folds `Some(m)`
-    /// straight into the running max and falls back to a per-term walk on
-    /// `None`.
+    /// The cached maximum free-variable index, `None` when unknown.
     #[inline]
     pub fn max_var_cached(&self) -> Option<u64> {
         if self.max_var == u64::MAX {
@@ -243,10 +181,7 @@ impl<T> Fact<T> {
             Some(self.max_var)
         }
     }
-    /// Generic map: stores both fingerprints as `u64::MAX` (result type `U`
-    /// carries no `HasFrees` bound).  A `MAX` bloom is a safe perf-miss and a
-    /// `MAX` max_var falls back to the walk; if a hot LNFact producer routes
-    /// through `map`, recompute via [`Fact::recompute_bloom`].
+    /// Map the terms; both caches become unknown.
     pub fn map<U, F: FnMut(T) -> U>(self, f: F) -> Fact<U>
     where
         T: Clone,
@@ -259,10 +194,8 @@ impl<T> Fact<T> {
             max_var: u64::MAX,
         }
     }
-    /// Borrowing map — the HS `Functor Fact` instance (Theory/Model/Fact.hs) for
-    /// producers holding a `&Fact`.  Clones `tag`/`annotations` and stores both
-    /// fingerprints as `u64::MAX`, exactly like [`Fact::new`]/[`Fact::map`]; the
-    /// same recompute guidance applies if a hot LNFact producer routes here.
+    /// HS `Functor Fact` (Theory/Model/Fact.hs) over a borrowed fact; both
+    /// caches become unknown.
     pub fn map_ref<U>(&self, f: impl FnMut(&T) -> U) -> Fact<U> {
         Fact {
             tag: self.tag,
@@ -272,10 +205,8 @@ impl<T> Fact<T> {
             max_var: u64::MAX,
         }
     }
-    /// Fallible borrowing map — the HS `Traversable Fact` instance
-    /// (Theory/Model/Fact.hs) specialised to `Result`; short-circuits on the first
-    /// `Err`.  Same `tag`/`annotations` clone and `u64::MAX` fingerprints as
-    /// [`Fact::map_ref`].
+    /// HS `Traversable Fact` (Theory/Model/Fact.hs) at `Result`; both caches
+    /// become unknown.
     pub fn try_map_ref<U, E>(&self, f: impl FnMut(&T) -> Result<U, E>) -> Result<Fact<U>, E> {
         let terms: Result<Vec<U>, E> = self.terms.iter().map(f).collect();
         Ok(Fact {
@@ -289,10 +220,8 @@ impl<T> Fact<T> {
 }
 
 impl<T: HasFrees> Fact<T> {
-    /// Bloom-COMPUTING constructor: use for every LNFact
-    /// producer whose output reaches `subst_system_once`, so the whole-fact
-    /// skip fast-path can fire.  The cached fingerprint is paid ONCE here and
-    /// reused on every unchanged pass the fact survives (P1 amortization).
+    /// Constructor that computes both caches, so the bloom skip can fire on
+    /// the fact.
     pub fn fresh(tag: FactTag, terms: Vec<T>) -> Self {
         let (bloom, max_var) = fact_fingerprints(&terms);
         Fact {
@@ -318,9 +247,8 @@ impl<T: HasFrees> Fact<T> {
             max_var,
         }
     }
-    /// Recompute both cached fingerprints (`bloom` and `max_var`) from the
-    /// CURRENT terms.  Call after any external `.terms` mutation (never leave a
-    /// stale fingerprint).
+    /// Recompute both caches from the current terms; required after any
+    /// direct `.terms` edit.
     pub fn recompute_bloom(&mut self) {
         let (bloom, max_var) = fact_fingerprints(&self.terms);
         self.bloom = bloom;
@@ -339,10 +267,7 @@ impl<T: HasFrees + Clone> HasFrees for Fact<T> {
         }
     }
     fn map_free_with(self, f: &mut dyn FnMut(LVar) -> LVar, monotone: bool) -> Self {
-        // Freshen / rule-rename producer: this renames vars, so
-        // the rebuilt fact's frees ≠ the source frees.  RECOMPUTE both
-        // fingerprints from the renamed terms — NEVER copy `self`'s (would
-        // fingerprint the old var names → possible wrong skip / stale max).
+        // Renaming changes the free variables, so recompute both caches.
         let terms: Vec<T> = self
             .terms
             .iter()

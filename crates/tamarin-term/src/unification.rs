@@ -254,37 +254,17 @@ fn sort_geq_lterm<C, F: Fn(&C) -> LSort>(sort_of_const: &F, v: &LVar, t: &LTerm<
 // Free matching (no AC).
 // =============================================================================
 
-/// Outcome of the native matcher, mirroring HS `solveMatchLTerm`'s
-/// 3-way `case runState (runExceptT match)` split
-/// (`Term/Unification.hs`):
-///
-/// * `NoMatcher`   ⇒ `Left NoMatcher`  ⇒ HS returns `[]` *without* any
-///   Maude round-trip.  (The pattern structurally cannot match the
-///   subject — e.g. constant clash, arity mismatch, sort clash, or a
-///   pattern var already bound to a different subject.)
-/// * `Matched(s)`  ⇒ `Right ()`        ⇒ HS returns `[substFromMap …]`
-///   natively, no Maude.
-/// * `NeedsAC`     ⇒ `Left ACProblem`  ⇒ HS calls `matchViaMaude` on the
-///   *whole* original problem.
-///
-/// Callers fall back to Maude only on `NeedsAc`: a `NoMatcher` is a
-/// definitive answer that HS never sends to Maude.
+/// Outcome of the native matcher (HS `solveMatchLTerm`, Unification.hs):
+/// `NoMatcher` and `Matched` are final; only `NeedsAc` (HS `ACProblem`)
+/// warrants a Maude `match` of the whole problem.
 pub enum MatchOutcome<C> {
     NoMatcher,
     Matched(Subst<C, LVar>),
     NeedsAc,
 }
 
-/// HS-faithful `solveMatchLTerm` (`Term/Unification.hs`): run the
-/// native `matchRaw` matcher over all delayed pairs and report the 3-way
-/// outcome so the caller can decide whether a Maude AC fallback is
-/// actually warranted (only on `NeedsAc`).
-///
-/// `matchRaw` raises `ACProblem` (here `NeedsAC`) the *instant* it sees an
-/// AC-/C-headed pair on BOTH sides; a variable pattern facing an
-/// AC-headed subject is bound natively (HS `matchRaw` checks the
-/// `(_, Lit (Var vp))` arm first, `Unification.hs`) — so a `tamxor`
-/// buried under a variable pattern never triggers a Maude call.
+/// HS `solveMatchLTerm` (Unification.hs) without the Maude fallback: run
+/// `matchRaw` over all pairs and report the 3-way outcome.
 pub fn solve_match_lterm<C, F>(sort_of_const: &F, problem: Match<LTerm<C>>) -> MatchOutcome<C>
 where
     C: Ord + Clone,
@@ -353,20 +333,8 @@ where
             }
             _ => Err(UnifyError::NoUnifier),
         },
-        // HS `(FApp (AC _) _, FApp (AC _) _) -> throwError ACProblem` and
-        // `(FApp (C _) _, FApp (C _) _) -> throwError ACProblem`
-        // (Unification.hs): the AC/C arm fires ONLY when BOTH the
-        // subject `t` AND the pattern `p` are AC-/C-headed.  An AC-/C-headed
-        // PATTERN facing a variable / constant / NoEq / List / differently-
-        // headed subject is NOT an AC problem — HS falls to the final
-        // `_ -> throwError NoMatcher` arm (Unification.hs).  (An
-        // AC-/C-headed PATTERN alone is not enough — the subject must be
-        // AC-/C-headed too, otherwise this would ship non-AC structural
-        // mismatches to Maude.)
-        // NB: HS does NOT require the AC (resp. C) symbols to match here —
-        // `Mult`-vs-`Union` is still `ACProblem` (Maude then resolves it,
-        // typically to no match).  So the guard is purely "both AC" / "both
-        // C", not "same symbol".
+        // HS `ACProblem` needs both sides AC- (or C-) headed, with any
+        // symbols; every other pairing is `NoMatcher`.
         Term::App(FunSym::Ac(_), _) => match t {
             Term::App(FunSym::Ac(_), _) => Err(UnifyError::NeedsAC),
             _ => Err(UnifyError::NoUnifier),

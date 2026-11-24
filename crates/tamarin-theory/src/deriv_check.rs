@@ -1,55 +1,23 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Dynamic message-derivation check.
+//! Dynamic message-derivation check: HS `checkVariableDeducibility`
+//! (Theory/Tools/MessageDerivationChecks.hs).
 //!
-//! Mirrors HS's `Theory.Tools.MessageDerivationChecks.checkVariableDeducibility`
-//! (lib/theory/src/Theory/Tools/MessageDerivationChecks.hs).  For each
-//! protocol rule, asks the prover: "given that the intruder has access to all
-//! of this rule's premise terms, can it derive each of the rule's free
-//! variables?"  When a variable IS bound by some premise fact but cannot
-//! actually be derived by the intruder (because the fact's containing rule
-//! is unreachable / requires private knowledge), HS flags it as an
-//! "unintended pattern match".
+//! For each protocol rule HS builds a probe theory with the original
+//! signature, privacy kept (see [`synthesise_probe`] for why `makeFunsPublic`
+//! and `replacePrivate` change nothing), and one generated rule over the
+//! rule's free variables (nat re-sorted to fresh) and premise terms:
 //!
-//! How HS does it (see `MessageDerivationChecks.hs`):
+//! ```text
+//! rule <idx>: [ Fr(v1), ... ] --[ Generated_<idx>(v1, ...) ]-> [ Out(t1), ... ]
+//! ```
 //!
-//!   For each rule R indexed by idx:
-//!     1. Drop ALL rules/lemmas/restrictions from the theory, keeping the
-//!        signature — privacy flags included.  HS's `makeFunsPublic` and
-//!        `replacePrivate` both look like they make symbols public but neither
-//!        changes the verdict: `makeFunsPublic` only sets the OPEN theory's
-//!        pure signature, which `closeTheoryWithMaude sig` overwrites with the
-//!        ORIGINAL private-preserving maude signature (so intruder-rule
-//!        generation stays private); and `replacePrivate` rewrites Out-term
-//!        heads to a same-name Public variant that gets no
-//!        construction/destruction rule, leaving the term opaque exactly as
-//!        the private application would be.  See [`synthesise_probe`] for the
-//!        full citation.
-//!     2. Add a single generated rule (HS names it `StandRule (show idx)`):
-//!          rule <idx>:
-//!            [ Fr(v1), Fr(v2), ... ]                     // each free var of R,
-//!                                                        // keeping its own sort
-//!                                                        // (only nat → fresh)
-//!            --[ Generated_<idx>(v1, v2, ...) ]->        // sole action
-//!            [ Out(t1), Out(t2), ... ]                   // R's premise terms
-//!     3. Add one exists-trace lemma per free var v.  HS's `landFormula`
-//!        gives each conjunct its OWN timepoint via `zip [0..]`, and the
-//!        intruder-knowledge predicate is `KU` (`lntermToKUFact = kuFact`):
-//!          lemma deriv_v: exists-trace
-//!            "Ex v1 v2 ... #t0 #t1. Generated_<idx>(v1, v2, ...) @ #t0 & KU(v) @ #t1"
-//!     4. Run the prover on each lemma with `--derivcheck-timeout`.
-//!     5. Lemmas whose proof did NOT find a trace identify non-derivable
-//!        variables — report them.
-//!
-//! Note: `prove_probe` builds the `ProofContext` + runs `ensure_saturated()`
-//! ONCE per probe and then iterates the per-variable lemmas reusing that
-//! shared, already-saturated context, so a rule with N free vars incurs N
-//! proof attempts but only one context build.  Each attempt is bounded by
-//! the user's timeout (default 5s, mirrored on the HS side).  The check is
-//! gated by `args.derivcheck_timeout`; passing `0` disables it entirely and
-//! a negative value runs it without a time limit (HS:
-//! `Main.TheoryLoader.hs`).  See [`DerivCheckTimeout`].
+//! It then proves one exists-trace lemma per variable,
+//! `Ex v1 ... #t0 #t1. Generated_<idx>(v1, ...) @ #t0 & KU(v) @ #t1`, within
+//! `--derivcheck-timeout`, and reports each variable whose lemma finds no
+//! trace.  [`prove_probe`] saturates one context per rule and reuses it for
+//! all the rule's variables.
 
 use crate::wellformedness::WfError;
 use std::num::NonZeroU32;
@@ -124,23 +92,13 @@ impl std::str::FromStr for DerivCheckTimeout {
     }
 }
 
-/// Run HS's per-variable derivability check on every rule.
+/// Run HS's per-variable derivability check on every rule, each probe
+/// proof bounded by `timeout`.
 ///
-/// [`DerivCheckTimeout::Disabled`] skips the check (returns `vec![]`).
-/// [`DerivCheckTimeout::Secs`] bounds each per-variable prove call by that
-/// many seconds of wall-clock time; [`DerivCheckTimeout::Unbounded`]
-/// installs no cap (mirrors HS's `--derivcheck-timeout`).
-///
-/// `ndc_cache` is the parent theory's once-per-load NDC-checked intruder
-/// cache: HS's probe theories inherit the parent's checked `_thyCache`
-/// verbatim (`deleteRulesAndLemmasAndRestrictionsFromTheory` keeps the
-/// cache field; `deductionChainCheck = False` only prevents re-checking,
-/// MessageDerivationChecks.hs), so the probe contexts are built with it
-/// injected — NDC tags stay active in `forbidden_edge` during probe
-/// proofs.  `None` falls back to signature assembly with the cache
-/// permutation applied.  A `Some` argument is one shared handle for the
-/// whole per-rule walk below: each probe context points at that rule list
-/// instead of copying it.
+/// `ndc_cache` is the parent theory's NDC-checked intruder cache, which HS's
+/// probe theories inherit verbatim (`deleteRulesAndLemmasAndRestrictionsFromTheory`
+/// keeps `_thyCache`, MessageDerivationChecks.hs); `None` assembles the cache
+/// from the signature.
 pub fn check_message_derivation(
     thy: &Theory,
     maude: &MaudeHandle,

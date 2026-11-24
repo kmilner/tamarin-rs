@@ -41,25 +41,9 @@ pub const RIBBON: usize = 73;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Process-wide DISPLAY width used by the bare [`Doc::render`] path.
-///
-/// The two output modes render at different widths in HS, and it is a
-/// property of the whole process (you invoke either `--prove` OR
-/// `interactive`, never both in one process):
-///   - the CLI (`--prove`) renders at the *console* width
-///     `LINE_LENGTH`/`RIBBON` = 110/73 (`src/Main/Console.hs`
-///     `renderDoc`);
-///   - the interactive web server renders every HTTP response at HS's
-///     *web* width 100/67 — HughesPJ's default `style` used by `render`
-///     (`getTheorySourceR` = `render . prettyClosedTheory`,
-///     `src/Web/Handler.hs`) and by `renderHtmlDoc`
-///     (`Text/PrettyPrint/Html.hs`).
-///
-/// Defaults to 110/73 so the CLI path is unchanged; the server calls
-/// [`set_display_width`] once at startup, before any rendering.  This is
-/// presentation-only — it can never affect proof search or verdicts —
-/// and the explicit `render_with`/`render_at` widths (WF/oracle/goal
-/// rendering) are unaffected.
+/// Width of the bare [`Doc::render`]: the console's 110/73 for the CLI
+/// (`src/Main/Console.hs`), or HughesPJ's default 100/67, which the
+/// interactive server installs once at startup (HS web `render`).
 static DISPLAY_LINE_LENGTH: AtomicUsize = AtomicUsize::new(LINE_LENGTH);
 static DISPLAY_RIBBON: AtomicUsize = AtomicUsize::new(RIBBON);
 

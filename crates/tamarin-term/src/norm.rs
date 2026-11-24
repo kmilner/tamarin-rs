@@ -1,24 +1,10 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Port of `Term.Rewriting.Norm` — normalisation and normal-form
-//! checks via the Maude bridge.
-//!
-//! Tamarin uses two strategies:
-//! 1. **Maude-backed normalisation** (`norm`) — simply asks Maude to
-//!    `reduce` the term modulo the theory.
-//! 2. **Haskell-side normal-form check** (`nf_via_haskell`) — a
-//!    structural walk that returns `false` early when an obviously-
-//!    reducible top construct is detected, avoiding a Maude callout
-//!    for negative cases.
-//!
-//! For the Rust port we expose the Maude-backed `norm` directly and
-//! the pure structural `nf_via_haskell` check, which decides normal
-//! form from syntax alone (independent of any AC canonicalisation
-//! Maude might apply).  `nf_via_haskell_maude` is the same structural
-//! check for callers that hold a `MaudeHandle`: its subterm-rule arm can
-//! additionally match rule LHSes that need AC matching (user-`[AC]`
-//! equations), which the pure check has no matcher for.
+//! Port of `Term.Rewriting.Norm`: `norm` asks Maude to `reduce`, and
+//! `nf_via_haskell*` is HS `nfViaHaskell`, the structural normal-form
+//! check.  The `_maude` entry points can also match st-rule LHSes that need
+//! AC matching; the pure one counts those as not matching.
 
 use crate::function_symbols::{AcSym, FunSym};
 use crate::lterm::LNTerm;
@@ -37,45 +23,18 @@ pub fn norm(maude: &MaudeHandle, t: &LNTerm) -> Result<LNTerm, MaudeError> {
     maude.reduce(t)
 }
 
-/// `nfViaHaskell` — pure structural normal-form check.  Mirrors HS
-/// `Term/Rewriting/Norm.hs` (`nfViaHaskell`).  Returns `true`
-/// iff `t` is in normal form according to the structural rules of the
-/// signature, **independent of any AC canonicalisation that Maude
-/// might apply**.  This is critical: a term like `mult(tid, x)` and
-/// `mult(x, tid)` are *both* in normal form by HS's structural check
-/// — neither contains `one`, `DH_neutral`, nested products, or invalid
-/// patterns — even though Maude's `reduce` would canonicalise them to
-/// the same AC form.  Using `maude.reduce(t) == t` as the NF predicate
-/// would wrongly flag AC-reordered terms as "creates non-normal",
-/// over-filtering `simpMinimize` arms in `substCreatesNonNormalTerms`
-/// and causing wrong-verified outcomes on DH key-secrecy lemmas
-/// (JKL_TS2_2004{,_KI_wPFS}).
-///
-/// HS-faithful pattern set (`nfViaHaskell` in Norm.hs):
-///   - irreducible top: walk subterms
-///   - reducible exponent / inverse / mult / xor / pmult / emap
-///     patterns: return `false`
-///   - subterm-rule LHS matches: return `false`
-///   - else: walk subterms
+/// HS `nfViaHaskell` (Norm.hs) without a Maude handle.  It is structural:
+/// `mult(tid, x)` and `mult(x, tid)` are both normal, whereas comparing with
+/// Maude's `reduce` would flag one of them and over-filter
+/// `substCreatesNonNormalTerms`.
 pub fn nf_via_haskell(msig: &MaudeSig, t: &LNTerm) -> bool {
     go_nf(t, msig, None)
 }
 
-/// Maude-capable variant of [`nf_via_haskell`]: identical structural walk,
-/// but the subterm-rule arm can also fire for rules whose LHS contains an
-/// Ac-/C-headed subterm (e.g. the user-`[AC]` cancellation equations
-/// `xorr(x, x) = zeroo` / `xorr(xorr(x, y), x) = y`).  HS's
-/// `struleApplicable` (Norm.hs) matches via `solveMatchLNTerm`
-/// inside the `WithMaude` reader, so AC-headed rule LHSes match through
-/// Maude; the pure no-AC matcher used by [`nf_via_haskell`] can never
-/// match them (its `match_raw` raises `NeedsAC` on any Ac-vs-Ac pair).
-/// Callers that hold a handle (the HS sites all do — `nf'` runs in the
-/// reader) should use this variant; the pure one under-reports
-/// reducibility exactly on those rules, e.g. keeping split cases whose
-/// substitution creates `xorr(~k, ~k, …)`, which HS's
-/// `substCreatesNonNormalTerms` filter discards (csf26-ac CRxor
-/// `splitEqs(2)`: 6 RS cases vs 2 HS cases, flipping the
-/// `isSplitGoalSmall` goal ranking and every later split-case number).
+/// HS `nfViaHaskell` (Norm.hs), whose `struleApplicable` matches through
+/// Maude when an st-rule LHS needs AC matching (e.g. `xorr(x, x) = zeroo`).
+/// The HS callers all run in `WithMaude`, so solver callers use this one;
+/// the pure variant misses such reductions (csf26-ac CRxor).
 pub fn nf_via_haskell_maude(maude: &MaudeHandle, t: &LNTerm) -> bool {
     let sig = maude.maude_sig();
     nf_via_haskell_maude_with_sig(&sig, maude, t)
@@ -95,19 +54,9 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
     match t {
         Term::Lit(_) => true,
         Term::App(sym, args) => {
-            // 1. Irreducible NoEq / user-defined-AC top: walk subterms.
-            // HS's `nfViaHaskell` (Norm.hs) gates the
-            // irreducible-set lookup on the symbol KIND — it checks
-            // `FAppNoEq o ts | (NoEq o) \`S.member\` irreducible` and
-            // `FAppACfct o ts | (AC (ACfct o)) \`S.member\` irreducible`.  The
-            // builtin AC operators sit in `irreducible_fun_syms` as well, for
-            // OTHER consumers (Contradictions.hs `maybeNonNormalTerms`
-            // uses `S.member` on the FUN set to decide which subterms to NOT
-            // include), but Norm.hs matches them through their own `viewTerm2`
-            // constructors, so they must not take this arm: ungated,
-            // `Mult(tid, ekI, ekR, inv(tid))` counts as NF — skipping section
-            // 5's invalidMult check — which under-filters simpMinimize and
-            // admits AC variants HS rejects.
+            // 1. Irreducible top: walk subterms.  HS checks membership only
+            //    for `FAppNoEq` and `FAppACfct`; the builtin AC operators,
+            //    though in `irreducible_fun_syms`, have their own arms below.
             if matches!(sym, FunSym::NoEq(_) | FunSym::Ac(AcSym::AcFct(_)))
                 && msig.irreducible_fun_syms.contains(sym)
             {

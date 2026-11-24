@@ -399,33 +399,15 @@ impl std::error::Error for RankingError {}
 // smartRanking — port of `Theory.Constraint.Solver.ProofMethod.smartRanking`
 // =============================================================================
 
-/// Decision-tree-aware goal ranking. Direct port of Haskell's
-/// `smartRanking ctxt False sys`:
+/// HS `smartRanking ctxt False sys` (ProofMethod.hs):
 ///
 /// ```text
-///   moveNatToEnd
-///     . sortOnUsefulness
-///     . sortDecisionTree notSolveLast
-///     . sortDecisionTree solveFirst
-///     . goalNrRanking
+///   moveNatToEnd . sortOnUsefulness . sortDecisionTree notSolveLast
+///     . sortDecisionTree solveFirst . goalNrRanking
 /// ```
 ///
-/// `isMsgOneCaseGoal` (`pcSources`/`full_sources` analysis, via
-/// `is_msg_one_case_goal` + `collect_one_case_syms`), `isSplitGoalSmall`
-/// (`is_split_goal_small`, reading `eq_store.split_size`),
-/// `isNoLargeSplitGoal` (`is_no_large_split_goal`), and `moveNatToEnd`
-/// (via `is_nat_subterm_split`, mirroring `isNatSubterm`) are all ported
-/// and wired in as live predicates in the decision tree below.
-///
-/// Takes a proof context for source-cache predicates and the current proof
-/// depth for round-robin heuristic scheduling.
-///
-/// `Ok(None)` is the ranking's normal `ApplySorry` instruction;
-/// `ProveError` means the ranking or a lazily forced source could not be
-/// evaluated.
-///
-/// `depth` mirrors HS's `useHeuristic (Heuristic rankings) depth =
-/// rankings !! (depth mod n)` (ProofMethod.hs).
+/// `Ok(None)` is the ranking's `ApplySorry`; an error means a lazily
+/// forced source could not be evaluated.
 pub(crate) fn rank_goals_with(
     sys: &System,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
@@ -1200,32 +1182,17 @@ fn smart_ranking(
     Ok(goals)
 }
 
-/// Port of HS `sapicRanking` (ProofMethod.hs, heuristic `p`) and
-/// `sapicPKCS11Ranking` (ProofMethod.hs, heuristic `P`).
+/// HS `sapicRanking` (heuristic `p`) and `sapicPKCS11Ranking` (heuristic
+/// `P`, selected by `pkcs11`), ProofMethod.hs:
 ///
 /// ```text
 ///   sortOnUsefulness . unmark . sortDecisionTreeLast solveLast
 ///     . sortDecisionTree solveFirst . goalNrRanking
 /// ```
 ///
-/// Differences from `smart_ranking` (HS `smartRanking`,
-/// ProofMethod.hs):
-///   - `unmark` is UNCONDITIONAL here (`map unmarkPremiseG`,
-///     ProofMethod.hs) — every PremiseG goal's usefulness is reset to
-///     `Useful`.
-///   - solve-last goals are moved to the END via `sortDecisionTreeLast`
-///     (not the `notSolveLast` partition trick).
-///   - `isFreshKnowsGoal` is COMMENTED OUT in HS's sapic solveFirst lists
-///     (ProofMethod.hs — the `-- , isFreshKnowsGoal . fst`
-///     line between the live `isPrivateKnowsGoal` and `isSplitGoalSmall`
-///     entries) — so fresh-nonce KU goals are NOT
-///     prioritised (the key difference vs smartRanking, where it IS active).
-///   - there is NO `moveNatToEnd` tail stage.
-///
-/// `pkcs11` selects the deprecated PKCS#11 variant, which uses a slightly
-/// different solveFirst/solveLast set (isDisjGoal vs isDisjGoalButNotProgress,
-/// isInsertTemplateAction instead of the MID_/first-insert/progress entries,
-/// isStandardActionGoalButNotInsert, isKnowsHandleGoal as solve-last).
+/// Unlike `smartRanking`, `unmark` is unconditional, solve-last goals move
+/// to the end, `isFreshKnowsGoal` is commented out of solveFirst in HS, and
+/// there is no `moveNatToEnd`.
 fn sapic_ranking(
     sys: &System,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
@@ -1327,8 +1294,7 @@ fn sort_decision_tree_last_dyn(
     xs
 }
 
-/// Port of HS `injRanking ctxt allowLoopBreakers sys`
-/// (ProofMethod.hs):
+/// HS `injRanking ctxt allowLoopBreakers sys` (ProofMethod.hs):
 ///
 /// ```text
 ///   sortOnUsefulness . unmark
@@ -1336,20 +1302,8 @@ fn sort_decision_tree_last_dyn(
 ///     . goalNrRanking
 /// ```
 ///
-/// where
-/// ```text
-///   solveFirst = [ isImmediateGoal, isHighPriorityGoal
-///                , isMedPriorityGoal, isLowPriorityGoal ]
-///   notSolveLast g = isNoLargeSplitGoal g && isNonSolveLastGoal g
-///                    && isNotKnowsLastNameGoal g
-/// ```
-///
-/// The crucial difference vs `smartRanking`: standard action goals and
-/// Disj goals share the SAME priority class (`isMedPriorityGoal`,
-/// ProofMethod.hs), so within that class they keep goal-nr
-/// order rather than Disj always winning.  This is why the csf17
-/// `heuristic: I` lemmas solve their protocol-action goal before the
-/// `¬(j<i)` disjunction.
+/// Standard action goals and disjunctions share one priority class
+/// (`isMedPriorityGoal`), so they keep goal-number order.
 fn inj_ranking(
     sys: &System,
     ctx: Option<&crate::constraint::solver::context::ProofContext>,
@@ -2077,38 +2031,14 @@ fn chain_to_equality(
     exists_ku_action_before(sys, ab_adj, t_start, &c.0)
 }
 
-/// True if a goal is still "open": not vacuously False, not already
-/// trivially handled.  **Direct port of Haskell's `openGoals` filter**
-/// (`Theory/Constraint/Solver/Goals.hs`):
-///
-/// NOTE: Haskell's first ActionG arm branches on `get sDiffSystem sys`
-/// (Goals.hs): in a diff proof every KU action goal is open iff
-/// `not solved`, skipping the pub/nat/pair/msg-var auto-solve cases.
-/// This port intentionally omits that branch — diff mode is not
-/// supported (the Rust `System` has no diff field), so we always take
-/// the non-diff path.
-///
-///   ActionG i (KU m) →
-///       not ( solved
-///             || (isMsgVar m && i ∉ sNodes)  -- handled later
-///             || sort m == Pub || sort m == Nat
-///             || isPair m || isInverse m || isProduct m
-///             || isUnion m || isNullaryPublicFunction m )
-///   DisjG (Disj []) → False    -- empty disj handled by contradictions
-///   ChainG c p →
-///     case kFactView (nodeConcFact c sys) of
-///       Just (DnK, FUnion args) | allMsgVarsKnownEarlier → False
-///       Just (DnK, m) | isMsgVar m → chainToEquality m c p
-///                     | otherwise  → True
-///       _ → True
-///   _ → not solved
-///
-/// **Soundness note**: filtered-out msg-var KD ChainG goals stand for
-/// "intruder learns some message via some derivation".  When the
-/// caller is `isFinished`, an empty `openGoals` set together with
-/// stale msg-var KD chains is still a valid Solved verdict — Haskell
-/// trusts that the intruder is omnipotent for any unspecified
-/// message, so the chain is vacuously satisfied.
+/// Whether a goal is open: the filter of HS `openGoals` (Goals.hs). A `KU`
+/// goal is closed when solved, a message variable at a node not yet in
+/// the system, a public or natural term, decomposable by `insertAction`,
+/// or a nullary public function; an empty disjunction is closed (the
+/// contradiction check reports it); a chain from a union whose message
+/// variables are all known earlier is closed, one from a message variable
+/// is open iff `chainToEquality`; other goals are open unless solved. The
+/// diff-system branch is not ported (no diff mode).
 fn is_open_in_sys(g: &Goal, sys: &System, ab_adj: &crate::constraint::system::PrebuiltAdj) -> bool {
     use crate::constraint::constraints::Disj;
     use crate::fact::FactTag;
@@ -2263,23 +2193,9 @@ fn has_top_pair_inv_prod(t: &tamarin_term::lterm::LNTerm) -> bool {
     }
 }
 
-/// Compute a goal's `Usefulness` annotation. Direct port of the
-/// `useful` case-block in Haskell's `openGoals`
-/// (`Theory.Constraint.Solver.Goals`):
-///
-///   useful = case goal of
-///     _ | gsLoopBreaker status     -> LoopBreaker
-///     ActionG i (UpK m) | hasKUGuards          -> Useful
-///                       | currentlyDeducible i m  -> CurrentlyDeducible
-///                       | probablyConstructible m -> ProbablyConstructible
-///     _                            -> Useful
-///
-/// `currentlyDeducible` and `extractible` ARE fully ported: the body
-/// calls `currently_deducible(sys, i, m)` (which does the full
-/// less-rel / edge reachability + node-rule introspection via
-/// `extractible` / `reachable_from`) and only then falls back to
-/// `probably_constructible(m)`, exactly as Haskell's `useful` block
-/// does.
+/// The `useful` annotation of HS `openGoals` (Goals.hs): a loop breaker,
+/// else for a `KU` goal `Useful` under KU guards, then `currentlyDeducible`,
+/// then `probablyConstructible`; everything else is `Useful`.
 pub fn goal_usefulness(g: &Goal, looping: bool, sys: &System) -> Usefulness {
     // Standalone callers build the shared `rawLessRel` adjacency on the
     // spot.  `open_goals` builds it once and uses
@@ -2496,24 +2412,9 @@ fn contains_toplevel_term(
     false
 }
 
-/// The `rawLessRel` adjacency: `from -> [to]` successor lists.
-///
-/// `rawLessRel se = getLessRel sLessAtoms ++ rawEdgeRel se`, and
-/// `rawEdgeRel sys = map (nodeConcNode *** nodePremNode) $ [Edge..] ++
-/// unsolvedChains sys` (System.hs).  So the relation has one
-/// conc-node -> prem-node edge per *unsolved Chain goal* in addition to
-/// `sLessAtoms` and `sEdges` — mirroring `build_always_before_adj`
-/// (system.rs).  Omitting the unsolved-chain edges would mis-classify a
-/// KU goal's `Usefulness` in `extractible`/`currentlyDeducible`.
-///
-/// This adjacency is invariant across all goals in one `openGoals`
-/// pass (only the BFS seed `i` varies per KU goal), so HS computes
-/// `existingDeps = rawLessRel sys` ONCE in the `where` clause of
-/// `openGoals` (Goals.hs) and shares it.  We get it from the single
-/// [`System::build_always_before_adj`] `PrebuiltAdj` (built once in
-/// `open_goals`) via `.map()` and thread it through
-/// `goal_usefulness_with_adj` — the `rawLessRel` map and the always-before
-/// adjacency are the SAME relation, built identically.
+/// The `rawLessRel` adjacency (System.hs): less atoms, edges and
+/// unsolved chains, as `from -> [to]` successor lists. `openGoals` builds
+/// it once (`existingDeps`) and shares it across goals.
 type RawLessAdj = tamarin_utils::FastMap<
     crate::constraint::constraints::NodeId,
     Vec<crate::constraint::constraints::NodeId>,

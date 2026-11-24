@@ -30,18 +30,9 @@ use tamarin_theory::theory::{LNMacro, OpenProtoRule, Theory, TheoryItem};
 
 use crate::translate::{needs_in_ev_res, translate, TranslateOptions};
 
-/// HS `Sapic.checkWellformedness` (Warnings.hs) over the UNTRANSLATED
-/// theory: warn-check the single top-level process.  The process arrives with
-/// its `P(args)` calls already inlined (HS inlines at parse time) but BEFORE
-/// `typeTheory` / `renameUnique`, so two binders sharing a name (e.g.
-/// `new x; new x`) are still alpha-identical and detected as captured.
-///
-/// `translateTheory` computes this report on the open theory before any
-/// translation step (TheoryLoader.hs), so both the
-/// translating path ([`apply_sapic`]) and the `-m spthy` / `-m spthytyped`
-/// paths that skip translation report exactly these warnings.
-///
-/// Empty when the theory carries no top-level process.
+/// HS `Sapic.checkWellformedness` (Warnings.hs) on the top-level process
+/// before typing, as `translateTheory` (TheoryLoader.hs) computes it for every
+/// output module.  Empty when the theory has no top-level process.
 pub fn sapic_pre_report(thy: &Theory) -> Vec<WfError> {
     match thy.processes().next() {
         Some(top) => crate::warnings::check_wellformedness(top),
@@ -53,15 +44,10 @@ pub fn sapic_pre_report(thy: &Theory) -> Vec<WfError> {
 /// `processOpenTheory`): type every process of the theory, then translate the
 /// single top-level process when there is exactly one.
 ///
-/// `user_set_heuristic` is true when the source / CLI already fixed a heuristic
-/// (in which case HS's `addHeuristic` returns `Nothing` and we do NOT add `p`).
-///
-/// Returns the SAPIC-process wellformedness report (HS `Sapic.checkWellformedness`,
-/// Warnings.hs), which the caller PREPENDS to the overall report — HS
-/// computes it in `translateTheory` on the OpenTheory *before* translation, so
-/// it sorts before every other check (TheoryLoader.hs;
-/// `preReport ++ postReport`).  Empty for a well-formed (or
-/// non-SAPIC) theory.
+/// `user_set_heuristic` is true when the source or CLI already set a heuristic,
+/// so `addHeuristic` adds no `p`.  Returns the [`sapic_pre_report`], which the
+/// caller puts in front of the wellformedness report (`preReport ++
+/// postReport`, TheoryLoader.hs).
 pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfError>, ElabError> {
     // The warnings read the untyped process; translation proceeds regardless.
     let wf_report = if thy.is_sapic() {
@@ -76,15 +62,8 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
     let typed = thy.processes().next().expect("is_sapic").clone();
     let maude_sig = &thy.signature;
 
-    // translate → rules + restrictions.  `needs_in_ev_res = any
-    // lemmaNeedsInEvRes (theoryLemmas th)` (sapic/src/Sapic.hs): gates the
-    // `EventEmpty`/`ChannelIn` actions + the `in_event` restriction.  HS
-    // `theoryLemmas` = the (non-diff, non-accountability) `Lemma` items.
     let needs_in_ev = needs_in_ev_res(thy);
-    // The signature's CtxtStRules drive `translateLetDestr` (let-destructor /
-    // let-elimination pass).
     let st_rules = &maude_sig.st_rules;
-    // Thread the theory options (HS `_thyOptions`) into the translation.
     let opts = TranslateOptions {
         trans_progress: thy.options.trans_progress(),
         trans_reliable: thy.has_signature_builtin("reliable-channel"),
@@ -101,17 +80,10 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
     let translation = translate(&typed, needs_in_ev, st_rules, &macros, opts)
         .map_err(|message| ElabError { message })?;
 
-    // The `predicate:` declarations the embedded `_restrict` formulas expand
-    // against: HS `liftedExpandFormula` reads `theoryPredicates thy`
-    // (Theory/Text/Parser.hs), the list `elaborate` built from the
-    // theory's `predicates:` items.
+    // HS `liftedAddProtoRule` (Theory/Text/Parser.hs) per rule: expand each
+    // embedded restriction against `theoryPredicates`, add a `Restr_<rule>_<i>`
+    // restriction before the rule and the matching action to the rule.
     let predicates: Vec<Predicate> = thy.predicates().cloned().collect();
-    // Inject each generated rule, running the `_restrict` expansion HS
-    // `liftedAddProtoRule` (Theory/Text/Parser.hs) performs per rule:
-    // for each embedded restriction formula, mint a fresh action
-    // `Restr_<rule>_<i>` + a global restriction `∀ … #NOW. Restr…@#NOW ⇒ φ`,
-    // insert the restrictions BEFORE the rule, and append the actions to the
-    // rule.
     for (rule, restr_formulas) in &translation.rules {
         let rname = match rule.info.name {
             ProtoRuleName::Stand(n) => n,
@@ -128,9 +100,6 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
         // the translation computed.
         let mut lifted = rule.clone();
         lifted.info.restrictions = restr_formulas.clone();
-        // `if <formula>` / `let … else` arm: expand the predicate atoms of
-        // every embedded formula (HS `liftedExpandFormula`,
-        // Theory/Text/Parser.hs).
         let mut closed: Vec<LNFormula> = Vec::with_capacity(restr_formulas.len());
         for phi in restr_formulas {
             closed.push(expand_formula(&predicates, phi).map_err(|e| ElabError {
@@ -143,21 +112,9 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
             lifted.actions.push(action);
         }
 
-        // HS `foldM liftedAddProtoRule th (map (`OpenProtoRule` []) eProtoRule)`
-        // (sapic/src/Sapic.hs): each generated rule goes through the same
-        // `addOpenProtoRule` name guard as a parsed rule (OpenTheory.hs)
-        // — `maybe True (ru ==)` over the rule bound to that name, so a user
-        // rule named like a generated one (e.g. `rule Init` alongside a
-        // `process:`) aborts the translation with `duplicate rule: <name>`.
-        // The comparison is between open rules: the macro-unexpanded
-        // `_oprRuleE` half plus the manual `_oprRuleAC` variants, against the
-        // generated rule as it stands after the `_restrict` lift.  The thrown
-        // `DuplicateItem` exception escapes to GHC's runtime, which prints
-        // `tamarin-prover: duplicate rule: <name>` to stderr and exits 1; here
-        // the message rides the existing `ElabError` channel.  (Generated rules
-        // never collide with each other — their names encode unique process
-        // positions — and never compare equal to a user rule: the parser drops
-        // `process=` attributes while the translation sets them.)
+        // `addOpenProtoRule`'s name guard (OpenTheory.hs): a user rule named
+        // like a generated one, e.g. `rule Init` beside a `process:`, fails
+        // with `duplicate rule: <name>` unless the open rules are equal.
         if let Some(prev) = thy.items.iter().find_map(|i| match i {
             TheoryItem::Rule(r) if r.name() == rname => Some(r),
             _ => None,

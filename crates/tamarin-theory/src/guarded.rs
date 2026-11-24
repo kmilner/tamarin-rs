@@ -756,38 +756,17 @@ fn unguarded_error(positions: &[usize], freshened: &[LVar]) -> GuardError {
 // Normal form of a stored formula
 // =============================================================================
 
-/// Rebuild a guarded formula bottom-up through the `gconj`/`gdisj` smart
-/// constructors, restoring the normal form that formula conversion
-/// (`convert`) establishes at creation: flattened, duplicate-free
-/// connectives.  Port of HS `normaliseGuarded` (150f5eba).
-/// NOTE: disjunctions are normalised CONSTRUCTOR-PRESERVING at every
-/// level (`normalise_disj_list_cow`), not via the full `gdisj`: a singleton
-/// disjunction wrapping a conjunction is load-bearing for the S_∀
-/// saturation dedup — `insert_formula` STORES disjunctions (formula +
-/// `Goal::Disj` twin) but DECOMPOSES bare conjunctions without storing
-/// them, so unwrapping the singleton turns a storable, dedupable derived
-/// instance into one that re-fires every simplifier iteration (livelock
-/// on ake/bilinear/TAK1_eCK_like.spthy).  Conjunctions use the full
-/// `gconj` (their singleton unwrap is harmless because conjunctions are
-/// decomposed on insertion anyway); this requires `gconj` to be
-/// idempotent — see the note on `gconj`.
-///
-/// Copy-on-write: returns `None` when normalisation leaves `g` structurally
-/// unchanged (so an owning caller can reuse `g` by move with zero
-/// allocation), `Some(rebuilt)` otherwise.  Mirrors the `subst_guarded_cow`
-/// convention (recursion returns `None` when all children are unchanged).
+/// HS `normaliseGuarded` (Guarded.hs): rebuild bottom-up through `gconj`,
+/// while every disjunction keeps its constructor (`normaliseDisj`), so a
+/// stored disjunction stays storable and in step with its `Goal::Disj` twin.
+/// `None` when `g` is unchanged.
 pub fn normalise_guarded_cow(g: &Guarded) -> Option<Guarded> {
     match g {
         // An atom carries no connectives to flatten → always unchanged.
         Guarded::Atom(_) => None,
         Guarded::Disj(items) => normalise_disj_list_cow(items).map(|v| Guarded::Disj(v.into())),
         Guarded::Conj(items) => {
-            // Normalise children first (COW), then re-run the `gconj`
-            // smart-constructor step (flatten nested Conj / absorb gfalse /
-            // dedup / singleton-unwrap).  When no child changed AND `gconj`
-            // is a structural no-op on the (already-normalised) children, the
-            // whole node is unchanged.  Otherwise the rebuild is exactly
-            // `gconj(children)`.
+            // Unchanged children on which `gconj` is a no-op leave the node.
             let mapped = cow_map_vec(items, normalise_guarded_cow);
             let children: &[Guarded] = mapped.as_deref().unwrap_or(&items[..]);
             if mapped.is_none() && gconj_is_structural_noop(children) {
@@ -815,13 +794,8 @@ pub fn normalise_guarded_cow(g: &Guarded) -> Option<Guarded> {
     }
 }
 
-/// `gconj(items) == Guarded::Conj(items)` — i.e. the `gconj` smart
-/// constructor is a structural no-op on this (already child-normalised)
-/// list.  True iff none of `gconj`'s transformations fire: no nested-`Conj`
-/// child to flatten (including an empty `Conj` = `gtrue`, which `gconj`
-/// drops), no `gfalse` (`Disj([])`) child to absorb, no duplicate to `nub`,
-/// and length != 1 (which would singleton-unwrap).  Debug builds check the
-/// answer against `gconj` itself.
+/// Whether `gconj(items) == Conj(items)`: no nested conjunction, no `gfalse`,
+/// no duplicate and not a singleton.  Debug builds check it against `gconj`.
 fn gconj_is_structural_noop(items: &[Guarded]) -> bool {
     if items.len() == 1 {
         return false;
@@ -840,21 +814,9 @@ fn gconj_is_structural_noop(items: &[Guarded]) -> bool {
     true
 }
 
-/// Normalise the disjunct list of a stored disjunction WITHOUT changing
-/// its constructor: each disjunct normalised, nested disjunctions
-/// flattened one level, duplicates dropped — but no singleton unwrap and
-/// no truth-value absorption, so a `Guarded::Disj` formula and its
-/// `Goal::Disj` twin (same payload, different wrapper) stay in LOCKSTEP.
-/// Port of HS `normaliseDisjList` (150f5eba); see that commit for why
-/// full `gdisj` here desynchronises the twin stores (gcm livelock).
-/// Copy-on-write disjunction normalization: `None` when the
-/// constructor-preserving normalisation leaves the disjunct list unchanged
-/// (every disjunct normalises in place, none is a nested `Disj` to flatten,
-/// no duplicate to drop), `Some(rebuilt)` otherwise.  BYTE-IDENTICAL to
-/// a freshly rebuilt list in the `Some` case.
+/// HS `normaliseDisjList` (Guarded.hs): normalise each disjunct, then
+/// `normaliseDisj`.  `None` when the list is unchanged.
 pub(crate) fn normalise_disj_list_cow(items: &[Guarded]) -> Option<Vec<Guarded>> {
-    // Normalise each disjunct (COW); `children` is the normalised list — the
-    // originals when `mapped` is `None` (all disjuncts unchanged).
     let mapped = cow_map_vec(items, normalise_guarded_cow);
     let children: &[Guarded] = mapped.as_deref().unwrap_or(items);
     if mapped.is_none() && disj_flatten_is_structural_noop(children) {
@@ -865,11 +827,8 @@ pub(crate) fn normalise_disj_list_cow(items: &[Guarded]) -> Option<Vec<Guarded>>
     }
 }
 
-/// `flatten_dedup_disj(items) == items` — the constructor-preserving disjunct
-/// normalisation (one-level flatten of a nested `Disj`, then `nub`) is a
-/// no-op.  True iff no disjunct is itself a `Disj` (any `Disj` has its wrapper
-/// spliced away) and there is no duplicate.  Debug builds check the answer
-/// against `flatten_dedup_disj` itself.
+/// Whether `flatten_dedup_disj(items) == items`: no nested disjunction and no
+/// duplicate.  Debug builds check it against `flatten_dedup_disj`.
 fn disj_flatten_is_structural_noop(items: &[Guarded]) -> bool {
     for (i, x) in items.iter().enumerate() {
         if matches!(x, Guarded::Disj(_)) {
@@ -891,12 +850,9 @@ fn flatten_dedup_disj(children: &[Guarded]) -> Vec<Guarded> {
     }))
 }
 
-/// Normalise a stored formula while preserving disjunction constructors at
-/// every level. The top-level wrapper stays in lockstep with its `Goal::Disj`
-/// twin; nested wrappers remain available for deduplication when inserted
-/// later (see [`normalise_guarded_cow`]). Port of HS `normaliseStoredFormula`.
-///
-/// Copy-on-write: `None` when unchanged, `Some(rebuilt)` otherwise.
+/// HS `normaliseStoredFormula` (Guarded.hs): a top-level disjunction keeps
+/// its constructor too, matching its `Goal::Disj` twin.  `None` when
+/// unchanged.
 pub fn normalise_stored_formula_cow(g: &Guarded) -> Option<Guarded> {
     match g {
         Guarded::Disj(items) => normalise_disj_list_cow(items).map(|v| Guarded::Disj(v.into())),

@@ -410,28 +410,10 @@ fn title_for(
 // Source / message deduction (pretty-printed)
 // ---------------------------------------------------------------------
 
-/// Render the full closed-theory source, mirroring HS `getTheorySourceR`
-/// and `getTheoryMessageDeductionR` — both are `render . prettyClosedTheory
-/// . theory` (`Web/Handler.hs`), i.e. identical output.
-///
-/// HS's stored `ClosedTheory` carries each lemma's LIVE
-/// `IncrementalProof` — the close-time `checkAndExtendProver`-replayed
-/// skeleton at load, updated in place by interactive proof steps — and
-/// `prettyClosedTheory` prints it (`prettyIncrementalProof`, incl.
-/// `/* unannotated */` markers).  Mirror that by rendering each lemma's
-/// proof body from the live [`ProofState`] root via the byte-faithful
-/// CLI printer (`pretty_proof_body` — same call the `--prove` output
-/// path uses, run.rs). The source/download handlers supply a materialised
-/// snapshot, so replay failures are returned rather than silently printed as
-/// `by sorry`.
-///
-/// The `Generated from:` version/build lines are placeholders
-/// (the interactive server does not carry the CLI build constants — the
-/// web-parity gate normalizes them away, as does HS's own `--prove` gate).
-/// Wellformedness: the `/* WARNING: ... */` (or `/* All ... successful. */`)
-/// block is rendered from the theory's stored `wf_report` — computed at load
-/// by the same pipeline `--prove` runs — via the shared `format_wf_block`,
-/// so it matches HS byte-for-byte (empty report ⇒ the "all successful" block).
+/// HS `getTheorySourceR` / `getTheoryMessageDeductionR`: `render .
+/// prettyClosedTheory`, with each lemma's live proof printed by the CLI's
+/// `pretty_proof_body` and the stored wellformedness report. The `Generated
+/// from:` build lines are placeholders.
 fn render_theory_source(entry: &crate::state::TheoryEntry) -> Result<String, String> {
     let build = tamarin_theory::pretty_theory::BuildInfo {
         tamarin_version: env!("CARGO_PKG_VERSION").to_string(),
@@ -605,23 +587,9 @@ pub async fn autoprove(
     // nodes at that depth become `sorry /* bound N hit */` leaves.
     let search_options = web_search_options(&extractor, bound, quit_on_empty, sub.len())
         .expect("extractor was validated by autoprover_name");
-    // HS `getProverR` → `applyProverAtPath` (`src/Web/Theory.hs`)
-    // → `focus proofPath prover` (`lib/theory/src/Theory/Proof.hs`):
-    // navigate to the URL's proof path, take THAT subproof's root system
-    // (`psInfo (root prf)`), run the autoprover from it, and graft the
-    // result back at the path via `modifyAtPath` — the rest of the tree is
-    // untouched.  Root autoprove is the `focus [] prover = prover` special
-    // case.  The prover itself is `runAutoProver` (Web/Handler.hs),
-    // which "ignores the existing proof and tries to find one by itself"
-    // (Theory/Proof.hs) — NOT `replaceSorryProver` (that wrapper is
-    // batch-`--prove`-only, Main/TheoryLoader.hs).  So any embedded
-    // proof skeleton (e.g. Yubikey's `slightly_weaker_invariant` script,
-    // replayed into the tree at `ProofState::new` time) is simply REPLACED
-    // at the focused path: we search from the path node's stored system via
-    // `run_proof_search` and never consult the skeleton.
-    // Keep the complete detached transaction on one blocking worker. Besides
-    // keeping Maude/source work off Tokio, this means cancellation can only
-    // discard an unpublished value; publication happens below after await.
+    // HS `applyProverAtPath` (`focus proofPath prover`): run `runAutoProver`
+    // from the system at the URL's path, ignoring any stored proof there,
+    // and graft the result back; the whole transaction runs on one worker.
     let lemma_owned = lemma_name.clone();
     let sub_owned = sub.clone();
     let failed = format!("Sorry, but {name} failed!");
@@ -724,25 +692,10 @@ fn parse_web_bound(raw: &str) -> Option<usize> {
     Some(usize::try_from(bound).unwrap_or(0))
 }
 
-/// Build the prover display name exactly as Haskell `getAutoProverR` /
-/// `getAutoProverAllR` (`src/Web/Handler.hs`):
-///
-/// ```text
-/// fullName   = proverName <> " (" <> intercalate ", " qualifiers <> ")"
-/// qualifiers = extractorQualifier ++ boundQualifier
-/// ```
-///
-/// `extractor` is the URL `#SolutionExtractor` path piece; Yesod's
-/// `instance PathPiece SolutionExtractor` (`src/Web/Types.hs`)
-/// accepts only the five strings below — any other value makes
-/// `fromPathPiece` return `Nothing`, which Yesod turns into a routing
-/// `notFound` (404) BEFORE the handler runs.  We mirror that by
-/// returning `None` here for an unrecognised extractor.
-///
-/// Note: the displayed name is computed from the RAW extractor, NOT the
-/// quit-on-empty–adjusted cut.  HS's `apCut = if quitOnEmpty then
-/// CutAfterSorry else extractor` only affects the prover, while
-/// `fullName`'s `extractorQualfier` matches on the original `extractor`.
+/// HS `getAutoProverR`'s `fullName`: the prover name with its extractor
+/// and bound qualifiers. `None` for an extractor `PathPiece
+/// SolutionExtractor` rejects (a routing 404). The name reads the raw
+/// extractor, not the quit-on-empty cut.
 fn autoprover_name(extractor: &str, bound: usize) -> Option<String> {
     let (prover_name, extractor_qual): (&str, &[&str]) = match extractor {
         "characterize" => ("characterization", &["dfs"]),
@@ -759,27 +712,9 @@ fn autoprover_name(extractor: &str, bound: usize) -> Option<String> {
     Some(format!("{} ({})", prover_name, qualifiers.join(", ")))
 }
 
-/// `GET /thy/trace/<idx>/autoproveAll/<extractor>/<bound>/*path` —
-/// run the autoprover on every lemma and return a redirect to the
-/// fresh theory idx, matching Haskell `getAutoProverAllR` /
-/// `getProverAllR` in `src/Web/Handler.hs`.
-///
-/// HS `getProverAllR` folds the SAME focus mechanism `autoprove` uses,
-/// at the root path of every lemma (`src/Web/Handler.hs`):
-///
-/// ```text
-/// proveAll thy = foldM (\tha lemma ->
-///     applyProverAtPath tha lemma [] autoProver) thy (names thy)
-/// ```
-///
-/// i.e. `runAutoProver` from each lemma's ROOT system, grafting the
-/// result as that lemma's new proof — replacing any embedded proof
-/// skeleton wholesale (`runAutoProver` "ignores the existing proof and
-/// tries to find one by itself", Theory/Proof.hs; it is NOT
-/// wrapped in `replaceSorryProver`, the batch-`--prove`-only wrapper —
-/// Main/TheoryLoader.hs).  We mirror that uniformly with
-/// `autoprove`: fork the proof state at a fresh idx (HS `modifyTheory`)
-/// and `run_proof_search` + `graft_at_path` at `[]` per lemma.
+/// `GET /thy/trace/<idx>/autoproveAll/<extractor>/<bound>/*path` — HS
+/// `getProverAllR`: `applyProverAtPath` at every lemma's root on a fresh
+/// theory index, then redirect.
 pub async fn autoprove_all(
     uri: Uri,
     State(state): State<Arc<AppState>>,
@@ -1048,20 +983,9 @@ fn stub_alert(what: &str) -> axum::Json<Value> {
     ))
 }
 
-/// `GET /thy/trace/<idx>/next/<section>/*path` —
-/// Compute the next theory-path under `section ∈ { normal, smart }`
-/// and return its `/main/...` URL as `text/plain`.
-///
-/// Mirrors Haskell `getNextTheoryPathR` (`src/Web/Handler.hs`):
-///   1. parse `path` into a TheoryPath
-///   2. call `nextThyPath` or `nextSmartThyPath`
-///   3. render `TheoryPathMR idx <new-path>` as a URL string
-///
-/// The `TheoryProof` arm walks the live proof tree (`getProofPaths` over the
-/// materialised [`crate::handlers::proof_tree::ProofState`]); a lemma with no
-/// materialised state has the single root path, so it yields no in-tree step
-/// and the traversal falls through to the lemma jump, exactly as HS's
-/// `getNextElement` does when no sibling exists.
+/// `GET /thy/trace/<idx>/next/<section>/*path` — HS `getNextTheoryPathR`:
+/// the `nextThyPath` (`normal`) or `nextSmartThyPath` (`smart`) target as a
+/// `main` URL in `text/plain`.
 pub async fn next_path(
     uri: Uri,
     state: State<Arc<AppState>>,
@@ -1423,21 +1347,9 @@ fn resolve_system_for_path(
     proof.get_system_at(&lemma_name, &sub)
 }
 
-/// `GET /thy/trace/<idx>/intdot/*path` — the interactive graph shell page.
-///
-/// HS `getInteractiveDotGraphR` (`src/Web/Handler.hs`) renders
-/// `intdotLayout True` (`src/Web/Types.hs`) around a
-/// `<dot-graph-viz>` custom element whose `dotsrc` points at the JSON graph
-/// route; the bundled `intdot-graph.es.js` fetches that and draws the graph
-/// client-side.  It does NOT resolve the constraint system itself — the shell
-/// is system-agnostic.
-///
-/// The same page serves both as the pop-out window and as the iframe embedded
-/// in the main theory view, so the floating `#popout-options` bar
-/// (`popoutOptionsTpl`, `src/Web/Types.hs`) is hidden client-side when
-/// embedded (the inline script sets `graph-embedded` on `<html>`).  Its
-/// Options menu is `optionsMenuItemTpl True` — the trace-theory variant, which
-/// includes the `abstr-toggle` entry.
+/// `GET /thy/trace/<idx>/intdot/*path` — HS `getInteractiveDotGraphR`:
+/// `intdotLayout True` around a `<dot-graph-viz>` pointing at the JSON
+/// graph route. The page is both the pop-out and the embedded iframe.
 pub async fn intdot(
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,
@@ -1453,24 +1365,11 @@ pub async fn intdot(
     html_response(intdot_shell_html(&title, &dotsrc))
 }
 
-/// Faithful port of Haskell `getOptions` (`src/Web/Handler.hs`): read a
-/// render request's [`GraphOptions`] out of its already-parsed query
-/// parameters.
-///
-/// The flags are presence-based (`un*`/`no-*` toggles arrive with an empty
-/// value, so presence, not value, is what matters):
-/// - `uncompress`     present => `compress = false`        (HS `isNothing`)
-/// - `unabbreviate`   present => `abbreviate = false`      (HS `isNothing`)
-/// - `no-auto-sources` present => `show_auto_source = false` (HS `isNothing`;
-///   absent => `true`, which overrides the struct default of `false`)
-/// - `clustering`     present => `clustering_similar_names = true` (HS `isJust`)
-/// - `simplification` value read with `SimplificationLevel`'s derived `Read`,
-///   i.e. only the tokens `SL0..SL3` parse (numeric `0..3`, the value the UI
-///   actually sends, fails to parse); anything else falls back to `SL2`
-///   (HS `fromMaybe SL2 (simpl >>= readMaybe . T.unpack)`).
-///
-/// The `uncompact`/`CompactBoringNodes` flag belongs to `DotOptions`
-/// (`Handler.hs`), not `GraphOptions`, so it is not handled here.
+/// HS `getOptions` (`src/Web/Handler.hs`), `GraphOptions` half: the
+/// `uncompress`, `unabbreviate`, `no-auto-sources` and `clustering` flags are
+/// presence-based, and `simplification` is read with the derived `Read`
+/// (`SL0`..`SL3`, else `SL2`). `uncompact` belongs to the unported
+/// `DotOptions`.
 fn graph_options_from_map(qs: &HashMap<String, String>) -> GraphOptions {
     let simplification_level = qs
         .get("simplification")
@@ -1601,25 +1500,10 @@ pub async fn interactive_graph_def(
     }
 }
 
-/// `GET /thy/trace/<idx>/json/*path` — the constraint system at `path`
-/// serialised to the JSON graph format the `<dot-graph-viz>` frontend reads.
-///
-/// Port of `getTheoryGraphJsonR` (`src/Web/Handler.hs`) over
-/// `graphJsonThyPath` (`src/Web/Theory.hs`):
-///
-/// - `TheoryProof lemma path` — the sub-proof's system, run through
-///   `Web.Utils.abbrev` when the `abbrevInBackend` parameter is present, and
-///   labelled `Theory: <thy> Lemma: <lemma>`.  An unresolvable proof path is
-///   HS `fromMaybe ""`: a 200 with an EMPTY body.
-/// - `TheorySource kind i j` — the `(i-1, j-1)` case system, labelled
-///   `Theory: <thy> Case: <i>:<j>`, with no backend abbreviation.  Indices
-///   naming no case are a 500 (see [`thy_path_system`]).
-/// - every other path — HS `error "Unhandled theory path. This is a bug."`,
-///   i.e. 500.
-///
-/// The response `Content-Type` is the literal `.json`: HS hands the cached
-/// file to `sendFile (fromString ".json")`, which uses that string verbatim as
-/// the MIME type.
+/// `GET /thy/trace/<idx>/json/*path` — HS `getTheoryGraphJsonR` over
+/// `graphJsonThyPath`: a proof path's system (abbreviated when
+/// `abbrevInBackend` is present; an unresolvable path is an empty 200) or a
+/// source case's, served with HS's literal `.json` content type.
 pub async fn graph_json(
     State(state): State<Arc<AppState>>,
     Path((idx, raw_path)): Path<(usize, String)>,

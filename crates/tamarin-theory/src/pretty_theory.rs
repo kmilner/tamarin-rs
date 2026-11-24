@@ -1,60 +1,12 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Theory pretty-printer.  Port of Haskell's `prettyClosedTheory`
-//! (ClosedTheory.hs) — top-level renderer for `--prove` output.
+//! Port of HS `prettyClosedTheory` (ClosedTheory.hs) and `prettyOpenTheory`
+//! (OpenTheory.hs): the batch and web theory renderers.
 //!
-//! Goal: byte-identical output to Haskell on the analyzed theory body.
-//! The output layout:
-//!
-//! ```text
-//! theory <name>
-//!
-//! begin
-//!
-//! // Function signature and definition of the equational theory E
-//!
-//! builtins: ...     (if any)
-//! functions: ...
-//! equations: ...
-//!
-//! rule (modulo E) <name>:
-//!    [ <prems> ] --[ <acts> ]-> [ <concs> ]
-//!
-//!   /* has exactly the trivial AC variant */
-//!
-//! restriction <name>:
-//!   "<formula>"
-//!
-//! lemma <name> [attrs]:
-//!   <quant> "<formula>"
-//! /*
-//! guarded formula characterizing ...:
-//! "<gformula>"
-//! */
-//! <proof body>
-//!
-//! /* All wellformedness checks were successful. */ (or warning block)
-//!
-//! /*
-//! Generated from:
-//! Tamarin version ...
-//! Maude version ...
-//! Git revision: ...
-//! Compiled at: ...
-//! */
-//!
-//! end
-//! ```
-//!
-//! Each top-level item is separated by a blank line (HS uses `vsep`).
-//!
-//! HS's `prettyTheory` (TheoryObject.hs) is one function taking five
-//! injected printers; here its ITEM half is [`pretty_theory_items`] and its
-//! header/footer half is spelled out once in [`pretty_closed_theory`] and once
-//! in `open_theory_blocks`.  The two assemblies differ in `ppSig`/`ppCache`
-//! and in the trailing wellformedness / `Generated from:` / `end` handling,
-//! and each is about thirty lines, so they stay apart.
+//! HS's `prettyTheory` (TheoryObject.hs) takes five injected printers; here
+//! its item half is [`pretty_theory_items`] and its header/footer half is
+//! assembled in [`pretty_closed_theory`] and `open_theory_blocks`.
 
 use crate::constraint::solver::goals::GoalRanking;
 use crate::pretty_formula as pf;

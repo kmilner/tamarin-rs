@@ -1,16 +1,8 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Port of `Theory.Constraint.Solver.Contradictions`.
-//!
-//! Identifies all reasons a `System` is contradictory. The full
-//! Haskell version probes ~12 conditions. Most are pure structural
-//! checks (cycles, false formulas, fact incompatibilities); a few
-//! consult signature-aware helpers (`nf_via_haskell`,
-//! `irreducible_fun_syms`, `enableDH`).  ForbiddenExp/ForbiddenBP are
-//! gated on `enable_dh`/`enable_bp` inside `contradictions` itself
-//! (matching HS Contradictions.hs `contradictions`); everything has a
-//! faithful port below.
+//! Port of `Theory.Constraint.Solver.Contradictions`: every reason a
+//! `System` is contradictory.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -77,14 +69,7 @@ pub fn contradictions(
     //   ForbiddenExp, ForbiddenBP, ForbiddenChain, IncompatibleEqs,
     //   FormulasFalse, then NonInjectiveFactInstance, then NodeAfterLast.
 
-    // Shared node-id → rule index for the map-consuming checks below
-    // (`has_impossible_chain`, `has_forbidden_constr_chain`,
-    // `has_forbidden_chain`, `non_injective_fact_instances`).  `sys` is
-    // held immutable for the whole body, so one build serves all of them.
-    // `OnceCell` rather than an eager build: each consumer forces it only
-    // after its own early-outs (no unsolved chain goal, no AC-constructor
-    // node, no injective fact tags), so a pass whose consumers all bail
-    // never builds it.
+    // Node-id → rule index shared by the checks below, built on first use.
     let node_rules: std::cell::OnceCell<NodeRuleMap<'_>> = std::cell::OnceCell::new();
 
     // 2. SubtermCyclic — `isContradictory subtermStore`.
@@ -149,44 +134,11 @@ pub fn contradictions(
     Ok(out)
 }
 
-/// `hasNonNormalTerms` — port of Haskell's
-/// `Theory.Constraint.Solver.Contradictions.hasNonNormalTerms`
-/// (`Contradictions.hs`).
-///
-/// HS spec:
-/// ```haskell
-/// hasNonNormalTerms sig se =
-///     any (not . (`runReader` hnd) . nf') (maybeNonNormalTerms hnd se)
-///   where hnd = L.get sigmMaudeHandle sig
-/// ```
-///
-/// And `nf' = nfViaHaskell` (Norm.hs) — a structural NF check
-/// that walks the term tree against the reducibility patterns in
-/// Norm.hs (NOT full Maude normalisation: no `reduce`, no AC
-/// re-canonicalisation).  It runs in the `WithMaude` reader because its
-/// `struleApplicable` arm matches subterm-rule LHSes via
-/// `solveMatchLNTerm`, which needs Maude AC matching for rules whose
-/// LHS contains an Ac-/C-headed subterm (user `[AC]` equations); the
-/// port mirrors that with `nf_via_haskell_maude_with_sig`.
-///
-/// Walks every node's premise, conclusion, action facts and
-/// `new_vars`; for each subterm whose head could be reducible,
-/// asks the NF check whether the term is in normal form.  If
-/// any term is not in NF, the system is contradictory (we only
-/// ever construct normal-form-respecting traces).
-///
-/// Skip optimization: when the proof context's signature has an
-/// empty `reducible_fun_syms` set (e.g. pair-only or hashing-only,
-/// which have no rewrite rules with a reducible head — all
-/// destructors come from intruder rules, not subterm rewriting),
-/// no term can be in non-normal form structurally, so we skip
-/// the per-term check.
+/// HS `hasNonNormalTerms` (Contradictions.hs): some candidate subterm of a
+/// node fails `nf'` (`nfViaHaskell`, Norm.hs), which needs Maude only to
+/// match `[AC]` subterm-rule left-hand sides.
 fn has_non_normal_terms(ctx: &ProofContext, sys: &System) -> bool {
-    // The NF check is cheap for AC-free-LHS signatures (pure structural
-    // walk; Maude is consulted only for Ac-/C-containing st-rule LHSes)
-    // but we call this from `is_finished` on every expand step, so the
-    // early-exit still helps for pair-only theories with no subterm
-    // rewrite rules.
+    // Without reducible symbols every term is in normal form.
     let sig = ctx.maude.maude_sig();
     if sig.reducible_fun_syms.is_empty() {
         return false;
@@ -586,30 +538,10 @@ fn possible_root_syms(t: &tamarin_term::lterm::LNTerm) -> Option<Vec<RootSym>> {
     }
 }
 
-/// `hasForbiddenKD` — port of Haskell's
-/// `Theory.Constraint.Solver.Contradictions.hasForbiddenKD`
-/// (`Contradictions.hs`).
-///
-/// A KD-conclusion `KD(t)` is forbidden if *no instance* of `t`
-/// can ever contain fresh names or private function symbols —
-/// because then the adversary already knows `t` (it can be
-/// derived from public constants and public function symbols
-/// alone), so deconstructing it via KD-chain would be wasteful
-/// and violates normal form N6.
-///
-/// `neverContainsFreshPriv t`:
-///   - no subterm uses a private function symbol, AND
-///   - every literal (variable or constant) has sort in
-///     `{Pub, Nat, Node}` — no `Msg` or `Fresh` literals.
-///
-/// (A `Msg` literal could instantiate to anything including
-/// fresh, so we must conservatively say it *might* contain
-/// fresh.  Same for `Fresh` literals.)
-///
-/// Skipped in diff mode (Haskell guards with `not isDiffSystem`,
-/// where `isDiffSystem = L.get sDiffSystem` — a dedicated boolean on
-/// the regular `System`, NOT the LHS/RHS `Side`, which in HS lives
-/// only on `DiffSystem`).
+/// HS `hasForbiddenKD` (Contradictions.hs): a `KD(t)` conclusion where
+/// `neverContainsFreshPriv t` (no private symbol, every literal of sort Pub,
+/// Nat or Node), so the adversary could have built `t` instead. Haskell skips
+/// it when `sDiffSystem` is set.
 ///
 /// Current limitation: `sys.side` is not Haskell's `sDiffSystem` flag.
 /// Trace systems have no side and run this check; implementing diff mode
@@ -819,28 +751,9 @@ fn ac_constr_chain_fixpoint(extracted: &[AcConstrPair]) -> bool {
     }
 }
 
-/// `hasForbiddenChain` — port of Haskell's
-/// `Theory.Constraint.Solver.Contradictions.hasForbiddenChain`
-/// (`Contradictions.hs`).
-///
-/// Detects normal-form-violating chains.  A `Chain(c, p)` goal is
-/// forbidden when:
-///
-///   1. The chain start (KD-conc at `c`) is a *message variable*
-///      (LVar of sort Msg) — i.e. the adversary doesn't know what
-///      term they're deconstructing.
-///   2. The chain end (KD-prem at `p`) is *not* an `IEquality`
-///      rule instance (those are exempt; they're the diff-mode
-///      equality bridge).
-///   3. There exists a `KU(t_start)` action somewhere in the
-///      system whose node strictly *precedes* the chain start
-///      `nodeConcNode c`.
-///
-/// All three conditions together violate normal form invariant
-/// N6′: if the adversary already knew `t_start` (KU before), they
-/// shouldn't be deconstructing it (KD chain) afterwards.  Hits an
-/// otherwise-undetected contradiction earlier than the search
-/// would, pruning a search branch.
+/// HS `hasForbiddenChain` (Contradictions.hs): an unsolved chain that starts
+/// at a message variable, does not end in `IEquality`, and whose start term
+/// is already a `KU` action before the chain start.
 fn has_forbidden_chain<'a>(
     sys: &'a System,
     ab_adj: &crate::constraint::system::PrebuiltAdj,
@@ -1641,15 +1554,8 @@ fn has_false_formula(sys: &System) -> bool {
         .any(|f| matches!(f.as_ref(), Guarded::Disj(v) if v.is_empty()))
 }
 
-/// Detect any node that is strictly after `last(_)`. Mirrors Haskell's
-/// `nodesAfterLast`.
-///
-/// Walks BOTH `less_atoms` AND `edges` to build the < relation.  Each
-/// edge `(src, _) → (tgt, _)` induces `src < tgt` (the producer must
-/// fire before the consumer).  Without including edges, a `last_atom`
-/// at a node that has chain successors via edges (but no explicit
-/// `LessAtom`) would survive — losing the contradiction Haskell uses
-/// to prune typing-class source cases at precompute.
+/// HS `nodesAfterLast` (Contradictions.hs): in-trace nodes reachable from
+/// the last node through `rawLessRel`.
 fn node_after_last(
     sys: &System,
     adj: &tamarin_utils::FastMap<NodeId, Vec<NodeId>>,
@@ -1658,26 +1564,7 @@ fn node_after_last(
         Some(l) => *l,
         None => return Vec::new(),
     };
-    // Port of Haskell `Theory.Constraint.Solver.Contradictions.nodesAfterLast`:
-    //
-    //   nodesAfterLast sys = case sLastAtom sys of
-    //     Just i  -> [(i,j) | j ∈ reachableSet [i] (rawLessRel sys)
-    //                       , j /= i, isInTrace sys j ]
-    //
-    // where `rawLessRel = lessAtoms ∪ rawEdgeRel` and
-    // `isInTrace sys i = i ∈ sNodes ∨ isLast sys i ∨
-    //                    any ((i ==) . fst) (unsolvedActionAtoms sys)`.
-    //
-    // Walk the raw less-relation (less_atoms ∪ edges ∪ unsolved chains —
-    // see `build_always_before_adj`).  Without edges the typing-case `Last(#vr_inner)`
-    // branch never contradicts even when `vr_inner` has a chain-edge
-    // successor that pins down the ordering.  Filter by `isInTrace`: a
-    // successor only counts if it's a rule instance in `sNodes`, the
-    // system's last, or carries an unsolved Action goal — otherwise
-    // abstract precompute-time node-ids spuriously trip the contradiction.
-    // `adj` is the raw less-relation, built once by the caller
-    // (`contradictions`) and shared.
-    // Strictly-reachable set from `last` (seed removed) via the shared routine.
+    // `adj` is `rawLessRel`; `j /= i` drops the seed.
     let visited = crate::constraint::solver::goals::reachable_set_adj(adj, &last, false);
     visited
         .into_iter()

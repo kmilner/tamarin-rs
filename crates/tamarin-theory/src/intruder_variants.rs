@@ -1,44 +1,15 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Pre-computed intruder-variant rule loaders.
+//! Pre-computed intruder-variant rule loaders: HS `mkDhIntruderVariants` and
+//! `mkBpIntruderVariants` (src/Main/TheoryLoader.hs), which parse the
+//! embedded `data/intruder_variants_{dh,bp}.spthy` on every theory load.
 //!
-//! HS-faithful port of `Main.TheoryLoader.mkDhIntruderVariants` and
-//! `mkBpIntruderVariants` (src/Main/TheoryLoader.hs):
-//!
-//! ```haskell
-//! dhIntruderVariantsFile :: FilePath
-//! dhIntruderVariantsFile = "data/intruder_variants_dh.spthy"
-//!
-//! mkDhIntruderVariants :: MaudeSig -> [IntrRuleAC]
-//! mkDhIntruderVariants msig =
-//!     either (error . show) id $
-//!         parseIntruderRules msig dhIntruderVariantsFile
-//!           $(embedFile "data/intruder_variants_dh.spthy")
-//! ```
-//!
-//! HS embeds the cached `.spthy` file via Template Haskell's `embedFile`
-//! and parses it on every theory load.  We mirror that exactly with
-//! `include_str!` (the Rust analog: compile-time string baking, identical
-//! semantics — both fail loudly at compile time if the file is missing).
-//!
-//! The cached files at `data/intruder_variants_dh.spthy` (51 rules) and
-//! `data/intruder_variants_bp.spthy` (75 rules) were produced by HS's
-//! `Main.Mode.Intruder.run` (src/Main/Mode/Intruder.hs) — that mode
-//! invokes `dhIntruderRules False`/`bpIntruderRules False` against
-//! Maude and pretty-prints the result.  See [`crate::intruder_rules`]
-//! for the Rust port of `dhIntruderRules`, which IS still used as a
-//! regenerator (the function that PRODUCES the cache file) but is not
-//! the production runtime path.
-//!
-//! The committed BP cache holds 75 rules, one more than the regenerator
-//! emits: `minimizeIntruderRules` (IntruderRules.hs) subsumes
-//! rules via the Maude-backed `equalDuplicateRuleUpToRenaming` /
-//! `equalSubsetRuleUpToRenaming`, collapsing one `d_em` variant that the
-//! cached file still lists, so `tamarin-prover variants` on the pinned
-//! upstream tree emits 74 BP rules.  Both HS and RS parse the committed
-//! 75 rules on every theory load, so the two stay byte-identical in
-//! production; the divergence is confined to the regenerator.
+//! The committed BP file holds 75 rules, one more than
+//! [`crate::intruder_rules::bp_intruder_rules`] (and `tamarin-prover
+//! variants` at the pinned revision) regenerates: `minimizeIntruderRules`
+//! now subsumes one `d_em` variant the file still lists.  Both provers parse
+//! the committed file, so proving is unaffected.
 
 use tamarin_parser as p;
 use tamarin_term::function_symbols::FunSym;
@@ -55,30 +26,16 @@ pub const DH_INTRUDER_VARIANTS_FILE: &str = "data/intruder_variants_dh.spthy";
 /// HS `bpIntruderVariantsFile` (TheoryLoader.hs).
 pub const BP_INTRUDER_VARIANTS_FILE: &str = "data/intruder_variants_bp.spthy";
 
-/// The DH intruder-variants spthy source, embedded at compile time
-/// (HS uses `$(embedFile "data/intruder_variants_dh.spthy")` —
-/// TheoryLoader.hs).
+/// The embedded DH intruder-variants file (HS `embedFile`).
 pub const DH_INTRUDER_VARIANTS_SPTHY: &str =
     include_str!("../../../tamarin-prover/data/intruder_variants_dh.spthy");
 
-/// The BP intruder-variants spthy source, embedded at compile time
-/// (HS uses `$(embedFile "data/intruder_variants_bp.spthy")` —
-/// TheoryLoader.hs).
+/// The embedded BP intruder-variants file (HS `embedFile`).
 pub const BP_INTRUDER_VARIANTS_SPTHY: &str =
     include_str!("../../../tamarin-prover/data/intruder_variants_bp.spthy");
 
-/// HS `mkDhIntruderVariants` (TheoryLoader.hs).
-///
-/// ```haskell
-/// mkDhIntruderVariants :: MaudeSig -> [IntrRuleAC]
-/// mkDhIntruderVariants msig =
-///     either (error . show) id $
-///         parseIntruderRules msig dhIntruderVariantsFile
-///             $(embedFile "data/intruder_variants_dh.spthy")
-/// ```
-///
-/// `either (error . show) id` ≡ `unwrap_or_else(|e| panic!("{}", e))`
-/// (HS's `error . show` formats the parse error and aborts).
+/// HS `mkDhIntruderVariants` (TheoryLoader.hs); a parse error aborts, as
+/// HS's `either (error . show) id` does.
 pub fn mk_dh_intruder_variants(msig: &MaudeSig) -> Vec<IntrRuleAC> {
     parse_intruder_rules(msig, DH_INTRUDER_VARIANTS_FILE, DH_INTRUDER_VARIANTS_SPTHY)
         .unwrap_or_else(|e| {
@@ -127,17 +84,8 @@ impl std::error::Error for IntrRuleParseError {}
 ///   . T.unpack . TE.decodeUtf8
 /// ```
 ///
-/// The `setState (mkStateSig msig)` step is critical: HS's term parser
-/// (Theory/Text/Parser/Term.hs) dispatches bare identifiers via
-/// `nullaryApp` against `funSyms maudeSig` to distinguish 0-arity NoEq
-/// applications (e.g. `one`, `DH_neutral` for `dhFunSig`) from free
-/// variables.  Without it, the cached DH file's
-/// `[ ] --[ !KU( one ) ]-> [ !KU( one ) ]` rule (`c_one` in
-/// `data/intruder_variants_dh.spthy`)
-/// parses `one` as a Msg-sort variable whose !KU-action unifies with
-/// every KU goal — adding a spurious `c_one` case to every source-case
-/// enumeration and falsely closing branches with `SOLVED // trace found`.
-/// The port's `p::parse_intruder_rules` takes `msig` for the same reason.
+/// The signature lets the term parser read nullary symbols such as `one`
+/// as applications, not variables (`nullaryApp`, Theory/Text/Parser/Term.hs).
 pub fn parse_intruder_rules(
     msig: &MaudeSig,
     ctxt_desc: &str,

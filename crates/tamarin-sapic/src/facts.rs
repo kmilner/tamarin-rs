@@ -172,49 +172,35 @@ pub(crate) fn fact_to_fact(f: &TransFact) -> LNFact {
             proto_fact_mult(kind.multiplicity(), &full, ts)
         }
         TransFact::TamarinFact(f) => f.clone(),
-        // `factToFact (PureCell t1 t2) = protoFact Linear "L_PureState" [t1, t2]`
-        // (Facts.hs).
         TransFact::PureCell(t1, t2) => proto_fact(
             Multiplicity::Linear,
             "L_PureState",
             vec![t1.clone(), t2.clone()],
         ),
-        // `factToFact (CellLocked t1 t2) = protoFact Linear "L_CellLocked" [t1, t2]`
-        // (Facts.hs).
         TransFact::CellLocked(t1, t2) => proto_fact(
             Multiplicity::Linear,
             "L_CellLocked",
             vec![t1.clone(), t2.clone()],
         ),
-        // `factToFact (FLet p t vars) = protoFact Linear ("Let_" ++ pos) (t : vars)`
-        // (Facts.hs).
         TransFact::FLet(p, t, vars) => {
             let full = format!("Let_{}", pretty_position(p));
             let mut ts: Vec<LNTerm> = vec![t.clone()];
             ts.extend(vars.iter().copied().map(var_term));
             proto_fact(Multiplicity::Linear, &full, ts)
         }
-        // `factToFact (Message t t') = protoFact Linear "Message" [t, t']`
-        // (Facts.hs) — the private-channel message-in-transit fact.
         TransFact::Message(t1, t2) => proto_fact(
             Multiplicity::Linear,
             "Message",
             vec![t1.clone(), t2.clone()],
         ),
-        // `factToFact (Ack t t') = protoFact Linear "Ack" [t, t']` (Facts.hs)
-        // — the private-channel acknowledgement fact.
         TransFact::Ack(t1, t2) => {
             proto_fact(Multiplicity::Linear, "Ack", vec![t1.clone(), t2.clone()])
         }
-        // `factToFact (MessageIDSender p) = protoFact Linear "MID_Sender" [varTerm $ varMID p]`
-        // (Facts.hs).
         TransFact::MessageIDSender(p) => proto_fact(
             Multiplicity::Linear,
             "MID_Sender",
             vec![var_term(var_mid(p))],
         ),
-        // `factToFact (MessageIDReceiver p) = protoFact Linear "MID_Receiver" [varTerm $ varMID p]`
-        // (Facts.hs).
         TransFact::MessageIDReceiver(p) => proto_fact(
             Multiplicity::Linear,
             "MID_Receiver",
@@ -229,84 +215,52 @@ pub(crate) fn action_to_fact(a: &TransAction) -> LNFact {
         TransAction::InitEmpty => proto_fact(Multiplicity::Linear, "Init", vec![]),
         TransAction::EventEmpty => proto_fact(Multiplicity::Linear, "Event", vec![]),
         TransAction::TamarinAct(f) => f.clone(),
-        // `actionToFact (PredicateA f) = mapFactName ("Pred_" ++) f`
-        // (Facts.hs).
         TransAction::PredicateA(f) => map_fact_name(f, "Pred_"),
-        // `actionToFact (NegPredicateA f) = mapFactName ("Pred_Not_" ++) f`
-        // (Facts.hs).
         TransAction::NegPredicateA(f) => map_fact_name(f, "Pred_Not_"),
-        // `actionToFact (IsIn t v) = protoFact Linear "IsIn" [t, varTerm v]`
-        // (Facts.hs).
         TransAction::IsIn(t, v) => {
             proto_fact(Multiplicity::Linear, "IsIn", vec![t.clone(), var_term(*v)])
         }
-        // `actionToFact (IsNotSet t) = protoFact Linear "IsNotSet" [t]` (Facts.hs).
         TransAction::IsNotSet(t) => proto_fact(Multiplicity::Linear, "IsNotSet", vec![t.clone()]),
-        // `actionToFact (InsertA t1 t2) = protoFact Linear "Insert" [t1, t2]`
-        // (Facts.hs).
         TransAction::InsertA(t1, t2) => {
             proto_fact(Multiplicity::Linear, "Insert", vec![t1.clone(), t2.clone()])
         }
-        // `actionToFact (DeleteA t) = protoFact Linear "Delete" [t]` (Facts.hs).
         TransAction::DeleteA(t) => proto_fact(Multiplicity::Linear, "Delete", vec![t.clone()]),
-        // `actionToFact (LockNamed t v) =
-        //    protoFact Linear (lockFactName v) [lockPubTerm v, varTerm v, t]`
-        // (Facts.hs).
         TransAction::LockNamed(t, v) => proto_fact(
             Multiplicity::Linear,
             &lock_fact_name(v),
             vec![lock_pub_term(v), var_term(*v), t.clone()],
         ),
-        // `actionToFact (LockUnnamed t v) =
-        //    protoFact Linear "Lock" [lockPubTerm v, varTerm v, t]` (Facts.hs).
         TransAction::LockUnnamed(t, v) => proto_fact(
             Multiplicity::Linear,
             "Lock",
             vec![lock_pub_term(v), var_term(*v), t.clone()],
         ),
-        // `actionToFact (UnlockNamed t v) =
-        //    protoFact Linear (unlockFactName v) [lockPubTerm v, varTerm v, t]`
-        // (Facts.hs).
         TransAction::UnlockNamed(t, v) => proto_fact(
             Multiplicity::Linear,
             &unlock_fact_name(v),
             vec![lock_pub_term(v), var_term(*v), t.clone()],
         ),
-        // `actionToFact (UnlockUnnamed t v) =
-        //    protoFact Linear "Unlock" [lockPubTerm v, varTerm v, t]` (Facts.hs).
         TransAction::UnlockUnnamed(t, v) => proto_fact(
             Multiplicity::Linear,
             "Unlock",
             vec![lock_pub_term(v), var_term(*v), t.clone()],
         ),
-        // `actionToFact (ChannelIn t) = protoFact Linear "ChannelIn" [t]`
-        // (Facts.hs).
         TransAction::ChannelIn(t) => proto_fact(Multiplicity::Linear, "ChannelIn", vec![t.clone()]),
-        // `actionToFact (ProgressFrom p) =
-        //    protoFact Linear ("ProgressFrom_" ++ prettyPosition p) [varTerm $ varProgress p]`
-        // (Facts.hs).
         TransAction::ProgressFrom(p) => proto_fact(
             Multiplicity::Linear,
             &format!("ProgressFrom_{}", pretty_position(p)),
             vec![var_term(var_progress(p))],
         ),
-        // `actionToFact (ProgressTo p pf) =
-        //    protoFact Linear ("ProgressTo_" ++ prettyPosition p) [varTerm $ varProgress pf]`
-        // (Facts.hs).  NOTE: name uses `p`, but the term is `varProgress pf`.
         TransAction::ProgressTo(p, pf) => proto_fact(
             Multiplicity::Linear,
             &format!("ProgressTo_{}", pretty_position(p)),
             vec![var_term(var_progress(pf))],
         ),
-        // `actionToFact (Send p t) = protoFact Linear "Send" [varTerm $ varMsgId p, t]`
-        // (Facts.hs).
         TransAction::Send(p, t) => proto_fact(
             Multiplicity::Linear,
             "Send",
             vec![var_term(var_mid(p)), t.clone()],
         ),
-        // `actionToFact (Receive p t) = protoFact Linear "Receive" [varTerm $ varMsgId p, t]`
-        // (Facts.hs).
         TransAction::Receive(p, t) => proto_fact(
             Multiplicity::Linear,
             "Receive",

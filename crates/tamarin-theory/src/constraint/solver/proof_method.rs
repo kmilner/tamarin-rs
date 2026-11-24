@@ -1,25 +1,9 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Port of `Theory.Constraint.Solver.ProofMethod`.
-//!
-//! `ProofMethod` is the small-step interface to the constraint
-//! solver. The high-level loop in Haskell is:
-//!
-//! ```text
-//! exec(method, sys) -> Map<CaseName, System>
-//!     - Sorry / Finished / Invalidated → trivial
-//!     - Simplify  → simplify the system once
-//!     - SolveGoal → reduce a specific open goal, possibly producing
-//!                   multiple cases
-//!     - Induction → split into base/step cases
-//! ```
-//!
-//! All arms are fully ported: the trivial cases (Sorry / Finished /
-//! Invalidated), `Simplify` (with the per-step simplify fan-out and
-//! dedup/distinguish case naming), `SolveGoal` (full goal dispatch via
-//! `solve_*_goal`), and `Induction` (base/step split via `ginduct`).
-//! `None` results mean "no applicable method", not unfinished stubs.
+//! Port of `Theory.Constraint.Solver.ProofMethod`: the small-step
+//! interface to the constraint solver. `exec_proof_method` maps a method and
+//! a system to its named cases, or `None` when the method does not apply.
 
 use crate::constraint::constraints::Goal;
 use crate::constraint::solver::context::ProofContext;
@@ -64,21 +48,9 @@ pub fn is_finished(
     super::cancellation_tests::checkpoint(ctx, super::cancellation_tests::Work::Terminal);
     let cs = contradictions(ctx, sys)?;
     if let Some(c) = cs.into_iter().next() {
-        // Mirror Haskell `contradictorySystem`: any contradiction
-        // closes the branch as `Contradictory`.  Haskell's `isFinished`
-        // does not gate this on source-case diagnostics.
         return Ok(Some(Result::Contradictory(Some(c))));
     }
-    // Direct port of Haskell `isFinished` (ProofMethod.hs):
-    //   | null ogs && stFinished     = Just Solved
-    //   | null ogs && not stFinished = Just Unfinishable
-    //   | otherwise                  = Nothing
-    // where `ogs = openGoals sys` — the FILTERED list (with the
-    // auto-solve KU heuristic applied), not just the unsolved-status
-    // count.  Our `open_goals` does the same filtering, so we check IT
-    // for emptiness rather than the status flags.
-    // (gfalse is caught as a FormulasFalse contradiction above, so we
-    // don't need an explicit `no_false_formula` guard here.)
+    // HS `isFinished` (ProofMethod.hs) tests the filtered `openGoals`.
     use crate::constraint::solver::goals::open_goals;
     if !open_goals(sys).is_empty() {
         return Ok(None);
@@ -112,40 +84,17 @@ pub fn is_finished_or_stuck(
     Ok((!crate::constraint::solver::search::deadline_reached()).then_some(Result::Unfinishable))
 }
 
-/// Render/index applicability — the evaluation depth HS's
-/// `mapMaybe execProofMethod` forces when building the web UI's
-/// "Applicable Proof Methods" list, WITHOUT the `SolveGoal` fan-out.
-///
-/// HS (`ProofMethod.hs`) forces each `execProofMethod` result
-/// only to WHNF (`Just`/`Nothing`); the `SolveGoal` arm is
-/// `return $ process $ solve goal` (`ProofMethod.hs`) — ALWAYS `Just`,
-/// with the whole case fan-out an unforced thunk the node page never
-/// demands (`Web/Theory.hs` binds the cases to `_`; the
-/// "N sub-case(s)" count comes from the persisted tree).  Only
-/// `Simplify` (bounded simplify + single-case guard) and
-/// `Induction` (structural `ginduct` guard) can drop a method at
-/// render, and those ARE forced — keep the full exec for them.  The
-/// fan-out is paid only when a method is APPLIED (`oneStepProver`'s
-/// `M.map` forces the spine, `Theory/Proof.hs`) — RS's `apply_at_path`,
-/// unchanged.
-///
-/// Eagerly exec'ing every candidate here made rendering one bilinear
-/// node cost 129s (ake/bilinear/Joux; HS renders it in 0.09s and takes
-/// 146.85s only when the method is clicked) — the Joux/Joux_EphkRev/siv
-/// web-crawl timeouts.  Also more faithful on the deadline: HS never
-/// drops a SolveGoal at render; the eager exec's deadline entry-guard
-/// could.
+/// Applicability as the web UI's method list forces it: HS evaluates
+/// `execProofMethod` only to `Just`/`Nothing`, and the `SolveGoal` arm is
+/// always `Just` with its case fan-out left unevaluated. Only `Simplify` and
+/// `Induction` can be dropped there, so only they are executed.
 pub fn is_applicable_for_display(
     ctx: &ProofContext,
     method: &ProofMethod,
     sys: &System,
 ) -> std::result::Result<bool, crate::prove::ProveError> {
     Ok(match method {
-        // `return tracedCases` — unconditionally `Just` in HS; do NOT
-        // call exec_proof_method (that forces the fan-out).
         ProofMethod::SolveGoal(_) => true,
-        // Forced by HS at render too; cheap and can legitimately drop
-        // the method (no-op Simplify / non-initial Induction).
         ProofMethod::Simplify | ProofMethod::Induction => {
             exec_proof_method(ctx, method, sys)?.is_some()
         }
@@ -208,18 +157,8 @@ fn process(ctx: &ProofContext, cases: Vec<(String, System)>) -> Vec<(String, Sys
     distinguish_case_names(deduped)
 }
 
-/// Execute a proof method against `sys`, returning the resulting
-/// case list in dispatch order. `Sorry` / `Finished` produce empty
-/// cases; `Simplify` runs the simplify fan-out and returns one case
-/// per surviving branch; `SolveGoal(g)` dispatches via `solve_*_goal`
-/// and converts `GoalCases` to a case list; `Induction` splits the
-/// first formula into base/step cases via `ginduct`.
-///
-/// The case list is returned as a `Vec` in the order branches were
-/// produced, but callers do not rely on that order: both `search.rs`
-/// and `replay.rs` re-sort the cases by name before walking them, to
-/// reproduce Haskell's `Data.Map` (alphabetical) iteration order from
-/// `execProofMethod`'s `M.fromListWith`.
+/// HS `execProofMethod` (ProofMethod.hs). Cases come back in production
+/// order; callers sort them by name, as Haskell's `M.fromListWith` does.
 pub fn exec_proof_method(
     ctx: &ProofContext,
     method: &ProofMethod,
@@ -228,36 +167,14 @@ pub fn exec_proof_method(
     use crate::constraint::solver::reduction::{GoalCases, Reduction};
 
     crate::constraint::solver::search::check_cancelled()?;
-    // Deadline short-circuit (entry-guard).  Without this, a single
-    // `exec_proof_method` invocation that internally enumerates many
-    // Maude unifiers / source-case branches (e.g. bilinear-pairing
-    // examples with large variant tables) can run for many seconds
-    // before any caller checks the deadline.  Returning `None` signals
-    // "no method applicable" — the caller in `expand_inner` then walks
-    // the rest of the candidate list, all of which also return `None`,
-    // and the node becomes `Sorry: no method`.  The next call up the
-    // recursion checks the deadline at the top of `search::expand_inner`
-    // and bails to `Sorry: deadline reached`.
-    // Combined, this bounds the post-deadline runtime to O(depth) rather
-    // than O(remaining-work-in-current-method).
+    // Rust-only deadline guard: past the deadline no method applies, which
+    // bounds the remaining work by the proof depth.
     if crate::constraint::solver::search::deadline_reached() {
         return Ok(None);
     }
 
-    // HS-faithful per-step Maude counter reset (ProofMethod.hs):
-    //   `runReduction (m <* simplifySystem) ctxt sys (avoid sys)`
-    // The FreshT counter starts at `avoid sys` for EVERY proof step
-    // (`avoid = maybe 0 (succ . snd) . boundsVarIdx`, LTerm.hs —
-    // 0 for a frees-less system such as a lemma's ROOT step, else
-    // max idx + 1; `avoid_fresh_state` mirrors that exactly).
-    // Without this, Rust's Maude counter advances monotonically across all
-    // proof steps — so witness idxs grow to hundreds where HS stays in
-    // the ~20-30 range.  Beyond cosmetics, the unbounded growth surfaces
-    // SubstVFresh same-target collisions: when a variant's lifted witness
-    // gets a target idx that collides with another raw entry's target,
-    // the collision pattern encodes an unintended unification that
-    // cascades downstream (KAS_key_secrecy: `~ltkA.0` and `~ltkA.349`
-    // both → `~ltkA.425` after lifting forces $R=$I via setNodes merge).
+    // `runReduction ... (avoid sys)`: every step's FreshT counter starts at
+    // `avoid sys`.
     let avoid = crate::constraint::solver::reduction::avoid_fresh_state(sys);
     ctx.maude.reset_counter_to(avoid);
 
@@ -334,38 +251,11 @@ pub fn exec_proof_method(
                 Ok(p) => p,
                 Err(_) => return Ok(None),
             };
-            // HS-faithful: mirror Haskell's `induction` (ProofMethod.hs):
-            //   induction (baseCase, stepCase) = do
-            //     (caseName, caseFormula) <- disjunctionOfList
-            //         [("empty_trace", baseCase), ("non_empty_trace", stepCase)]
-            //     L.setM sFormulas (S.singleton caseFormula)
-            //     return caseName
-            // Match HS's direct formula-store assignment. Inserting here
-            // would create disjunction goals before simplifySystem and alter
-            // their ordering; simplification handles the selected formula.
-            // HS `process . induction` (ProofMethod.hs):
-            // `runReduction (induction <* simplifySystem)` under the DisjT
-            // monad.  `simplifySystem` CAN fan out at induction time — a
-            // step-case formula that `reduceFormulas` decomposes into
-            // unique-action goals (e.g. eCK lemmas whose formula carries
-            // several `Accept(...)` atoms, TAK1_eCK_like) makes
-            // `solveUniqueActions` fan out over the AC unifiers of each
-            // action.  An in-place `simplify_system` here would discard
-            // that `Cases` outcome without marking the goal solved, so the
-            // simplify fixpoint would re-solve the same action forever (the
-            // TAK1 web proof-page spin, since `write_applicable_methods`
-            // execs Induction while the batch search does not).
-            // Route through `simplify_system_with_fanout` exactly like the
-            // `Simplify` and `SolveGoal` arms.
-            // HS branch order: `disjunctionOfList [("empty_trace", base),
-            // ("non_empty_trace", step)]` — base first, then step; each
-            // branch's simplify sub-branches keep DisjT order (the same
-            // order `simplify_system_with_fanout` returns, validated by the
-            // `Simplify` arm's byte parity).
+            // `process . induction`: each case replaces the formula store
+            // (`setM sFormulas`, not `insertFormula`, so no goals are created
+            // before simplification) and is simplified with fan-out.
             let mut named: Vec<(String, System)> = Vec::new();
             for (name, fm_case) in [("empty_trace", base), ("non_empty_trace", step)] {
-                // HS `induction` uses `setM sFormulas` — a direct field
-                // write, NOT `insert_formula`.
                 let mut case_sys = sys.clone();
                 case_sys.clear_formulas();
                 case_sys.insert_open_formula(fm_case);

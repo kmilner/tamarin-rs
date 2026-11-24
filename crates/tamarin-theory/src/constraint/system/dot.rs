@@ -1,78 +1,16 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Port of Haskell's `Theory.Constraint.System.Dot` +
-//! `Theory.Constraint.System.Graph.*` — convert a `System` into a
-//! Graphviz DOT representation suitable for `dot -Tsvg`.
+//! Port of HS `Theory.Constraint.System.Dot` (`dotSystemCompact`): render a
+//! `System`'s graph (Graph.hs, GraphRepr.hs) as a Graphviz DOT document.
 //!
-//! A `System` becomes the same kinds of nodes / edges / clusters HS draws, as
-//! a single self-contained DOT document with an HTML-table legend for the
-//! chosen abbreviations and similar-name / role clustering.
+//! This module holds the content layer — labels, colours (`nodeColorMap`,
+//! `roleColor`), row filtering and ordering; `showdot` builds the `Text.Dot`
+//! element tree and renders it through `showDot`. The batch `--output-dot`
+//! writer renders at each trace's label, the web routes at `"G"`.
 //!
-//! This module is the entry point and the CONTENT layer — the label,
-//! colour, filtering and ordering helpers, all of them HS's: fact rendering
-//! (`prettyLNFact`), action-row filtering (Diff / auto-source), the preamble
-//! and cluster attribute blocks, the `roleColor` cluster styling and the
-//! less-edge colours.  The bytes themselves are `showdot`'s, which builds a
-//! `Text.Dot` element tree ([`tamarin_utils::dot`]) and renders it through
-//! `showDot`.
-//!
-//! Upstream has exactly one such serializer — `dotSystemCompact graphOptions
-//! dotOptions system` — and hands it to `D.showDot` UNWRAPPED at the batch
-//! `--output-dot` writer (`Batch.hs`, at the trace's own label) and at the
-//! interactive DOT route (`dotGraphString`, `Web/Theory.hs`, at the
-//! fixed label `"G"`).  Both of RS's callers go through this module at those
-//! two labels.
-//!
-//! Upstream's seven other `showDot "G"` sites serialise the same thing and
-//! belong to three functions RS has no counterpart for.  `imgThyPath`
-//! and `imgDiffThyPath` WRITE a file and
-//! shell out to graphviz, so what they answer with is an image;
-//! `interactiveDotDiffThyPath` returns its text,
-//! but only over `DiffTheory*` paths, and RS's `/thy/equiv/` routes are stubs
-//! that draw nothing.
-//! Three of the seven run the document through `prefixedShowDot`,
-//! which `unlines` two
-//! `// protocol rules: …` / `// message deduction rules: …` comment lines
-//! ahead of it; the other four, the proof-path arms of the two diff
-//! functions, do not.  A DOT comment is invisible to graphviz, so on the image
-//! routes the prefix cannot reach the rendering at all.
-//!
-//! Per-rule node FILL colours are a faithful port of HS `nodeColorMap`
-//! (System/Dot.hs): the size-dependent light-HSV palette keyed by
-//! `(groupIdx, memberIdx)` — see `build_node_color_map` / `NodeColorMap` in
-//! [`crate::constraint::system::graph::color`]. An explicit per-rule
-//! `color:` attribute and a cluster's `manualNodeColor` still take priority
-//! (HS `dotNodeCompact`, System/Dot.hs).
-//! Each rule record also carries HS's `fontcolor` (`colorUsesWhiteFont` of the
-//! palette colour, System/Dot.hs) and `role` (System/Dot.hs)
-//! attributes.
-//!
-//! The `uncompact`/`FullBoringNodes` toggle belongs to HS `DotOptions`, which
-//! RS has no counterpart for, so the renderer is always compact — matching
-//! the HS default (`defaultDotOptions`, System/Dot.hs) and the
-//! interactive route's own default (`getOptions`, Handler.hs, which
-//! selects `CompactBoringNodes` when the `uncompact` query param is absent).
-//!
-//! Reference:
-//!   - `lib/theory/src/Theory/Constraint/System/Dot.hs`
-//!   - `lib/theory/src/Theory/Constraint/System/Graph/Graph.hs`
-//!   - `lib/theory/src/Theory/Constraint/System/Graph/GraphRepr.hs`
-//!
-//! Each rule node is rendered as a Graphviz record:
-//!
-//! ```text
-//!     +------------+------------+
-//!     |  prem_0    |  prem_1    |
-//!     +------------+------------+
-//!     |      #i : RuleName      |
-//!     +------------+------------+
-//!     |  conc_0    |  conc_1    |
-//!     +------------+------------+
-//! ```
-//!
-//! with a port per field so that edges from the `sEdges` set can target the
-//! correct slot.
+//! HS `DotOptions`' `FullBoringNodes` (`uncompact`) is not ported: nodes
+//! always render compact, the HS default.
 
 use crate::constraint::system::{NodeRuleMap, System};
 use crate::fact::{FactTag, LNFact};

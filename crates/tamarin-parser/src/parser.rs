@@ -163,28 +163,11 @@ pub fn parse_theory_with_manifest(
     Ok((theory, parser.state.input_aliases))
 }
 
-/// Parse a stream of intruder-rule declarations of the form
-///     `rule (modulo AC) <name>[<limit>]: [..] --[..]-> [..]`
-/// (with no surrounding `theory ... begin ... end` wrapper).
-///
-/// Direct port of HS `parseIntruderRules` (Theory/Text/Parser/Rule.hs):
-/// ```haskell
-/// parseIntruderRules
-///     :: MaudeSig -> String -> B.ByteString -> Either ParseError [IntrRuleAC]
-/// parseIntruderRules msig ctxtDesc =
-///     parseString [] ctxtDesc (setState (mkStateSig msig) >> many intrRule)
-///   . T.unpack . TE.decodeUtf8
-/// ```
-/// `msig` is the signature HS installs with `setState (mkStateSig msig)`
-/// (Theory/Text/Parser/Rule.hs, called from TheoryLoader.hs);
-/// [`Parser::seed_signature`] does the same here, so `nullaryApp` resolves
-/// the constants these machine-generated files use — `one` and `DH_neutral`
-/// in the cached DH file — instead of reading them as variables.
-///
-/// The bodies are parsed using the existing `parse_rule_ac` path.
-/// The caller is responsible for translating the parser-AST rules into
-/// `IntrRuleAC` (incl. the `c_`/`d_` name dispatch HS `intrInfo` does
-/// at Theory/Text/Parser/Rule.hs).
+/// HS `parseIntruderRules` (Theory/Text/Parser/Rule.hs): a stream of
+/// `rule (modulo AC) <name>: ...` declarations with no theory wrapper, parsed
+/// under `msig` (`setState (mkStateSig msig)`) so `nullaryApp` resolves
+/// constants such as `one` and `DH_neutral`.  The caller converts the rules
+/// to `IntrRuleAC`, including `intrInfo`'s `c`/`d` name dispatch.
 pub fn parse_intruder_rules(msig: &MaudeSig, input: &str) -> Result<Vec<Rule>, ParseError> {
     let mut p = Parser::new(input, &[], false);
     p.seed_signature(msig);
@@ -1147,27 +1130,11 @@ impl<'a> Parser<'a> {
 
     // -------------------- Preprocessor --------------------
 
-    /// Expand an already-consumed `#include` keyword and its following path into the
-    /// sequence of theory items declared in the referenced file.
-    ///
-    /// HS `include` (Theory/Text/Parser.hs):
-    /// ```haskell
-    /// include inFile0 thy = do
-    ///    filepath <- try (symbol "#include") *> filePathParser
-    ///    st <- getState
-    ///    let (thy', st') = unsafePerformIO (parseFileWState st ... filepath)
-    ///    _ <- putState st'
-    ///    addItems inFile0 $ set (sigpMaudeSig . thySignature) (sig st') thy'
-    ///  where
-    ///    filePathParser = case takeDirectory <$> inFile0 of
-    ///        Nothing -> doubleQuoted filePath
-    ///        Just s  -> (s </>) <$> doubleQuoted filePath
-    /// ```
-    /// The double-quoted path is consumed here; the path is
-    /// resolved against `self.base_dir` (HS `takeDirectory inFile0`); the file
-    /// is read and its header-less fragment parsed by [`parse_include_fragment`]
-    /// — which threads parser state both ways (signature / known funcs / flags),
-    /// matching HS's `getState`/`putState` round-trip and `sig st'` merge.
+    /// HS `include` (Theory/Text/Parser.hs), after the `#include` keyword:
+    /// read the double-quoted path relative to `self.base_dir` (`takeDirectory
+    /// inFile0`) and parse the header-less fragment with
+    /// [`parse_include_fragment`], threading parser state both ways as HS's
+    /// `getState`/`putState` does.
     fn expand_include(&mut self) -> Result<Vec<TheoryItem>, ParseError> {
         self.in_context(ParseContext::Include, Self::expand_include_inner)
     }
@@ -2585,35 +2552,13 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// The name guards HS `liftedAddProtoRule` (Theory/Text/Parser.hs)
-    /// runs after each protocol rule parses, in HS's order:
-    ///
-    ///   1. each `_restrict` formula's minted `Restr_<rule>_<i>` restriction is
-    ///      added first — `addRestriction` fails if a restriction with that
-    ///      NAME already exists (TheoryObject.hs), so a second
-    ///      `_restrict`-carrying rule with a reused name dies here
-    ///      (`duplicate restriction: Restr_<rule>_1`) even when it is
-    ///      byte-identical to the first;
-    ///   2. then the rule itself — `addOpenProtoRule` (OpenTheory.hs)
-    ///      fails only when the name is already bound to a DIFFERENT rule
-    ///      (`maybe True (ru ==) $ lookupOpenProtoRule …`); an identical
-    ///      duplicate passes the guard and is appended AGAIN (both copies
-    ///      render), which the corpus relies on (e.g.
-    ///      examples/asiaccs20-POIDC/OIDC_CodeFlow_with_ClientSecret.spthy).
-    ///
-    /// Diff mode is exempt: diff theories route rules through
-    /// `liftedAddDiffRule`/`addDiffRule` with a different message
-    /// (`"duplicate rule or inconsistent names: …"`,
-    /// Theory/Text/Parser.hs), which
-    /// this port does not implement.
-    ///
-    /// Equality is on the parsed AST minus the `(modulo E)` head, which HS
-    /// discards at parse time (`optional moduloE`, Parser/Rule.hs).
-    /// HS compares rules after `liftedAddProtoRule` has appended the minted
-    /// `Restr_*` actions; two same-name rules that both carry an embedded
-    /// restriction die at the restriction guard above before this comparison
-    /// runs, and a rule with none has no action to append, so the two
-    /// comparisons agree.
+    /// The name guards HS `liftedAddProtoRule` (Theory/Text/Parser.hs) runs
+    /// per protocol rule, in order: each minted `Restr_<rule>_<i>` must be a
+    /// new restriction name (`addRestriction`, TheoryObject.hs), then
+    /// `addOpenProtoRule` (OpenTheory.hs) rejects a name bound to a DIFFERENT
+    /// rule; an identical duplicate is appended again, which the corpus relies
+    /// on.  Diff mode is exempt (`liftedAddDiffRule` is not ported).  Rules
+    /// compare as parsed ASTs without the discarded `(modulo E)` head.
     fn guard_duplicate_rule(&mut self, r: &Rule, name_start: Pos) -> Result<(), ParseError> {
         if self.is_diff {
             return Ok(());

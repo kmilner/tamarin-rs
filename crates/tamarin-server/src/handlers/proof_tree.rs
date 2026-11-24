@@ -1,26 +1,10 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Live proof-tree state — mirror of Haskell's `IncrementalProof` +
-//! `applyProverAtPath`.
-//!
-//! Haskell's interactive UI keeps a mutable proof tree per lemma; user
-//! clicks dispatch a `ProofMethod` at a path in that tree and the
-//! result is spliced back in. Rust keeps each root lazy until first use and
-//! shares materialised roots copy-on-write between theory versions.
-//!
-//! In the Rust port we model this with:
-//!
-//! - One lazy, copy-on-write [`ProofNode`] root per lemma.
-//! - [`apply_at_path`]: navigate by case-name path, run the requested
-//!   `ProofMethod` via `exec_proof_method`, replace that subtree's
-//!   children, return the new root.
-//!
-//! The implementation is intentionally minimal: it doesn't yet drive
-//! the full `run_proof_search` loop on click — that's the autoprove
-//! button.  Each user-driven step applies exactly one method and
-//! returns the resulting cases.  The proof can therefore stay "open"
-//! until the user navigates / clicks again.
+//! Live proof-tree state, HS's per-lemma `IncrementalProof` and
+//! `applyProverAtPath`: one lazy, copy-on-write [`ProofNode`] root per lemma.
+//! A clicked method runs one `exec_proof_method` step at a case-name path;
+//! autoprove grafts a whole search result there.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -1036,38 +1020,10 @@ fn write_applicable_methods(
         .render();
     out.push(format!("<h3>{h3}</h3>"));
     // HS `preformatted (Just "methods") (numbered' $ zipWith prettyPM [1..] pms)`
-    // = `withTag "div" [("class","preformatted methods")] …` (no `<pre>`).
-    // Mirror Haskell `Web.Theory.subProofSnippet` (`Web/Theory.hs`):
-    // each ranked method N (1-based) emits
-    //   <a class="internal-link proof-method"
-    //      href="/thy/trace/<idx>/main/method/<lemma>/<N>/<sub>">label</a>
-    // The frontend's `mainDisplay.applyProofMethod` keyboard shortcuts
-    // (1..9) target `div.methods a.internal-link`, and the click handler
-    // for `internal-link` posts the URL via `server.handleJson` —
-    // landing on our `/main/method/...` route which dispatches to
-    // `theory::apply_method` and returns a `{redirect}`.
-    // HS lays the whole list out as ONE HtmlDoc (`numbered' $ zipWith
-    // prettyPM [1..] pms`, Web/Theory.hs): each item is
-    // `flushRight nW (show i) <> ". " <> (link (prettyProofMethod m) <->
-    // lineComment_ expl)` — so the method text wraps (a) at HTML-ENTITY
-    // fill widths (renderHtmlDoc), (b) beside-shifted by the `N. ` prefix
-    // (nW+2 cols), and (c) with the trailing `// expl` comment
-    // participating in the last line's fits check.  Reproduce that layout
-    // per item: build the method Doc under the entity-width guard and lay
-    // it with `render_at(100, 67, nW+2)` (the beside-shift budget), then
-    // split the never-wrapped `<->`-joined comment back off to place the
-    // `</a>` boundary.  (Continuation-line indent bytes and the blank line
-    // `numbered'` inserts between items are whitespace the parity gate
-    // canonicalizes; the break POSITIONS are what must match.)
-    // HS `numbered' $ zipWith prettyPM [1..] pms` (Web/Theory.hs):
-    //   pp (i, d) = text (flushRight nW (show i)) <> text ". " <> d
-    //   d        = withTag "a" [("class",…),("href",…)] (prettyProofMethod m)
-    //              <-> (if null expl then emptyDoc else lineComment_ expl)
-    // and `numbered'` separates the items by a blank line (`intersperse (text "")`).
-    // Each item is built as ONE Doc (so the `N. ` prefix beside-shifts a wrapped
-    // method's continuation lines, the method carries its `hl_keyword` span, and
-    // the trailing `// expl` comment participates in the fill), then rendered
-    // under the active HtmlDoc guard.
+    // (Web/Theory.hs): item N is `flushRight nW (show N) <> ". " <> d` with
+    // `d = link (prettyProofMethod m) <-> lineComment_ expl`, built as ONE Doc
+    // so the prefix beside-shifts a wrapped method and the comment takes part
+    // in the fill; `numbered'` separates items by a blank line.
     let nw = methods.len().to_string().len();
     let mut method_blocks: Vec<String> = Vec::with_capacity(methods.len());
     for (i, (m, expl)) in methods.iter().enumerate() {

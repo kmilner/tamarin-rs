@@ -1,26 +1,11 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Batch-mode driver: turn parsed [`Args`] into proof attempts and
-//! produce an analyzed-theory output document.
-//!
-//! Mirrors `Main.Mode.Batch.run` in spirit — load each input file,
-//! parse + elaborate, optionally prove lemmas, and emit either to
-//! stdout or to `--output=` / `-O DIR`. The analyzed-theory output is
-//! rendered via `pretty_theory::pretty_closed_theory`, the port of
-//! Haskell's `prettyClosedTheory`, which interleaves the theory items
-//! with their per-lemma proof/summary annotations.
-//!
-//! `--parse-only` stops after parsing and prints the pretty-printed OPEN
-//! theory to stdout (HS `prettyOpenTheory`, Batch.hs — always stdout,
-//! `-o`/`-O` are ignored there); `-m`/`--output-module` (Batch.hs)
-//! translates and CHECKS but never closes: per-module preprocessing
-//! (`processOpenTheory` — identity for `spthy`, SAPIC typing for
-//! `spthytyped`, full translation + lemma filter for `msr`), the full
-//! wellformedness/NDC/derivation stage, then the OPEN print
-//! (`prettyOpenTheoryByModule`) with the wf + version comment blocks, docs
-//! deferred until every file is processed; all other modes close the theory
-//! and go through `prettyClosedTheory`.
+//! Port of HS `Main.Mode.Batch.run` and the CLI's other modes. Batch mode
+//! loads each file through the shared `theory_loader` pipeline and then
+//! prints the open theory (`--parse-only`, `-m`), the precomputation summary
+//! (`--precompute-only`) or the proved closed theory (`prettyClosedTheory`)
+//! with the `summary of summaries`.
 
 // Sanctioned stdout path: this is the batch-mode CLI output module — it emits
 // the analyzed-theory document and progress lines to stdout by design (the
@@ -427,26 +412,13 @@ fn run_test(args: &Args) -> Result<i32, RunError> {
     }
 }
 
-/// `tamarin-prover variants` — mirror HS's `Main.Mode.Intruder.run`.
-/// HS dumps the DH-intruder rule variants (the `c_exp`, `c_inv`,
-/// `c_mult`, `c_one`, etc. rules) then the BP-intruder variants, without
-/// needing a `.spthy` file (Intruder.hs).
-///
-/// We mirror the DH half: spin up Maude with `dh_maude_sig()`, generate the
-/// rules via [`tamarin_theory::intruder_rules::dh_intruder_rules`] with the
-/// HS-hardcoded `False` flag, and pretty-print each rule in HS's
-/// `rule (modulo AC) NAME:` shape, and the BP half the same way on a second
-/// handle (see body for why the two signatures stay separate).
-/// `-O`/`--Output` additionally writes the two blocks to files, as HS's
-/// `writeRules` does (see the tail of the body).  Both blocks and the stdout
-/// dump are byte-identical to the oracle's — 5811 / 10426 / 16238 bytes.
+/// HS `Main.Mode.Intruder.run` (Intruder.hs): dump the DH then the
+/// bilinear-pairing intruder variants, and with `-O` write them to files
+/// (`writeRules`).
 fn run_variants(args: &Args) -> Result<i32, RunError> {
     let maude_path = maude_invocation_path(args);
-    // HS `Main.Mode.Intruder.run` runs `ensureMaude` BEFORE it starts either
-    // handle (Intruder.hs), so the tool block — stderr only, the rule dump
-    // alone goes to stdout — precedes any Maude spawn, and a maude that cannot
-    // be started aborts here rather than in `MaudeHandle::start`.  The verdict
-    // is discarded (`_ <- ensureMaude as`).
+    // HS runs `ensureMaude` before starting either handle; its verdict is
+    // discarded.
     let _ = ensure_maude(args, &maude_path);
     let start_maude = |sig| {
         MaudeHandle::start(&maude_path, sig).map_err(|e| {
@@ -456,28 +428,9 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
             ))
         })
     };
-    // HS `Main.Mode.Intruder.run` (Intruder.hs) starts TWO SEPARATE
-    // Maude handles — one on `dhMaudeSig`, one on `bpMaudeSig` — and
-    // generates `dhIntruderRules False` then `bpIntruderRules False`, then
-    // emits `dhS ++ bpS`.  We mirror the DH handle on `dh_maude_sig()` ALONE
-    // (NOT merged with bp): merging exposes pmult/em to Maude during the DH
-    // variant query and could perturb DH variant enumeration.  The DH
-    // generator is hardcoded `False` in HS, not the --diff flag, so we pass
-    // `false`.
+    // Two separate handles, as HS: `dhIntruderRules False` on `dhMaudeSig`,
+    // then `bpIntruderRules False` on `bpMaudeSig`, generated at runtime.
     let maude = start_maude(tamarin_term::maude_sig::dh_maude_sig())?;
-    // HS `Main.Mode.Intruder.run` (Intruder.hs) generates BOTH the DH
-    // and the bilinear-pairing variants and emits `dhS ++ bpS`:
-    //   - DH: `dhIntruderRules False` (runtime, via Maude).  RS's runtime
-    //     generator is byte-faithful (exactly 51 rules); `MaudeHandle::variants`
-    //     applies `remove_renamings` to drop redundant identity-variants.
-    //   - BP: `bpIntruderRules False` (runtime).  Like HS
-    //     (Intruder.hs), we start a SECOND Maude handle on
-    //     `bp_maude_sig()` and generate the 74 BP rules at runtime via
-    //     `bp_intruder_rules(false, ..)`.  This tracks the CURRENT Maude
-    //     rather than the stale cached `data/intruder_variants_bp.spthy`
-    //     (which production proving still parses via
-    //     `mk_bp_intruder_variants`); HS's `variants` command likewise
-    //     generates BP at runtime, so the two stay byte-identical.
     let dh_rules = tamarin_theory::intruder_rules::dh_intruder_rules(&maude);
     let bp_maude = start_maude(tamarin_term::maude_sig::bp_maude_sig())?;
     let bp_rules = tamarin_theory::intruder_rules::bp_intruder_rules(&bp_maude);
@@ -647,18 +600,9 @@ fn run_interactive(args: &Args) -> Result<i32, RunError> {
         port, display_host, port, loading_what,
     );
 
-    // Spin up a tokio runtime and run the server. We use a multi-thread
-    // runtime so background `spawn_blocking` proof tasks don't park the
-    // single executor thread.
-    //
-    // `thread_stack_size`: the web constraint-system pane is rendered as
-    // ONE HughesPJ Doc (HS `prettyNonGraphSystem = vsep …`), and the
-    // eager Doc builders (`beside`/`aboveNest`) recurse along the left
-    // operand's token spine — depth scales with the pane size.  GHC grows
-    // its stack on demand; tokio's default 2 MiB worker stacks do not, and
-    // overflowed on fact-heavy panes (UM_three_pass).  64 MiB is reserved
-    // virtual address space only (committed on use), applied to both
-    // worker and `spawn_blocking` threads.
+    // Proof work runs on `spawn_blocking` threads. The 64 MiB stacks
+    // (virtual, committed on use) hold the recursive HughesPJ Doc builders
+    // on fact-heavy panes, where GHC grows its stack on demand.
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .thread_stack_size(64 * 1024 * 1024)
@@ -735,18 +679,8 @@ fn stop_on_trace_cut(
     }
 }
 
-/// HS `ensureMaude` (Console.hs) on the binary this run invokes — the
-/// probe every mode but `--parse-only` runs first.
-///
-/// The name HS reports is `maudePath as` (Console.hs):
-/// the `--with-maude` value, else the bare `"maude"` it lets `PATH` resolve.
-/// The port resolves that default to an absolute path of its own
-/// ([`default_maude_path`]) but still reports the basename HS would print, so
-/// only which of two identical binaries is spawned differs.
-///
-/// `maude_path` is [`maude_invocation_path`]'s answer, taken as a parameter so
-/// a caller that already resolved it (resolving the default probes the
-/// filesystem) does not pay for it twice.
+/// HS `ensureMaude` (Console.hs) on `maude_path`, reporting the name HS
+/// would: the `--with-maude` value, else the default's basename.
 fn ensure_maude(args: &Args, maude_path: &str) -> (bool, String) {
     let reported: &str = if args.maude_path.is_some() {
         maude_path
@@ -766,17 +700,9 @@ fn maude_invocation_path(args: &Args) -> String {
     args.maude_path.clone().unwrap_or_else(default_maude_path)
 }
 
-/// Report a failed input-file read the way GHC's runtime does.
-///
-/// HS never guards the read: `openFile` throws an IOException that escapes to
-/// the runtime, which writes `tamarin-prover: <path>: openFile: <reason>` (the
-/// IOException `Show` instance, GHC.IO.Exception) to stderr and exits 1.
-///
-/// A directory is the one reason GHC does not take from the errno: `openFile`
-/// checks the file type itself and raises `InappropriateType` with the
-/// hand-written description `is a directory` (GHC.IO.FD), where the write
-/// side's EISDIR carries `strerror`'s capitalised `Is a directory`.  Every
-/// other reason is the shared errno rendering — [`io_exception_reason`].
+/// GHC's runtime report of an unguarded `openFile` failure:
+/// `<path>: openFile: <reason>`. A directory is `inappropriate type (is a
+/// directory)` (GHC.IO.FD); other reasons are [`io_exception_reason`].
 fn open_file_error(in_file: &str, e: &std::io::Error) -> RunError {
     let reason = if e.kind() == std::io::ErrorKind::IsADirectory {
         "inappropriate type (is a directory)".to_string()
@@ -812,17 +738,9 @@ fn missing_output_path() -> i32 {
     1
 }
 
-/// GHC's `show` for an `IOException` that escapes an unguarded file write:
-/// `<path>: <op>: <description> (<strerror>)` (the `Show IOException`
-/// instance, GHC.IO.Exception).  `op` is the frame that opened the handle —
-/// `withFile` for `writeFile`, `withBinaryFile` for `BL.writeFile`, and
-/// `createDirectory` for `createDirectoryIfMissing`.
-///
-/// `<description>` is `Show IOErrorType` of the type `errnoToIOError` picks
-/// for the errno (Foreign.C.Error), and the parenthesised tail is
-/// `strerror(errno)` — the very text Rust's `Display` prints ahead of its own
-/// ` (os error N)` suffix, which GHC has no counterpart for.  An errno outside
-/// the table keeps Rust's message whole, suffix included.
+/// GHC's `show` for an `IOException` from an unguarded write:
+/// `<path>: <op>: <description> (<strerror>)` (GHC.IO.Exception), where `op`
+/// is `withFile`, `withBinaryFile` or `createDirectory`.
 fn write_io_exception(path: &str, op: &str, e: &std::io::Error) -> String {
     format!("{path}: {op}: {}", io_exception_reason(e))
 }
@@ -973,16 +891,9 @@ fn wants_trace_output(args: &Args) -> bool {
     args.trace_dot.is_some() || args.trace_json.is_some()
 }
 
-/// HS `outputTraces`' two writers (Batch.hs), run once per input file
-/// inside `processThy`'s close-and-prove branch.  `writeFile`/`BL.writeFile`
-/// TRUNCATE, so with several input files the LAST file's traces survive.
-///
-/// `traces` is the labelled `(label, system)` list in HS's order: lemma
-/// declaration order, then `proofSystems`' case-name walk.
-/// Both writers stream graph-by-graph so peak RSS tracks the largest single
-/// graph, not the total output (HS's DOT side is a lazily-consumed
-/// `writeFile`; its JSON side materialises the document, which the port
-/// need not reproduce — the bytes are identical either way).
+/// HS `outputTraces` (Batch.hs), once per input file: the DOT and JSON
+/// writers truncate, so the last file's traces survive. `traces` is in
+/// lemma order, then `proofSystems`' case walk; both writers stream per graph.
 fn write_output_traces(args: &Args, traces: Vec<(String, System)>) -> Result<(), String> {
     use std::io::Write;
     let opts = tamarin_theory::constraint::system::graph::GraphOptions::default();
@@ -1363,17 +1274,9 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         };
 
         if opts.parse_only_mode {
-            // HS-faithful `--parse-only` (Batch.hs + TheoryLoader.hs): parse, emit the marker above, pretty-print the OPEN
-            // theory (`prettyOpenTheory`) — no wellformedness, no
-            // configuration-block processing (that happens in `closeTheory`,
-            // TheoryLoader.hs), no Maude, no output files (`-o`/`-O`
-            // are ignored: the parseOnly branch never consults `writeOutput`),
-            // no `summary of summaries`.
-            //
-            // The elaborated theory here only supplies the parse-time
-            // signature + hoisted heuristic/tactic headers + the arity-1
-            // fold set — elaboration is RS's signature-construction step
-            // (HS builds the same pure signature during parsing).
+            // HS `--parse-only` (Batch.hs): `prettyOpenTheory` of the parsed
+            // theory, with no checks, Maude, output files or summary.
+            // Elaboration only builds the parse-time signature.
             let elaborated = elaborate_with_in_file(&parsed, in_file).map_err(|e| {
                 RunError::Regular(format!("elaboration error in {}: {}", in_file, e.message))
             })?;
@@ -1472,16 +1375,8 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     let wf_len = st.wf_report.len();
                     precompute_pending.push((session, wf_len));
                 } else {
-                    // HS `outputTraces` (Batch.hs) runs in `processThy`'s
-                    // close-and-prove `else` — the ONLY branch that reaches it.
-                    // `--parse-only` (Batch.hs), `--precompute-only`
-                    // and `-m` all return first, so they leave
-                    // the target paths untouched, as does a run with no input files
-                    // (`helpAndExit`, Batch.hs) and `--diff` (the `bitraverse`
-                    // `Right` arm is `pure ()`; RS rejects `--diff` before the loop).
-                    // It precedes the theory render, matching HS's force order: the
-                    // write is an `IO` action inside `processThy`, while the doc is
-                    // rendered later in `Batch.hs`'s output phase.
+                    // HS `outputTraces` runs only in this close-and-prove
+                    // branch, before the theory is rendered.
                     if wants_trace_output(args)
                         && let Err(io) = write_output_traces(args, closed.trace_systems)
                     {
@@ -1613,32 +1508,12 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
     Ok(0)
 }
 
-/// HS-equivalent: GHC's `+RTS -N RTS_FLAG` sets the worker capacity for
-/// the `par*`/`Strategies` sites HS uses (`using parList` / `parMap`:
-/// CloseRule.hs, Prover.hs, Theory/Constraint/Solver/Sources.hs,
-/// TheoryObject.hs).  We mirror that surface via a CLI flag.
-/// Idempotent across files in a batch — `build_global` silently errors on
-/// the second call, which is what we want.
-///
-/// Default: `available_parallelism()` (full machine).  `MaudePool`
-/// (`--maude-processes=M`) removes the Maude IPC mutex contention that
-/// would otherwise serialise every worker on a single subprocess, so
-/// users can productively scale to every core.  Memory budget is
-/// mediated by `--maude-processes`, which defaults to `processors` (1:1).
+/// GHC `+RTS -N`: the worker count for HS's `parMap`/`parList` sites.
+/// `--processors` (default: every core); later calls keep the first pool.
 fn init_rayon_pool(args: &Args) {
     let n = args.effective_processors();
-    // `build_global` is idempotent-error: the SECOND call returns Err
-    // even if N matches.  We swallow the error: the first invocation
-    // wins (which is the desired behaviour — RS runs `run_batch` once
-    // per process, and tests install their own pool).
-    // `stack_size`: the theory item fold renders each item as ONE HughesPJ
-    // Doc on a worker (HS `parMap rdeepseq ppItem`, TheoryObject.hs), and
-    // the eager Doc builders (`beside`/`above_g`) recurse along the left
-    // operand's token spine, so depth scales with the item's size.  GHC grows
-    // its stack on demand; rayon's default worker stacks do not, and overflow
-    // on equation- and formula-heavy theories (`jcs18/trace-existence.spthy`).
-    // 64 MiB is reserved virtual address space only, committed on use — the
-    // same size the interactive server gives its tokio workers.
+    // 64 MiB stacks (virtual, committed on use) hold the recursive Doc
+    // builders for large theory items, where GHC grows its stack on demand.
     let _ = rayon::ThreadPoolBuilder::new()
         .num_threads(n)
         .stack_size(64 * 1024 * 1024)

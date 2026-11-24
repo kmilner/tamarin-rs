@@ -1,21 +1,9 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! End-to-end `prove_lemma` entry point.
-//!
-//! Bridges an elaborated theory and a lemma name into the
-//! proof-search driver. Mirrors the high-level shape of Haskell's
-//! `Theory.Proof.proveLemma`:
-//!
-//! 1. Look up the lemma by name in the elaborated theory.
-//! 2. Convert its formula to guarded form.
-//! 3. Convert restrictions to guarded form.
-//! 4. Build the initial `System` via `formula_to_system`.
-//! 5. Build a `ProofContext` carrying the theory's rules.
-//! 6. Drive `run_proof_search` to produce a `ProofNode` tree.
-//!
-//! Returns `Err` on lemma lookup, guarded conversion, or goal-ranking
-//! failures.
+//! The per-theory prover session and per-lemma proof entry points: lemma
+//! systems and contexts, heuristics, and the shared raw and refined sources
+//! (HS `proveLemma`, ClosedTheory.hs and TheoryLoader.hs).
 
 use crate::constraint::solver::context::{IntrRuleCache, ProofContext, SharedSources, SourceSlot};
 use crate::constraint::solver::goals::RankingError;
@@ -1076,22 +1064,11 @@ impl ProverSession {
         }
     }
 
-    /// Build the shared per-file state. The theory's `in_file` resolves oracle
-    /// paths (HS Theory/Text/Parser.hs). Does the expensive
-    /// once-per-file work: restriction conversion and full `ProofContext`
-    /// construction (which runs intruder rule generation,
-    /// `close_intr_rule`, DH/BP cached variants, per-rule variant
-    /// expansion, source precomputation).  Carries the CLI
-    /// `--heuristic`/`--oraclename`/`--oracle-only` (HS `AutoProver`): when
-    /// `cli_heuristic.raw` is `Some`, every lemma's goal ranking is the CLI
-    /// heuristic (HS `selectHeuristic`: `apDefaultHeuristic <|> pcHeuristic`,
-    /// Theory/Proof.hs).
-    ///
-    /// `ndc_cache`: the theory's once-per-load NDC-checked intruder cache
-    /// (`close_rule::check_close_intr_rule`), injected into the template
-    /// context so the session reuses the tagged+permuted rules instead of
-    /// re-running the check.  Taken as a borrowed handle: the caller keeps
-    /// the one cache and the template context shares its allocation.
+    /// Build the shared per-file state: guarded restrictions and lemmas,
+    /// resolved heuristics (the CLI heuristic overrides every lemma's, HS
+    /// `selectHeuristic`) and the template `ProofContext` with its intruder
+    /// rules and rule variants. `ndc_cache` reuses the theory's NDC-checked
+    /// intruder rules.
     pub fn build(
         theory: std::sync::Arc<crate::theory::Theory>,
         maude: tamarin_term::maude_proc::MaudeHandle,
@@ -1148,15 +1125,9 @@ impl ProverSession {
             } else {
                 Vec::new()
             };
-        // HS-FAITHFUL PURITY (mirrors the source-refinement purity in
-        // `ensure_saturated`): HS closes the theory ONCE and each lemma's
-        // proof independently resets fresh to `avoid sys` per step
-        // (ProofMethod.hs) — the theory-build's fresh allocation never
-        // feeds the per-lemma proof counter.  RS's template build advances
-        // the shared counter, so restore the counter to its pre-build value
-        // to keep the build counter-neutral: every lemma starts from the same
-        // base and template vars are re-freshened from `avoid sys` on
-        // instantiation.
+        // HS closes the theory once and each proof seeds its fresh supply
+        // from `avoid sys`; restore the counter so the template build does
+        // not shift any lemma's numbering.
         let setup_counter_before = maude.fresh_counter_peek();
         let template_ctx = ProofContext::try_with_options(
             maude.clone(),

@@ -282,40 +282,14 @@ pub(crate) fn source_patterns(
         out.push(Source::lazy(goal));
     }
 
-    // -----------------------------------------------------------------
-    // msgGoals — ActionG for KU(t) over each non-trivial function
-    // symbol head + a Fresh-sorted variable.  Mirrors Haskell's
-    // `msgGoals = someKUGoal <$> absMsgFacts`.
-    //
-    // The cases produced by `solve_action_goal` for an abstract
-    // `KU(t)` give the full enumeration of how the adversary derives
-    // a term of that shape — including the recursive saturate-driven
-    // chain. At runtime, `solve_with_source` matches a live
-    // KU goal against these patterns.
-    // -----------------------------------------------------------------
+    // HS `msgGoals = someKUGoal <$> absMsgFacts`: KU goals for a fresh
+    // variable and for each function symbol head.
     let goal_node = tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0);
     let mut ku_patterns: Vec<tamarin_term::lterm::LNTerm> = Vec::new();
-    // Per HS Sources.hs, `absMsgFacts` is `asum $ sortednub $ [..]`
-    // i.e. the union of:
-    //   (1) fresh-sorted singleton t.1
-    //   (2) bilinear pairing em(t.1,t.2)  [if enableBP]
-    //   (3) nat 1, nat t.1 %+ t.2          [if enableNat]
-    //   (4) one fAppNoEq per non-implicit NoEq symbol of arity ≥ 1 OR Private
-    // After `sortednub`, the list is sorted by `Ord LNTerm`.  Term Ord
-    // tiebreaks first on the head FunSym; FunSym Ord is `NoEq < Ac < C`
-    // (see FunctionSymbols.hs; mirrored by the `enum FunSym`
-    // variant order in `function_symbols.rs`). EMap-headed terms sort after
-    // every NoEq- or AC-headed term.
-    //
-    // Runtime source lookup selects the first matching source, so pattern
-    // order also determines which source cases are explored.
-    //
-    // Strategy: push fresh first (sorts before any App), then all
-    // NoEq fAppNoEq's via the `msig.fun_syms` BTreeSet iter (already
-    // alphabetical by name), then C / AC symbols at the tail.
-    //
-    // Mirrors HS Sources.hs:
-    //     return $ varTerm (LVar "t" LSortFresh 1)
+    // `absMsgFacts` is `sortednub`ed, and runtime lookup takes the first
+    // matching source, so order matters: the fresh variable sorts first,
+    // then NoEq applications by name (`fun_syms` order), then AC (natural
+    // numbers) and C (bilinear pairing) heads (`FunSym` Ord NoEq < Ac < C).
     ku_patterns.push(tamarin_term::term::Term::Lit(
         tamarin_term::vterm::Lit::Var(tamarin_term::lterm::LVar::new(
             "t",
@@ -324,21 +298,8 @@ pub(crate) fn source_patterns(
         )),
     ));
     let msig = ctx.maude.maude_sig();
-    // Per-function-symbol applications.  Use Msg-sorted arg vars.
-    // Mirrors Haskell `absMsgFacts` (Sources.hs):
-    //     [ fAppNoEq o $ nMsgVars k
-    //     | o@(_,(k,priv,_)) <- S.toList . noEqFunSyms $ msig
-    //     , NoEq o `S.notMember` implicitFunSig
-    //     , k > 0 || priv == Private ]
-    // i.e. all NoEq symbols whose arity is ≥ 1 OR which are
-    // Private, excluding the implicit `pair`/`inv`/`Mult`/`Union`
-    // symbols (FunctionSymbols.hs).  Includes both constructors
-    // AND destructors (e.g. `adec`, `fst`, `snd`).
-    //
-    // HS uses `noEqFunSyms msig` which is the full NoEq set, including
-    // reducible symbols (`adec`, `fst`, `snd`, ...).  Rust's
-    // `irreducible_fun_syms` filters these out, so use `fun_syms`
-    // instead to mirror HS.
+    // `[fAppNoEq o (nMsgVars k) | o <- noEqFunSyms msig, NoEq o `notMember`
+    // implicitFunSig, k > 0 || priv == Private]`, destructors included.
     for sym in &msig.fun_syms {
         if let tamarin_term::function_symbols::FunSym::NoEq(noeq) = sym {
             // Skip HS `implicitFunSig` symbols: pair, inv.  (Mult and
@@ -492,22 +453,9 @@ impl Drop for RefineFsScope {
     }
 }
 
-/// `refineWithSourceAsms` — direct port of Haskell's
-/// `Theory.Constraint.Solver.Sources.refineWithSourceAsms`.
-///
-/// Takes the precomputed (saturated) source cases and a list of
-/// `[sources]`-tagged lemma formulas, and prunes any case whose
-/// system becomes contradictory once the assumptions are folded in.
-/// Mirrors the Haskell flow:
-///
-/// ```text
-///   for each (name, sys) in src.cases:
-///     sys' = sys with assumptions added to formulas
-///     re-simplify sys'
-///     if simplifySystem produced a contradiction → drop the case
-///     else → strip the assumptions back out (they were only added
-///            for refinement) and keep
-/// ```
+/// HS `refineWithSourceAsms` (Sources.hs): add the `[sources]` assumptions
+/// to every case, re-saturate so cases contradicting them disappear, then
+/// remove the formulas again (`removeFormulas`).
 pub(crate) fn refine_with_source_asms(
     sources: Vec<Source>,
     assumptions: &[std::sync::Arc<crate::guarded::Guarded>],
@@ -551,15 +499,7 @@ pub(crate) fn refine_with_source_asms(
         intermediate.push(Source::eager(src.goal, new_cases));
     }
 
-    // `saturateSources` (Sources.hs): re-saturate with the
-    // assumption-augmented cases.  This step is critical — it
-    // propagates the typing constraints through the recursive premise
-    // expansion, pruning cases whose continuation introduces premises
-    // that violate the [sources] typing.  Haskell threads the SAME
-    // `paramSaturationLimit` into this saturate as into the raw one
-    // (`refineWithSourceAsms parameters … = saturateSources parameters …`,
-    // Sources.hs), so a `-s` override applies here too — the
-    // ctx carries it.
+    // HS uses the same `paramSaturationLimit` as the raw saturation.
     let limit = ctx.parameters.saturation_limit();
     let saturated = saturate_sources_with_simp(intermediate, limit, ctx)?;
 
@@ -630,15 +570,8 @@ fn refine_one_source(
         };
         changed |= took_step;
         still_distinct &= branches.len() <= 1;
-        // HS-faithful `refineSource` (Sources.hs):
-        //   map (second (modify sSubst (restrict stableVars)))
-        // restricts each branch's eq-store subst to the STABLE vars
-        // (frees of the source's `cdGoal`) before dedup.  This
-        // narrows the subst to bindings the runtime case-matcher
-        // cares about; internal fresh bindings are dropped so
-        // equivalent branches dedupe.  Dedup itself is applied ONCE
-        // across the flat preDedup list (after the loop, see below).
-        // `stable_vars` was computed once before the loop above.
+        // `refineSource` restricts each branch's substitution to the
+        // source goal's variables before removing redundant cases.
         for (mut branch_sys, branch_name_list) in branches {
             restrict_eq_store_to_stable_vars(&mut branch_sys, &stable_vars);
             if still_distinct {
@@ -647,12 +580,8 @@ fn refine_one_source(
             deferred_filtered.push((branch_name_list, branch_sys));
         }
     }
-    // HS-faithful `removeRedundantCases` (Sources.hs): applies
-    // ONCE to the flat list of post-refine branches across all input
-    // cases.  Gated on BP/MSet per HS short-circuit (`removeRedundantCases`
-    // in Sources.hs returns the input unchanged outside BP/MSet).
-    // Compute independent comparison keys across workers for larger sources.
-    // Deduplication consumes those keys in the original case order.
+    // `removeRedundantCases` runs once over all refined branches. Larger
+    // sources compute the comparison keys on several workers.
     let deduped = if still_distinct {
         deferred_filtered
     } else if needs_dedup
@@ -675,21 +604,11 @@ fn refine_one_source(
     Ok((Source::eager(src.goal, deduped), changed))
 }
 
-/// HS `showSaturationSteps` (Sources.hs): when set, `saturateSources`
-/// traces `[Saturating Sources] …` progress lines to stderr.
-///
-/// The value is `closeTheoryWithMaude`'s last argument (CloseRule.hs),
-/// which every CLI theory close passes as `True` — `closeTranslatedTheory`
-/// (TheoryLoader.hs, the batch/`--prove`/`--precompute-only`/web load),
-/// `closeTheory` (Prover.hs) and `applyPartialEvaluation`
-/// (Prover.hs).  Only the two auxiliary closes pass `False`: the NDC
-/// deduction check (CloseRule.hs) and the message-derivation check
-/// (MessageDerivationChecks.hs).  HS then emits nothing on theories whose
-/// proofs never force `crcRawSources`/`crcRefinedSources`, since `trace`
-/// fires at thunk-force time.
-///
-/// Re-simplify every grafted source case so newly-fired implied formulas can
-/// prune it. Mirrors Haskell's `saturateSources`, including its iteration cap.
+/// HS `saturateSources` (Sources.hs): refine every source against the
+/// single-case ones until no surviving case takes a step or `limit` passes
+/// have run. With `show_saturation_steps` (HS `showSaturationSteps`, set by
+/// every CLI close but not the auxiliary deduction and derivation checks) it
+/// traces `[Saturating Sources]` progress to stderr.
 pub(crate) fn saturate_sources_with_simp(
     sources: Vec<Source>,
     limit: usize,
@@ -707,19 +626,8 @@ pub(crate) fn saturate_sources_with_simp(
             .filter(|s| s.cases_len() <= 1)
             .cloned()
             .collect();
-        // Inside refine_with_source_asms, drive each case forward by
-        // SOLVING its safe goals (chain/KD-premise/non-KU action) —
-        // not just simplifying.  Mirrors Haskell's `solveAllSafeGoals`-
-        // driven `saturateSources` (`Sources.hs`).  This is
-        // what propagates typing assumptions transitively: each safe
-        // goal we solve adds a new node/edge whose fact constraints
-        // get unified against the assumption's pattern, eventually
-        // pruning typing-violating cases.  Bare simplify alone misses
-        // most of these because `insert_implied_formulas_pass` relies on
-        // term-shape match against system actions, which only get
-        // grafted by goal-solving.
-        // HS refines each source against the same snapshot. The ordered map
-        // keeps each goal with its own cases, including an empty case list.
+        // HS refines each source against the same snapshot, keeping each
+        // goal with its own cases, including an empty case list.
         let worker_ctx = ctx.clone();
         let refined = tamarin_utils::parallel::try_map(current, move |src| {
             let ctx = &worker_ctx;
@@ -841,36 +749,11 @@ fn solve_all_safe_goals(
         fresh_counter,
     }) = worklist.pop()
     {
-        // HS-faithful `simplifySystem` in DisjT (Sources.hs):
-        //   simplifySystem
-        //   ctxt <- ask
-        //   isContra <- gets (contradictorySystem ctxt)
-        //   contradictoryIf isContra
-        //
-        // HS's `Reduction = StateT (DisjT ...)` means any Disj-monad
-        // fan-out inside `simplifySystem` (e.g. internal `solveAction`
-        // on KU/KD goals, or `solveTermEqs SplitNow` AC-arms in
-        // `enforce_*_uniqueness`) SPLITS the current state into
-        // sibling branches BEFORE the contradictoryIf check.  Each
-        // sibling proceeds independently through the rest of
-        // `solveAllSafeGoals.solve`.
-        //
-        // This pass must PROPAGATE Disj fan-out, not collapse it in-place:
-        // a simplify step that fans out N siblings must yield N sibling
-        // systems here (as `simplify_system_with_fanout` does in
-        // `exec_proof_method`), else N HS-siblings collapse into 1 RS branch.
-        //
-        // Strategy: split into N sibling systems, push the tail back
-        // onto worklist with same (name, used, chains_left,
-        // last_chain_term), and process the head.  Empty result drops
-        // the branch (HS mzero-equivalent).
-        // HS-faithful: propagate the DisjT fan-out from simplifySystem
-        // (unconditional).
+        // HS `solve` starts with `simplifySystem` and `contradictoryIf`. A
+        // simplification that splits the state (`DisjT`) yields sibling
+        // systems; continue with the first and push the rest so they pop in
+        // order. An empty result drops the branch.
         let post_simp = simplify_system_with_fanout_seeded_with_counters(ctx, sys, fresh_counter)?;
-        // Pop one sibling to continue with; push the rest back for
-        // later processing.  Match HS's Disj-monad insertion order:
-        // first sibling processed first (LIFO worklist → push tail
-        // reversed so the head pops next).
         let SystemBranch {
             sys,
             counter: fresh_counter,
@@ -906,16 +789,7 @@ fn solve_all_safe_goals(
             continue;
         }
 
-        // Pick a goal — mirrors the saturate goal-pick logic.
-        // Saturate-time filter (Haskell `openGoals`) drops msg-var KD
-        // ChainG so `split_allowed` correctly flips True when only
-        // auto-handled chains remain.  See `is_open_for_saturate_with` in
-        // goals.rs for the rationale.
-        //
-        // Haskell-faithful Goal-Ord (Goals.hs `M.toList sGoals`).
-        // `is_open_for_saturate_with`'s always-before relation depends only on
-        // `red.sys` (not the goal), and `red.sys` is unmutated across this
-        // filter, so build it once and thread it in.
+        // HS `openGoals` in `Goal` order (`M.toList sGoals`).
         let sat_adj = red.sys.build_always_before_adj();
         let mut goals: Vec<(Goal, bool)> = red
             .sys
@@ -963,13 +837,7 @@ fn solve_all_safe_goals(
         };
         let is_chain_prem1 =
             |g: &Goal| -> bool { matches!(g, Goal::Chain(_, (_, pi)) if pi.0 == 1) };
-        // HS-faithful: HS's `safeGoal` predicate (Sources.hs)
-        // marks Split/Disj/Subterm safe when `splitAllowed`.  Split is
-        // allowed during saturate when `splitAllowed` (HS's
-        // `safeGoal SplitG = doSplit`, Sources.hs), regardless
-        // of precompute/runtime.  In practice split_allowed is rarely
-        // true during saturate (chain goals stay open), so this is a
-        // no-op for most cases — but it is the HS-faithful behaviour.
+        // HS `safeGoal`: splits are safe only when `splitAllowed`.
         let is_safe = |g: &Goal, looping: bool| -> bool {
             if looping {
                 return false;
@@ -979,10 +847,7 @@ fn solve_all_safe_goals(
                     if chains_left > 0 {
                         true
                     } else {
-                        // HS `safeGoal` reports an exhausted chain budget via
-                        // `traceChainLimit` (Sources.hs), gated by
-                        // `showSaturationSteps`, keeping auxiliary derivation
-                        // and NDC checks silent.
+                        // HS `traceChainLimit`, gated by `showSaturationSteps`.
                         if red.ctx.show_saturation_steps {
                             eprintln!(
                                 "[Open Chains] Too many chain constraints, \
@@ -1000,45 +865,26 @@ fn solve_all_safe_goals(
                         && !fa.is_no_sources()
                 }
                 Goal::Disj(_) | Goal::Subterm(_) => split_allowed,
-                // HS-faithful: `safeGoal SplitG = doSplit = splitAllowed`
-                // (Sources.hs).
                 Goal::Split(_) => split_allowed,
             }
         };
-        // HS-faithful: kdPremGoals uses UNFILTERED goals (Sources.hs),
-        // safeGoals uses FILTERED.  Match HS by deriving each
-        // candidate from the correct source.  `safeGoals` is a SHARED lazy
-        // list in HS — each element is tested by `safeGoal` at most once
-        // per iteration — so compute the head once and reuse it for the
-        // pick fallback, the chains decrement, and the lastChainTerm
-        // update.  (The `[Open Chains]` trace count inside `is_safe` still
-        // differs from HS's demand-driven forcing — a documented deliberate
-        // divergence; line content and phase placement match.)
+        // HS `kdPremGoals` read all open goals and `safeGoals` the
+        // chain-filtered ones. The head of `safeGoals` decides the chain
+        // budget (`remainingChains`) and `lastChainTerm'`, whichever goal is
+        // solved. (The `[Open Chains]` trace can fire more often than HS's
+        // lazily forced list.)
         let first_safe = filtered_goals.iter().find(|(g, l)| is_safe(g, *l));
-        // HS `remainingChains safeGoals` (Sources.hs) keys
-        // the chains decrement on the HEAD OF `safeGoals` — not on the goal
-        // actually solved — so a kd-prem step still burns a chain tick
-        // whenever the first safe goal is a chain, and a chain-prem1 kd
-        // pick burns none when it isn't.
         let safe_head_is_chain = matches!(first_safe, Some((Goal::Chain(_, _), _)));
         let pick = goals
             .iter()
             .find(|(g, _)| is_kd_prem(g) || is_chain_prem1(g))
             .or(first_safe);
-        // HS-faithful update of `lastChainTerm'` (Sources.hs):
-        //   case (kdPremGoals, safeGoals) of
-        //     ([], ((ChainG c _):_)) -> ... (t <|> lastChainTerm) =<< kConcTerm c
-        //     _                      -> return lastChainTerm
-        // Update when no kd-prem goals exist AND first safe goal is a
-        // Chain.  HS: `t <|> lastChainTerm` keeps the existing value if
-        // the new chain has no K-term (`kConcTerm` returns Nothing).
         let kd_prem_empty = !goals
             .iter()
             .any(|(g, _)| is_kd_prem(g) || is_chain_prem1(g));
         let new_last_chain_term = if kd_prem_empty {
             if let Some((Goal::Chain(c, _), _)) = first_safe {
                 let t = k_conc_term_for_chain(&red.sys, c);
-                // `t <|> lastChainTerm`: prefer new t, else keep old.
                 t.or(last_chain_term.clone())
             } else {
                 last_chain_term.clone()
@@ -1057,20 +903,11 @@ fn solve_all_safe_goals(
             let inner_outcome = dispatch_solve_goal(&mut red, &goal)?;
             match inner_outcome {
                 GoalCases::Contradictory => {
-                    // Drop branch — Haskell mzero.
                     continue;
                 }
                 GoalCases::LinearNamed(sub_name) => {
-                    // HS-faithful: INSIDE `solveAllSafeGoals.solve`
-                    // (Sources.hs), step names are APPENDED
-                    // via `caseNames ++ x` — not combined via the
-                    // coerce-skipping `combine`.  `combine` runs at
-                    // `refineSource` level once per saturate-outer
-                    // iter (between calls to solveAllSafeGoals), not
-                    // per step within solveAllSafeGoals.
-                    // HS-faithful change flag: a named safe-goal step is a
-                    // step → `not (null names)` True → outer saturate
-                    // re-iterates (Sources.hs).
+                    // Steps append their names (`caseNames ++ x`); `combine`
+                    // runs only at the `refineSource` boundary.
                     let mut new_name = name.clone();
                     new_name.push(sub_name);
                     worklist.push(Entry {
@@ -1084,23 +921,7 @@ fn solve_all_safe_goals(
                     });
                 }
                 GoalCases::Cases(cases) => {
-                    // Multi-output — fork.  Each case's System
-                    // becomes a new alive branch.
-                    //
-                    // HS-faithful insertion-order processing:
-                    // worklist is Vec-as-stack (LIFO), so naive
-                    // push pops branches in REVERSE order.  HS's
-                    // Disj-monad is depth-first INSERTION order.
-                    // Reverse the cases when pushing so subsequent
-                    // `worklist.pop()` calls fire them in the
-                    // original [direct, destructor1, destructor2, ...]
-                    // order from `solveChain` (Goals.hs),
-                    // matching HS's case ordering at NSPK3/NSLPK3
-                    // types and similar source-saturated lemmas.
-                    //
-                    // HS-faithful change flag: a forking safe-goal step is a
-                    // step → each forked branch inherits took_step=true; it
-                    // only counts toward `changes` if that branch survives.
+                    // Push the cases reversed so they pop in HS's order.
                     for branch in cases.into_iter().rev() {
                         let mut new_name = name.clone();
                         new_name.push(branch.name);
@@ -1119,8 +940,7 @@ fn solve_all_safe_goals(
             continue;
         }
 
-        // No safe goal — try source-pick (Haskell's third disjunct
-        // of `nextStep`).
+        // No safe goal: try a source (the third alternative of `nextStep`).
         if ths.is_empty() {
             any_step_taken |= took_step;
             finished.push((red.sys, name));
@@ -1161,9 +981,7 @@ fn solve_all_safe_goals(
             }
         }
         let Some((source_index, branches)) = picked else {
-            // No useful goal has a matching source — Haskell's
-            // `nextStep = Nothing` → `return caseNames` (current
-            // state survives).
+            // `nextStep = Nothing`: the branch is finished.
             any_step_taken |= took_step;
             finished.push((red.sys, name));
             continue;
@@ -1178,9 +996,7 @@ fn solve_all_safe_goals(
         {
             let mut new_used = used.clone();
             new_used.insert(source_index);
-            // HS-faithful: source-pick step APPENDS its name to `caseNames`
-            // (Sources.hs `(caseNames ++ x)`); `combine` runs only at the
-            // refineSource boundary, not per-step inside solveAllSafeGoals.
+            // `caseNames ++ x`, where `x` is the applied case's name list.
             let mut new_name = name.clone();
             new_name.extend(case_names);
             worklist.push(Entry {
@@ -1195,12 +1011,7 @@ fn solve_all_safe_goals(
         }
     }
 
-    // HS-faithful: apply `refineSource`'s `combine(existing, step_names)`
-    // now that solveAllSafeGoals has finished accumulating.  `combine`
-    // strips leading "coerce" entries from `initial_name`; if anything
-    // non-coerce remains it's the only segment we keep (the rest of
-    // the chain is discarded), otherwise the accumulated step_names
-    // take over.  Mirrors Sources.hs exactly.
+    // `refineSource` combines the case's name with the steps taken.
     let branches: Vec<(System, Vec<String>)> = finished
         .into_iter()
         .map(|(sys, step_names_list)| {
@@ -1320,22 +1131,15 @@ pub fn case_name_list_to_string(names: &[String]) -> String {
     names.join("_")
 }
 
-/// HS-faithful `combine` (Sources.hs):
+/// HS `combine` (Sources.hs `refineSource`): drop leading `coerce` steps,
+/// then keep only the first remaining name, or take the new names if none
+/// remains.
 ///
 /// ```haskell
 /// combine []            ns' = ns'
 /// combine ("coerce":ns) ns' = combine ns ns'
 /// combine (n       :_)  _   = [n]
 /// ```
-///
-/// Strips leading `"coerce"` elements from `existing`, then:
-/// - if everything stripped → return `new_names` (HS uses `ns'`)
-/// - else return ONLY the first non-coerce element as a singleton,
-///   dropping the rest of `existing` AND `new_names` entirely.
-///
-/// This collapse bounds case-name growth across saturation iterations.
-/// Each element is one step name returned by `solveGoal`; underscores inside
-/// a step name are preserved.
 fn combine_case_names_list(existing: &[String], new_names: &[String]) -> Vec<String> {
     let mut i = 0;
     while i < existing.len() && existing[i] == "coerce" {
@@ -1349,12 +1153,6 @@ fn combine_case_names_list(existing: &[String], new_names: &[String]) -> Vec<Str
         vec![existing[i].clone()]
     }
 }
-
-// A source-case name reaching the runtime is already the final, `combine`d
-// display name (HS `combine`, Sources.hs, ported in
-// `combine_case_names_list`; joined with `intercalate "_"`, ProofMethod.hs).
-// Use it verbatim — never re-split on `_`, which would corrupt function symbols
-// whose names contain `_` (e.g. `c_KDF_SKc` → `SKc`).
 
 /// HS `modify sSubst (restrict stableVars)` (Sources.hs `refineSource`): keep
 /// only the substitution bindings whose variable is stable. `restrict`
@@ -1756,48 +1554,13 @@ fn conjoin_source_case(
 }
 
 // =============================================================================
-
-// removeRedundantCases — HS Sources.hs
+// removeRedundantCases (Sources.hs)
 // =============================================================================
 //
-// Direct port of:
-//
-//   removeRedundantCases :: ProofContext -> [LVar] -> (a -> System) ->  [a] -> [a]
-//   removeRedundantCases ctxt stableVars getSys cases0 =
-//       if enableBP msig || enableMSet msig then cases else cases0
-//     where
-//       decoratedCases = map (second addNormSys) $  zip [(0::Int)..] cases0
-//       cases = map (fst . snd) . sortOn fst
-//             . sortednubBy (\(_,(_, x)) (_,(_, y)) -> compareSystemsUpToNewVars x y)
-//             $ decoratedCases
-//       addNormSys = id &&&
-//         ((modify sEqStore dropNameHintsBound) . renameDropNameHints . getSys)
-//       orderedVars sys =
-//           filter ((/= LSortNode) . lvarSort) $ map fst . sortOn snd . varOccurences $ sys
-//       renameDropNameHints sys =
-//         (`evalFresh` avoid stableVars) . (`evalBindT` stableVarBindings) $ do
-//             _ <- renameDropNamehint (orderedVars sys)
-//             renameDropNamehint sys
-//         where stableVarBindings = M.fromList (map (\v -> (v, v)) stableVars)
-//
-// Where:
-//   varOccurences sys: walks `_sNodes` ONLY (System's foldFreesOcc
-//     commented out everything except field a). Produces
-//     [(LVar, Set Occurence)] where Occurence = [String].
-//   renameDropNamehint: assigns each LVar a fresh idx with name "".
-//   compareSystemsUpToNewVars: compareNodesUpToNewVars first; if EQ
-//     fall through to structural compare on (b..m, empty nodes).
-//   compareRulesUpToNewVars: ignores `_rNewVars`.
-//   dropNameHintsBound: drops name hints in `eqStore.conj` VFresh substs.
-//
-// Implementation strategy (per HS):
-//   1. Gate on BP/MSet — non-BP/MSet returns cases0 as-is.
-//   2. For each case build the normalised system.  The normalisation
-//      walks free vars in HS-determined order (varOccurences-ordered
-//      first, then foldFrees), assigning each a fresh idx with empty
-//      name.
-//   3. Deduplicate the indexed cases with Haskell's `sortednubBy` survivor
-//      rules, then sort the survivors by their original indices.
+// Only with bilinear pairing or multisets: normalise each case
+// (`addNormSys`: rename non-stable variables in `varOccurences` order, then
+// the rest, dropping name hints), `sortednubBy compareSystemsUpToNewVars`,
+// and restore the survivors' input order.
 
 /// One segment of an occurrence path (HS's `[String]` context under
 /// `foldFreesOcc`).  A path is materialised once per variable occurrence, so a
@@ -2348,11 +2111,6 @@ fn deduplicate_normalized_cases<T>(cases: impl IntoIterator<Item = (System, T)>)
     deduped.sort_by_key(|a| a.0);
     deduped.into_iter().map(|(_, (_, c))| c).collect()
 }
-
-// SplitG is not a "safe" goal at saturate time while chains are open
-// (`doSplit = noChainGoals && not (null chains)`, Sources.hs) —
-// HS leaves `RuleACConstrs` SplitG OPEN, and variant narrowing happens
-// at runtime as a deeper `case split` step, never as sibling source cases.
 
 #[cfg(test)]
 #[path = "sources_tests.rs"]

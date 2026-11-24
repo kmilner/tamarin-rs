@@ -1309,47 +1309,10 @@ fn variants_intruder_with(
 }
 
 // =============================================================================
-// `dhIntruderRules` — port of
-// `Theory.Tools.IntruderRules.dhIntruderRules`
-// (IntruderRules.hs).
-//
-// HS shape:
-// ```haskell
-// dhIntruderRules :: Bool -> WithMaude [IntrRuleAC]
-// dhIntruderRules diff = reader $ \hnd -> minimizeIntruderRules diff hnd $
-//     [ expRule  (ConstrRule (append (pack "_") expSymString) (NoEq expSym))  kuFact return
-//     , invRule  (ConstrRule (append (pack "_") invSymString) (NoEq invSym))  kuFact return
-//     , dhNeutralRule (ConstrRule (append (pack "_") dhNeutralSymString) (NoEq dhNeutralSym)) kuFact return
-//     , oneRule  (ConstrRule (append (pack "_") oneSymString) (NoEq oneSym))  kuFact return
-//     , multRule (ConstrRule (append (pack "_") multSymString) (AC Mult)) kuFact return
-//     ] ++
-//     concatMap (variantsIntruder hnd id True diff)
-//       [ expRule (DestrRule (append (pack "_") expSymString) 0 True False [NoEq expSym]) kdFact (const [])
-//       , invRule (DestrRule (append (pack "_") invSymString) 0 True False [NoEq invSym]) kdFact (const [])
-//       ]
-//   where
-//     x_var_0 = varTerm (LVar "x" LSortMsg 0)
-//     x_var_1 = varTerm (LVar "x" LSortMsg 1)
-//     expRule mkInfo kudFact mkAction =
-//         Rule mkInfo [bfact, efact] [concfact] (mkAction concfact) []
-//       where bfact=kudFact x_var_0; efact=kuFact x_var_1
-//             conc=fAppExp(x_var_0,x_var_1); concfact=kudFact conc
-//     ... (multRule, invRule, oneRule, dhNeutralRule similarly)
-// ```
-//
-// Note the asymmetry of `mkAction` between constructors and
-// destructors:
-//   * constructors pass `return :: a -> [a]` (singleton list) — i.e.
-//     `[concfact]` as the actions list.
-//   * destructors pass `const [] :: a -> [a]` — i.e. empty actions.
-//
-// We mirror this by passing the `mk_action` argument as an `Fn(&LNFact)
-// -> Vec<LNFact>` closure.
+// `dhIntruderRules` / `bpIntruderRules` (IntruderRules.hs) and their shared
+// `where`-helpers.  Constructors take `mkAction = return` (the conclusion as
+// the action), destructors `const []`.
 // =============================================================================
-
-// Shared `mkInfo`/action plumbing for `dh_intruder_rules` and
-// `bp_intruder_rules` (these are inline HS `where`-helpers, not distinct HS
-// functions, so a single Rust definition serves both generators).
 
 /// `append (pack "_") xSymString` — the intruder-rule name-mangling primitive.
 fn underscore_prefixed(sym: &[u8]) -> Vec<u8> {
@@ -1389,37 +1352,13 @@ fn intr_mk_empty(_: LNFact) -> Vec<LNFact> {
     Vec::new()
 }
 
-/// `dhIntruderRules` — compute the intruder rules for the Diffie-Hellman
-/// theory.  Direct mirror of HS `dhIntruderRules` (IntruderRules.hs).
+/// HS `dhIntruderRules` (IntruderRules.hs): the `_exp`, `_inv`,
+/// `_DH_neutral`, `_one` and `_mult` constructors plus the variants of the
+/// `_exp` and `_inv` destructors, minimised.
 ///
-/// Returns 5 constructor rules (`_exp`, `_inv`, `_DH_neutral`, `_one`,
-/// `_mult`) plus the variants-expansion of 2 destructor rules
-/// (`_exp`, `_inv`).  The constructors for `one` / `mult` /
-/// `DH_neutral` are only really applied in `diff` mode — in trace mode
-/// all such constraints are solved directly — but the constructors
-/// always appear in the message theory (mirrors HS comment at
-/// IntruderRules.hs).
-///
-/// # Role: cache REGENERATOR (not the production runtime path)
-///
-/// HS uses this function only inside `Main.Mode.Intruder.run`
-/// (src/Main/Mode/Intruder.hs) to PRODUCE `data/intruder_variants_dh.spthy`:
-/// ```haskell
-/// let dhRules = dhIntruderRules False `runReader` dhHnd
-/// ```
-/// The production theory-load path
-/// (`Main.TheoryLoader.addMessageDeductionRuleVariants`,
-/// TheoryLoader.hs) parses the CACHED file via
-/// `mkDhIntruderVariants` — see [`crate::intruder_variants::mk_dh_intruder_variants`].
-///
-/// In production the Rust port likewise takes the cached-file path
-/// (see `constraint::solver::context::ProofContext::with_options`,
-/// the `intruder_variants::mk_dh_intruder_variants` call); this
-/// function stays here as the regenerator.  The test
-/// `intruder_rules::tests::dh_intruder_rules_emits_five_constructors_and_some_destructors`
-/// exercises it.  The asserts `rules.len() == 51`, `n_exp == 45` and
-/// `n_inv == 1` in that test report any drift between today's Maude and the
-/// cached file.
+/// Like HS, proving reads the cached `data/intruder_variants_dh.spthy`
+/// ([`crate::intruder_variants::mk_dh_intruder_variants`]); this generator
+/// serves the `variants` command, which regenerates that file.
 pub fn dh_intruder_rules(maude: &tamarin_term::maude_proc::MaudeHandle) -> Vec<IntrRuleAC> {
     use tamarin_term::builtin::{dh_neutral, exp, inv, mult, one_const};
     use tamarin_term::function_symbols::{
@@ -1527,10 +1466,7 @@ pub fn dh_intruder_rules(maude: &tamarin_term::maude_proc::MaudeHandle) -> Vec<I
         ),
     ];
 
-    // Destructor variants: `concatMap (variantsIntruder hnd id True diff)
-    // [exp-destr, inv-destr]`.  Note `applyFilters=True` here — this is
-    // the BUILD-time narrowing call, which expects the identity variant
-    // and ground-conc variants to be DROPPED.
+    // `concatMap (variantsIntruder hnd id True diff) [exp-destr, inv-destr]`.
     let exp_destr = exp_rule(
         intr_destr_info(EXP_SYM_STRING, vec![FunSym::NoEq(exp_sym())]),
         kd_fact,
@@ -1552,59 +1488,15 @@ pub fn dh_intruder_rules(maude: &tamarin_term::maude_proc::MaudeHandle) -> Vec<I
     minimize_intruder_rules(maude, all)
 }
 
-// =============================================================================
-// `bpIntruderRules` — port of
-// `Theory.Tools.IntruderRules.bpIntruderRules` (IntruderRules.hs).
-//
-// HS shape:
-// ```haskell
-// bpIntruderRules :: Bool -> WithMaude [IntrRuleAC]
-// bpIntruderRules diff = reader $ \hnd -> minimizeIntruderRules diff hnd $
-//     [ pmultRule (ConstrRule "_pmult" (NoEq pmultSym)) kuFact return
-//     , emapRule  (ConstrRule "_em" (C EMap))           kuFact return
-//     ]
-//     ++ (variantsIntruder hnd id True diff $
-//           pmultRule (DestrRule "_pmult" 0 True False [NoEq pmultSym]) kdFact (const []))
-//     ++ (bpVariantsIntruder diff hnd $
-//           emapRule (DestrRule "_em" 0 True False [C EMap]) kdFact (const []))
-//   where
-//     x_var_0 = varTerm (LVar "x" LSortMsg 0)
-//     x_var_1 = varTerm (LVar "x" LSortMsg 1)
-//     pmultRule mkInfo kud mkAction =
-//         Rule mkInfo [kud x0, kuFact x1] [kud (pmult(x1,x0))] (mkAction conc) []
-//     emapRule mkInfo kud mkAction =
-//         Rule mkInfo [kud x0, kud x1] [kud (em(x0,x1))] (mkAction conc) []
-// ```
-//
-// NOTE the asymmetries vs `dhIntruderRules`:
-//   * `pmultRule`'s conclusion is `pmult(x_var_1, x_var_0)` — the args
-//     are SWAPPED relative to the premise order (HS `fAppPMult (x_var_1,
-//     x_var_0)`, IntruderRules.hs).
-//   * `emapRule` uses `kud` (the KU/KD-fact constructor) for BOTH
-//     premises (`bfact = kud x0`, `efact = kud x1`), not `kuFact` for the
-//     second (IntruderRules.hs).
-//
-// # Role: runtime BP generator for the `variants` command ONLY
-//
-// HS's `variants` command (Main.Mode.Intruder.run, Intruder.hs)
-// generates `bpIntruderRules False` at RUNTIME against a fresh
-// `bpMaudeSig` handle.  On current Maude this differs from the STALE
-// cached `data/intruder_variants_bp.spthy`, which production PROVING
-// still parses via `mk_bp_intruder_variants`.  This function is the
-// runtime generator and is reachable ONLY from `run_variants`; proving
-// must keep using the cached file.
-// =============================================================================
-/// `bpIntruderRules` — compute the bilinear-pairing intruder rules at
-/// runtime.  Direct mirror of HS `bpIntruderRules` (IntruderRules.hs).
+/// HS `bpIntruderRules` (IntruderRules.hs): the `_pmult` and `_em`
+/// constructors plus the variants of the `_pmult` destructor and, through
+/// [`bp_variants_intruder`], of the `_em` destructor, minimised.  Note
+/// `pmultRule` concludes `pmult(x1, x0)`, swapping its premises' order, and
+/// `emapRule` takes both premises through `kud`.
 ///
-/// Returns 2 constructor rules (`_pmult`, `_em`) plus the
-/// variants-expansion of the `_pmult` destructor (via plain
-/// `variants_intruder`, like DH `exp`) and the `_em` destructor (via
-/// [`bp_variants_intruder`], which canonicalises + the KD→KU
-/// post-process).
-///
-/// Reachable only from the `variants` command — NOT from proving (which
-/// uses the cached [`crate::intruder_variants::mk_bp_intruder_variants`]).
+/// Serves the `variants` command only; proving reads the cached
+/// `data/intruder_variants_bp.spthy`
+/// ([`crate::intruder_variants::mk_bp_intruder_variants`]).
 pub fn bp_intruder_rules(maude: &tamarin_term::maude_proc::MaudeHandle) -> Vec<IntrRuleAC> {
     use tamarin_term::builtin::{emap, pmult};
     use tamarin_term::function_symbols::{pmult_sym, CSym, EMAP_SYM_STRING, PMULT_SYM_STRING};
