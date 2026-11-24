@@ -1699,12 +1699,8 @@ impl ProofBody for crate::theory::ProofTree {
         true
     }
 
-    /// `cases` keeps source order; the parser stored them in an `M.fromList`
-    /// (Theory/Text/Parser/Proof.hs), so they print sorted by name.
     fn cases(&self) -> Vec<(&String, &Self)> {
-        let mut cases: Vec<(&String, &Self)> = self.cases.iter().map(|(n, c)| (n, c)).collect();
-        cases.sort_by_key(|(n, _)| *n);
-        cases
+        self.cases.iter().collect()
     }
 }
 
@@ -2689,40 +2685,6 @@ end\n";
                  \"∀ m x y #i. ((A( m ) @ #i) ∧ (m = <x, y>)) ⇒ (m = <'t', x, y>)\"\n  */",
             ]
         );
-    }
-}
-
-#[cfg(test)]
-mod restriction_attribute_tests {
-    use super::*;
-
-    /// HS's restriction parser accepts no attribute list at all —
-    /// `restriction varp nodep = Restriction <$> (symbol "restriction" *>
-    /// identifier <* colon) <*> doubleQuoted (standardFormula varp nodep)
-    /// <*> pure Nothing` (Theory/Text/Parser/Restriction.hs) — and only
-    /// `diffRestriction` does, so `prettyRestriction`
-    /// (TheoryObject.hs) has no attribute to print.  RS's parser is
-    /// lenient here and reads `[left]`/`[right]` in a non-diff theory; neither
-    /// print carries it through.
-    #[test]
-    fn restriction_attributes_are_not_printed() {
-        const SRC: &str = "theory RestrictionAttrs\n\
-begin\n\
-rule A:\n  [ In( x ) ] --[ A( x ) ]-> [ ]\n\
-restriction Sided [left]:\n  \"All x #i. A( x ) @ #i ==> not( x = 'no' )\"\n\
-end\n";
-        let parsed = tamarin_parser::parse_theory(SRC, &[]).expect("theory parses");
-        let elaborated = crate::elaborate::elaborate(&parsed).expect("theory elaborates");
-        let closed = web_restrictions(&elaborated);
-        assert_eq!(closed.len(), 1);
-        assert!(
-            closed[0].starts_with("restriction Sided:\n"),
-            "closed print: {}",
-            closed[0]
-        );
-        let open = pretty_open_theory(&elaborated);
-        assert!(open.contains("restriction Sided:\n"), "open print: {open}");
-        assert!(!open.contains("[left]"), "open print: {open}");
     }
 }
 

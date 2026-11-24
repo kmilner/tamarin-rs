@@ -1179,14 +1179,13 @@ pub fn proof_tree_from_parsed(
     t: &p::ParsedProofTree,
     sig: &MaudeSig,
 ) -> Result<ProofTree, ElabError> {
-    let cases: Result<Vec<_>, _> = t
-        .cases
-        .iter()
-        .map(|(name, sub)| proof_tree_from_parsed(sub, sig).map(|sub| (name.clone(), sub)))
-        .collect();
     Ok(ProofTree {
         method: proof_method_from_parsed(&t.method, sig)?,
-        cases: cases?,
+        cases: t
+            .cases
+            .iter()
+            .map(|(name, sub)| Ok((name.clone(), proof_tree_from_parsed(sub, sig)?)))
+            .collect::<Result<_, _>>()?,
     })
 }
 
@@ -1400,15 +1399,6 @@ where
                 tamarin_term::function_symbols::nat_one_sym(),
                 vec![],
             ))
-        }
-        p::Term::Number(_) => {
-            // Defensive: `p::Term::Number` cannot arise from parsed
-            // input. HS has no bare-integer (>=2) term — the parser
-            // recognizes only `1`/`%1`/`DH_neutral` (Term.hs), and the
-            // Rust parser likewise never constructs `Term::Number`, so
-            // this arm is unreachable for real elaboration input.
-            let n = Name::new(NameTag::Pub, "n".to_string());
-            Some(Term::Lit(Lit::Con(n)))
         }
         p::Term::App(name, args) => {
             // HS `naryOpApp` (Theory/Text/Parser/Term.hs) parses the

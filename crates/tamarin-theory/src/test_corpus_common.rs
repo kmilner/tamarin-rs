@@ -24,10 +24,6 @@ pub const SKIP_ELAB: &str = "elaboration rejects this upstream example";
 /// review instead of being hidden by an aggregate coverage percentage.
 pub const EXPECTED_LOAD_SKIPS: &[(&str, &str)] = &[
     ("features/predicates/functionappl.spthy", SKIP_PARSE),
-    // This diff-only theory has side-specific lemma attributes but neither a
-    // diff(...) term nor a test manifest, so the corpus loader uses the trace
-    // parser.
-    ("regression/diff/last.spthy", SKIP_PARSE),
     // Intentional rejection fixtures introduced by the updated upstream pin.
     (
         "regression/negative/issue905-undeclared-em.spthy",
@@ -40,6 +36,9 @@ pub const EXPECTED_LOAD_SKIPS: &[(&str, &str)] = &[
         SKIP_PARSE,
     ),
     ("regression/negative/missing-end.spthy", SKIP_PARSE),
+    // Upstream's `startProofSkeleton` rejects a stored proof that starts
+    // with SOLVED.
+    ("regression/trace/issue326.spthy", SKIP_PARSE),
     ("regression/trace/issue834-2.spthy", SKIP_PARSE),
     ("regression/trace/issue834-3.spthy", SKIP_PARSE),
     (
@@ -115,12 +114,10 @@ pub fn beyond_budget(path: &Path, root: &Path) -> bool {
     BEYOND_BUDGET.contains(&rel(path, root).to_string_lossy().as_ref())
 }
 
-/// Detect the gated term operator before choosing the parser mode.  Looking at
-/// the source, rather than retrying after an arbitrary default-mode failure,
-/// prevents an unrelated parser regression from being hidden by a second
-/// parse.  The real lexer supplies word boundaries and skips nested comments,
-/// so prose such as `diffuse` and commented-out operators do not select the
-/// mode.
+/// Whether the source uses the gated `diff(...)` term operator, the first
+/// evidence of a diff theory.  The real lexer supplies word boundaries and
+/// skips nested comments, so prose such as `diffuse` and commented-out
+/// operators do not count.
 fn uses_diff_operator(src: &str) -> bool {
     let mut lexer = tamarin_parser::lexer::Lexer::new(src);
     while !lexer.is_eof() {
@@ -161,17 +158,22 @@ fn manifest_requests_diff(path: &Path) -> bool {
     })
 }
 
+/// Parse in the mode the evidence suggests (`diff`, or a `diff(...)` term),
+/// then in the other. The two modes accept disjoint item sets, as in HS, so a
+/// file that is valid in either mode loads in exactly that mode; a file valid
+/// in neither stays a load skip, which the census ledgers pin.
 fn parse_source(src: &str, base: Option<PathBuf>, diff: bool) -> Option<p::Theory> {
+    let plain = |base| tamarin_parser::parser::parse_theory_with_base(src, &[], base).ok();
+    let diff_mode = |base| tamarin_parser::parser::parse_diff_theory_with_base(src, &[], base).ok();
     if diff || uses_diff_operator(src) {
-        tamarin_parser::parser::parse_diff_theory_with_base(src, &[], base).ok()
+        diff_mode(base.clone()).or_else(|| plain(base))
     } else {
-        tamarin_parser::parser::parse_theory_with_base(src, &[], base).ok()
+        plain(base.clone()).or_else(|| diff_mode(base))
     }
 }
 
 /// Read and parse one example file once per test process, resolving includes
-/// against its directory and selecting diff mode only when the source contains
-/// the gated `diff` term operator or its test manifest passes `--diff`.
+/// against its directory, in the mode [`parse_source`] settles on.
 pub fn parse_file(path: &Path) -> Option<Arc<p::Theory>> {
     type Entry = Arc<OnceLock<Option<Arc<p::Theory>>>>;
     static CACHE: OnceLock<Mutex<BTreeMap<PathBuf, Entry>>> = OnceLock::new();
@@ -200,21 +202,14 @@ pub fn parse_file(path: &Path) -> Option<Arc<p::Theory>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        corpus_root_or_skip, manifest_requests_diff, parse_file, parse_source, uses_diff_operator,
-    };
+    use super::{corpus_root_or_skip, manifest_requests_diff, parse_file, parse_source};
 
     #[test]
     fn corpus_parser_takes_diff_mode_from_the_test_manifest() {
         let Some(root) = corpus_root_or_skip("manifest diff mode") else {
             return;
         };
-        // Diff syntax without a diff(...) term: the trace parser rejects it,
-        // as HS does, and the manifest's `--diff` selects the diff parser.
         let path = root.join("regression/negative/diff-side-products.spthy");
-        let src = std::fs::read_to_string(&path).unwrap();
-        assert!(!uses_diff_operator(&src));
-        assert!(parse_source(&src, path.parent().map(Into::into), false).is_none());
         assert!(manifest_requests_diff(&path));
         assert!(parse_file(&path).expect("diff mode parses it").is_diff);
 
@@ -224,28 +219,23 @@ mod tests {
         assert!(!parse_file(&path).expect("trace mode parses it").is_diff);
     }
 
+    /// Each file loads in the one mode that accepts it, whatever the evidence
+    /// suggested first; a file neither mode accepts does not load.
     #[test]
-    fn corpus_parser_selects_diff_mode_for_a_diff_operator() {
-        let src = "theory D begin\nrule R: [ In(x) ] --> [ Out(diff(x, x)) ]\nend\n";
-        assert!(tamarin_parser::parser::parse_theory(src, &[]).is_err());
-        let parsed = parse_source(src, None, false).expect("the diff operator selects diff mode");
-        assert!(parsed.is_diff);
-    }
-
-    #[test]
-    fn diff_mode_detection_honours_tokens_and_comments() {
-        assert!(uses_diff_operator("rule R: [ ] --> [ Out(diff (x,y)) ]"));
-        assert!(!uses_diff_operator(
-            "/* diff(x,y) */ // diff (x,y)\nrule diffuse: [ ] --> [ ]"
-        ));
-    }
-
-    #[test]
-    fn corpus_parser_does_not_mask_an_ordinary_parse_failure_with_diff_mode() {
-        // A general syntax error is not evidence that the caller intended
-        // diff mode, so it takes only the default parser path.
-        let src = "theory D begin\nrule R: [ ] -->\nend\n";
-        assert!(!uses_diff_operator(src));
-        assert!(parse_source(src, None, false).is_none());
+    fn corpus_parser_settles_on_the_mode_that_accepts_the_file() {
+        let rows: &[(&str, Option<bool>)] = &[
+            ("rule R: [ In(x) ] --> [ Out(diff(x, x)) ]", Some(true)),
+            ("restriction r [left]: \"F\"", Some(true)),
+            (
+                "/* diff(x,y) */ // diff (x,y)\nrule diffuse: [ ] --> [ ]",
+                Some(false),
+            ),
+            ("rule R: [ ] -->", None),
+        ];
+        for &(body, is_diff) in rows {
+            let src = format!("theory D begin\n{body}\nend\n");
+            let parsed = parse_source(&src, None, false).map(|t| t.is_diff);
+            assert_eq!(parsed, is_diff, "{body}");
+        }
     }
 }

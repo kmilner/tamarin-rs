@@ -41,6 +41,51 @@ fn diff_theory_checks_each_lemma_namespace() {
     let src = format!("theory D begin lemma L [left]: {formula} lemma L [right]: {formula} end");
     parse_diff_theory(&src, &[]).expect("the two side-specific stores are independent");
 }
+/// Case tests, accountability lemmas and lemmas each have their own
+/// namespace (`addCaseTest`, `addAccLemma`, `addLemma`, TheoryObject.hs).
+#[test]
+fn accountability_items_check_their_own_namespaces() {
+    for body in [
+        "test C: \"T\" test C: \"F\"",
+        "test C: \"T\" lemma a: C accounts for \"T\" lemma a: C accounts for \"F\"",
+    ] {
+        let src = format!("theory T begin {body} end");
+        assert!(
+            parse_theory(&src, &[]).is_err(),
+            "accepted duplicate: {body}"
+        );
+    }
+    let src = "theory T begin test a: \"T\" lemma a: a accounts for \"T\" lemma a: \"T\" end";
+    parse_theory(src, &[]).expect("the three namespaces are independent");
+}
+/// `lemmaAcc` reads `commaSep1 identifier` and then the literal symbol
+/// `accounts for` or `account for` (Theory/Text/Parser/Accountability.hs),
+/// so `accounts` can name a case test and the symbol has exactly one space.
+#[test]
+fn accountability_lemma_reads_identifiers_then_the_accounts_for_symbol() {
+    for (test, lemma) in [
+        ("accounts", "accounts accounts for"),
+        ("account", "account account for"),
+        ("C", "C, D accounts for"),
+    ] {
+        let src = format!("theory A begin test {test}: \"T\" lemma a: {lemma} \"T\" end");
+        let thy = parse_theory(&src, &[]).unwrap_or_else(|e| panic!("{lemma}: {e}"));
+        assert!(
+            matches!(thy.items.last(), Some(TheoryItem::AccLemma(_))),
+            "{lemma}"
+        );
+    }
+    // After a comma `accounts` is read as another identifier.
+    for lemma in [
+        "C, accounts for",
+        "C accounts /*hi*/ for",
+        "C accounts  for",
+    ] {
+        let src = format!("theory A begin test C: \"T\" lemma a: {lemma} \"T\" end");
+        assert!(parse_theory(&src, &[]).is_err(), "accepted {lemma}");
+    }
+}
+
 use tamarin_term::maude_sig::pair_maude_sig;
 
 /// [`parse_formula_str`] against the signature HS `parseString` installs
@@ -507,12 +552,12 @@ fn lemma_with_quantifier() {
 
 #[test]
 fn comment_handling() {
-    let s = "/* outer */ theory T // line\n begin /* x /* y */ z */ end";
+    let s = "/* outer */ theory T // line\n begin /* x /* y */ z */ diffLemma{*body*} end";
     let t = parse_theory(s, &[]).unwrap();
     assert_eq!(t.name, "T");
-    // `/* */` and `//` are whitespace, not theory items.  Only the
-    // `name{* … *}` formal comment becomes a theory item.
-    assert!(t.items.is_empty(), "unexpected items: {:?}", t.items);
+    assert!(
+        matches!(t.items.as_slice(), [TheoryItem::FormalComment { header, body }] if header == "diffLemma" && body == "body")
+    );
 }
 
 /// The one argument of a subterm goal.  The goal grammar reads it with the
@@ -720,6 +765,39 @@ fn malformed_stored_proof_fails_theory_parse() {
     ));
 }
 
+/// HS tries a lemma's proof with `symbol`s that need no word boundary
+/// (Lemma.hs, Theory/Text/Parser/Proof.hs), so `bysorry` is a proof.
+#[test]
+fn stored_proof_starts_without_word_boundary() {
+    let theory = parse_theory("theory T begin\nlemma L: \"T\"\nbysorry\nend", &[]).expect("parse");
+    assert_eq!(lemma_proof_raw(&theory), "bysorry\n");
+    let src = "theory D begin diffLemma E: rule-equivalencecase R bysorry qed end";
+    let parsed = parse_diff_theory(src, &[]).expect("parse diff theory");
+    let TheoryItem::DiffLemma(lemma) = &parsed.items[0] else {
+        panic!("expected diff lemma");
+    };
+    assert_eq!(
+        lemma.proof.as_ref().unwrap().raw,
+        "rule-equivalencecase R bysorry qed "
+    );
+}
+
+/// `startProofSkeleton` (Theory/Text/Parser/Proof.hs) rejects a proof that
+/// starts with `SOLVED`, which is a leaf only below a proof method.
+#[test]
+fn stored_proof_cannot_start_with_solved() {
+    for proof in ["SOLVED", "SOLVEDx"] {
+        let src = format!("theory T begin\nlemma L: \"T\"\n{proof}\nend");
+        assert!(parse_theory(&src, &[]).is_err(), "accepted {proof}");
+    }
+    let theory = parse_theory(
+        "theory T begin\nlemma L: \"T\"\ninduction case base SOLVED qed\nend",
+        &[],
+    )
+    .expect("SOLVED below a method");
+    assert_eq!(lemma_proof_raw(&theory), "induction case base SOLVED qed\n");
+}
+
 #[test]
 fn stored_proof_preserves_raw_and_lemma_text_whitespace() {
     let lemma_text = "lemma L:\t\"T\"\n  by\t sorry \n \t";
@@ -739,12 +817,12 @@ fn completed_proofs_keep_following_theory_items_separate() {
         (
             false,
             "lemma L: \"T\"\n",
-            "induction\n  case rule\n  by sorry\nqed \t/* proof tail */\n  ",
+            "induction\n  case lemma\n  by sorry\nqed \t/* proof tail */\n  ",
         ),
         (
             true,
             "diffLemma L:\n",
-            "rule-equivalence\n  case rule\n  MIRRORED\nqed \t/* proof tail */\n  ",
+            "rule-equivalence\n  case lemma\n  MIRRORED\nqed \t/* proof tail */\n  ",
         ),
     ] {
         for (following, item_kind) in [
@@ -1096,8 +1174,9 @@ end"#;
 }
 
 // Several cases separated by `next` may be labelled after different top-level
-// keywords (`rule`, `lemma`, `function`). None may truncate the proof or become
-// a separate theory item.
+// keywords (`restriction`, `lemma`, `function`). None may truncate the proof or
+// become a separate theory item. `rule` is a reserved name, so `case rule`
+// fails the theory parse as it does in HS.
 #[test]
 fn multiple_case_labels_named_after_keywords_do_not_truncate() {
     let s = r#"theory T begin
@@ -1105,7 +1184,7 @@ fn multiple_case_labels_named_after_keywords_do_not_truncate() {
     all-traces "All x #i. Done(x) @ #i ==> F"
   simplify
   solve( A( x ) ▶₀ #i )
-    case rule
+    case restriction
       by sorry
     next
     case lemma
@@ -1116,11 +1195,13 @@ fn multiple_case_labels_named_after_keywords_do_not_truncate() {
   qed
 end"#;
     let t = parse_theory(s, &[]).expect("keyword-named case labels must not truncate");
-    // The parser splits no Rule or Functions items out of the body.
+    // The parser splits no Restriction or Functions items out of the body.
     // `lemma_proof_raw` checks the lemma count.
     assert!(
-        !t.items.iter().any(|it| matches!(it, TheoryItem::Rule(_))),
-        "a `case rule` label must not be split into a top-level rule"
+        !t.items
+            .iter()
+            .any(|it| matches!(it, TheoryItem::Restriction(_))),
+        "a `case restriction` label must not be split into a top-level restriction"
     );
     assert!(
         !t.items
@@ -1129,10 +1210,15 @@ end"#;
         "a `case function` label must not be split into a top-level functions decl"
     );
     let raw = lemma_proof_raw(&t);
-    for label in ["case rule", "case lemma", "case function"] {
+    for label in ["case restriction", "case lemma", "case function"] {
         assert!(raw.contains(label), "proof raw missing {label:?}: {raw:?}");
     }
     assert!(raw.contains("qed"), "proof raw missing qed: {raw:?}");
+    let reserved = s.replace("case restriction", "case rule");
+    assert!(
+        parse_theory(&reserved, &[]).is_err(),
+        "`case rule` must fail the theory parse"
+    );
 }
 
 // A genuine rule following a completed proof must remain a theory item,
@@ -1343,15 +1429,19 @@ fn colon_suffix_is_a_sapic_type_in_a_process_and_a_sort_in_a_rule() {
 // The sort the parser stamps on every variable
 // =============================================================================
 
-/// The first argument of the first premise of the theory's single rule.
-fn rule_premise_term(src: &str) -> Term {
-    let thy = parse_theory(src, &[]).expect("parses");
-    for item in &thy.items {
-        if let TheoryItem::Rule(r) = item {
-            return r.premises[0].args[0].clone();
-        }
+/// The argument of the predicate `P(<args>)`, read as a lemma formula, where
+/// a variable of every sort may appear (`fact (vlit (try varp <|> nodep))`,
+/// Theory/Text/Parser/Formula.hs).
+fn predicate_term(args: &str) -> Term {
+    let src = format!("theory T begin builtins: natural-numbers lemma L: \"P(<{args}>)\" end");
+    let thy = parse_theory(&src, &[]).expect("parses");
+    match thy.items.last() {
+        Some(TheoryItem::Lemma(Lemma {
+            formula: Formula::Atom(Atom::Pred(fact)),
+            ..
+        })) => fact.args[0].clone(),
+        other => panic!("expected a predicate lemma, got {other:?}"),
     }
-    panic!("no rule in {src}");
 }
 
 /// `(name, idx, sort)` of every element of a tuple of variables.
@@ -1381,10 +1471,7 @@ fn var_of(t: &Term) -> &VarSpec {
 /// (Token.hs).
 #[test]
 fn bare_variable_is_msg_sorted() {
-    let t = rule_premise_term(
-        "theory T begin builtins: natural-numbers \
-         rule R: [ In(<x, x.1, ~f, $p, #i, %n>) ] --[ ]-> [ ] end",
-    );
+    let t = predicate_term("x, x.1, ~f, $p, #i, %n");
     assert_eq!(
         tuple_var_specs(&t),
         vec![
@@ -1403,10 +1490,7 @@ fn bare_variable_is_msg_sorted() {
 /// `x:fresh` and `~x` are one variable.
 #[test]
 fn sort_suffix_parses_to_the_plain_sort() {
-    let t = rule_premise_term(
-        "theory T begin builtins: natural-numbers \
-         rule R: [ In(<x:msg, x:fresh, x:pub, x:node, x:nat>) ] --[ ]-> [ ] end",
-    );
+    let t = predicate_term("x:msg, x:fresh, x:pub, x:node, x:nat");
     assert_eq!(
         tuple_var_specs(&t),
         vec![
@@ -1447,19 +1531,323 @@ fn timepoint_positions_are_node_sorted() {
     // The "term equality" alternative reads both operands with `msgvar`, so
     // two bare names are message variables.
     assert_eq!(sort_of("k = l"), vec![LSort::Msg, LSort::Msg]);
+}
 
-    for invalid in [
-        "$i < $j",
-        "x:msg < j",
-        "f(i) < j",
-        "$i = #j",
-        "f(i) = #j",
-        "k = #l",
-    ] {
-        assert!(
-            parse_formula_str_sig(invalid).is_err(),
-            "accepted non-node operands in {invalid}"
+/// Every context's variable grammar, as HS threads it through the term and
+/// formula parsers (`vlit varp`, Theory/Text/Parser/Term.hs): rules, lemmas,
+/// restrictions, macro bodies and proof goals read `msgvar`, which has no
+/// timepoints and takes a sort suffix only on a bare name; a formula reads
+/// timepoints with `nodevar` after `@`, in `last`, `<` and a node equality,
+/// and with `try msgvar <|> nodevar` in a predicate; equations read
+/// `llitNoPub`; macro and predicate parameters `lvar`; a process
+/// `sapicvar`, whose colon names a type, and its patterns `sapicpatternvar`
+/// (Token.hs, Formula.hs, Sapic.hs).  Each row's verdict is the oracle's
+/// `--parse-only` verdict on the same theory.
+#[test]
+fn variable_grammar_follows_the_context() {
+    let rows: &[(&str, &str, bool)] = &[
+        (
+            "rule term",
+            r#"rule B: [ In(x:pub) ] --[ M(~k, $p, %n, x.1, n:nat, f:fresh) ]-> [ Out(f(x)) ]"#,
+            true,
+        ),
+        ("rule term", r#"rule B: [] --[ M(#j) ]-> []"#, false),
+        ("rule term", r#"rule B: [ In(<x, j:node>) ] --> []"#, false),
+        ("rule term", r#"rule B: [] --> [ Out(f(#j)) ]"#, false),
+        ("rule term", r#"rule B: [] --[ M(x:custom) ]-> []"#, false),
+        ("rule term", r#"rule B: [] --[ M(#j:msg) ]-> []"#, false),
+        ("rule term", r#"rule B: [ In($x:pub) ] --> []"#, false),
+        (
+            "rule let",
+            r#"rule B: let x = #j in [] --[ M(x) ]-> []"#,
+            false,
+        ),
+        (
+            "rule let",
+            r#"rule B: let x = 'a' %n = %1 y:nat = %1 in [] --[ M(x, %n, y) ]-> []"#,
+            true,
+        ),
+        ("rule let", r#"rule B: let $x = 'a' in [] --> []"#, false),
+        ("rule let", r#"rule B: let ~x = 'a' in [] --> []"#, false),
+        ("rule let", r#"rule B: let #x = 'a' in [] --> []"#, false),
+        ("rule let", r#"rule B: let x:pub = 'a' in [] --> []"#, false),
+        (
+            "formula message",
+            r#"lemma l: "All #j. M(#j) @ #j ==> F""#,
+            false,
+        ),
+        (
+            "formula message",
+            r#"lemma l: "All #j #i. M(<'a', #j>) @ #i ==> F""#,
+            false,
+        ),
+        (
+            "formula message",
+            r#"lemma l: "All j:node #i. M(j:node) @ #i ==> F""#,
+            false,
+        ),
+        (
+            "formula message",
+            r#"lemma l: "All x #j. f(#j) = x ==> F""#,
+            false,
+        ),
+        (
+            "formula message",
+            r#"lemma l: "All x #j. x = f(#j) ==> F""#,
+            false,
+        ),
+        (
+            "formula message",
+            r#"lemma l: "All x #j. x << f(#j) ==> F""#,
+            false,
+        ),
+        (
+            "formula message",
+            r#"restriction r: "All #j. M(#j) @ #j ==> F""#,
+            false,
+        ),
+        (
+            "formula message",
+            r#"rule B: [] --[ _restrict(All #j. M(#j) @ #j ==> F) ]-> []"#,
+            false,
+        ),
+        (
+            "formula message",
+            r#"lemma l: "All j #i. M(j) @ #i ==> F""#,
+            true,
+        ),
+        (
+            "formula message",
+            r#"lemma l: "All x:foo #i. M(x) @ i ==> F""#,
+            false,
+        ),
+        (
+            "formula message",
+            r#"lemma l: "All $x:pub #i. M($x) @ i ==> F""#,
+            false,
+        ),
+        (
+            "formula message",
+            r#"lemma l: "All #i:node. M('a') @ i ==> F""#,
+            false,
+        ),
+        (
+            "formula timepoint",
+            r#"rule B: [] --[ _restrict(All #i #j. #i < #j | i = j) ]-> []"#,
+            true,
+        ),
+        (
+            "formula message",
+            r#"lemma l: "All x #j. x (<) #j ==> F""#,
+            false,
+        ),
+        (
+            "formula timepoint",
+            r#"lemma l: "All #i #j. #i = #j | #i < #j | last(#i) | i < j | #i = j | j:node = #i | last(i:node) | M('a') @ i:node""#,
+            true,
+        ),
+        (
+            "formula timepoint",
+            r#"lemma l: "Ex #i. M('a') @ #i:node""#,
+            false,
+        ),
+        (
+            "formula timepoint",
+            r#"lemma l: "Ex #i. M('a') @ #i:foo""#,
+            false,
+        ),
+        (
+            "formula timepoint",
+            r#"lemma l: "Ex #i. M('a') @ $i:node""#,
+            false,
+        ),
+        (
+            "formula timepoint",
+            r#"lemma l: "Ex #i. M('a') @ $i""#,
+            false,
+        ),
+        (
+            "formula timepoint",
+            r#"lemma l: "Ex #i. M('a') @ f(i)""#,
+            false,
+        ),
+        (
+            "formula timepoint",
+            r#"lemma l: "Ex #i. M('a') @ i:msg""#,
+            false,
+        ),
+        ("formula timepoint", r#"lemma l: "Ex #i. last($i)""#, false),
+        ("formula timepoint", r#"lemma l: "Ex #i. (#i) < #i""#, false),
+        ("formula timepoint", r#"lemma l: "Ex #i. c() < #i""#, false),
+        (
+            "formula timepoint",
+            r#"lemma l: "Ex #i. c < #i | #i = c | last(c) | M('a') @ c""#,
+            true,
+        ),
+        ("formula timepoint", r#"lemma l: "Ex #i. #i = 'a'""#, false),
+        ("formula timepoint", r#"lemma l: "Ex #i. 'a' = #i""#, false),
+        ("formula timepoint", r#"lemma l: "Ex i j. $i < $j""#, false),
+        (
+            "formula timepoint",
+            r#"lemma l: "Ex i j. x:msg < j""#,
+            false,
+        ),
+        ("formula timepoint", r#"lemma l: "Ex i j. f(i) < j""#, false),
+        (
+            "formula timepoint",
+            r#"lemma l: "Ex #i #j. $i = #j""#,
+            false,
+        ),
+        (
+            "formula timepoint",
+            r#"lemma l: "Ex #i #j. f(i) = #j""#,
+            false,
+        ),
+        ("formula timepoint", r#"lemma l: "Ex #i #j. i = #j""#, false),
+        (
+            "formula timepoint",
+            r#"functions: last/1 lemma l: "last('a') = last('a')""#,
+            true,
+        ),
+        ("formula timepoint", r#"lemma l: "Ex #j. (i) < #j""#, false),
+        ("formula timepoint", r#"lemma l: "Ex #j. <i> < #j""#, false),
+        (
+            "formula timepoint",
+            r#"functions: join/2 [AC] lemma l: "Ex #j. join(i) < #j""#,
+            false,
+        ),
+        (
+            "formula timepoint",
+            r#"lemma l: "Ex #j. (x:msg = y) & i < #j""#,
+            true,
+        ),
+        (
+            "predicate",
+            r#"predicates: Q(y) <=> T lemma l: "All x #i. M(x) @ i ==> x = 'a' | x << f(x) | x (<) x | Q(x)""#,
+            true,
+        ),
+        (
+            "predicate",
+            r#"predicates: P(#i, x:node, $y, z) <=> M(z) @ i"#,
+            true,
+        ),
+        ("predicate", r#"predicates: P(x:foo) <=> T"#, false),
+        (
+            "predicate",
+            r#"predicates: Q(a, b, c, d) <=> T lemma l: "All #i. Q(#i, i:node, x, $y) ==> F""#,
+            true,
+        ),
+        (
+            "predicate",
+            r#"predicates: Q(y) <=> T lemma l: "Ex x. Q(x:foo)""#,
+            false,
+        ),
+        ("equation", r#"equations: f(f(x)) = x"#, true),
+        ("equation", r#"equations: f(f(~'n')) = ~'n'"#, true),
+        ("equation", r#"equations: f(f($x)) = $x"#, true),
+        ("equation", r#"equations: f(f(#i)) = #i"#, false),
+        ("equation", r#"equations: f(f('a')) = 'a'"#, false),
+        ("macro", r#"macros: m(x, #i, y:pub) = <x, y>"#, true),
+        ("macro", r#"macros: m(x) = <x, #i>"#, false),
+        ("macro", r#"macros: m(x) = <x, y:foo>"#, false),
+        (
+            "proof goal",
+            r#"lemma l: "T" solve( M(x) @ #i ) by sorry"#,
+            true,
+        ),
+        (
+            "proof goal",
+            r#"lemma l: "T" solve( M(#j) @ #i ) by sorry"#,
+            false,
+        ),
+        (
+            "proof goal",
+            r#"lemma l: "T" solve( M(x) ▶₀ #i ) by sorry"#,
+            true,
+        ),
+        (
+            "proof goal",
+            r#"lemma l: "T" solve( M(#j) ▶₀ #i ) by sorry"#,
+            false,
+        ),
+        (
+            "proof goal",
+            r#"lemma l: "T" solve( x ⊏ f(x) ) by sorry"#,
+            true,
+        ),
+        (
+            "proof goal",
+            r#"lemma l: "T" solve( #i ⊏ x ) by sorry"#,
+            false,
+        ),
+        (
+            "proof goal",
+            r#"lemma l: "T" solve( (M(x) @ #i) ∥ (#i < #j) ) by sorry"#,
+            true,
+        ),
+        (
+            "proof goal",
+            r#"lemma l: "T" solve( (M(#j) @ #i) ∥ (#i < #j) ) by sorry"#,
+            false,
+        ),
+        (
+            "process formula",
+            r#"process: if Ex x #j. M(#j) @ #j & f(#j) = x & #j << x then 0"#,
+            true,
+        ),
+        (
+            "process formula",
+            r#"process: [] --[ _restrict(All #j. M(#j) @ #j ==> F) ]-> []; 0"#,
+            true,
+        ),
+        (
+            "process formula",
+            r#"process: [] --[ _restrict(Ex #i. M('a') @ i:node) ]-> []"#,
+            true,
+        ),
+        (
+            "process formula",
+            r#"process: [] --[ _restrict(Ex #i. M('a') @ #i:wrong) ]-> []"#,
+            false,
+        ),
+        (
+            "process formula",
+            r#"process: [] --[ _restrict(Ex #i. #i = 'a' | 'a' = #i | #i = x:node | last(i:node)) ]-> []"#,
+            true,
+        ),
+        (
+            "process formula",
+            r#"process: [] --[ _restrict(Ex #i. (#i) < #i) ]-> []"#,
+            false,
+        ),
+        (
+            "process formula",
+            r#"process: [] --[ _restrict(Ex x:foo #i:Any. Q(x:foo, #i:Any)) ]-> []"#,
+            true,
+        ),
+        (
+            "process term",
+            r#"process: new x:nat; out(<x, #t, $p:pub, y:node>); event M(y:custom); 0"#,
+            true,
+        ),
+        ("process term", r#"process: out(x:)"#, false),
+        ("process term", r#"process: lookup #k as #v in 0"#, true),
+        (
+            "process pattern",
+            r#"process: [ In(=x) ] --[ M(#j, x) ]-> [ Out(#j:Any) ]"#,
+            true,
+        ),
+        ("process pattern", r#"process: out(=x)"#, false),
+        ("process pattern", r#"process: in(<=x, #j>); 0"#, true),
+        ("process pattern", r#"process: let =x = #j in 0"#, true),
+    ];
+    for (context, item, accepted) in rows {
+        let src = format!(
+            "theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 \
+             rule A: [] --[ M('a') ]-> [] {item} end"
         );
+        let result = parse_theory(&src, &[]);
+        assert_eq!(result.is_ok(), *accepted, "{context}: {item}: {result:?}");
     }
 }
 
@@ -1767,17 +2155,6 @@ fn rule_let_requires_a_binding_and_in_terminator() {
         "theory T begin rule R: let x = y [] --[]-> [] end",
     ] {
         assert!(parse_theory(src, &[]).is_err(), "unexpectedly parsed {src}");
-    }
-}
-
-#[test]
-fn rule_let_rejects_sorts_outside_msg_and_nat() {
-    for binder in ["$x", "~x", "#x"] {
-        let src = format!("theory T begin rule R: let {binder} = y in [] --[]-> [] end");
-        assert!(
-            parse_theory(&src, &[]).is_err(),
-            "unexpectedly parsed {src}"
-        );
     }
 }
 

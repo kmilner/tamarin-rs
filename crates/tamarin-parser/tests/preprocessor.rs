@@ -131,13 +131,22 @@ end"
 
 #[test]
 fn active_comments_and_item_contents_own_directive_like_lines() {
-    for parse in [parse_theory, parse_diff_theory] {
+    for diff in [false, true] {
+        let parse = if diff {
+            parse_diff_theory
+        } else {
+            parse_theory
+        };
         for (open, close) in [
             ("/*", "*/"),
             ("export e: \"", "\""),
             ("text{*", "*}"),
             ("tactic: t prio: regex \"", "\""),
         ] {
+            // A diff theory has no `export` item.
+            if diff && open.starts_with("export") {
+                continue;
+            }
             for body in ["#endif", "#ifdef OFF\n#else\n#endif"] {
                 // Exercise both top-level and active conditional-item parsing.
                 for prefix in ["", "#ifdef ON\n"] {
@@ -167,8 +176,8 @@ fn ordinary_names_and_inline_directive_text_are_not_reserved() {
             let source = format!("theory T begin lemma L: \"T\" by solve(Seen() @ #{name}) end");
             parse(&source, &[]).unwrap_or_else(|error| panic!("{source}: {error}"));
         }
-        parse("theory T begin export e: \"#ifdef #else #endif\" end", &[]).unwrap();
     }
+    parse_theory("theory T begin export e: \"#ifdef #else #endif\" end", &[]).unwrap();
 }
 
 #[test]

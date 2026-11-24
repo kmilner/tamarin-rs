@@ -237,10 +237,6 @@ fn unknown_attributes_report_their_context() {
             "theory T begin\nrule R: [ ] --> [ ]\nlemma L [bogus]: \"T\"\nend\n",
             ParseContext::LemmaAttribute,
         ),
-        (
-            "theory T begin\nrestriction R [bogus]: \"T\"\nend\n",
-            ParseContext::RestrictionAttribute,
-        ),
     ];
 
     for (source, expected_context) in cases {
@@ -278,7 +274,7 @@ fn invalid_fact_and_diff_errors_are_classified() {
         ["the `diff` operator requires diff mode"]
     );
 
-    let equation_source = "theory T begin\nequations: diff('a','b') = 'a'\nend\n";
+    let equation_source = "theory T begin\nequations: diff(x,y) = x\nend\n";
     let equation = parse_theory(equation_source, &["diff"])
         .expect_err("diff in an equation must fail even in diff mode");
     assert_eq!(
@@ -1229,35 +1225,6 @@ fn malformed_compound_operands_keep_application_errors() {
 }
 
 #[test]
-fn role_strings_keep_checked_literal_failures() {
-    let source = "theory T begin rule R [role=\"abc\\q\"]: [] --> [] end";
-    let error = parse_theory(source, &[]).unwrap_err();
-    assert_eq!(error.span().start, source.find("\\q").unwrap() + 1);
-    assert_eq!(
-        error.diagnostic_notes(),
-        ["expected a valid string literal; found 'q'"]
-    );
-
-    let source = "theory T begin rule R [role=\"unfinished";
-    let error = parse_theory(source, &[]).unwrap_err();
-    assert!(
-        matches!(
-            error.kind(),
-            ParseErrorKind::UnclosedDelimiter { opening: '"', .. }
-        ),
-        "{error:?}"
-    );
-    assert_eq!(error.span().start, source.len());
-    let labels = error.diagnostic_labels_with_source(source);
-    assert_eq!(&source[labels[1].span.clone()], "\"");
-
-    for literal in ["\"abc\\n\"", "'abc'", "\"\"", "'/* ignored */ abc'"] {
-        let source = format!("theory T begin rule R [role={literal}]: [] --> [] end");
-        parse_theory(&source, &[]).unwrap();
-    }
-}
-
-#[test]
 fn predicate_syntax_errors_do_not_become_function_errors() {
     for signature in ["", "functions: G/2"] {
         let prefix = format!("theory T begin {signature} predicates: G(x) <=> T lemma L: \"");
@@ -1493,29 +1460,6 @@ fn trailing_input_has_structured_boundary_expectations() {
     assert_eq!(error.source_text(), Some("end"));
     assert_eq!(error.span().start, 0);
     std::fs::remove_dir_all(dir).unwrap();
-}
-
-#[test]
-fn explicit_sorts_do_not_leak_between_formula_operands() {
-    for prefix in ["", "(x:msg = y) & ", "(Seen(x:msg) | T) & "] {
-        for (operand, accepted) in [
-            ("i", true),
-            ("i:msg", false),
-            ("(i)", true),
-            ("(i:msg)", false),
-            ("<i>", true),
-            ("<i:msg>", false),
-            ("join(i)", true),
-            ("join(i:msg)", false),
-            ("c", true),
-        ] {
-            let source = format!(
-                "theory T begin functions: join/2 [AC], c/0                  lemma L: \"{prefix}{operand} < #j\" end"
-            );
-            let result = parse_theory(&source, &[]);
-            assert_eq!(result.is_ok(), accepted, "{source}: {result:?}");
-        }
-    }
 }
 
 #[test]

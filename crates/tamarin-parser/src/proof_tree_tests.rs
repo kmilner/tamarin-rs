@@ -23,7 +23,7 @@ fn leaf_forms() {
 
 #[test]
 fn standalone_proofs_reject_input_after_a_complete_skeleton() {
-    for proof in ["by sorry", "SOLVED", "induction case rule by sorry qed"] {
+    for proof in ["by sorry", "SOLVED", "induction case base by sorry qed"] {
         for following in ["trailing", "text{* documentation *}", "lemma L: \"T\""] {
             let prefix = format!("{proof} \t/* whitespace */\n");
             let source = format!("{prefix}{following}");
@@ -90,10 +90,49 @@ fn induction_with_case_block() {
     let t = parse_proof_tree(src, &bare_parser()).expect("parse");
     assert_eq!(t.method, ParsedMethod::Induction);
     assert_eq!(t.cases.len(), 2);
-    assert_eq!(t.cases[0].0, "empty_trace");
-    assert_eq!(t.cases[0].1.method, ParsedMethod::Contradiction);
-    assert_eq!(t.cases[1].0, "non_empty_trace");
-    assert_eq!(t.cases[1].1.method, ParsedMethod::Sorry);
+    assert_eq!(t.cases["empty_trace"].method, ParsedMethod::Contradiction);
+    assert_eq!(t.cases["non_empty_trace"].method, ParsedMethod::Sorry);
+}
+
+/// HS builds the children with `M.fromList` (Theory/Text/Parser/Proof.hs):
+/// the last of several cases with one name wins, and they come out in name
+/// order.
+#[test]
+fn duplicate_case_names_keep_the_last() {
+    let src = "induction case B by sorry next case A by sorry next case A by simplify qed";
+    let t = parse_proof_tree(src, &bare_parser()).expect("parse");
+    assert_eq!(t.cases.keys().collect::<Vec<_>>(), ["A", "B"]);
+    assert_eq!(t.cases["A"].method, ParsedMethod::Simplify);
+}
+
+/// HS `symbol` (Token.hs) has no word boundary, so a keyword may run into
+/// the next token; text left over after a keyword still has to parse.
+#[test]
+fn proof_keywords_need_no_word_boundary() {
+    for src in [
+        "induction caseBase by sorry qed",
+        "induction case Base bysorry qed",
+        "inductioncase Base by sorryqed",
+    ] {
+        let t = parse_proof_tree(src, &bare_parser()).unwrap_or_else(|e| panic!("{src}: {e}"));
+        assert_eq!(t.method, ParsedMethod::Induction, "{src}");
+        assert_eq!(t.cases["Base"].method, ParsedMethod::Sorry, "{src}");
+    }
+    let t = parse_proof_tree(
+        "induction case A by sorry nextcase B by sorry qed",
+        &bare_parser(),
+    )
+    .expect("parse");
+    assert_eq!(t.cases.keys().collect::<Vec<_>>(), ["A", "B"]);
+    for src in [
+        "sorryfoo",
+        "by contradictionfoo",
+        "induction case A bysorryx qed",
+        "induction case A by sorry qedx",
+    ] {
+        assert!(parse_proof_tree(src, &bare_parser()).is_err(), "{src}");
+    }
+    assert!(validate_diff_proof_tree("rule-equivalencecase R bysorry qed", &bare_parser()).is_ok());
 }
 
 #[test]
@@ -106,8 +145,39 @@ fn identifier_stops_at_hyphen() {
     assert!(parse_proof_tree("induction case foo-bar by sorry qed", &bare_parser()).is_err());
     let t = parse_proof_tree("induction case foo_bar by sorry qed", &bare_parser()).expect("parse");
     assert_eq!(t.method, ParsedMethod::Induction);
-    assert_eq!(t.cases.len(), 1);
-    assert_eq!(t.cases[0].0, "foo_bar");
+    assert_eq!(t.cases.keys().collect::<Vec<_>>(), ["foo_bar"]);
+}
+
+#[test]
+fn case_names_follow_hs_identifier() {
+    // HS `oneCase` reads `identifier` (`T.identifier spthy`, Token.hs):
+    // `identStart = alphaNum`, and `reservedNames` excludes `in`, `let`,
+    // `rule` and `diff`.
+    for name in ["rule", "in", "let", "diff", "_x"] {
+        let prefix = "induction case ";
+        let source = format!("{prefix}{name} by sorry qed");
+        let error = parse_proof_tree(&source, &bare_parser())
+            .expect_err("a reserved or underscore-led case name must be rejected");
+        assert_eq!(error.span().start, prefix.len(), "{source}: {error:?}");
+        assert!(
+            error
+                .diagnostic_notes()
+                .iter()
+                .any(|note| note.contains("identifier")),
+            "{source}: {error:?}"
+        );
+        let diff = format!("rule-equivalence case {name} MIRRORED qed");
+        assert!(
+            validate_diff_proof_tree(&diff, &bare_parser()).is_err(),
+            "{diff}"
+        );
+    }
+    for name in ["rule_1", "1", "Rule", "x_"] {
+        let source = format!("induction case {name} by sorry qed");
+        let t =
+            parse_proof_tree(&source, &bare_parser()).unwrap_or_else(|e| panic!("{source}: {e}"));
+        assert!(t.cases.contains_key(name), "{source}");
+    }
 }
 
 #[test]
@@ -423,12 +493,9 @@ fn nested_case_block() {
         ";
     let t = parse_proof_tree(src, &bare_parser()).expect("parse");
     assert!(matches!(t.method, ParsedMethod::SolveGoal(_)));
-    assert_eq!(t.cases.len(), 2);
-    assert_eq!(t.cases[0].0, "case_1");
-    assert_eq!(t.cases[0].1.cases.len(), 2);
-    assert_eq!(t.cases[0].1.cases[0].0, "case_a");
-    assert_eq!(t.cases[0].1.cases[1].0, "case_b");
-    assert_eq!(t.cases[1].0, "case_2");
+    assert_eq!(t.cases.keys().collect::<Vec<_>>(), ["case_1", "case_2"]);
+    let inner = t.cases["case_1"].cases.keys().collect::<Vec<_>>();
+    assert_eq!(inner, ["case_a", "case_b"]);
 }
 
 /// HS reads the goal of a `solve( ... )` step with `parens goal`
@@ -542,5 +609,5 @@ fn solve_goal_with_bracket_in_pub_name() {
         }
         other => panic!("expected an action goal, got {other:?}"),
     }
-    assert_eq!(t.cases[0].1.method, ParsedMethod::Sorry);
+    assert_eq!(t.cases[""].method, ParsedMethod::Sorry);
 }

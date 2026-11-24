@@ -721,8 +721,8 @@ fn free_term<F: FormulaVars>(
 /// HS `nodevarTerm = lit . Var <$> nodep` (Theory/Text/Parser/Formula.hs):
 /// the three positions `blatom` reads with it — `last`'s argument, an
 /// action's timepoint and both operands of `<` — take a bare
-/// variable through `nodep`.  The RS parser also accepts a non-variable term
-/// there (parser.rs's `<` arm), which converts like any other term.
+/// variable through `nodep`, as the parser does; any other term converts
+/// like a message term.
 fn node_term<F: FormulaVars>(
     t: &p::Term,
     sig: &MaudeSig,
@@ -1191,28 +1191,27 @@ mod tests {
     }
 
     #[test]
-    fn rule_let_substitution_keeps_typed_free_variables() {
+    fn rule_let_substitution_keeps_free_variables() {
         let formula = rule_restriction(
             "theory T begin rule R: let x = y.1 in []
-             --[_restrict(Ex y.1 #i. A(x,y.1,y:foo) @ i)]-> [] end",
+             --[_restrict(Ex y.1 #i. A(x,y.1,y) @ i)]-> [] end",
         );
         assert_eq!(
             formula_frees(&formula),
             vec![LVar::new("y", LSort::Msg, 0), LVar::new("y", LSort::Msg, 1)]
         );
-        assert_eq!(formula, parsed("Ex y.2 #i. A(y.1,y.2,y:foo) @ i"));
+        assert_eq!(formula, parsed("Ex y.2 #i. A(y.1,y.2,y) @ i"));
     }
 
     #[test]
-    fn rule_let_substitution_uses_untyped_variable_identity() {
+    fn rule_let_substitution_uses_variable_identity() {
         for (binding, input, expected) in [
-            ("x=y", "Ex y. A(x,y:foo)", "Ex y.1. A(y,y.1)"),
-            ("x=y:foo", "Ex y. A(x,y)", "Ex y.1. A(y,y.1)"),
-            ("x=z", "Ex x:foo. A(x)", "Ex x. A(x)"),
-            ("x=z", "A(x:foo)", "A(z)"),
+            ("x=y", "Ex y. A(x,y)", "Ex y.1. A(y,y.1)"),
+            ("x=z", "Ex x. A(x)", "Ex x. A(x)"),
+            ("x=z", "A(x)", "A(z)"),
             (
                 "x=y",
-                "Ex y. A(x,y:foo) & (Ex y:foo. B(y))",
+                "Ex y. A(x,y) & (Ex y. B(y))",
                 "Ex y.1. A(y,y.1) & (Ex y.2. B(y.2))",
             ),
             ("x=z", "Ex #x. A(x,x.1) @ x", "Ex #x. A(z,x.1) @ x"),
@@ -1420,8 +1419,6 @@ mod tests {
             "All x. P(x) & x = 'a'",
             "Ex y. Q(y) ==> last(#i)",
             "#k < #l",
-            "x:foo = 'a'",
-            "All x:foo. P(x:foo)",
             "Ex ~k. K(~k) @ #i & #i < #j",
             "Ex #j. Foo(x) @ #j",
         ] {

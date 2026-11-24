@@ -392,7 +392,6 @@ fn collect_term<'a>(t: &'a p::Term, out: &mut Shapes<'a>) {
         p::Term::PubLit(_)
         | p::Term::FreshLit(_)
         | p::Term::NatLit(_)
-        | p::Term::Number(_)
         | p::Term::NumberOne
         | p::Term::NatOne
         | p::Term::DhNeutral => {}

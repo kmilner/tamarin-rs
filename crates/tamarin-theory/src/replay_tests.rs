@@ -57,7 +57,7 @@ fn sorry_leaf_runs_auto_prover_only_for_prove_targets() {
     // Skeleton = `by sorry`.
     let skel = ProofTree {
         method: ProofMethod::Sorry(None),
-        cases: Vec::new(),
+        cases: BTreeMap::new(),
     };
     let replayed =
         replace_sorry_prove(&ctx, past_initial_system(), &skel, 50).expect("proof search");
@@ -86,7 +86,7 @@ fn sorry_leaf_runs_auto_prover_only_for_prove_targets() {
         past_initial_system(),
         &ProofTree {
             method: ProofMethod::Sorry(Some(reason.clone())),
-            cases: Vec::new(),
+            cases: BTreeMap::new(),
         },
         50,
     )
@@ -100,11 +100,11 @@ fn sorry_with_children_is_replaced_as_one_node() {
     let ctx = ProofContext::new(h, Vec::new());
     let child = ProofTree {
         method: ProofMethod::Finished(MethodResult::Contradictory(None)),
-        cases: Vec::new(),
+        cases: BTreeMap::new(),
     };
     let skel = ProofTree {
         method: ProofMethod::Sorry(Some("stale".into())),
-        cases: vec![("kept".into(), child)],
+        cases: BTreeMap::from([("kept".into(), child)]),
     };
 
     let replayed =
@@ -142,7 +142,7 @@ fn contradiction_leaf_without_contradiction_falls_back_to_auto() {
     let sys = past_initial_system();
     let skel = ProofTree {
         method: ProofMethod::Finished(MethodResult::Contradictory(None)),
-        cases: Vec::new(),
+        cases: BTreeMap::new(),
     };
     let result = replace_sorry_prove(&ctx, sys, &skel, 50).expect("proof search");
     // No goals, no contradictions → auto-prover recognises Solved. The
@@ -452,14 +452,14 @@ fn parsed_to_unannotated_marks_whole_subtree() {
     // Skeleton:  simplify → case "a" (by sorry), case "b" (by sorry)
     let leaf = |m| ProofTree {
         method: m,
-        cases: Vec::new(),
+        cases: BTreeMap::new(),
     };
     let skel = ProofTree {
         method: ProofMethod::Simplify,
-        cases: vec![
+        cases: BTreeMap::from([
             ("a".to_string(), leaf(ProofMethod::Sorry(None))),
             ("b".to_string(), leaf(ProofMethod::Sorry(None))),
-        ],
+        ]),
     };
     let node = parsed_to_unannotated(&skel, System::empty());
     assert!(!node.annotated, "root must be unannotated");
@@ -539,7 +539,7 @@ fn cancellation_during_terminal_classification_cannot_change_the_verdict() {
     ] {
         let skeleton = stored.clone().map(|method| ProofTree {
             method: ProofMethod::Finished(method),
-            cases: vec![],
+            cases: BTreeMap::new(),
         });
         let run = |sys| match &skeleton {
             Some(skeleton) => check_and_extend(&ctx, sys, skeleton, usize::MAX),

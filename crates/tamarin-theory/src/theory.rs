@@ -278,13 +278,12 @@ pub use tamarin_term::macro_expand::LNMacro;
 /// `LTree CaseName (ProofStep ())` (Theory/ProofSkeleton.hs,
 /// Theory/Proof.hs).
 ///
-/// `cases` keeps the source order of the `case` blocks; the printer sorts by
-/// name (HS stores them in an `M.fromList`, Theory/Text/Parser/Proof.hs)
-/// and replay looks each case up by name.
+/// `cases` is keyed by name like HS's `M.fromList` of the parsed case blocks
+/// (Theory/Text/Parser/Proof.hs).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProofTree {
     pub method: crate::constraint::solver::proof_method::ProofMethod,
-    pub cases: Vec<(String, ProofTree)>,
+    pub cases: std::collections::BTreeMap<String, ProofTree>,
 }
 
 /// A lemma's stored proof.  `None` is a lemma written without one, which HS

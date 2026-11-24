@@ -193,7 +193,7 @@ fn eq_starts_no_term_outside_pattern_positions() {
     // oracle stops at the `=` itself: `unexpected "=" / expecting term or
     // ")"`.  The port rejects at the same position through its
     // no-alternative fallback (whose frame wording differs, same class as
-    // above).  Before the `allow_pat` gate the port PARSED these and died
+    // above).  Before the pattern grammar was confined to those positions the port PARSED these and died
     // later inside translation/elaboration with an unrelated message.
     let e = parse_err("theory T begin\nprocess:\n  in('c', x); out('c', =x)\nend\n");
     assert_eq!(e.line_column(), (3, 24));

@@ -9,6 +9,8 @@
 //! syntax-level staging form that a later elaboration pass lowers. [`Theory`] is
 //! the root; every other type hangs off its [`TheoryItem`] stream.
 
+use std::collections::BTreeMap;
+
 use tamarin_term::lterm::LSort;
 pub use tamarin_term::tags::{FactAnnotation, LemmaAttr, TraceQuantifier};
 
@@ -286,13 +288,12 @@ pub struct ProofSkeleton {
 ///     oneCase = (,) <$> (symbol "case" *> identifier) <*> proofSkeleton
 /// ```
 ///
-/// `cases` retains the source ordering (HS uses `M.fromList` which is
-/// alphabetical, but at replay time the order doesn't matter — we look
-/// each case up by name).
+/// `cases` is the `M.fromList` map: ordered by name, and the last of several
+/// cases with one name wins.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedProofTree {
     pub method: ParsedMethod,
-    pub cases: Vec<(String, ParsedProofTree)>,
+    pub cases: BTreeMap<String, ParsedProofTree>,
 }
 
 /// Parsed proof method.  Mirrors the `ProofMethod` values HS's
@@ -523,7 +524,6 @@ pub enum Term {
     PubLit(String),   // 'foo'
     FreshLit(String), // ~'n'
     NatLit(String),   // %'n'
-    Number(u64),      // bare integer literal (e.g. for %+)
     NumberOne,        // 1
     NatOne,           // 1:nat / %1
     DhNeutral,

@@ -105,7 +105,7 @@ impl Census {
                 p::GoalSpec::Subterm { .. } => self.subterm += 1,
             }
         }
-        for (_, sub) in &tree.cases {
+        for sub in tree.cases.values() {
             self.count_tree(sub);
         }
     }

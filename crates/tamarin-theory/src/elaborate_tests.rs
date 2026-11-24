@@ -1051,7 +1051,7 @@ fn stored_proof_steps_convert_to_internal_goals() {
 
     // The theory's `[AC]` symbols reach the goal sub-parser, so the infix
     // spelling of `add` is that AC application.
-    let step1 = &step0.cases[0].1;
+    let step1 = &step0.cases[""];
     match &step1.method {
         ProofMethod::SolveGoal(Goal::Action(_, fa)) => match &fa.terms[0] {
             Term::App(FunSym::Ac(AcSym::AcFct(sym)), args) => {
@@ -1064,7 +1064,7 @@ fn stored_proof_steps_convert_to_internal_goals() {
     }
 
     // Both endpoints of a chain goal keep their node index.
-    let step2 = &step1.cases[0].1;
+    let step2 = &step1.cases[""];
     assert_eq!(
         step2.method,
         ProofMethod::SolveGoal(Goal::Chain(
@@ -1072,7 +1072,7 @@ fn stored_proof_steps_convert_to_internal_goals() {
             (LVar::new("j", LSort::Node, 0), PremIdx(1)),
         ))
     );
-    assert_eq!(step2.cases[0].1.method, ProofMethod::Sorry(None));
+    assert_eq!(step2.cases[""].method, ProofMethod::Sorry(None));
 }
 
 /// HS `guardedFormula` (Theory/Text/Parser/Formula.hs) `fail`s the

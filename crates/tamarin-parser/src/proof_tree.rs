@@ -28,8 +28,10 @@
 //! A token this grammar does not accept fails the containing theory parse, as
 //! it does in HS.
 
+use std::collections::BTreeMap;
+
 use crate::ast::{ParsedMethod, ParsedProofTree};
-use crate::lexer::{is_ident_char, Lexer};
+use crate::lexer::Lexer;
 use crate::parse_error::ParseContext;
 use crate::parser::{ParseError, Parser};
 
@@ -115,7 +117,7 @@ impl<'a> TreeParser<'a, '_> {
         if self.try_kw("SOLVED") {
             return Ok(ParsedProofTree {
                 method: ParsedMethod::SolvedLeaf,
-                cases: Vec::new(),
+                cases: BTreeMap::new(),
             });
         }
         // finalProof: `by <proofMethod>`
@@ -123,7 +125,7 @@ impl<'a> TreeParser<'a, '_> {
             let m = self.proof_method()?;
             return Ok(ParsedProofTree {
                 method: m,
-                cases: Vec::new(),
+                cases: BTreeMap::new(),
             });
         }
         // interProof: <method> ( case-block | proofSkeleton )
@@ -138,12 +140,15 @@ impl<'a> TreeParser<'a, '_> {
         // interProof method must be followed by a child.
         self.lx.skip_ws();
         if self.peek_kw("case") || self.peek_kw("qed") {
-            let mut cases: Vec<(String, ParsedProofTree)> = Vec::new();
-            // HS: sepBy oneCase "next" <* "qed"
+            // HS: `M.fromList (sepBy oneCase "next" <* "qed")`, so the last
+            // of several cases with one name wins.
+            let mut cases = BTreeMap::new();
             if self.peek_kw("case") {
-                cases.push(self.one_case()?);
+                let (name, sub) = self.one_case()?;
+                cases.insert(name, sub);
                 while self.try_kw("next") {
-                    cases.push(self.one_case()?);
+                    let (name, sub) = self.one_case()?;
+                    cases.insert(name, sub);
                 }
             }
             self.require_kw("qed")?;
@@ -159,7 +164,7 @@ impl<'a> TreeParser<'a, '_> {
         let sub = self.proof_skeleton()?;
         Ok(ParsedProofTree {
             method: m,
-            cases: vec![("".to_string(), sub)],
+            cases: BTreeMap::from([(String::new(), sub)]),
         })
     }
 
@@ -167,7 +172,7 @@ impl<'a> TreeParser<'a, '_> {
     ///   `(,) <$> ("case" *> identifier) <*> proofSkeleton`
     fn one_case(&mut self) -> Result<(String, ParsedProofTree), ParseError> {
         self.require_kw("case")?;
-        let name = self.identifier_extended()?;
+        let name = self.identifier()?;
         let sub = self.proof_skeleton()?;
         Ok((name, sub))
     }
@@ -244,7 +249,7 @@ impl<'a> TreeParser<'a, '_> {
 
     fn diff_one_case(&mut self) -> Result<(), ParseError> {
         self.require_kw("case")?;
-        self.identifier_extended()?;
+        self.identifier()?;
         self.diff_proof_skeleton()
     }
 
@@ -275,15 +280,18 @@ impl<'a> TreeParser<'a, '_> {
 
     // -------- helpers --------
 
-    /// Match a keyword with a word boundary.
+    /// HS `symbol` (Token.hs): the keyword's text, with no word boundary,
+    /// so `caseBase` is `case Base` and `bysorry` is `by sorry`.
     fn try_kw(&mut self, kw: &str) -> bool {
         self.lx.skip_ws();
-        self.lx.try_symbol(kw)
+        let found = self.lx.eat_str(kw);
+        self.lx.skip_ws();
+        found
     }
 
     fn peek_kw(&mut self, kw: &str) -> bool {
         self.lx.skip_ws();
-        self.lx.peek_symbol(kw)
+        self.lx.rest().starts_with(kw)
     }
 
     fn require_kw(&mut self, kw: &str) -> Result<(), ParseError> {
@@ -294,29 +302,12 @@ impl<'a> TreeParser<'a, '_> {
         }
     }
 
-    /// Identifier with extended chars: HS's `identifier` accepts
-    /// alphanum + `_` (Token.hs `identLetter = alphaNum <|> oneOf "_"`)
-    /// and emits names like `Server_ReceiveOTP_NewSession_case_1`.
-    fn identifier_extended(&mut self) -> Result<String, ParseError> {
-        self.lx.skip_ws();
-        let mut s = String::new();
-        match self.lx.peek() {
-            Some(c) if c.is_alphanumeric() || c == '_' => {
-                s.push(c);
-                self.lx.bump();
-            }
-            _ => return Err(self.err_expect("identifier")),
-        }
-        while let Some(c) = self.lx.peek() {
-            if is_ident_char(c) {
-                s.push(c);
-                self.lx.bump();
-            } else {
-                break;
-            }
-        }
-        self.lx.skip_ws();
-        Ok(s)
+    /// HS `identifier` (`T.identifier spthy`, Token.hs): an alphanumeric
+    /// start, then alphanumerics or `_`, and not a reserved name.
+    fn identifier(&mut self) -> Result<String, ParseError> {
+        self.lx
+            .identifier()
+            .ok_or_else(|| self.err_expect("identifier"))
     }
 }
 
