@@ -239,7 +239,7 @@ fn a_runaway_variant_check_stops_when_its_request_is_cancelled() {
 #[test]
 fn a_runaway_variant_check_stops_at_its_search_bound() {
     let mut h = exponents();
-    h.set_variant_check_search(1 << 20);
+    h.set_variant_check_search(1 << 18);
     let started = Instant::now();
     let error = h.variants(&joint_product_and_quotient()).unwrap_err();
     let elapsed = started.elapsed();
