@@ -670,4 +670,57 @@ mod tests {
         }
         assert!(slow.is_empty(), "closure test above 100 ms: {slow:?}");
     }
+
+    /// Time the certifier on the builtin group tables, alone and with the
+    /// rules of pairing, symmetric encryption, signatures and hashing. Each
+    /// line is `table,verdict,fastest ms,median ms` over `CERTIFY_ROUNDS`
+    /// calls (default 7); `CERTIFY_ONLY` selects one table by name.
+    #[test]
+    #[ignore = "timing"]
+    fn certify_timing() {
+        use crate::maude_sig::{
+            bp_maude_sig, dh_maude_sig, hash_maude_sig, signature_maude_sig, sym_enc_maude_sig,
+            xor_maude_sig,
+        };
+        let rounds: usize = std::env::var("CERTIFY_ROUNDS")
+            .ok()
+            .and_then(|r| r.parse().ok())
+            .unwrap_or(7);
+        let only = std::env::var("CERTIFY_ONLY").ok();
+        let user = || {
+            pair_maude_sig()
+                .merge(sym_enc_maude_sig())
+                .merge(signature_maude_sig())
+                .merge(hash_maude_sig())
+        };
+        let groups = [
+            ("dh", dh_maude_sig()),
+            ("dh+bp", dh_maude_sig().merge(bp_maude_sig())),
+            ("dh+xor", dh_maude_sig().merge(xor_maude_sig())),
+            ("xor", xor_maude_sig()),
+        ];
+        for (name, group) in groups {
+            for (suffix, sig) in [("", group.clone()), ("+user", group.merge(user()))] {
+                let label = format!("{name}{suffix}");
+                if only.as_ref().is_some_and(|o| *o != label) {
+                    continue;
+                }
+                let table = session_table(&sig.refresh());
+                let mut times = Vec::new();
+                for _ in 0..rounds {
+                    let start = Instant::now();
+                    let verdict = table.certifies(CERTIFIER_DEPTH).unwrap();
+                    times.push(start.elapsed());
+                    assert_eq!(verdict, table.certified());
+                }
+                times.sort();
+                println!(
+                    "{label},{},{:.2},{:.2}",
+                    table.certified(),
+                    times[0].as_secs_f64() * 1e3,
+                    times[times.len() / 2].as_secs_f64() * 1e3
+                );
+            }
+        }
+    }
 }

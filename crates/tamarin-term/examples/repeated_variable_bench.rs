@@ -70,7 +70,7 @@ fn main() {
     handle.unify(&warm).expect("warming query");
     if args[3] == "variants" {
         // The first variant query of a session builds its rule table, and
-        // native-only certifies the table (about 0.2 s for Diffie-Hellman).
+        // native-only certifies the table.
         handle
             .variants(&product(&sym, "WA*WB"))
             .expect("warming variant query");
