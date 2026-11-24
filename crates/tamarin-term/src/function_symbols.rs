@@ -409,6 +409,13 @@ pub enum FunSym {
 }
 
 impl FunSym {
+    /// A free symbol declared `private`.  The privacy tests of HS
+    /// `containsPrivate` / `isPrivateFunction` (Term/Term.hs) read only
+    /// `NoEq` symbols.
+    pub fn is_private(&self) -> bool {
+        matches!(self, FunSym::NoEq(s) if s.privacy == Privacy::Private)
+    }
+
     pub fn is_ac(&self) -> bool {
         matches!(self, FunSym::Ac(_))
     }

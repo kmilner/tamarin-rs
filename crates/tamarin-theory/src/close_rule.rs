@@ -191,13 +191,9 @@ pub(crate) fn ndc_cache_order(
 
 /// Privacy of a function symbol's declaration.
 fn fun_sym_private(f: &FunSym) -> bool {
-    match f {
-        FunSym::NoEq(s) => s.privacy == Privacy::Private,
-        FunSym::Ac(tamarin_term::function_symbols::AcSym::AcFct(s)) => {
-            s.privacy == Privacy::Private
-        }
-        _ => false,
-    }
+    f.is_private()
+        || matches!(f, FunSym::Ac(tamarin_term::function_symbols::AcSym::AcFct(s))
+            if s.privacy == Privacy::Private)
 }
 
 /// HS `dedNaive`: `fact` is directly present in `terms` or derivable from

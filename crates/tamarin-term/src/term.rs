@@ -356,6 +356,13 @@ pub fn is_pair<A>(t: &Term<A>) -> bool {
     }
 }
 
+/// `True` iff the term is the natural number one `%1`: HS `viewTerm2`'s
+/// `NatOne` (Term/Term/Raw.hs), the nullary application of `natOneSym`.
+pub fn is_nat_one<A>(t: &Term<A>) -> bool {
+    matches!(t, Term::App(FunSym::NoEq(s), args)
+        if args.is_empty() && *s == crate::function_symbols::nat_one_sym())
+}
+
 /// `True` iff the term is a DH product `_*_`. Port of HS `isProduct`
 /// (Term/Term.hs, `viewTerm2 -> FMult _`): top symbol is the AC
 /// multiplication operator.

@@ -34,9 +34,7 @@ use std::sync::{OnceLock, RwLock};
 use tamarin_utils::pretty_hpj::{fcat, fsep, parens, punctuate, Doc, HtmlDocGuard, FLAT_WIDTH};
 use tamarin_utils::FastMap;
 
-use crate::function_symbols::{
-    diff_sym, exp_sym, nat_one_sym, pair_sym, AcSym, CSym, FunSym, EMAP_SYM_STRING,
-};
+use crate::function_symbols::{diff_sym, exp_sym, pair_sym, AcSym, CSym, FunSym, EMAP_SYM_STRING};
 use crate::lterm::{sort_prefix, BVar, LNTerm, LSort, LVar, Name, NameTag};
 use crate::term::{ShowLit, Term};
 use crate::vterm::{Lit, VTerm};
@@ -168,9 +166,7 @@ pub fn pretty_term<L>(pp_lit: &dyn Fn(&L) -> Doc, t: &Term<L>) -> Doc {
                 .beside(pretty_term(pp_lit, &ts[1]))
                 .beside(Doc::text(")"))
         }
-        Term::App(FunSym::NoEq(sym), ts) if ts.is_empty() && *sym == nat_one_sym() => {
-            Doc::text("%1")
-        }
+        t if crate::term::is_nat_one(t) => Doc::text("%1"),
         // The arm carries no arity guard (Term/Term.hs); the arity check
         // lives in `split`, which stops on anything else.
         Term::App(FunSym::NoEq(sym), _) if *sym == pair_sym() => {

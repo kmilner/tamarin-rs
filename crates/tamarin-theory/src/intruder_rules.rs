@@ -1053,18 +1053,7 @@ pub fn construction_rules(
 
 /// `isPrivateFunction` (Term/Term.hs): top-level function symbol is Private.
 pub fn is_private_function(t: &LNTerm) -> bool {
-    use tamarin_term::function_symbols::{NoEqSym, Privacy};
-    use tamarin_term::term::Term;
-    matches!(
-        t,
-        Term::App(
-            FunSym::NoEq(NoEqSym {
-                privacy: Privacy::Private,
-                ..
-            }),
-            _
-        )
-    )
+    matches!(t, tamarin_term::term::Term::App(f, _) if f.is_private())
 }
 
 /// `destructionRulesAC diff fSig` — port of

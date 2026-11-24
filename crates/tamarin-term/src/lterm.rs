@@ -18,7 +18,7 @@
 
 use std::cmp::Ordering;
 
-use crate::function_symbols::{AcSym, FunSym, Privacy};
+use crate::function_symbols::{AcSym, FunSym};
 use crate::term::Term;
 use crate::vterm::{const_term, Lit, VTerm};
 use tamarin_utils::cow::cow_map_vec;
@@ -298,7 +298,7 @@ pub fn get_var(t: &LNTerm) -> Option<&LVar> {
 
 /// `containsPrivate t`: any private NoEq symbol anywhere in `t`?
 pub fn contains_private<A>(t: &Term<A>) -> bool {
-    t.any_fun_sym(|f| matches!(f, FunSym::NoEq(s) if s.privacy == Privacy::Private))
+    t.any_fun_sym(FunSym::is_private)
 }
 
 /// `containsOnlyNoEq t`: does `t` contain only NoEq function symbols (i.e.
@@ -312,9 +312,7 @@ pub fn contains_only_no_eq<A>(t: &Term<A>) -> bool {
 /// `FunSym`, so a symbol differing in arity/constructability/NDC state from
 /// its `funs` entry is not exempted.
 pub fn contains_no_private_except<A>(funs: &[FunSym], t: &Term<A>) -> bool {
-    t.all_fun_syms(|f| {
-        !matches!(f, FunSym::NoEq(s) if s.privacy == Privacy::Private) || funs.contains(f)
-    })
+    t.all_fun_syms(|f| !f.is_private() || funs.contains(f))
 }
 
 /// `isTrivialFunSymTerm t sym`: is `t` an application of `sym` whose

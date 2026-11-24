@@ -663,7 +663,6 @@ fn has_forbidden_kd(sys: &System) -> bool {
 /// literals (they could instantiate to anything) and any private
 /// function symbol.
 fn never_contains_fresh_priv(t: &tamarin_term::lterm::LNTerm) -> bool {
-    use tamarin_term::function_symbols::{FunSym, Privacy};
     use tamarin_term::lterm::{LSort, NameTag};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
@@ -672,11 +671,7 @@ fn never_contains_fresh_priv(t: &tamarin_term::lterm::LNTerm) -> bool {
         Term::Lit(Lit::Con(n)) => !matches!(n.tag, NameTag::Fresh),
         Term::App(sym, args) => {
             // Reject if the head is a private function symbol.
-            let is_private = match sym {
-                FunSym::NoEq(s) => s.privacy == Privacy::Private,
-                _ => false,
-            };
-            if is_private {
+            if sym.is_private() {
                 return false;
             }
             args.iter().all(never_contains_fresh_priv)

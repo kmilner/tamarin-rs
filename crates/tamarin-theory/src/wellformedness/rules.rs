@@ -31,10 +31,10 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_term::function_symbols::{nat_one_sym, AcSym, FunSym};
+use tamarin_term::function_symbols::{AcSym, FunSym};
 use tamarin_term::lterm::{frees, frees_list, sort_of_name, LNTerm, LSort, LVar, Name};
 use tamarin_term::pretty::pretty_nterm;
-use tamarin_term::term::Term;
+use tamarin_term::term::{is_nat_one, Term};
 use tamarin_term::vterm::Lit;
 
 use crate::elaborate::{collect_names, collect_process_names};
@@ -138,12 +138,6 @@ pub fn unbound_report(thy: &Theory) -> Vec<WfError> {
 // =============================================================================
 // Nat sorts
 // =============================================================================
-
-/// HS `viewTerm2`'s `NatOne` (Term/Term/Raw.hs): the
-/// nullary application of `natOneSym`, which the source spells `%1`.
-fn is_nat_one(t: &LNTerm) -> bool {
-    matches!(t, Term::App(FunSym::NoEq(s), ts) if ts.is_empty() && *s == nat_one_sym())
-}
 
 /// HS `isNatVar` (LTerm.hs): a term that is a nat-sorted VARIABLE.
 /// A nat literal such as `%'a'` is a `Con` name and so is not one.

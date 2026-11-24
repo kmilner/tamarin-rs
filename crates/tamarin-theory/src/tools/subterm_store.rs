@@ -578,7 +578,7 @@ fn recurse_subterm(
 /// the later `redElem` / constructor equations.  `None` means neither guard
 /// applies, so the caller continues with [`is_true_false_structural`].
 pub fn nat_guards(small: &LNTerm, big: &LNTerm) -> Option<Option<bool>> {
-    use tamarin_term::function_symbols::{nat_one_sym, AcSym};
+    use tamarin_term::function_symbols::AcSym;
     use tamarin_term::lterm::{flattened_ac_terms, is_msg_var, sort_of_lnterm, LSort};
     let big_nat = sort_of_lnterm(big) == LSort::Nat;
     if !big_nat {
@@ -586,10 +586,7 @@ pub fn nat_guards(small: &LNTerm, big: &LNTerm) -> Option<Option<bool>> {
     }
     let small_flat = flattened_ac_terms(AcSym::NatPlus, small);
     let big_flat = flattened_ac_terms(AcSym::NatPlus, big);
-    let only_ones = small_flat.iter().all(|t| {
-        matches!(t, Term::App(FunSym::NoEq(s), args)
-            if args.is_empty() && *s == nat_one_sym())
-    });
+    let only_ones = small_flat.iter().all(|t| tamarin_term::term::is_nat_one(t));
     if only_ones && small_flat.len() < big_flat.len() {
         return Some(Some(true));
     }
