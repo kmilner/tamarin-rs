@@ -2,7 +2,7 @@
 // Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
-use crate::fact::{apply_subst_fact, Fact};
+use crate::fact::Fact;
 use tamarin_term::subst::apply_vterm;
 use tamarin_term::vterm::var_term;
 
@@ -407,7 +407,7 @@ fn rename_for_render(s: &[LNFact], fact_term: &LNTerm) -> (Vec<LNFact>, LNTerm) 
         .collect();
     let sigma = tamarin_term::subst::Subst::from_list(rename);
     (
-        s.iter().map(|f| apply_subst_fact(&sigma, f)).collect(),
+        tamarin_term::apply::Apply::apply(s.to_vec(), &sigma),
         apply_vterm(&sigma, fact_term.clone()),
     )
 }

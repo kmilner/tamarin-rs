@@ -137,67 +137,6 @@ fn dh_variants_destructors_are_d_exp_or_d_inv_with_limit_0() {
     }
 }
 
-/// The name index behind [`KnownFuns::lookup`] must answer exactly what
-/// HS `lookupFun`'s `find ((== f) . showFunSymName) knownFuns` answers,
-/// INCLUDING on a name collision: `show_fun_sym_name` is not injective —
-/// a user-defined AC symbol and a user-defined NoEq symbol may carry the
-/// same name, and only their `FunSym` variant separates them.
-///
-/// `Ord FunSym` puts `NoEq` before `AC` (FunctionSymbols.hs), so
-/// in `S.toList` order the NoEq symbol is the earlier one and `find`
-/// returns it.  An index built by plain `insert` would return the AC one.
-#[test]
-fn lookup_is_first_wins_when_two_symbols_share_a_name() {
-    use std::collections::BTreeSet;
-    use tamarin_term::function_symbols::{
-        AcFctSym, AcSym, Constructability, NdcState, NoEqSym, Privacy,
-    };
-
-    let noeq_foo = NoEqSym::new(
-        b"foo".to_vec(),
-        2,
-        Privacy::Public,
-        Constructability::Constructor,
-    );
-    let ac_foo = AcFctSym::new(
-        b"foo".to_vec(),
-        Privacy::Public,
-        Constructability::Constructor,
-        NdcState::NotNdc,
-    );
-    assert_eq!(
-        show_fun_sym_name(&FunSym::NoEq(noeq_foo)),
-        show_fun_sym_name(&FunSym::Ac(AcSym::AcFct(ac_foo))),
-        "the two symbols must collide for this test to mean anything"
-    );
-
-    // Same construction `parse_intruder_rules` uses: a `BTreeSet` drained
-    // in order, i.e. HS `S.toList (funSyms msig)`.
-    let syms: Vec<FunSym> = [FunSym::Ac(AcSym::AcFct(ac_foo)), FunSym::NoEq(noeq_foo)]
-        .into_iter()
-        .collect::<BTreeSet<FunSym>>()
-        .into_iter()
-        .collect();
-    let linear_scan = syms
-        .iter()
-        .copied()
-        .find(|fun| show_fun_sym_name(fun) == "foo")
-        .expect("linear scan must find `foo`");
-
-    assert_eq!(
-        KnownFuns::new(syms)
-            .lookup("foo")
-            .expect("index finds `foo`"),
-        linear_scan,
-        "the index must return the same symbol the linear `find` returns"
-    );
-    assert_eq!(
-        linear_scan,
-        FunSym::NoEq(noeq_foo),
-        "`NoEq` sorts before `AC`, so the NoEq `foo` is the first match"
-    );
-}
-
 /// `parse_intruder_rules` is the public entry point with full HS
 /// signature `MaudeSig → ctxtDesc → source → Result`.  Verify it
 /// works directly on a tiny inline source.

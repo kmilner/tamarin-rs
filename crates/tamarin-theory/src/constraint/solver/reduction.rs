@@ -178,80 +178,24 @@ pub fn refine_floor() -> u64 {
 }
 
 impl<'ctx> Reduction<'ctx> {
+    /// A reduction seeded from `avoid sys` (Haskell `runReduction m ctx sys
+    /// (avoid sys)`), lifted to the source-precompute floor when one is set.
     pub fn new(ctx: &'ctx ProofContext, sys: System) -> Self {
-        // HS-faithful `avoid th` (Sources.hs): during source precompute
-        // a thread-local floor (`REFINE_FLOOR`) carries the source-wide
-        // `avoid th` seed into EVERY reduction of the refinement — including
-        // the many `Reduction::new` sub-reductions (simplify, action solve,
-        // etc.) that would otherwise reseed at the per-case `avoid se` and
-        // undershoot HS's single monotonic counter.  0 (default, general
-        // proving path) is a no-op.
-        Self::new_with_floor(ctx, sys, refine_floor())
+        Self::new_inheriting(ctx, sys, 0)
     }
 
-    /// Like [`new`] but seeds the per-Reduction Fresh counter from
-    /// `max(bounds_max(sys), floor)` instead of `bounds_max(sys)` alone.
+    /// Like [`new`](Self::new) but continues an enclosing Reduction's fresh
+    /// counter: the next draw is `max(avoid sys, floor + 1, inherit_next)`.
     ///
-    /// HS-faithful `refineSource` (Sources.hs) seeds EVERY case's
-    /// `runReduction proofStep ctxt se fs` from `fs = avoid th` — the max
-    /// var idx over the WHOLE source `th` (all its cases), NOT the single
-    /// case `se`.  A source whose sibling case is complex (high var idx)
-    /// therefore seeds even its SIMPLE cases from that high `avoid th`.
-    /// RS creates each case's Reduction from `bounds_max(se)` alone
-    /// (per-case `avoid se`), so simple cases in a source with a complex
-    /// sibling seed too low → their solve-time allocations land below HS.
-    /// Source-precompute threads `avoid th` in as `floor`; the general
-    /// proving path passes `floor = 0` (a no-op) via [`new`].
-    pub fn new_with_floor(ctx: &'ctx ProofContext, sys: System, floor: u64) -> Self {
-        // HS-faithful per-Reduction Fresh counter: seed the NEXT-draw value
-        // from `avoid sys` (LTerm.hs, via `avoid_fresh_state` — 0
-        // for a frees-less system, max idx + 1 otherwise).  Matches
-        // `runReduction m ctx sys (avoid sys)`.  `floor` (max-idx units,
-        // source-precompute's `avoid th` whole-source seed) lifts the
-        // next-draw to `floor + 1` when set; `floor == 0` means "no floor"
-        // (the general proving path via [`new`]).
-        let next = avoid_fresh_state(&sys).max(if floor == 0 {
-            0
-        } else {
-            floor.saturating_add(1)
-        });
-        let maude = ctx.maude.with_fresh_counter_next(next);
-        // Ensure the GLOBAL ctx.maude is at least as advanced as our
-        // local high-water start (counter ≥ next).  Any non-Reduction
-        // allocator (`sources.rs`, etc.) that subsequently uses
-        // `ctx.maude` will then start above our base, preventing
-        // cross-allocator collisions on names like `~mw` that both
-        // routes mint.
-        if next > 0 {
-            ctx.maude.ensure_above(next - 1);
-        }
-        Reduction {
-            ctx,
-            sys,
-            maude,
-            changed: ChangeIndicator::Unchanged,
-        }
-    }
-
-    /// Like [`new`] but continues an ENCLOSING Reduction's fresh-counter
-    /// thread: the sub-Reduction's next draw starts at
-    /// `max(avoid_fresh_state(sys), inherit_next)`.
-    ///
-    /// HS-faithful FreshT-threading (`Reduction = StateT System (FreshT
-    /// (DisjT ...))`, Reduction.hs): within one `runReduction` there is
-    /// ONE fresh counter; sub-computations (labelNodeId's exploitPrems,
-    /// insertEdges' solveFactEqs, per-arm simp) all draw from it, including
-    /// draws whose variables never persist in the system (transients:
-    /// Fresh-narrowing witnesses, eq-store simp fold draws).  RS runs these
-    /// sub-computations in child `Reduction`s; seeding a child from
-    /// `bounds_max(sys)` alone silently REWINDS the thread past any
-    /// transient draws, so later draws in the enclosing exec undershoot
-    /// HS — the fresh/witness numbering family on web sequent panes.
-    /// `inherit_next` = the parent's
-    /// `maude.fresh_counter_peek()` at the fork point.
+    /// Haskell's `Reduction = StateT System (FreshT (DisjT ...))` has one
+    /// fresh counter per `runReduction`; the port runs sub-computations in
+    /// child Reductions, and reseeding a child from `avoid sys` alone would
+    /// rewind past draws whose variables never reached the system.
+    /// `inherit_next` is the parent's `maude.fresh_counter_peek()` at the
+    /// fork. The floor is `avoid th` of the source being refined
+    /// (`refineSource`, Sources.hs), carried by [`REFINE_FLOOR`]; 0 means
+    /// none.
     pub fn new_inheriting(ctx: &'ctx ProofContext, sys: System, inherit_next: u64) -> Self {
-        // Respect the source-precompute floor exactly like `new` does
-        // (REFINE_FLOOR is orthogonal to the in-exec thread continuation).
         let floor = refine_floor();
         let next = avoid_fresh_state(&sys)
             .max(if floor == 0 {
@@ -261,6 +205,8 @@ impl<'ctx> Reduction<'ctx> {
             })
             .max(inherit_next);
         let maude = ctx.maude.with_fresh_counter_next(next);
+        // Keep the shared handle above this Reduction's start, so an allocator
+        // drawing from `ctx.maude` directly cannot collide with it.
         if next > 0 {
             ctx.maude.ensure_above(next - 1);
         }
@@ -1552,9 +1498,9 @@ impl<'ctx> Reduction<'ctx> {
                 // vars exist; a frees-less system (lemma ROOT step: HS seeds 0)
                 // must stay unclamped — `ensure_above(0)` would force ≥ 1,
                 // shifting the root existentials (#i/#j/tid/key) +1 vs HS.
-                let avoid_max = self.fresh_var_baseline();
-                if avoid_max > 0 || system_has_any_free_var(&self.sys) {
-                    self.maude.ensure_above(avoid_max);
+                let avoid = avoid_fresh_state(&self.sys);
+                if avoid > 0 {
+                    self.maude.ensure_above(avoid - 1);
                 }
                 let base = self.maude.reserve_idxs(vars.len() as u64);
                 // HS `openGuarded` draws one binder per `(name, sort)` from the
@@ -2557,7 +2503,7 @@ impl<'ctx> Reduction<'ctx> {
 /// the un-narrowed form.  Mirrors Haskell's `someRuleACInst`
 /// (Model/Rule.hs) extracting the `RuleACInst` half
 /// from a `RuleAC`.
-fn canonical_rule_inst(o: &crate::theory::OpenProtoRule) -> RuleACInst {
+pub(crate) fn canonical_rule_inst(o: &crate::theory::OpenProtoRule) -> RuleACInst {
     // Always prefer the abstracted rule (reducible-headed sub-terms
     // narrowed to fresh `z_i` vars) when present, falling back to the
     // raw rule otherwise.
@@ -2575,91 +2521,7 @@ fn canonical_rule_inst(o: &crate::theory::OpenProtoRule) -> RuleACInst {
     }
 }
 
-/// `someRuleACInst`-style rule enumeration (Model/Rule.hs): one canonical
-/// `RuleACInst` per `OpenProtoRule`, paired with its variant disjunction
-/// (`Maybe RuleACConstrs`). Callers should add the disjunction to the
-/// eq-store as a SplitG via `solve_rule_constraints` after labeling the
-/// node. Intruder rules are added with `None` constraints (they have no
-/// variants).
-fn rule_insts_with_constrs<F: Fn(&RuleACInst) -> bool>(
-    open: &[crate::theory::OpenProtoRule],
-    keep: F,
-) -> Vec<(
-    RuleACInst,
-    Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
-)> {
-    let mut out = Vec::new();
-    for o in open {
-        let inst = canonical_rule_inst(o);
-        if !keep(&inst) {
-            continue;
-        }
-        let constrs = if o.variant_substs.is_empty() {
-            None
-        } else {
-            Some(o.variant_substs.clone())
-        };
-        out.push((inst, constrs));
-    }
-    out
-}
-
-/// SplitG-faithful non-silent rule enumeration: returns the
-/// canonical rule per `OpenProtoRule` plus its variant disjunction.
-/// Intruder rules carry `None` (no variants).
-///
-/// HS-faithful ordering: `joinAllRules (ClassifiedRules a b c) = a ++ b ++ c`
-/// where (a, b, c) = (crProtocol, crDestruct, crConstruct).
-/// `crProtocol` is `rulesAC` filtered to rules that are NEITHER
-/// `isConstrRule` NOR `isDestrRule` — and `rulesAC = intruder ++ proto`,
-/// so within `crProtocol` the non-constr-non-destr intruder rules
-/// (ISend, IRecv) come BEFORE the protocol rules.  See
-/// `Theory/Constraint/System.hs`.
-///
-fn non_silent_rule_insts_with_constrs(
-    ctx: &crate::constraint::solver::context::ProofContext,
-) -> Vec<(
-    RuleACInst,
-    Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
-)> {
-    use crate::rule::{is_constr_rule, is_destr_rule};
-
-    // crProtocol arm: intruder-non-cd ++ protocol (rulesAC order).
-    let mut cr_protocol: Vec<(RuleACInst, Option<_>)> = Vec::new();
-    for ir in &ctx.intruder_rules {
-        if ir.actions.is_empty() {
-            continue;
-        }
-        if is_constr_rule(&ir.info) || is_destr_rule(&ir.info) {
-            continue;
-        }
-        cr_protocol.push((intr_rule_to_rule_ac_inst(ir.clone()), None));
-    }
-    cr_protocol.extend(rule_insts_with_constrs(&ctx.rules, |r| {
-        !r.actions.is_empty()
-    }));
-
-    // crDestruct + crConstruct: walk intruder_rules once, partition.
-    let mut cr_destruct: Vec<(RuleACInst, Option<_>)> = Vec::new();
-    let mut cr_construct: Vec<(RuleACInst, Option<_>)> = Vec::new();
-    for ir in &ctx.intruder_rules {
-        if ir.actions.is_empty() {
-            continue;
-        }
-        if is_destr_rule(&ir.info) {
-            cr_destruct.push((intr_rule_to_rule_ac_inst(ir.clone()), None));
-        } else if is_constr_rule(&ir.info) {
-            cr_construct.push((intr_rule_to_rule_ac_inst(ir.clone()), None));
-        }
-    }
-
-    let mut out = cr_protocol;
-    out.extend(cr_destruct);
-    out.extend(cr_construct);
-    out
-}
-
-fn intr_rule_to_rule_ac_inst(ir: crate::rule::IntrRuleAC) -> RuleACInst {
+pub(crate) fn intr_rule_to_rule_ac_inst(ir: crate::rule::IntrRuleAC) -> RuleACInst {
     crate::rule::Rule {
         info: crate::rule::RuleInfo::Intr(ir.info),
         premises: ir.premises,
@@ -2912,78 +2774,11 @@ fn illegal_coerce(p_rule: &RuleACInst, fa_conc: &crate::fact::LNFact) -> bool {
         || tamarin_term::term::is_product(t)
 }
 
-/// SplitG-aware premise-solving rule enumeration: returns the
-/// canonical (possibly abstracted) rule per `OpenProtoRule` plus its
-/// variant disjunction.  Intruder rules carry `None` (no variants).
-/// For K-premises this includes the intruder rules.
-fn premise_solving_rule_insts_with_constrs(
-    ctx: &crate::constraint::solver::context::ProofContext,
-    _fa_prem: &crate::fact::LNFact,
-) -> Vec<(
-    RuleACInst,
-    Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
-)> {
-    // HS-faithful: `solvePremise (crProtocol ++ crConstruct)` iterates
-    // the crProtocol intruder rules (ISend, IRecv) regardless of
-    // conclusion-tag — the `labelNodeId` trace `exploitPrems rule=Send`/
-    // `Recv` fires before the conclusion unification mzero's.
-    //
-    // HS-faithful: HS iterates ALL `crProtocol ++ crConstruct` rules
-    // per `solveGoal kind=Premise ...` (Goals.hs#solveGoal).
-    // With single-threaded HS (`+RTS -N1`) the lazy ListT enumeration is
-    // deterministic and forces all branches.  Mirror that ordering
-    // and inclusion set, as HS partitions it (CloseRule.hs):
-    //   crProtocol  = non-destr, non-constr intruder rules (ISend,
-    //                  IRecv) ++ protocol rules
-    //   crConstruct = constructor intruder rules (Coerce, PubConstr,
-    //                  FreshConstr, NatConstr, ConstrRule(*))
-    // Note: crDestruct (the destructor rules and `IEquality`) is NOT
-    // iterated for Premise goals — those are reserved for `solveChain`
-    // (Goals.hs#solveChain).
-    let mut out: Vec<(
-        RuleACInst,
-        Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
-    )> = Vec::new();
-    // crProtocol intruder rules first.
-    for ir in &ctx.intruder_rules {
-        let is_crprotocol_intr =
-            !crate::rule::is_destr_rule(&ir.info) && !crate::rule::is_constr_rule(&ir.info);
-        if is_crprotocol_intr {
-            out.push((intr_rule_to_rule_ac_inst(ir.clone()), None));
-        }
-    }
-    // Then all protocol rules.
-    out.extend(rule_insts_with_constrs(&ctx.rules, |_| true));
-    // Then crConstruct intruder rules (Coerce, PubConstr, FreshConstr,
-    // NatConstr, ConstrRule).
-    for ir in &ctx.intruder_rules {
-        if crate::rule::is_constr_rule(&ir.info) {
-            out.push((intr_rule_to_rule_ac_inst(ir.clone()), None));
-        }
-    }
-    out
-}
-
-/// Find the largest free LVar index used anywhere in the system, so
-/// fresh-renaming doesn't collide.
-///
-/// **Must scan every field of `System` that holds free LVars** — not
-/// just `nodes`.  In particular, the lemma's free existentials live in
-/// `goals` and `formulas` *before any rule is added*, so a `bounds_max`
-/// that ignores them will return `0`, causing `freshen_rule`'s shift
-/// of `+1` to land directly on the lemma's variable indices.  Result:
-/// the freshly-added rule's vars (e.g. Secrecy_claim's `A:Msg idx 0`
-/// shifted to `idx 1`) collide with the lemma's existential `A:Msg
-/// idx 1`, identifying them by structural equality and conflating
-/// downstream substitutions across what should be distinct variables.
-// Specialised, statically-dispatched walkers for the system's concrete
-// types (`LVar` / `LNTerm` / `LNFact` / `RuleACInst` / `Goal`): the
-// compiler inlines the recursion and folds the per-node "is this idx
-// larger?" check into a register op, avoiding the `&mut dyn FnMut(&LVar)`
-// vtable dispatch a generic `HasFrees::for_each_free` walk pays on every
-// node in this frequently called bound calculation.
+// Max-free-index walkers over the system's concrete types: HS
+// `boundsVarIdx` restricted to the maximum, statically dispatched because
+// `bounds_max` misses walk every node.
 #[inline(always)]
-fn bm_term(t: &tamarin_term::lterm::LNTerm, max: &mut u64) {
+pub(crate) fn bm_term(t: &tamarin_term::lterm::LNTerm, max: &mut u64) {
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
     match t {
@@ -3002,7 +2797,7 @@ fn bm_term(t: &tamarin_term::lterm::LNTerm, max: &mut u64) {
 }
 
 #[inline(always)]
-fn bm_fact(fa: &crate::fact::LNFact, max: &mut u64) {
+pub(crate) fn bm_fact(fa: &crate::fact::LNFact, max: &mut u64) {
     // Per-fact cached max-var-idx fast-path: `Fact::fresh`/`fresh_annotated`
     // compute the EXACT max free-var idx of `fa.terms` in the same
     // `for_each_free` walk that builds the bloom (fact.rs `fact_fingerprints`),
@@ -3049,7 +2844,7 @@ fn bm_lvar(v: &tamarin_term::lterm::LVar, max: &mut u64) {
 }
 
 #[inline(always)]
-fn bm_rule(r: &crate::rule::RuleACInst, max: &mut u64) {
+pub(crate) fn bm_rule(r: &crate::rule::RuleACInst, max: &mut u64) {
     for f in &r.premises {
         bm_fact(f, max);
     }
@@ -3064,19 +2859,28 @@ fn bm_rule(r: &crate::rule::RuleACInst, max: &mut u64) {
     }
 }
 
-// Public re-exports so `system.rs`'s incremental cache bumpers can
-// reuse the inline walkers.
 #[inline(always)]
-pub(crate) fn bm_term_pub(t: &tamarin_term::lterm::LNTerm, max: &mut u64) {
-    bm_term(t, max);
-}
-#[inline(always)]
-pub(crate) fn bm_fact_pub(fa: &crate::fact::LNFact, max: &mut u64) {
-    bm_fact(fa, max);
-}
-#[inline(always)]
-pub fn bm_rule_pub(r: &crate::rule::RuleACInst, max: &mut u64) {
-    bm_rule(r, max);
+pub(crate) fn bm_goal(g: &Goal, max: &mut u64) {
+    match g {
+        Goal::Action(i, fa) => {
+            bm_lvar(i, max);
+            bm_fact(fa, max);
+        }
+        Goal::Premise(p, fa) => {
+            bm_lvar(&p.0, max);
+            bm_fact(fa, max);
+        }
+        Goal::Chain(c, p) => {
+            bm_lvar(&c.0, max);
+            bm_lvar(&p.0, max);
+        }
+        Goal::Subterm((s, t)) => {
+            bm_term(s, max);
+            bm_term(t, max);
+        }
+        // A disjunction's variables are those of its stored formula.
+        Goal::Disj(_) | Goal::Split(_) => {}
+    }
 }
 
 /// Cached entry point for the max free-var idx walk over the system.
@@ -3316,87 +3120,11 @@ fn bounds_max_disable_enabled() -> bool {
 /// at the first substantive applyEqStore call).
 pub fn avoid_fresh_state(sys: &System) -> u64 {
     let bm = bounds_max(sys);
-    if bm > 0 || system_has_any_free_var(sys) {
+    if bm > 0 || tamarin_term::lterm::bounds_var_idx(sys).is_some() {
         bm + 1
     } else {
         0
     }
-}
-
-/// TRUE iff the system has at least one free variable — the existence
-/// companion to `bounds_max`, mirroring HS `boundsVarIdx` returning
-/// `Nothing` (LTerm.hs) over the same traversal domain as
-/// `bounds_max_uncached`.  Only consulted when `bounds_max(sys) == 0`
-/// (in practice: lemma-root systems), so the walk is cheap.
-pub fn system_has_any_free_var(sys: &System) -> bool {
-    use tamarin_term::lterm::HasFrees;
-    // Nodes / edges / less-atoms / last carry LVar node-ids structurally.
-    if !sys.nodes.is_empty()
-        || !sys.edges.is_empty()
-        || !sys.less_atoms.is_empty()
-        || sys.last_atom.is_some()
-    {
-        return true;
-    }
-    fn term_has_var(t: &tamarin_term::lterm::LNTerm) -> bool {
-        let mut seen = false;
-        t.for_each_free(&mut |_| {
-            seen = true;
-        });
-        seen
-    }
-    for c in sys
-        .subterm_store
-        .subterms
-        .iter()
-        .chain(sys.subterm_store.solved_subterms.iter())
-    {
-        if term_has_var(&c.small) || term_has_var(&c.big) {
-            return true;
-        }
-    }
-    for (s, t) in &sys.subterm_store.neg_subterms {
-        if term_has_var(s) || term_has_var(t) {
-            return true;
-        }
-    }
-    for (g, _) in sys.goals.iter() {
-        use crate::constraint::constraints::Goal;
-        match g {
-            // These carry a node-id LVar structurally.
-            Goal::Action(..) | Goal::Premise(..) | Goal::Chain(..) => return true,
-            Goal::Subterm((s, t)) => {
-                if term_has_var(s) || term_has_var(t) {
-                    return true;
-                }
-            }
-            Goal::Disj(_) | Goal::Split(_) => {}
-        }
-    }
-    for f in sys
-        .formulas
-        .iter()
-        .chain(sys.solved_formulas.iter())
-        .chain(sys.lemmas.iter())
-    {
-        if !crate::guarded::is_closed(f) {
-            return true;
-        }
-    }
-    // eq-store: subst dom vars are frees; conj counts DOMAIN keys only
-    // (HS `foldFrees (SubstVFresh) = foldFrees f . M.keys`, matching the
-    // `bounds_max_uncached` walk).
-    if !sys.eq_store().subst.is_empty() {
-        return true;
-    }
-    for d in &sys.eq_store().conj {
-        for s in &d.substs {
-            if s.dom().next().is_some() {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 /// Node-component of the max walk (the `sNodes` map: ids + rule frees).
@@ -3462,26 +3190,7 @@ pub fn bounds_max_rest(sys: &System) -> u64 {
         bm_term(t, &mut max);
     }
     for (g, _) in sys.goals.iter() {
-        use crate::constraint::constraints::Goal;
-        match g {
-            Goal::Action(i, fa) => {
-                bm_lvar(i, &mut max);
-                bm_fact(fa, &mut max);
-            }
-            Goal::Premise(p, fa) => {
-                bm_lvar(&p.0, &mut max);
-                bm_fact(fa, &mut max);
-            }
-            Goal::Chain(c, p) => {
-                bm_lvar(&c.0, &mut max);
-                bm_lvar(&p.0, &mut max);
-            }
-            Goal::Subterm((s, t)) => {
-                bm_term(s, &mut max);
-                bm_term(t, &mut max);
-            }
-            Goal::Disj(_) | Goal::Split(_) => {}
-        }
+        bm_goal(g, &mut max);
     }
     for f in sys
         .formulas
@@ -4315,11 +4024,8 @@ impl<'ctx> Reduction<'ctx> {
                 // SplitG goal via `solve_rule_constraints`
                 // (Reduction.hs). One case per rule at the
                 // action level; variant choice deferred to SplitG.
-                let candidates: Vec<(
-                    RuleACInst,
-                    Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
-                )> = non_silent_rule_insts_with_constrs(self.ctx);
-                if candidates.is_empty() {
+                let candidates = &self.ctx.classified_rules;
+                if candidates.non_silent().next().is_none() {
                     return Ok(GoalCases::Contradictory);
                 }
                 let avoid_max = bounds_max(&self.sys);
@@ -4351,7 +4057,7 @@ impl<'ctx> Reduction<'ctx> {
                             _
                         )
                     );
-                for (rule, constrs) in candidates {
+                for (rule, constrs) in candidates.non_silent() {
                     // Mirror the `labelNodeId` call in Haskell's `solveAction`
                     // (Goals.hs; `labelNodeId` itself is
                     // Reduction.hs) which
@@ -4373,8 +4079,12 @@ impl<'ctx> Reduction<'ctx> {
                     // over its actions. Do that prefix once per rule, then
                     // clone only the completed prefix for compatible actions.
                     self.maude.reset_counter_to(base_counter);
-                    let (renamed, renamed_constrs) =
-                        freshen_rule_with_constrs(rule, constrs, avoid_max, &self.maude);
+                    let (renamed, renamed_constrs) = freshen_rule_with_constrs(
+                        rule.clone(),
+                        constrs.clone(),
+                        avoid_max,
+                        &self.maude,
+                    );
                     let renamed_counter = self.maude.fresh_counter_peek();
                     counter_high_water = counter_high_water.max(renamed_counter);
                     let case_name = rule_case_name(&renamed);
@@ -4581,13 +4291,9 @@ impl<'ctx> Reduction<'ctx> {
             return self.solve_premise_goal(&p_learn, &prem_learn);
         }
         let g = Goal::Premise(*p, fa_prem.clone());
-        // Canonical (abstracted) rule + variant disjunction installed
-        // as SplitG after labeling — Haskell-faithful `someRuleACInst`
-        // path (Model/Rule.hs).
-        let candidates: Vec<(
-            RuleACInst,
-            Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
-        )> = premise_solving_rule_insts_with_constrs(self.ctx, fa_prem);
+        // `solvePremise (crProtocol ++ crConstruct)` (Goals.hs).
+        let rules = &self.ctx.classified_rules;
+        let candidates = rules.protocol.iter().chain(&rules.construct);
         let avoid_max = bounds_max(&self.sys);
         let mut cases: Vec<GoalBranch> = Vec::new();
         // HS FreshT-threading: per pushed case, the branch's final fresh
@@ -4610,7 +4316,7 @@ impl<'ctx> Reduction<'ctx> {
         let vr_idx = self.maude.fresh_idx();
         let post_vr_counter = self.maude.fresh_counter_peek();
         let mut counter_high_water = post_vr_counter;
-        for (rule, constrs) in &candidates {
+        for (rule, constrs) in candidates {
             // Mirror HS `labelNodeId` in solvePremise: HS exploits every
             // candidate rule via Disj-monad, including conclusion
             // tag-mismatched ones (mzero in solveFactEqs).
@@ -4998,19 +4704,13 @@ impl<'ctx> Reduction<'ctx> {
             let vr_idx = self.maude.fresh_idx();
             let post_vr_counter = self.maude.fresh_counter_peek();
             let mut counter_high_water = post_vr_counter;
-            for ir in &self.ctx.intruder_rules {
-                // `rules` is `crDestruct` (Goals.hs): the intruder rules
-                // `isDestrRule` accepts, which are the `DestrRule`s and the
-                // `IEquality` rule (CloseRule.hs).
-                if !crate::rule::is_destr_rule(&ir.info) {
-                    continue;
-                }
-                let ru_inst = intr_rule_to_rule_ac_inst(ir.clone());
+            // `solveChain (crDestruct rules)` (Goals.hs).
+            for (ru_inst, _) in &self.ctx.classified_rules.destruct {
                 // Independent Disj fork: reset to the post-`freshLVar "vr"`
                 // state so this destructor renames from the same base as its
                 // siblings.
                 self.maude.reset_counter_to(post_vr_counter);
-                let ru_renamed = freshen_rule(ru_inst, avoid_max, &self.maude);
+                let ru_renamed = freshen_rule(ru_inst.clone(), avoid_max, &self.maude);
                 counter_high_water = counter_high_water.max(self.maude.fresh_counter_peek());
                 // HS-faithful `labelNodeId` (Reduction.hs) — when
                 // the chain conc's rule (parent) shares a name with this

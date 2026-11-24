@@ -59,19 +59,18 @@ impl SavedSearch<'_> {
         }
         if let Some(remaining) = self.replacements.get_mut(path) {
             let started = Instant::now();
-            let _tls = SearchTlsGuard::install(SearchTlsState {
-                deadline: remaining.and_then(|budget| started.checked_add(budget)),
+            let _deadline =
+                DeadlineGuard::install(remaining.and_then(|budget| started.checked_add(budget)));
+            let mut search = Search {
                 max_depth: limit.saturating_sub(path.len()),
-                depth_limit_hit: false,
-                proof_bound: self.proof_bound,
-                ranking_depth_offset: 0,
-            });
-            let result = re_expand_depth_limited(self.ctx, node, 0);
+                ..Search::new(self.proof_bound, 0)
+            };
+            let result = re_expand_depth_limited(self.ctx, &mut search, node, 0);
             if let Some(budget) = remaining {
                 *budget = budget.saturating_sub(started.elapsed());
             }
             result?;
-            *incomplete |= DEPTH_LIMIT_HIT.with(|flag| flag.get());
+            *incomplete |= search.depth_limit_hit;
             let mut suffix = Vec::new();
             return Ok(find_solved_path(node, &mut suffix).then(|| {
                 let mut selected = path.clone();

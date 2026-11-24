@@ -1601,13 +1601,10 @@ fn non_injective_fact_instances<'a>(
             .contains(&k);
         let incompatible_last = if !ordered && sys.last_atom == Some(k) {
             let rules = node_rules.get_or_init(|| sys.node_rule_map());
-            match (rules.get(&j), rules.get(&k)) {
-                (Some(a), Some(b)) => !crate::rule::unifiable_rule_ac_insts(&ctxt.maude, a, b)
-                    .map_err(|error| {
-                        crate::prove::ProveError::Maude(format!("last-node unification: {error:?}"))
-                    })?,
-                _ => false,
-            }
+            crate::constraint::solver::simplify::non_unifiable_nodes(&ctxt.maude, rules, &j, &k)
+                .map_err(|error| {
+                    crate::prove::ProveError::Maude(format!("last-node unification: {error:?}"))
+                })?
         } else {
             false
         };

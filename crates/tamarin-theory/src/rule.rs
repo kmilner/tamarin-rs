@@ -16,12 +16,12 @@
 
 use tamarin_term::apply::Apply;
 use tamarin_term::function_symbols::{FunSym, NdcState};
-use tamarin_term::lterm::{HasFrees, LNTerm, LVar, Name};
+use tamarin_term::lterm::{HasFrees, LNTerm, LVar};
 use tamarin_term::macro_expand::LNMacro;
 use tamarin_utils::color::Rgb;
 
 use crate::apply::SystemSubst;
-use crate::fact::{apply_macro_in_fact, pretty_lnfact, FactTag, LNFact, Multiplicity};
+use crate::fact::{apply_macro_in_fact, pretty_lnfact, FactSubst, FactTag, LNFact, Multiplicity};
 use crate::formula::{formula_frees_list, SyntacticLNFormula};
 use crate::pretty_hpj::{
     above_blank, fsep, hcat, kw_rule_modulo, kw_variants, line_comment_, multi_comment,
@@ -210,8 +210,8 @@ impl<I: Clone> HasFrees for Rule<I> {
 /// `ProtoRuleACInstInfo`, whose instance (Theory/Model/Rule.hs)
 /// rewrites only the rule name, and a rule name is not a variable
 /// (Theory/Model/Rule.hs) — so the info comes through untouched.
-impl<I: Clone> Apply<SystemSubst<'_>> for Rule<I> {
-    fn apply_changed(&self, subst: &SystemSubst<'_>) -> Option<Self> {
+impl<I: Clone, S: FactSubst> Apply<S> for Rule<I> {
+    fn apply_changed(&self, subst: &S) -> Option<Self> {
         let premises = self.premises.apply_changed(subst);
         let conclusions = self.conclusions.apply_changed(subst);
         let actions = self.actions.apply_changed(subst);
@@ -246,41 +246,6 @@ pub fn proto_rule_e_frees(ru: &ProtoRuleE) -> Vec<LVar> {
     out.sort();
     out.dedup();
     out
-}
-
-/// HS `instance Apply LNSubst i => Apply LNSubst (Rule i)`
-/// (Theory/Model/Rule.hs):
-/// a free substitution applied to every fact and new-var term of a rule.
-///
-/// `info` is carried over untouched, which is what HS's `apply subst i` comes
-/// to for the info types this port instantiates: the `Apply` instances for
-/// `ProtoRuleEInfo` and `IntrRuleACInfo` are literally `apply _ = id`
-/// (Theory/Model/Rule.hs), and `ProtoRuleACInstInfo`'s
-/// (Theory/Model/Rule.hs)
-/// maps only its `ProtoRuleName`, whose own instance is `apply _ = id`
-/// (Theory/Model/Rule.hs).  So a refined `ProtoRuleE` keeps its
-/// original
-/// restriction frees unsubstituted.
-pub(crate) fn apply_subst_rule<I: Clone>(
-    sigma: &tamarin_term::subst::Subst<Name, LVar>,
-    r: &Rule<I>,
-) -> Rule<I> {
-    let app_facts = |fs: &[LNFact]| -> Vec<LNFact> {
-        fs.iter()
-            .map(|f| crate::fact::apply_subst_fact(sigma, f))
-            .collect()
-    };
-    Rule {
-        info: r.info.clone(),
-        premises: app_facts(&r.premises),
-        conclusions: app_facts(&r.conclusions),
-        actions: app_facts(&r.actions),
-        new_vars: r
-            .new_vars
-            .iter()
-            .map(|t| tamarin_term::subst::apply_vterm(sigma, t.clone()))
-            .collect(),
-    }
 }
 
 // =============================================================================
@@ -741,39 +706,17 @@ pub fn get_remaining_rule_applications<I>(rule: &Rule<RuleInfo<I, IntrRuleACInfo
 /// destructor — the loop-breaker that bounds chain extensions of
 /// the same rule.
 pub fn set_remaining_rule_applications<I>(
-    rule: Rule<RuleInfo<I, IntrRuleACInfo>>,
+    mut rule: Rule<RuleInfo<I, IntrRuleACInfo>>,
     n: i64,
 ) -> Rule<RuleInfo<I, IntrRuleACInfo>> {
-    let Rule {
-        info,
-        premises,
-        conclusions,
-        actions,
-        new_vars,
-    } = rule;
-    let info = match info {
-        RuleInfo::Intr(IntrRuleACInfo::DestrRule {
-            name,
-            rhs_is_proper_subterm,
-            rhs_is_constant,
-            funs,
-            ..
-        }) => RuleInfo::Intr(IntrRuleACInfo::DestrRule {
-            name,
-            remaining_applications: n,
-            rhs_is_proper_subterm,
-            rhs_is_constant,
-            funs,
-        }),
-        other => other,
-    };
-    Rule {
-        info,
-        premises,
-        conclusions,
-        actions,
-        new_vars,
+    if let RuleInfo::Intr(IntrRuleACInfo::DestrRule {
+        remaining_applications,
+        ..
+    }) = &mut rule.info
+    {
+        *remaining_applications = n;
     }
+    rule
 }
 
 /// Get the rule name for `RuleACInst` / `RuleAC` shapes — used to
@@ -1081,7 +1024,6 @@ pub fn equal_subset_rule_up_to_renaming(
     r2: &IntrRuleAC,
 ) -> bool {
     use tamarin_term::rewriting::Equal;
-    use tamarin_term::subst::apply_vterm;
     use tamarin_term::subst_vfresh::LNSubstVFresh;
 
     // `unifyLNFactEqs [Equal (head co2) (head co1)]`.  HS's `head` `error`s on
@@ -1149,21 +1091,8 @@ pub fn equal_subset_rule_up_to_renaming(
             counter += n;
             b
         });
-        let subst_prems = |fs: &[LNFact]| -> Vec<LNFact> {
-            fs.iter()
-                .map(|f| {
-                    // subst rebuild — frees can change; recompute the bloom.
-                    let terms: Vec<LNTerm> = f
-                        .terms
-                        .iter()
-                        .map(|t| apply_vterm(&sigma, t.clone()))
-                        .collect();
-                    LNFact::fresh_annotated(f.tag, f.annotations.clone(), terms)
-                })
-                .collect()
-        };
-        let spr1 = subst_prems(&r1.premises);
-        let srpr2 = subst_prems(&r2.premises);
+        let spr1 = r1.premises.clone().apply(&sigma);
+        let srpr2 = r2.premises.clone().apply(&sigma);
         if is_subset_of(&srpr2, &spr1) {
             return true;
         }
@@ -1179,111 +1108,83 @@ pub fn equal_subset_rule_up_to_renaming(
 use tamarin_term::maude_proc::{MaudeError, MaudeHandle};
 use tamarin_term::rewriting::Equal;
 
-/// `unifyLNFactEqs`: AC-unify a list of fact equalities. Returns
-/// the substitution candidates (one inner Vec per disjunct, holding
-/// `(var, term)` bindings). If any pair has mismatched tags or
-/// arities, returns `Ok(vec![])`.
+/// The term equations of fact equations, or `None` when a pair differs in tag
+/// or arity.  HS `unifyLNFactEqs` (Theory/Model/Fact.hs) unifies the
+/// `fAppList`s of the facts' terms only when every tag agrees, and lists of
+/// different lengths have no unifier.
+fn fact_term_eqs<'a>(
+    pairs: impl IntoIterator<Item = (&'a LNFact, &'a LNFact)>,
+) -> Option<Vec<Equal<LNTerm>>> {
+    let mut eqs = Vec::new();
+    for (a, b) in pairs {
+        if a.tag != b.tag || a.terms.len() != b.terms.len() {
+            return None;
+        }
+        eqs.extend(a.terms.iter().zip(b.terms.iter()).map(|(x, y)| Equal {
+            lhs: x.clone(),
+            rhs: y.clone(),
+        }));
+    }
+    Some(eqs)
+}
+
+/// HS `unifyLNFactEqs` (Theory/Model/Fact.hs): the AC unifiers of a list
+/// of fact equations, one `(var, term)` list per unifier.
 pub fn unify_ln_fact_eqs(
     maude: &MaudeHandle,
     eqs: &[Equal<LNFact>],
 ) -> Result<Vec<Vec<(LVar, LNTerm)>>, MaudeError> {
-    let mut term_eqs = Vec::new();
-    for e in eqs {
-        if e.lhs.tag != e.rhs.tag {
-            return Ok(Vec::new());
-        }
-        if e.lhs.terms.len() != e.rhs.terms.len() {
-            return Ok(Vec::new());
-        }
-        for (a, b) in e.lhs.terms.iter().zip(e.rhs.terms.iter()) {
-            term_eqs.push(Equal {
-                lhs: a.clone(),
-                rhs: b.clone(),
-            });
-        }
+    match fact_term_eqs(eqs.iter().map(|e| (&e.lhs, &e.rhs))) {
+        None => Ok(Vec::new()),
+        Some(term_eqs) if term_eqs.is_empty() => Ok(vec![Vec::new()]),
+        Some(term_eqs) => maude.unify(&term_eqs),
     }
-    if term_eqs.is_empty() {
-        // No constraints → unique trivial unifier (empty substitution).
-        return Ok(vec![Vec::new()]);
-    }
-    maude.unify(&term_eqs)
 }
 
-/// `unifiableLNFacts`: are two facts AC-unifiable?  Routes through
-/// the memoised `maude.unifiable` path — the boolean result is
-/// context-free, so caching avoids redundant subprocess round-trips
-/// when the simplifier re-checks the same pairs across iterations.
+/// The verdict on a fact-equation list: unifiable iff it has a unifier.
+fn unifiable_fact_eqs(
+    maude: &MaudeHandle,
+    term_eqs: Option<Vec<Equal<LNTerm>>>,
+) -> Result<bool, MaudeError> {
+    match term_eqs {
+        None => Ok(false),
+        Some(eqs) if eqs.is_empty() => Ok(true),
+        Some(eqs) => maude.unifiable(&eqs),
+    }
+}
+
+/// HS `unifiableLNFacts` (Theory/Model/Fact.hs), through the memoised
+/// `maude.unifiable`.
 pub fn unifiable_ln_facts(
     maude: &MaudeHandle,
     f1: &LNFact,
     f2: &LNFact,
 ) -> Result<bool, MaudeError> {
-    if f1.tag != f2.tag {
-        return Ok(false);
-    }
-    if f1.terms.len() != f2.terms.len() {
-        return Ok(false);
-    }
-    let eqs: Vec<Equal<LNTerm>> = f1
-        .terms
-        .iter()
-        .zip(f2.terms.iter())
-        .map(|(a, b)| Equal {
-            lhs: a.clone(),
-            rhs: b.clone(),
-        })
-        .collect();
-    if eqs.is_empty() {
-        return Ok(true);
-    }
-    maude.unifiable(&eqs)
+    unifiable_fact_eqs(maude, fact_term_eqs([(f1, f2)]))
 }
 
-/// `unifiableRuleACInsts`: are two rule instances AC-unifiable?
-/// Routes through `maude.unifiable` for memoisation; the shape-
-/// mismatch fast-path rejects rules whose info, premise count or
-/// conclusion count differ before building any equalities.
+/// HS `unifiableRuleACInsts` / `unifyRuleACInstEqs` (Theory/Model/Rule.hs),
+/// through the memoised `maude.unifiable`.
 pub fn unifiable_rule_ac_insts(
     maude: &MaudeHandle,
     r1: &RuleACInst,
     r2: &RuleACInst,
 ) -> Result<bool, MaudeError> {
-    if r1.info != r2.info {
-        return Ok(false);
-    }
-    if r1.premises.len() != r2.premises.len() {
-        return Ok(false);
-    }
-    if r1.conclusions.len() != r2.conclusions.len() {
-        return Ok(false);
-    }
-    let mut eqs: Vec<Equal<LNTerm>> = Vec::new();
-    for (a, b) in r1.premises.iter().zip(r2.premises.iter()) {
-        if a.tag != b.tag || a.terms.len() != b.terms.len() {
-            return Ok(false);
-        }
-        for (ta, tb) in a.terms.iter().zip(b.terms.iter()) {
-            eqs.push(Equal {
-                lhs: ta.clone(),
-                rhs: tb.clone(),
-            });
-        }
-    }
-    for (a, b) in r1.conclusions.iter().zip(r2.conclusions.iter()) {
-        if a.tag != b.tag || a.terms.len() != b.terms.len() {
-            return Ok(false);
-        }
-        for (ta, tb) in a.terms.iter().zip(b.terms.iter()) {
-            eqs.push(Equal {
-                lhs: ta.clone(),
-                rhs: tb.clone(),
-            });
-        }
-    }
-    if eqs.is_empty() {
+    if r1 == r2 {
         return Ok(true);
     }
-    maude.unifiable(&eqs)
+    if r1.info != r2.info
+        || r1.premises.len() != r2.premises.len()
+        || r1.conclusions.len() != r2.conclusions.len()
+    {
+        return Ok(false);
+    }
+    let pairs = r1
+        .premises
+        .iter()
+        .zip(&r2.premises)
+        .chain(r1.conclusions.iter().zip(&r2.conclusions));
+    unifiable_fact_eqs(maude, fact_term_eqs(pairs))
 }
 
 // =============================================================================

@@ -59,7 +59,9 @@ use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::vterm::var_term;
 
 use crate::constraint::solver::context::IntrRuleCache;
-use crate::fact::{fresh_fact, ku_fact, out_fact, proto_fact, LNFact, Multiplicity};
+use crate::fact::{
+    fresh_fact, ku_fact, nat_to_fresh_var, out_fact, proto_fact, LNFact, Multiplicity,
+};
 use crate::formula::{exists_var, lift_free, LNFormula};
 use crate::rule::{ProtoRuleE, ProtoRuleEInfo};
 use crate::theory::{Theory, TraceQuantifier};
@@ -263,19 +265,6 @@ fn rule_free_vars(r: &ProtoRuleE) -> Vec<LVar> {
         collect(f);
     }
     seen.into_iter().collect()
-}
-
-/// HS `lvarToLnterm`: retype an LSortNat var to LSortFresh; otherwise keep
-/// the var's sort unchanged (Theory/Model/Fact.hs).
-fn nat_to_fresh_var(v: LVar) -> LVar {
-    if v.sort == LSort::Nat {
-        LVar {
-            sort: LSort::Fresh,
-            ..v
-        }
-    } else {
-        v
-    }
 }
 
 /// Rename a premise term's variables for the probe: a free var becomes its

@@ -38,7 +38,7 @@ basic_precompute	cli_flags_basic.spthy	!=basic_lemma_reach	--derivcheck-timeout=
 # ---- --bound reaching the PARALLEL sibling expansion.  cli_flags_tutorial is
 # a byte-copy of the submodule's examples/Tutorial.spthy: its proofs fan out
 # (>= 2 cases under Dfs), so `-b=6` cuts inside rayon workers — the pin that
-# fails if `PROOF_BOUND` is not re-seeded per worker (search.rs) -------------
+# fails if a worker's `Search` copy loses `proof_bound` (search.rs) ----------
 tutorial_plain	cli_flags_tutorial.spthy	-	--derivcheck-timeout=300 --prove
 tutorial_bound_6	cli_flags_tutorial.spthy	!=tutorial_plain	--derivcheck-timeout=300 --prove -b=6
 # ---- --stop-on-trace (exists-trace search: dfs cuts, none explores; bfs and

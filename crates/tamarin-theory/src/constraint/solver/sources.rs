@@ -947,68 +947,6 @@ fn k_conc_term_for_chain(
     fact.terms.first().cloned()
 }
 
-/// Structural equality modulo fresh variable renaming.  Mirrors HS
-/// `eqModuloFreshnessNoAC` (LTerm.hs).  Two terms are equal iff
-/// they're structurally identical after renaming every free var to a
-/// fresh canonical name preserving ONLY sort.
-// alpha-eq var->index maps (outer scope); probed by key only, never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-fn eq_modulo_freshness_no_ac(
-    a: &tamarin_term::lterm::LNTerm,
-    b: &tamarin_term::lterm::LNTerm,
-) -> bool {
-    use std::collections::HashMap;
-    use tamarin_term::lterm::LVar;
-    // alpha-eq var->index maps (go helper); probed by key only, never iterated;
-    // std kept (byte-inert) — iteration order never reaches output.
-    #[allow(clippy::disallowed_types)]
-    fn go(
-        a: &tamarin_term::lterm::LNTerm,
-        b: &tamarin_term::lterm::LNTerm,
-        ma: &mut HashMap<LVar, u64>,
-        mb: &mut HashMap<LVar, u64>,
-        next: &mut u64,
-    ) -> bool {
-        use tamarin_term::term::Term;
-        use tamarin_term::vterm::Lit;
-        match (a, b) {
-            (Term::Lit(Lit::Var(va)), Term::Lit(Lit::Var(vb))) => {
-                if va.sort != vb.sort {
-                    return false;
-                }
-                let ka = ma.get(va).copied();
-                let kb = mb.get(vb).copied();
-                match (ka, kb) {
-                    (Some(x), Some(y)) => x == y,
-                    (None, None) => {
-                        let k = *next;
-                        *next += 1;
-                        ma.insert(*va, k);
-                        mb.insert(*vb, k);
-                        true
-                    }
-                    _ => false,
-                }
-            }
-            (Term::Lit(Lit::Con(ca)), Term::Lit(Lit::Con(cb))) => ca == cb,
-            (Term::App(oa, xs), Term::App(ob, ys)) => {
-                oa == ob
-                    && xs.len() == ys.len()
-                    && xs
-                        .iter()
-                        .zip(ys.iter())
-                        .all(|(x, y)| go(x, y, ma, mb, next))
-            }
-            _ => false,
-        }
-    }
-    let mut ma = HashMap::new();
-    let mut mb = HashMap::new();
-    let mut next = 0;
-    go(a, b, &mut ma, &mut mb, &mut next)
-}
-
 /// Refine one case until its surviving branches have no safe goal or eligible
 /// source left to apply. Each branch inherits the remaining open-chain limit.
 /// The flag requests another saturation pass if any surviving branch took a step.
@@ -1156,17 +1094,19 @@ fn solve_all_safe_goals(
         // `lastChainTerm` (Sources.hs) excludes a chain whose conclusion is
         // equal modulo freshness to the last solved chain's conclusion. This
         // bounds repeated destructor expansion during saturation.
+        let last_canon = last_chain_term
+            .clone()
+            .map(crate::tools::abstract_interpretation::canonicalize_freshness_no_ac);
         let filtered_goals: Vec<(Goal, bool)> = goals
             .iter()
             .filter(|(g, _)| {
                 match g {
                     Goal::Chain(c, _) => {
-                        let this_t = k_conc_term_for_chain(&red.sys, c);
                         // HS: `Just True /= liftM2 eqModuloFreshnessNoAC last this`
-                        // Drop iff `last` is Some AND `this` is Some AND
-                        // they're equal-mod-freshness.  Keep otherwise.
-                        match (last_chain_term.as_ref(), this_t.as_ref()) {
-                            (Some(lt), Some(tt)) => !eq_modulo_freshness_no_ac(lt, tt),
+                        match (&last_canon, k_conc_term_for_chain(&red.sys, c)) {
+                            (Some(lt), Some(tt)) => {
+                                *lt != crate::tools::abstract_interpretation::canonicalize_freshness_no_ac(tt)
+                            }
                             _ => true,
                         }
                     }
@@ -2455,16 +2395,7 @@ impl PartialOrd for Seg {
 
 impl Ord for Seg {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let a = self.as_str().as_bytes();
-        let b = other.as_str().as_bytes();
-        if std::ptr::eq(a, b) {
-            return std::cmp::Ordering::Equal;
-        }
-        match (a.first(), b.first()) {
-            (Some(x), Some(y)) if x != y => x.cmp(y),
-            _ if a.len().min(b.len()) <= 1 => a.len().cmp(&b.len()),
-            _ => a.cmp(b),
-        }
+        self.as_str().cmp(other.as_str())
     }
 }
 
@@ -2503,28 +2434,6 @@ fn var_occurrences_nodes(
                 CSym::EMap => Seg::Static("C EMap"),
             },
             FunSym::List => Seg::Static("List"),
-        }
-    }
-    // HS `show (factTag fa)` (derived `Show FactTag`, Theory/Model/Fact.hs).
-    //   ProtoFact mult name arity -> "ProtoFact <mult> \"<name>\" <arity>"
-    //   FreshFact/OutFact/InFact/KUFact/KDFact/DedFact/TermFact (nullary)
-    fn fact_tag_occ_ctx(f: &crate::fact::LNFact) -> Seg {
-        use crate::fact::{FactTag, Multiplicity};
-        match &f.tag {
-            FactTag::Proto(m, name, arity) => {
-                let mstr = match m {
-                    Multiplicity::Persistent => "Persistent",
-                    Multiplicity::Linear => "Linear",
-                };
-                Seg::shared(&format!("ProtoFact {} {:?} {}", mstr, name, arity))
-            }
-            FactTag::Fresh => Seg::Static("FreshFact"),
-            FactTag::Out => Seg::Static("OutFact"),
-            FactTag::In => Seg::Static("InFact"),
-            FactTag::Ku => Seg::Static("KUFact"),
-            FactTag::Kd => Seg::Static("KDFact"),
-            FactTag::Ded => Seg::Static("DedFact"),
-            FactTag::Term => Seg::Static("TermFact"),
         }
     }
     // ctx is a stack-allocated parent-linked chain (HS's persistent
@@ -2624,7 +2533,9 @@ fn var_occurrences_nodes(
         out: &mut BTreeMap<LVar, BTreeSet<Vec<Seg>>>,
     ) {
         let tag_ctx = Ctx {
-            seg: fact_tag_occ_ctx(f),
+            seg: Seg::shared(&crate::constraint::solver::tactic_show::show_fact_tag(
+                &f.tag,
+            )),
             parent: Some(ctx),
         };
         for (i, t) in f.terms.iter().enumerate() {

@@ -1058,7 +1058,7 @@ fn precompute_only_with_prove_pins_the_stats_document() {
 /// `-b/--bound=N` cutting inside PARALLEL sibling expansion.  Tutorial's
 /// proofs fan out (`n_cases >= 2` under Dfs), so with default
 /// `--processors` the `-b=6` cut fires inside rayon workers — the pin that
-/// fails if `PROOF_BOUND` is not re-seeded per worker like `MAX_DEPTH`
+/// fails if a worker's `Search` copy loses the parent's `proof_bound`
 /// (search.rs; basic_bound_1 cannot reach that branch: its cut fires at
 /// depth 1, before any case list exists).
 #[test]

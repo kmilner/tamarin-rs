@@ -43,6 +43,7 @@
 //! pipeline of the same theories is kept under `cfg(test)` as the
 //! differential reference for the structural builders (see the tests).
 
+use tamarin_term::apply::Apply;
 use tamarin_term::function_symbols::{FunSym, NdcState, Privacy};
 use tamarin_term::lterm::{BVar, HasFrees, LNTerm, LSort, LVar};
 use tamarin_term::maude_proc::MaudeHandle;
@@ -57,7 +58,7 @@ use crate::fact::{Fact, FactTag, LNFact, Multiplicity};
 use crate::formula::{exists_var, for_all_var, lift_free, BLNTerm, LNFormula, ProtoFormula};
 use crate::guarded::Guarded;
 use crate::rule::{
-    apply_subst_rule, get_conc_fact, get_deconstr_rule_kd_prem, get_deconstr_rule_prems_tail,
+    get_conc_fact, get_deconstr_rule_kd_prem, get_deconstr_rule_prems_tail,
     get_destr_rule_function, IntrRuleAC, IntrRuleACInfo,
 };
 
@@ -618,7 +619,7 @@ fn bound_to_one(rule: &IntrRuleAC, checked_fun: Option<FunSym>) -> IntrRuleAC {
 
 /// The `boundToOne`-mapped intruder cache of one `apply_ndc_check` group.
 /// Every `chainedRulesDeductionTest` of a group maps the cache with the same
-/// `checked_fun` — the group's head function, which `apply_subst_rule`
+/// `checked_fun` — the group's head function, which applying the unifier
 /// leaves untouched — so the mapping is shared by the whole group and is
 /// built on the first pair that actually reaches a deduction check.
 struct BoundToOneCache<'a> {
@@ -706,7 +707,7 @@ struct ChainablePair<'a> {
     r: &'a IntrRuleAC,
     fresh_inst1: IntrRuleAC,
     unifs: Vec<Vec<(LVar, LNTerm)>>,
-    counter: u64,
+    fresh: tamarin_utils::fresh::FastFreshState,
 }
 
 /// Chainability phase of HS `ndcCheck`: `None` when the pair cannot chain
@@ -741,15 +742,12 @@ fn ndc_check_prepare<'a>(
     }
     // The fresh supply `applySubsts` threads across the unifier list,
     // avoiding both rules.
-    let mut counter: u64 = 0;
-    let mut track = |v: &LVar| counter = counter.max(v.idx + 1);
-    r.for_each_free(&mut track);
-    fresh_inst1.for_each_free(&mut track);
+    let fresh = tamarin_term::lterm::avoid(&(r.clone(), fresh_inst1.clone()));
     Ok(Some(ChainablePair {
         r,
         fresh_inst1,
         unifs,
-        counter,
+        fresh,
     }))
 }
 
@@ -766,22 +764,18 @@ fn ndc_check_eval(
         r,
         fresh_inst1,
         unifs,
-        mut counter,
+        mut fresh,
     } = pair;
     for u_pairs in unifs {
         // `applySubsts subst r freshInst1` — freshToFree this unifier off
         // the pair's supply, which the whole list shares in order.
         let s_fresh = LNSubstVFresh::from_list(u_pairs);
-        let sigma = s_fresh.fresh_to_free_avoiding(|n| {
-            let b = counter;
-            counter += n;
-            b
-        });
+        let sigma = s_fresh.fresh_to_free_avoiding(|n| fresh.fresh_idents(n));
         if !chained_rules_deduction_test(
             maude,
             intr_modified,
-            &apply_subst_rule(&sigma, r),
-            &apply_subst_rule(&sigma, &fresh_inst1),
+            &r.clone().apply(&sigma),
+            &fresh_inst1.clone().apply(&sigma),
         )? {
             return Ok(false);
         }

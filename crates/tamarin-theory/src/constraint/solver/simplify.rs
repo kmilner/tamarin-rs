@@ -122,7 +122,7 @@ fn merge_last_injective_fact_nodes(
 /// Start_before_Loop.
 fn simp_post_loop_steps(red: &mut Reduction) {
     exploit_unique_msg_order(red);
-    remove_solved_split_goals_pass(red);
+    red.remove_solved_split_goals();
     add_non_injective_fact_instances(red);
 }
 
@@ -308,6 +308,21 @@ fn complete_solve(
     })
 }
 
+/// HS `nonUnifiableNodes i j` (Simplify.hs, Contradictions.hs): both nodes
+/// exist and their rule instances do not unify, so they are distinct in every
+/// model.
+pub(crate) fn non_unifiable_nodes(
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    rules: &crate::constraint::system::NodeRuleMap<'_>,
+    i: &crate::constraint::constraints::NodeId,
+    j: &crate::constraint::constraints::NodeId,
+) -> Result<bool, tamarin_term::maude_proc::MaudeError> {
+    match (rules.get(i), rules.get(j)) {
+        (Some(a), Some(b)) => Ok(!crate::rule::unifiable_rule_ac_insts(maude, a, b)?),
+        _ => Ok(false),
+    }
+}
+
 /// Direct port of Haskell `addNonInjectiveFactInstances`
 /// (Simplify.hs): collects (smaller, larger) pairs from
 /// `nonInjectiveFactInstances` (Simplify.hs) and inserts each as
@@ -347,31 +362,12 @@ fn non_injective_fact_instances_pairs(
     let node_rule_map = sys.node_rule_map();
     let lookup_node =
         |id: &NodeId| -> Option<&crate::rule::RuleACInst> { node_rule_map.get(id).copied() };
-    let non_unifiable_nodes = |i: &NodeId, j: &NodeId| -> bool {
-        let (Some(ri), Some(rj)) = (lookup_node(i), lookup_node(j)) else {
-            return false;
-        };
-        match crate::rule::unifiable_rule_ac_insts(&ctxt.maude, ri, rj) {
-            Ok(true) => false,
-            Ok(false) => true,
-            Err(_) => false,
-        }
+    let non_unifiable_nodes = |i: &NodeId, j: &NodeId| {
+        non_unifiable_nodes(&ctxt.maude, &node_rule_map, i, j).unwrap_or(false)
     };
-    // Haskell-faithful: iterate edges and nodes in Ord order
-    // (`S.toList sEdges`, `M.keys sNodes`).  Our Vec preserves
-    // insertion order; sort to match so the order of generated Less
-    // atoms (and therefore downstream simplify-loop behaviour) is
-    // deterministic and aligned with Haskell.
-    let mut edges_sorted: Vec<&crate::constraint::constraints::Edge> = sys.edges.iter().collect();
-    edges_sorted.sort_by(|a, b| {
-        (&a.src.0, a.src.1 .0, &a.tgt.0, a.tgt.1 .0)
-            .cmp(&(&b.src.0, b.src.1 .0, &b.tgt.0, b.tgt.1 .0))
-    });
-    let mut nodes_sorted: Vec<&(
-        crate::constraint::constraints::NodeId,
-        crate::rule::RuleACInst,
-    )> = sys.nodes.iter().collect();
-    nodes_sorted.sort_by_key(|a| a.0);
+    // HS walks `S.toList sEdges` and `M.toList sNodes`.
+    let edges_sorted = sys.edges_in_set_order();
+    let nodes_sorted = sys.nodes_in_map_order();
     // The `alwaysBefore` adjacency is invariant across the edge/node loop
     // (`sys` is read-only), so build it once and query with
     // `always_before_with` instead of rebuilding the relation per pair.
@@ -513,18 +509,8 @@ fn exploit_unique_msg_order(red: &mut Reduction) {
 /// out of disjunctions or short-circuiting conjunctions.
 fn eval_formula_atoms_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::prove::ProveError> {
     use crate::guarded::{simplify_guarded_with, Guarded};
-    // HS-faithful: `evalFormulaAtoms` iterates `S.toList sFormulas` —
-    // Simplify.hs — ascending Guarded Ord.  Rust's Vec is in
-    // insertion order; sort first to match HS's iteration.
-    // HS-faithful: collect references to the formulas, sort the references
-    // by the derived `Guarded` `Ord` (HS `deriving Ord`, Guarded.hs),
-    // and clone only the ones that actually change (below).  In a converged
-    // fixpoint most formulas are unchanged, so cloning every `Guarded`
-    // up-front (a deep recursive AST clone) is wasted work.  Iteration order
-    // is preserved (same comparator, same set), so the change list is
-    // byte-identical.
-    let mut formulas: Vec<&Guarded> = red.sys.formulas.iter().map(|f| f.as_ref()).collect();
-    formulas.sort();
+    // HS iterates `Stored.toList sFormulas`.
+    let formulas = crate::constraint::system::formulas_in_set_order(&red.sys.formulas);
     // HS-faithful: `evalFormulaAtoms` builds a CHANGE LIST via
     // `applyChangeList`'s list comprehension (Simplify.hs) where
     // every `fm'` is computed from the SINGLE `valuation` captured at
@@ -668,28 +654,11 @@ fn partial_atom_valuation_with(
     atom: &crate::atom::Atom<tamarin_term::lterm::LNTerm>,
 ) -> Option<bool> {
     use crate::atom::ProtoAtom;
-    // `nonUnifiableNodes i j`: i and j must be distinct in every model.
-    // Returns true iff both nodes are in the system *and* their rule
-    // instances do not AC-unify.  Mirrors Haskell's helper of the same
-    // name in `Theory.Constraint.Solver.Simplify`.  Node-id → rule resolution
-    // uses the `node_rule` map built ONCE by the caller (sys.nodes is a
-    // unique-keyed map, so a lookup returns the same rule a linear scan would).
-    let non_unifiable_nodes = |i: &crate::constraint::constraints::NodeId,
-                               j: &crate::constraint::constraints::NodeId|
-     -> bool {
-        let ri = node_rule.get(i).copied();
-        let rj = node_rule.get(j).copied();
-        match (ri, rj) {
-            (Some(a), Some(b)) => {
-                match crate::rule::unifiable_rule_ac_insts(maude, a, b) {
-                    Ok(true) => false,
-                    Ok(false) => true,
-                    Err(_) => false, // be conservative on Maude errors
-                }
-            }
-            _ => false,
-        }
-    };
+    // Maude errors count as unifiable.
+    let non_unifiable_nodes =
+        |i: &crate::constraint::constraints::NodeId, j: &crate::constraint::constraints::NodeId| {
+            non_unifiable_nodes(maude, node_rule, i, j).unwrap_or(false)
+        };
     // HS-faithful `isInTrace` (System.hs):
     //   isInTrace sys i =
     //        i `M.member` sNodes
@@ -973,34 +942,32 @@ fn insert_implied_formulas_pass(
     // (Guarded Ord ascending) — Simplify.hs:
     //   clause <- (S.toList $ get sFormulas sys) ++
     //             (S.toList $ get sLemmas sys)
-    let mut sorted_universals_src: Vec<&Guarded> =
-        red.sys.formulas.iter().map(|f| f.as_ref()).collect();
-    sorted_universals_src.sort();
-    let mut sorted_lemmas_src: Vec<&Guarded> = red.sys.lemmas.iter().map(|f| f.as_ref()).collect();
-    sorted_lemmas_src.sort();
-    let universals: Vec<(Vec<LVar>, Vec<AAtom<LNTerm>>, Guarded)> = sorted_universals_src
-        .iter()
-        .chain(sorted_lemmas_src.iter())
-        .copied()
-        .filter(|formula| stable || !has_existential(formula))
-        .filter_map(|f| match f {
-            Guarded::GGuarded {
-                qua: Quantifier::All,
-                ..
-            } => {
-                let (_, xs, new_guards, new_body) = crate::guarded::open_guarded(f, &mut fresh)
-                    .expect("the arm matched a universal GGuarded");
-                Some((xs, new_guards, new_body))
-            }
-            // Upstream #958: non-universal safety assumptions (including
-            // false and ground Boolean formulas) still require reduction.
-            // An empty matching prefix emits the formula itself through the
-            // same dedup/insertion path. Existential reuse lemmas are not
-            // assumptions that may be forced into every proof state.
-            _ if crate::guarded::is_safety_formula(f) => Some((Vec::new(), Vec::new(), f.clone())),
-            _ => None,
-        })
-        .collect();
+    use crate::constraint::system::formulas_in_set_order;
+    let universals: Vec<(Vec<LVar>, Vec<AAtom<LNTerm>>, Guarded)> =
+        formulas_in_set_order(&red.sys.formulas)
+            .into_iter()
+            .chain(formulas_in_set_order(&red.sys.lemmas))
+            .filter(|formula| stable || !has_existential(formula))
+            .filter_map(|f| match f {
+                Guarded::GGuarded {
+                    qua: Quantifier::All,
+                    ..
+                } => {
+                    let (_, xs, new_guards, new_body) = crate::guarded::open_guarded(f, &mut fresh)
+                        .expect("the arm matched a universal GGuarded");
+                    Some((xs, new_guards, new_body))
+                }
+                // Upstream #958: non-universal safety assumptions (including
+                // false and ground Boolean formulas) still require reduction.
+                // An empty matching prefix emits the formula itself through the
+                // same dedup/insertion path. Existential reuse lemmas are not
+                // assumptions that may be forced into every proof state.
+                _ if crate::guarded::is_safety_formula(f) => {
+                    Some((Vec::new(), Vec::new(), f.clone()))
+                }
+                _ => None,
+            })
+            .collect();
     if universals.is_empty() {
         return Ok(SystemOutcome::Linear);
     }
@@ -1035,16 +1002,10 @@ fn insert_implied_formulas_pass(
             })
             .collect();
     unsolved_actions.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-    let mut node_actions: Vec<(crate::constraint::constraints::NodeId, crate::fact::LNFact)> =
-        Vec::new();
-    for (id, rule) in red.sys.nodes.iter() {
-        for a in &rule.actions {
-            node_actions.push((*id, a.clone()));
-        }
-    }
-    node_actions.sort_by_key(|a| a.0);
     let mut sys_actions = unsolved_actions;
-    sys_actions.extend(node_actions);
+    for (id, rule) in red.sys.nodes_in_map_order() {
+        sys_actions.extend(rule.actions.iter().map(|a| (*id, a.clone())));
+    }
 
     // Group `sys_actions` indices by fact name, once per pass.  Without the
     // index, the Action-guard arm of `try_match_all_guards::rec` would scan
@@ -1397,7 +1358,7 @@ fn try_match_all_guards(
                 // guard binds a variable used by a later guard propagate
                 // the binding correctly.  For single-guard universals
                 // this is a no-op (acc is empty).
-                let g_fact_subst = crate::fact::apply_subst_fact(acc, g_fact);
+                let g_fact_subst = tamarin_term::apply::Apply::apply(g_fact.clone(), acc);
                 let g_time_subst = tamarin_term::subst::apply_vterm(acc, g_time.clone());
                 // Iterate only the name-equal group of the pass-invariant
                 // `actions_by_name` index (substitution never rewrites a
@@ -2764,7 +2725,15 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) {
     // copy-on-write, leaving this handle on the old Vec — without deep-copying
     // every node's `RuleACInst` up front (a large per-pass allocation).
     let nodes_snapshot = red.sys.nodes.clone();
+    let mut node_rules = crate::constraint::system::NodeRuleMap::default();
+    for (id, rule) in nodes_snapshot.iter() {
+        node_rules.entry(id).or_insert(rule);
+    }
     let maude = red.ctx.maude.clone();
+    let non_unifiable = |i: &crate::constraint::constraints::NodeId,
+                         j: &crate::constraint::constraints::NodeId| {
+        non_unifiable_nodes(&maude, &node_rules, i, j).unwrap_or(false)
+    };
 
     // Precompute, ONCE, the set of nodes whose rule has exactly one, LINEAR
     // conclusion — the only rule property `plain_route` (`getRoute`/`plainRoute`,
@@ -2876,11 +2845,7 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) {
     let mut less_idx: Option<crate::constraint::system::LessIndex> = None;
 
     for (sup_id, fresh_var) in &suppliers {
-        let sup_rule = match nodes_snapshot.iter().find(|(id, _)| id == sup_id) {
-            Some((_, r)) => r,
-            None => continue,
-        };
-        for (idx, (other_id, other_rule)) in nodes_snapshot.iter().enumerate() {
+        for (idx, (other_id, _)) in nodes_snapshot.iter().enumerate() {
             if other_id == sup_id {
                 continue;
             }
@@ -2902,10 +2867,8 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) {
             if !direct && !transitive() {
                 continue;
             }
-            match crate::rule::unifiable_rule_ac_insts(&maude, sup_rule, other_rule) {
-                Ok(true) => continue,
-                Ok(false) => {}
-                Err(_) => continue,
+            if !non_unifiable(sup_id, other_id) {
+                continue;
             }
             // HS-faithful insertLess (Reduction.hs `modM sLessAtoms . S.insert`).
             // `add_less_indexed` is the indexed twin of the set-add dedup
@@ -2958,24 +2921,8 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) {
         }
         // `tail rs` — all nodes after the first.
         let tail = &rs[1..];
-        // Side condition: all nodes in `tail rs` must be non-unifiable
-        // with `j`.  `nonUnifiableNodes n j = ¬ unifiableRuleACInsts
-        // rule(n) rule(j)`.
-        let j_rule = match nodes_snapshot.iter().find(|(id, _)| id == j) {
-            Some((_, r)) => r,
-            None => continue,
-        };
-        let all_non_unifiable = tail.iter().all(|t_id| {
-            let t_rule = match nodes_snapshot.iter().find(|(id, _)| id == t_id) {
-                Some((_, r)) => r,
-                None => return true,
-            };
-            matches!(
-                crate::rule::unifiable_rule_ac_insts(&maude, t_rule, j_rule),
-                Ok(false)
-            )
-        });
-        if !all_non_unifiable {
+        // Side condition: `all (nonUnifiableNodes j) (tail rs)`.
+        if !tail.iter().all(|t_id| non_unifiable(j, t_id)) {
             continue;
         }
         let last = match rs.last() {
@@ -3011,35 +2958,21 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) {
 fn enforce_edge_uniqueness_pass(
     red: &mut Reduction,
 ) -> Result<SystemOutcome, crate::prove::ProveError> {
-    use crate::fact::FactTag;
-    // Lookup: is this conclusion of this node a persistent fact?
-    // Haskell `factTagMultiplicity` (Theory/Model/Fact.hs):
-    //   ProtoFact multi _ _ -> multi
-    //   KUFact              -> Persistent
-    //   KDFact              -> Persistent
-    //   _                   -> Linear
-    // So !ProtoPersistent, KU, and KD are all persistent for the
-    // purpose of `proveLinearConc` — edge_uniqueness must SKIP these
-    // when checking "linear conclusions feed at most one premise".
-    // Helper computed up-front so it doesn't borrow `red` across the
-    // mutable solve_node_id_eqs calls.  Collects (NodeId, ConcIdx)
-    // pairs that are persistent conclusions.
-    let mut persistent_concs: std::collections::BTreeSet<(
-        crate::constraint::constraints::NodeId,
-        usize,
-    )> = std::collections::BTreeSet::new();
-    for (id, rule) in red.sys.nodes.iter() {
-        for (i, c) in rule.conclusions.iter().enumerate() {
-            if matches!(
-                &c.tag,
-                FactTag::Proto(crate::fact::Multiplicity::Persistent, _, _)
-                    | FactTag::Ku
-                    | FactTag::Kd
-            ) {
-                persistent_concs.insert((*id, i));
-            }
-        }
-    }
+    // HS `proveLinearConc`: the conclusion exists and is a linear fact.
+    let linear_concs: std::collections::BTreeSet<crate::constraint::constraints::NodeConc> = {
+        let rules = red.sys.node_rule_map();
+        red.sys
+            .edges
+            .iter()
+            .map(|e| e.src)
+            .filter(|(v, i)| {
+                rules
+                    .get(v)
+                    .and_then(|ru| ru.conclusions.get(i.0))
+                    .is_some_and(|fa| fa.is_linear())
+            })
+            .collect()
+    };
     // Pass 1 (Haskell's first `mergeNodes eSrc eTgt`): group edges by
     // TARGET premise.  Every premise position must have at most one
     // incoming edge — multiple incoming sources mean the source nodes
@@ -3052,7 +2985,8 @@ fn enforce_edge_uniqueness_pass(
         crate::constraint::constraints::NodeConc,
         Vec<crate::constraint::constraints::NodePrem>,
     > = std::collections::BTreeMap::new();
-    for e in &red.sys.edges {
+    // HS groups `S.toList sEdges`.
+    for e in red.sys.edges_in_set_order() {
         by_tgt.entry(e.tgt).or_default().push(e.src);
         by_src.entry(e.src).or_default().push(e.tgt);
     }
@@ -3087,7 +3021,7 @@ fn enforce_edge_uniqueness_pass(
         if prems.len() < 2 {
             continue;
         }
-        if persistent_concs.contains(&(src.0, src.1 .0)) {
+        if !linear_concs.contains(&src) {
             continue;
         }
         let keep = &prems[0];
@@ -3180,15 +3114,8 @@ fn simp_injective_fact_eq_mon_pass(
     // `Map NodeId`, and the `paired` comprehension iterates
     // `M.toList behaviourTerms` for both i and j (Simplify.hs) —
     // i.e. ASCENDING NodeId order, with a node's premises kept in their
-    // original `rPrems` order.  Iterate nodes sorted by NodeId (stable
-    // within a node) so the (i, j) pair enumeration matches HS; the
-    // `sys.nodes` Vec is in insertion order, not NodeId order.
-    let mut sorted_nodes: Vec<&(
-        crate::constraint::constraints::NodeId,
-        crate::rule::RuleACInst,
-    )> = red.sys.nodes.iter().collect();
-    sorted_nodes.sort_by_key(|a| a.0);
-    for (id, rule) in sorted_nodes {
+    // original `rPrems` order.
+    for (id, rule) in red.sys.nodes_in_map_order() {
         for prem in &rule.premises {
             if let Some(behaviours) = red.ctx.injective_fact_insts.get(&prem.tag)
                 && let Some((first, pairs)) =
@@ -3526,19 +3453,17 @@ fn reduce_formulas_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::pro
     // Simplify.hs — ascending Guarded Ord.  Sort to match HS's
     // iteration order; otherwise the decomposition + re-insertion
     // sequence picks up different goal-nrs than HS.
-    let mut to_decompose: Vec<crate::guarded::Guarded> = red
-        .sys
-        .formulas
-        .iter()
-        .filter(|f| match f.as_ref() {
-            crate::guarded::Guarded::Disj(items) => !red.sys.goals.iter().any(|(goal, _)| {
-                matches!(goal, crate::constraint::constraints::Goal::Disj(disj) if disj.0.as_slice() == items.as_ref())
-            }),
-            _ => reducible_formula(f),
-        })
-        .map(|f| f.as_ref().clone())
-        .collect();
-    to_decompose.sort();
+    let to_decompose: Vec<crate::guarded::Guarded> =
+        crate::constraint::system::formulas_in_set_order(&red.sys.formulas)
+            .into_iter()
+            .filter(|f| match f {
+                crate::guarded::Guarded::Disj(items) => !red.sys.goals.iter().any(|(goal, _)| {
+                    matches!(goal, crate::constraint::constraints::Goal::Disj(disj) if disj.0.as_slice() == items.as_ref())
+                }),
+                _ => reducible_formula(f),
+            })
+            .cloned()
+            .collect();
     if to_decompose.is_empty() {
         return Ok(SystemOutcome::Linear);
     }
@@ -3547,11 +3472,6 @@ fn reduce_formulas_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::pro
     red.sys.formulas_mut().retain(|f| !to_decompose.contains(f));
     red.changed = ChangeIndicator::Changed;
     red.insert_formulas(&to_decompose)
-}
-
-/// `removeSolvedSplitGoals` lifted into a one-shot pass.
-fn remove_solved_split_goals_pass(red: &mut Reduction) {
-    red.remove_solved_split_goals();
 }
 
 /// Drop `gtrue` (`Conj []`) entries from the formula list — those are

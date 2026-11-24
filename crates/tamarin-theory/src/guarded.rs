@@ -28,6 +28,7 @@ use tamarin_term::term::{f_app, map_lits, Term};
 use tamarin_term::vterm::{var_term, Lit};
 use tamarin_utils::cow::{cow_map_arc, cow_map_vec, cow_pair};
 use tamarin_utils::fresh::MonadFresh;
+use tamarin_utils::prelude_ext::nub;
 
 // =============================================================================
 // Guarded data type
@@ -135,106 +136,50 @@ pub fn reducible_formula(fm: &Guarded) -> bool {
     }
 }
 
-/// Smart `Conj` — recursively flatten nested `Conj`s and short-circuit.
-/// HS-faithful: mirrors Haskell `gconj` (Guarded.hs), whose helper
-/// `flatten (GConj conj) = concatMap flatten $ getConj conj`
-/// recursively unwraps every level of nested conjunction.  Must flatten
-/// EVERY level (not just one): a binary-And chain parsed as
-/// `Conj(Conj(Conj(a, b), c), d)` must collapse to a single 4-item Conj,
-/// else the runtime sees a 2-item Conj and mismatches HS's
-/// case-enumeration shape.
+/// HS `gconj` (Guarded.hs): flatten nested conjunctions at every level,
+/// `nub`, then a singleton is itself and any `gfalse` absorbs.
 pub fn gconj(items: Vec<Guarded>) -> Guarded {
-    fn flatten(item: Guarded, out: &mut Vec<Guarded>) -> bool {
-        // returns true if gfalse encountered (absorbs)
-        match item {
-            Guarded::Conj(inner) => {
-                for x in inner.iter() {
-                    if flatten(x.clone(), out) {
-                        return true;
-                    }
-                }
-                false
-            }
-            x if x == gfalse() => true,
-            x => {
-                out.push(x);
-                false
-            }
+    fn flatten(gf: Guarded, out: &mut Vec<Guarded>) {
+        match gf {
+            Guarded::Conj(conj) => conj.iter().for_each(|x| flatten(x.clone(), out)),
+            gf => out.push(gf),
         }
     }
-    let mut out = Vec::new();
-    for it in items {
-        if flatten(it, &mut out) {
-            return gfalse();
-        }
+    let mut flat = Vec::new();
+    items.into_iter().for_each(|gf| flatten(gf, &mut flat));
+    let mut gfs = nub(flat);
+    if gfs.len() == 1 {
+        gfs.pop().unwrap()
+    } else if gfs.contains(&gfalse()) {
+        gfalse()
+    } else {
+        Guarded::Conj(gfs.into())
     }
-    // Like HS, deduplicate before collapsing a singleton so construction
-    // is idempotent: gconj [a, a] becomes a in one pass.
-    let mut deduped: Vec<Guarded> = Vec::with_capacity(out.len());
-    for x in out {
-        if !deduped.contains(&x) {
-            deduped.push(x);
-        }
-    }
-    if deduped.len() == 1 {
-        return deduped.into_iter().next().unwrap();
-    }
-    Guarded::Conj(deduped.into())
 }
 
-/// Smart `Disj` — flatten recursively, short-circuit on `gtrue`, drop
-/// `gfalse` items.  Mirrors Haskell's `gdisj` which treats `Disj` as a
-/// set semantically: True absorbs, False is the unit.  Without dropping
-/// gfalse items, partial_atom_valuation can turn `Disj([Eq(j,i),
-/// Less(i,j)])` into `Disj([gfalse, gfalse])` (when j<i is known via
-/// the order graph) and we'd split a 2-case Disj goal whose branches
-/// both close — Haskell collapses this to `gfalse` directly.
+/// HS `gdisj` (Guarded.hs): flatten nested disjunctions at every level
+/// (`gfalse`, the empty disjunction, flattens away), then a singleton is
+/// itself, any `gtrue` absorbs, and the rest is `nub`bed.
 pub fn gdisj(items: Vec<Guarded>) -> Guarded {
-    // Recursively flatten nested `Disj`s. HS-faithful: mirrors Haskell
-    // `gdisj` (Guarded.hs) whose helper
-    // `flatten (GDisj disj) = concatMap flatten $ getDisj disj`
-    // recursively unwraps every level. Must flatten EVERY level (not just
-    // one): a 5-way `∨` parsed as a binary `Or` chain
-    // (`Disj(Disj(Disj(Disj(a, b), c), d), e)`) must collapse to a single
-    // 5-alt Disj goal, else the runtime sees a 2-alt Disj and mismatches
-    // the case-enumeration of skeleton proofs like YubiSecure
-    // slightly_weaker_invariant.
-    fn flatten(item: Guarded, out: &mut Vec<Guarded>) -> bool {
-        // returns true if gtrue encountered (absorbs)
-        match item {
-            Guarded::Disj(inner) => {
-                for x in inner.iter() {
-                    if flatten(x.clone(), out) {
-                        return true;
-                    }
-                }
-                false
-            }
-            x if x == gtrue() => true,
-            x if x == gfalse() => false,
-            x => {
-                out.push(x);
-                false
-            }
+    fn flatten(gf: Guarded, out: &mut Vec<Guarded>) {
+        match gf {
+            Guarded::Disj(disj) => disj.iter().for_each(|x| flatten(x.clone(), out)),
+            gf => out.push(gf),
         }
     }
-    let mut out = Vec::new();
-    for it in items {
-        if flatten(it, &mut out) {
-            return gtrue();
-        }
+    let mut gfs = Vec::new();
+    items.into_iter().for_each(|gf| flatten(gf, &mut gfs));
+    if gfs.len() == 1 {
+        return gfs.pop().unwrap();
     }
-    // Deduplicate before collapsing a singleton so normalization is idempotent.
-    let mut deduped: Vec<Guarded> = Vec::with_capacity(out.len());
-    for x in out {
-        if !deduped.contains(&x) {
-            deduped.push(x);
-        }
+    if gfs.contains(&gtrue()) {
+        return gtrue();
     }
-    if deduped.len() == 1 {
-        deduped.pop().unwrap()
+    let mut gfs = nub(gfs);
+    if gfs.len() == 1 {
+        gfs.pop().unwrap()
     } else {
-        Guarded::Disj(deduped.into())
+        Guarded::Disj(gfs.into())
     }
 }
 
@@ -846,6 +791,7 @@ pub fn normalise_guarded_cow(g: &Guarded) -> Option<Guarded> {
             let mapped = cow_map_vec(items, normalise_guarded_cow);
             let children: &[Guarded] = mapped.as_deref().unwrap_or(&items[..]);
             if mapped.is_none() && gconj_is_structural_noop(children) {
+                debug_assert!(gconj(children.to_vec()) == *g);
                 None
             } else {
                 Some(gconj(children.to_vec()))
@@ -874,8 +820,8 @@ pub fn normalise_guarded_cow(g: &Guarded) -> Option<Guarded> {
 /// list.  True iff none of `gconj`'s transformations fire: no nested-`Conj`
 /// child to flatten (including an empty `Conj` = `gtrue`, which `gconj`
 /// drops), no `gfalse` (`Disj([])`) child to absorb, no duplicate to `nub`,
-/// and length != 1 (which would singleton-unwrap).  Keep in exact lock-step
-/// with `gconj`.
+/// and length != 1 (which would singleton-unwrap).  Debug builds check the
+/// answer against `gconj` itself.
 fn gconj_is_structural_noop(items: &[Guarded]) -> bool {
     if items.len() == 1 {
         return false;
@@ -912,6 +858,7 @@ pub(crate) fn normalise_disj_list_cow(items: &[Guarded]) -> Option<Vec<Guarded>>
     let mapped = cow_map_vec(items, normalise_guarded_cow);
     let children: &[Guarded] = mapped.as_deref().unwrap_or(items);
     if mapped.is_none() && disj_flatten_is_structural_noop(children) {
+        debug_assert!(flatten_dedup_disj(children) == items);
         None
     } else {
         Some(flatten_dedup_disj(children))
@@ -921,8 +868,8 @@ pub(crate) fn normalise_disj_list_cow(items: &[Guarded]) -> Option<Vec<Guarded>>
 /// `flatten_dedup_disj(items) == items` — the constructor-preserving disjunct
 /// normalisation (one-level flatten of a nested `Disj`, then `nub`) is a
 /// no-op.  True iff no disjunct is itself a `Disj` (any `Disj` has its wrapper
-/// spliced away) and there is no duplicate.  Lock-step with
-/// `flatten_dedup_disj`.
+/// spliced away) and there is no duplicate.  Debug builds check the answer
+/// against `flatten_dedup_disj` itself.
 fn disj_flatten_is_structural_noop(items: &[Guarded]) -> bool {
     for (i, x) in items.iter().enumerate() {
         if matches!(x, Guarded::Disj(_)) {
@@ -935,28 +882,13 @@ fn disj_flatten_is_structural_noop(items: &[Guarded]) -> bool {
     true
 }
 
-/// One-level flatten of nested `Disj`s + duplicate drop over an
-/// already-normalised disjunct list.  This is the outer-loop body of
-/// disjunction normalizer factored out so it runs on the COW-normalised
-/// children; BYTE-IDENTICAL to that original loop (same push/dedup order).
+/// HS `normaliseDisj` (Guarded.hs): splice nested disjunctions one level
+/// deep, then `nub`.
 fn flatten_dedup_disj(children: &[Guarded]) -> Vec<Guarded> {
-    fn push(g: Guarded, out: &mut Vec<Guarded>) {
-        if !out.contains(&g) {
-            out.push(g);
-        }
-    }
-    let mut out: Vec<Guarded> = Vec::new();
-    for it in children {
-        match it {
-            Guarded::Disj(ds) => {
-                for d in ds.iter() {
-                    push(d.clone(), &mut out);
-                }
-            }
-            g => push(g.clone(), &mut out),
-        }
-    }
-    out
+    nub(children.iter().flat_map(|g| match g {
+        Guarded::Disj(ds) => ds.to_vec(),
+        g => vec![g.clone()],
+    }))
 }
 
 /// Normalise a stored formula while preserving disjunction constructors at

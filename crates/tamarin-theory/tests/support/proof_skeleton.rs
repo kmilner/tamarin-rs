@@ -5,8 +5,9 @@
 //! cross-checking that our proof trees structurally match
 //! `tamarin-prover`'s.
 //!
-//! This module is a test-only cross-checking harness; it is **not**
-//! part of `--prove` output. The production pretty-printer lives in
+//! This module is a test-only cross-checking harness shared by the
+//! oracle tests and the `dump_proof` example; it is **not** part of
+//! `--prove` output. The production pretty-printer lives in
 //! `pretty_theory.rs` (`pretty_proof_body` / `pp_step_doc`, port of
 //! `Theory/Proof.hs` `prettyProofWith`/`ppCases`) and
 //! `constraint/solver/proof_method.rs` (port of
@@ -39,8 +40,8 @@
 //!   2. Full skeleton strings — feed into a `similar`-style line
 //!      diff for a holistic view.
 
-use crate::constraint::solver::proof_method::{ProofMethod, Result as MethodResult};
-use crate::constraint::solver::search::{NodeStatus, ProofNode};
+use tamarin_theory::constraint::solver::proof_method::{ProofMethod, Result as MethodResult};
+use tamarin_theory::constraint::solver::search::{NodeStatus, ProofNode};
 
 /// Render our proof tree in a normalized, Haskell-compatible skeleton.
 ///
@@ -209,9 +210,9 @@ fn method_keyword(m: &ProofMethod) -> &'static str {
 }
 
 fn contradiction_label(
-    c: &Option<crate::constraint::solver::contradictions::Contradiction>,
+    c: &Option<tamarin_theory::constraint::solver::contradictions::Contradiction>,
 ) -> String {
-    use crate::constraint::solver::contradictions::Contradiction as K;
+    use tamarin_theory::constraint::solver::contradictions::Contradiction as K;
     // Strings are abbreviated mirrors of Haskell `prettyContradiction`
     // (Contradictions.hs); see the case there for each variant.
     // A few variants drop Haskell's interpolated detail (e.g. Haskell's
@@ -494,9 +495,9 @@ pub fn first_divergence(ours: &str, theirs: &str) -> Option<(usize, String, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constraint::solver::contradictions::Contradiction;
-    use crate::constraint::system::System;
     use std::collections::BTreeMap;
+    use tamarin_theory::constraint::solver::contradictions::Contradiction;
+    use tamarin_theory::constraint::system::System;
 
     const TWO_LEMMA_PROOF: &str = r#"theory T begin
 lemma foo:

@@ -200,7 +200,8 @@ fn abstract_rule(ru: &ProtoRuleE, irreducible: &BTreeSet<FunSym>) -> ProtoRuleE 
     // counter at `avoid ru = maybe 0 (succ . snd) (boundsVarIdx ru)`
     // (Term/LTerm.hs) — one past the largest variable index in the rule,
     // or 0 when the rule has no variables at all.
-    let mut next_idx = avoid(ru);
+    let mut next_idx =
+        tamarin_term::lterm::bounds_var_idx(ru).map_or(0, |(_, max_idx)| max_idx + 1);
     // HS `BindT` state: `M.Map LNTerm LVar`, so one binding per distinct
     // abstracted term, reused on every later occurrence.
     let mut bindings: BTreeMap<LNTerm, LVar> = BTreeMap::new();
@@ -241,30 +242,6 @@ fn abstract_rule(ru: &ProtoRuleE, irreducible: &BTreeSet<FunSym>) -> ProtoRuleE 
         actions,
         new_vars,
     }
-}
-
-/// HS `avoid` (Term/LTerm.hs) over a rule's `frees`: `succ` of the largest
-/// variable index, `0` for a variable-free rule.  The rule's info contributes
-/// no variables (`HasFrees RuleAttributes` folds to `mempty`,
-/// Theory/Model/Rule.hs, and RS lifts `_restrict` formulas out of the
-/// rule before elaboration), so premises, conclusions, actions and new
-/// variables are the whole domain.
-fn avoid(ru: &ProtoRuleE) -> u64 {
-    let mut max_idx: Option<u64> = None;
-    let mut visit = |v: &LVar| {
-        max_idx = Some(max_idx.map_or(v.idx, |m: u64| m.max(v.idx)));
-    };
-    for facts in [&ru.premises, &ru.conclusions, &ru.actions] {
-        for f in facts {
-            for t in f.terms.iter() {
-                t.for_each_free(&mut visit);
-            }
-        }
-    }
-    for t in &ru.new_vars {
-        t.for_each_free(&mut visit);
-    }
-    max_idx.map_or(0, |m| m + 1)
 }
 
 /// HS `abstractTerm` (Wellformedness.hs):

@@ -152,7 +152,7 @@ fn refine_rule<I: Clone + PartialEq>(
                 // (each unifier alternative starts from the same value).
                 let mut c = counter.clone();
                 let sigma = s_fresh.fresh_to_free_avoiding(|n| c.fresh_idents(n));
-                out.push(crate::rule::apply_subst_rule(&sigma, ru));
+                out.push(tamarin_term::apply::Apply::apply(ru.clone(), &sigma));
             }
             return Ok(());
         }
@@ -258,24 +258,18 @@ fn interpret_abstractly<I: Clone + PartialEq>(
 // eqModuloFreshnessNoAC for rules (Term/LTerm.hs)
 // =============================================================================
 
-/// Canonical variable indices for structural comparison modulo freshness.
-/// Compiled members have no local restrictions; only body variables participate.
-fn canon_rule_frees<I: Clone + PartialEq>(r: &Rule<I>) -> Rule<I> {
+/// HS `canonicalizeFreshnessNoAC` (LTerm.hs): drop name hints and number
+/// the free variables in traversal order, keeping their sorts. Equality of
+/// the results is `eqModuloFreshnessNoAC`.
+pub(crate) fn canonicalize_freshness_no_ac<T: HasFrees>(t: T) -> T {
     let mut map: tamarin_utils::FastMap<LVar, LVar> = Default::default();
     let mut ctr: u64 = 0;
-    r.clone().map_free_with(
-        &mut |v| {
-            if let Some(nv) = map.get(&v) {
-                *nv
-            } else {
-                let nv = LVar::new("", v.sort, ctr);
-                ctr += 1;
-                map.insert(v, nv);
-                nv
-            }
-        },
-        false,
-    )
+    t.map_free(&mut |v| {
+        *map.entry(v).or_insert_with(|| {
+            ctr += 1;
+            LVar::new("", v.sort, ctr - 1)
+        })
+    })
 }
 
 /// HS `nubBy eqModuloFreshnessNoAC` over rules: first occurrence wins;
@@ -286,7 +280,7 @@ fn nub_modulo_freshness<I: Clone + PartialEq>(rules: Vec<Rule<I>>) -> Vec<Rule<I
     let mut kept: Vec<Rule<I>> = Vec::new();
     let mut kept_canon: Vec<Rule<I>> = Vec::new();
     for r in rules {
-        let c = canon_rule_frees(&r);
+        let c = canonicalize_freshness_no_ac(r.clone());
         if !kept_canon.contains(&c) {
             kept.push(r);
             kept_canon.push(c);
@@ -492,7 +486,8 @@ pub fn apply_partial_evaluation(
             let variants = &recomputed.variant_substs;
             if variants.len() != 1
                 || !variants[0].is_empty()
-                || canon_rule_frees(rule) != canon_rule_frees(computed)
+                || canonicalize_freshness_no_ac(rule.clone())
+                    != canonicalize_freshness_no_ac(computed.clone())
             {
                 exportable = false;
                 break;

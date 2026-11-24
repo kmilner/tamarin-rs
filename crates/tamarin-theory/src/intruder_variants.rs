@@ -148,72 +148,35 @@ pub fn parse_intruder_rules(
         message: e.to_string(),
     })?;
 
-    // HS `knownFuns = S.toList (funSyms msig)`.
-    let known_funs = KnownFuns::new(msig.fun_syms.iter().copied().collect());
-
     let mut out = Vec::with_capacity(parser_rules.len());
     for r in parser_rules {
-        let intr = ast_rule_to_intr_rule_ac(&known_funs, msig, &r).map_err(|message| {
-            IntrRuleParseError {
-                ctxt_desc: ctxt_desc.to_string(),
-                message,
-            }
+        let intr = ast_rule_to_intr_rule_ac(msig, &r).map_err(|message| IntrRuleParseError {
+            ctxt_desc: ctxt_desc.to_string(),
+            message,
         })?;
         out.push(intr);
     }
     Ok(out)
 }
 
-/// HS `knownFuns = S.toList (funSyms msig)` together with a display-name
-/// index over it, so [`KnownFuns::lookup`] is one `BTreeMap` probe rather
-/// than a scan of the whole signature.  Every constructor name and every
-/// `constr_name_func` segment of both cached files (126 rules) resolves
-/// through it on each theory load.
-struct KnownFuns {
-    /// The symbols in `S.toList` order, kept for the not-found message.
-    syms: Vec<FunSym>,
-    /// `show_fun_sym_name` → the FIRST symbol of `syms` carrying that name.
-    ///
-    /// FIRST-wins is load-bearing, not an implementation detail: HS
-    /// `lookupFun` is `find ((== f) . showFunSymName) knownFuns`, which
-    /// returns the earliest match in `S.toList` order, and two DISTINCT
-    /// symbols can share a `showFunSymName` — a user-defined AC symbol and a
-    /// user-defined NoEq symbol may carry the same name, and `Ord FunSym`
-    /// (FunctionSymbols.hs) orders `NoEq` before `AC`, so the NoEq
-    /// one is the earlier.  An `insert` loop would let the later symbol win
-    /// and silently change which `FunSym` lands in the rule info.
-    by_name: std::collections::BTreeMap<std::borrow::Cow<'static, str>, FunSym>,
-}
-
-impl KnownFuns {
-    /// `syms` must already be in `S.toList` order — `MaudeSig::fun_syms` is a
-    /// `BTreeSet`, so iterating it is exactly that order.
-    fn new(syms: Vec<FunSym>) -> KnownFuns {
-        let mut by_name = std::collections::BTreeMap::new();
-        for f in &syms {
-            // `or_insert`, never `insert`: the first symbol carrying a name
-            // is the one HS's `find` returns.
-            by_name.entry(show_fun_sym_name(f)).or_insert(*f);
-        }
-        KnownFuns { syms, by_name }
-    }
-
-    /// HS `lookupFun` (Theory/Text/Parser/Rule.hs): resolve a plain function
-    /// name against the signature's known symbols (`S.toList (funSyms msig)`)
-    /// by `showFunSymName` equality.
-    fn lookup(&self, f: &str) -> Result<FunSym, String> {
-        self.by_name.get(f).copied().ok_or_else(|| {
+/// HS `lookupFun` (Theory/Text/Parser/Rule.hs): the first symbol of
+/// `knownFuns = S.toList (funSyms msig)` whose `showFunSymName` is `f`.
+fn lookup_fun(msig: &MaudeSig, f: &str) -> Result<FunSym, String> {
+    msig.fun_syms
+        .iter()
+        .copied()
+        .find(|g| show_fun_sym_name(g) == f)
+        .ok_or_else(|| {
             format!(
                 "Failed parsing intruder rule name: no function named '{}' found in the signature (symbols: {})",
                 f,
-                self.syms
+                msig.fun_syms
                     .iter()
                     .map(show_fun_sym_name)
                     .collect::<Vec<_>>()
                     .join(", ")
             )
         })
-    }
 }
 
 /// HS `constrNameFunc` (Theory/Text/Parser/Rule.hs): recover the function
@@ -223,7 +186,7 @@ impl KnownFuns {
 /// `readMaybe :: Maybe Int`); errors on an empty result.
 ///
 /// The split is unconditional, so a function symbol whose own name contains
-/// `'_'` decomposes into several segments that [`KnownFuns::lookup`] cannot resolve
+/// `'_'` decomposes into several segments that [`lookup_fun`] cannot resolve
 /// — see the FIXME beside `name_decompose` in Theory/Text/Parser/Rule.hs
 /// ("there can be underscores in the name of a function").  Dormant for the
 /// two cached files, which only name builtin DH/BP symbols.
@@ -284,11 +247,7 @@ fn constr_name_func(name: &str) -> Result<Vec<&str>, String> {
 /// `True False` are HS hard-codes — see the FIXME in
 /// Theory/Text/Parser/Rule.hs ("Currently we (wrongly) always assume
 /// that we have a subterm rule").  Subterm=True / constant=False.
-fn ast_rule_to_intr_rule_ac(
-    known_funs: &KnownFuns,
-    msig: &MaudeSig,
-    r: &p::Rule,
-) -> Result<IntrRuleAC, String> {
+fn ast_rule_to_intr_rule_ac(msig: &MaudeSig, r: &p::Rule) -> Result<IntrRuleAC, String> {
     // HS `intrInfo` rejects non-c/d-prefixed names.  Mirror that here.
     let bytes = r.name.as_bytes();
     if bytes.is_empty() {
@@ -300,7 +259,7 @@ fn ast_rule_to_intr_rule_ac(
             // `lookupFun knownFuns $ tail cname` — cname is `_<fun>`, so
             // `tail` strips the leading underscore.
             let cname = &r.name[1..];
-            let f = known_funs.lookup(cname.get(1..).unwrap_or(""))?;
+            let f = lookup_fun(msig, cname.get(1..).unwrap_or(""))?;
             IntrRuleACInfo::ConstrRule {
                 name: rest.to_vec(),
                 fun: f,
@@ -310,7 +269,7 @@ fn ast_rule_to_intr_rule_ac(
             let dname = &r.name[1..];
             let funs = constr_name_func(dname)?
                 .into_iter()
-                .map(|n| known_funs.lookup(n))
+                .map(|n| lookup_fun(msig, n))
                 .collect::<Result<Vec<_>, _>>()?;
             IntrRuleACInfo::DestrRule {
                 name: rest.to_vec(),
@@ -395,8 +354,7 @@ fn ast_rule_to_intr_rule_ac(
 
 /// Elaborate one top-level `rule (modulo AC)` parsed in an ordinary theory.
 pub(crate) fn intr_rule_from_ast(msig: &MaudeSig, r: &p::Rule) -> Result<IntrRuleAC, String> {
-    let known_funs = KnownFuns::new(msig.fun_syms.iter().copied().collect());
-    ast_rule_to_intr_rule_ac(&known_funs, msig, r)
+    ast_rule_to_intr_rule_ac(msig, r)
 }
 
 // =============================================================================

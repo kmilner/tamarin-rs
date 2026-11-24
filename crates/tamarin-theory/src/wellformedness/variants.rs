@@ -341,7 +341,8 @@ mod tests {
                 for item in &mut theory.items {
                     if let crate::theory::TheoryItem::Rule(rule) = item {
                         rule.rule_e = Some(Box::new(rule.rule.clone()));
-                        let restricted = crate::rule::apply_subst_rule(&subst, &rule.rule);
+                        let restricted =
+                            tamarin_term::apply::Apply::apply(rule.rule.clone(), &subst);
                         match representation {
                             "compiled" => rule.rule = restricted.clone(),
                             "abstracted" => rule.abstracted_rule = Some(restricted.clone()),
@@ -392,7 +393,7 @@ mod tests {
                 var_term(LVar::new("w", LSort::Msg, 9)),
             ),
         ]);
-        let mut member = crate::rule::apply_subst_rule(&ren, &expected);
+        let mut member = tamarin_term::apply::Apply::apply(expected.clone(), &ren);
         member.actions.insert(1, fact("Extra", vec![]));
         assert!(alignment::align_rule(&maude, &member, &expected)
             .unwrap()
@@ -402,7 +403,7 @@ mod tests {
             .unwrap()
             .is_none());
         let collapse = Subst::from_list([(LVar::new("y", LSort::Msg, 0), x)]);
-        let collapsed = crate::rule::apply_subst_rule(&collapse, &expected);
+        let collapsed = tamarin_term::apply::Apply::apply(expected.clone(), &collapse);
         assert!(alignment::align_rule(&maude, &collapsed, &expected)
             .unwrap()
             .is_none());

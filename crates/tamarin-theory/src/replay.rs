@@ -53,10 +53,10 @@ use std::collections::BTreeMap;
 use crate::constraint::constraints::Goal;
 use crate::constraint::solver::context::ProofContext;
 use crate::constraint::solver::proof_method::{
-    check_and_exec_proof_method, finished_step_is_valid, ProofMethod, Result as MethodResult,
+    exec_proof_method, finished_step_is_valid, ProofMethod, Result as MethodResult,
 };
 use crate::constraint::solver::search::{
-    node_status_of, run_proof_search_at_depth, NodeStatus, ProofNode,
+    node_status_of, rollup_statuses, run_proof_search_at_depth, NodeStatus, ProofNode,
 };
 use crate::constraint::system::System;
 use crate::prove::ProveError;
@@ -350,10 +350,8 @@ fn replay_node_inner(
     let produced: BTreeMap<String, System> = cases.into_iter().collect();
 
     let mut children: BTreeMap<String, ProofNode> = BTreeMap::new();
-    let mut any_solved = false;
-    let mut any_contra = false;
-    let mut any_unfin = false;
-    let mut any_sorry = false;
+    // A stored-only child counts as incomplete whatever its stored method.
+    let mut statuses = Vec::new();
 
     // Walk the skeleton's child cases in source order.
     for (skel_name, sub_tree) in &node.cases {
@@ -392,7 +390,7 @@ fn replay_node_inner(
             // that exercises this drifted-case path.)
             let placeholder = parsed_to_unannotated(sub_tree, sys.clone());
             children.insert(skel_name.clone(), placeholder);
-            any_sorry = true;
+            statuses.push(NodeStatus::Sorry);
             continue;
         };
         let child_sys = produced.get(&runtime_name).cloned().unwrap();
@@ -400,13 +398,7 @@ fn replay_node_inner(
         // unnamed stored child which adopted a named singleton runtime case.
         let _path = crate::constraint::solver::trace::CasePathGuard::push(&runtime_name);
         let child_node = replay_node(ctx, child_sys, sub_tree, proof_bound, auto_prove)?;
-        match child_node.status {
-            NodeStatus::Solved => any_solved = true,
-            NodeStatus::Contradictory => any_contra = true,
-            NodeStatus::Unfinishable => any_unfin = true,
-            NodeStatus::Sorry => any_sorry = true,
-            NodeStatus::Open => {}
-        }
+        statuses.push(child_node.status);
         children.insert(runtime_name, child_node);
     }
 
@@ -447,33 +439,15 @@ fn replay_node_inner(
             // branch above, which is `Nothing`.
             annotated_sorry(None, rt_sys)
         };
-        match auto.status {
-            NodeStatus::Solved => any_solved = true,
-            NodeStatus::Contradictory => any_contra = true,
-            NodeStatus::Unfinishable => any_unfin = true,
-            NodeStatus::Sorry => any_sorry = true,
-            NodeStatus::Open => {}
-        }
+        statuses.push(auto.status);
         children.insert(rt_name, auto);
     }
-
-    let status = if any_solved {
-        NodeStatus::Solved
-    } else if any_sorry {
-        NodeStatus::Sorry
-    } else if any_unfin {
-        NodeStatus::Unfinishable
-    } else if any_contra {
-        NodeStatus::Contradictory
-    } else {
-        NodeStatus::Sorry
-    };
 
     Ok(ProofNode {
         method,
         sys,
         children,
-        status,
+        status: rollup_statuses(statuses),
         annotated: true,
     })
 }
@@ -481,10 +455,9 @@ fn replay_node_inner(
 /// Re-execute one stored proof step against `sys` and produce the
 /// (method, cases) pair it yields.
 ///
-/// HS `checkAndExecProofMethod` (Theory/Proof.hs) runs
-/// the stored `ProofMethod` itself; [`resolve_method`] is the `SolveGoal`
-/// half of that, binding the stored goal to the equal one among `sys`'s
-/// goals before `check_and_exec_proof_method` validates and runs it.
+/// HS `checkAndExecProofMethod` (Theory/Proof.hs): [`resolve_method`] does
+/// its validation, binding a stored `SolveGoal` to the equal live goal of
+/// `sys`; terminal methods are handled as leaves by [`replay_node`].
 fn exec_method_for(
     stored: &ProofMethod,
     sys: &System,
@@ -493,7 +466,7 @@ fn exec_method_for(
     let Some(method) = resolve_method(stored, sys) else {
         return Ok(None);
     };
-    Ok(check_and_exec_proof_method(ctx, &method, sys)?.map(|cases| (method, cases)))
+    Ok(exec_proof_method(ctx, &method, sys)?.map(|cases| (method, cases)))
 }
 
 /// Resolve one stored [`ProofMethod`] against `sys`.

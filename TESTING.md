@@ -993,14 +993,12 @@ reference path whose output is byte-identical):
 | `TAM_RS_VERIFY_FACT_MAX=1` | panic if a Fact's cached `max_var` diverges from a full walk of its terms |
 | `TAM_RS_VERIFY_CANON_TABLES=1` | panic if a per-store incremental canon table diverges from a full rebuild |
 | `TAM_RS_VERIFY_REDUCE_NF=1` | panic if a normal-form fast path elided a Maude reduce that would have changed the term |
-| `TAM_RS_NO_SIMP_NOOP_SKIP=1` | force the full Simplify pass (disable the no-op shortcut; A/B oracle) |
 | `TAM_RS_NO_SOURCE_CACHE=1` | disable persistent session source-case reuse (recompute for each proof/source context; A/B oracle) |
 | `TAM_RS_DISABLE_BOUNDS_CACHE=1` | force the full `bounds_max` walk (disable the cache; A/B oracle) |
 | `TAM_RS_DISABLE_PARALLEL_EXPAND=1` | expand proof-tree siblings serially instead of per-child in parallel |
 | `TAM_RS_KEEP_SYS=1` | keep every proof node's `System` instead of dropping the ones the search no longer needs |
 | `TAM_RS_SUBST_SKIP_STATS=1` | `subst_system` call/skip counters to stderr |
 | `TAM_RS_FP_STATS=1` | fact-descent bloom-skip counters to stderr |
-| `TAM_RS_SIMP_NOOP_STATS=1` | Simplify no-op shortcut hit/miss counters to stderr |
 | `TAM_RS_CANON_TABLE_STATS=1` | canon-table cache hit/rebuild counters to stderr |
 | `TAM_MAUDE_CACHE_STATS=1` | one Maude reduce/unify/reply cache hit-rate line per subprocess at teardown |
 | `TAM_SATURATION_LIMIT=<n>` | source-saturation step cap; outranks the CLI `-s=` |

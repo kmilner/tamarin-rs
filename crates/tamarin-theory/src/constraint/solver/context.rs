@@ -68,6 +68,60 @@ impl<'a> IntoIterator for &'a IntrRuleCache {
     }
 }
 
+/// A rule instance with its variant disjunction (`Maybe RuleACConstrs`);
+/// intruder rules carry none.
+pub(crate) type RuleWithConstrs = (
+    crate::rule::RuleACInst,
+    Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
+);
+
+/// HS `ClassifiedRules` (System.hs), partitioned once per context.
+#[derive(Debug)]
+pub(crate) struct ClassifiedRules {
+    /// `crProtocol`: the intruder rules that neither construct nor destruct,
+    /// then the protocol rules (`rulesAC = intruder ++ proto`).
+    pub(crate) protocol: Vec<RuleWithConstrs>,
+    /// `crDestruct`: destructor rules and `IEquality`.
+    pub(crate) destruct: Vec<RuleWithConstrs>,
+    /// `crConstruct`: constructor rules and `Coerce`.
+    pub(crate) construct: Vec<RuleWithConstrs>,
+}
+
+impl ClassifiedRules {
+    fn new(rules: &[OpenProtoRule], intruder_rules: &[IntrRuleAC]) -> Self {
+        use crate::constraint::solver::reduction::{
+            canonical_rule_inst, intr_rule_to_rule_ac_inst,
+        };
+        use crate::rule::{is_constr_rule, is_destr_rule};
+        let intr = |keep: fn(&crate::rule::IntrRuleACInfo) -> bool| {
+            intruder_rules
+                .iter()
+                .filter(|ir| keep(&ir.info))
+                .map(|ir| (intr_rule_to_rule_ac_inst(ir.clone()), None))
+                .collect::<Vec<RuleWithConstrs>>()
+        };
+        let mut protocol = intr(|info| !is_constr_rule(info) && !is_destr_rule(info));
+        protocol.extend(rules.iter().map(|o| {
+            let constrs = (!o.variant_substs.is_empty()).then(|| o.variant_substs.clone());
+            (canonical_rule_inst(o), constrs)
+        }));
+        ClassifiedRules {
+            protocol,
+            destruct: intr(is_destr_rule),
+            construct: intr(is_constr_rule),
+        }
+    }
+
+    /// HS `nonSilentRules = filter (not . null . get rActs) . joinAllRules`.
+    pub(crate) fn non_silent(&self) -> impl Iterator<Item = &RuleWithConstrs> {
+        self.protocol
+            .iter()
+            .chain(&self.destruct)
+            .chain(&self.construct)
+            .filter(|(rule, _)| !rule.actions.is_empty())
+    }
+}
+
 /// Read-only, immutable-after-build bundle of a `ProofContext`.
 ///
 /// These fields are computed once at theory-load time and shared unchanged by
@@ -93,6 +147,8 @@ pub struct ProofContextShared {
     /// shared [`IntrRuleCache`] handle, so cloning the bundle shares the
     /// rule list instead of copying it.
     pub intruder_rules: IntrRuleCache,
+    /// `rules` and `intruder_rules` partitioned as HS `ClassifiedRules`.
+    pub(crate) classified_rules: ClassifiedRules,
     /// Action `(tag, arity)` shapes that occur in exactly one protocol or
     /// intruder rule. `solveUniqueActions` consults this on every simplify
     /// iteration, so derive it once with the immutable rule bundle.
@@ -883,6 +939,7 @@ impl ProofContext {
             shared: std::sync::Arc::new(ProofContextShared {
                 #[cfg(test)]
                 worker_gate: std::sync::Mutex::new(None),
+                classified_rules: ClassifiedRules::new(&rules, &intruder_rules),
                 rules,
                 intruder_rules,
                 unique_action_shapes,

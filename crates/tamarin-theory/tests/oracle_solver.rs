@@ -32,6 +32,9 @@ use tamarin_theory::elaborate::formula_to_guarded_parsed;
 use tamarin_theory::formula::Quantifier;
 use tamarin_theory::guarded::Guarded;
 
+#[path = "support/proof_skeleton.rs"]
+mod proof_skeleton;
+
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
@@ -1057,9 +1060,9 @@ fn verdict_match_suite_all_solved_against_tamarin() {
 #[test]
 #[ignore = "heavyweight whole-corpus probe (hour-plus). Run with --ignored"]
 fn corpus_proof_skeleton_match_probe() {
+    use proof_skeleton::{extract_from_haskell, first_divergence, render};
     use rayon::prelude::*;
     use tamarin_theory::constraint::solver::search::ProofDeadlineGuard;
-    use tamarin_theory::proof_skeleton::{extract_from_haskell, first_divergence, render};
     use tamarin_theory::prove::prove_lemma;
 
     // Same stack-bump as the verdict probe — Goal-Ord + Sk-matcher path

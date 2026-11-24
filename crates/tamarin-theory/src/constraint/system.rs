@@ -1442,7 +1442,7 @@ impl System {
     pub fn bump_node_max_rule(&self, r: &crate::rule::RuleACInst) {
         if let Some(cur) = self.node_max_cache.get() {
             let mut m = cur;
-            crate::constraint::solver::reduction::bm_rule_pub(r, &mut m);
+            crate::constraint::solver::reduction::bm_rule(r, &mut m);
             if m != cur {
                 self.node_max_cache.set(Some(m));
             }
@@ -1497,19 +1497,19 @@ impl System {
     /// Bump the cache by walking a term.
     #[inline]
     pub fn bump_cache_term(&self, t: &tamarin_term::lterm::LNTerm) {
-        self.bump_cache_with(|m| crate::constraint::solver::reduction::bm_term_pub(t, m));
+        self.bump_cache_with(|m| crate::constraint::solver::reduction::bm_term(t, m));
     }
 
     /// Bump the cache by walking a fact's terms.
     #[inline]
     pub fn bump_cache_fact(&self, fa: &crate::fact::LNFact) {
-        self.bump_cache_with(|m| crate::constraint::solver::reduction::bm_fact_pub(fa, m));
+        self.bump_cache_with(|m| crate::constraint::solver::reduction::bm_fact(fa, m));
     }
 
     /// Bump the cache by walking a rule's free vars.
     #[inline]
     pub fn bump_cache_rule(&self, r: &crate::rule::RuleACInst) {
-        self.bump_cache_with(|m| crate::constraint::solver::reduction::bm_rule_pub(r, m));
+        self.bump_cache_with(|m| crate::constraint::solver::reduction::bm_rule(r, m));
     }
 
     /// Bump the cache by walking a guarded formula.
@@ -1526,31 +1526,7 @@ impl System {
     /// Bump the cache by walking a goal.
     #[inline]
     pub fn bump_cache_goal(&self, g: &Goal) {
-        // Bump BEFORE the cache-None early return so a goal add still moves
-        // `content_stamp` when the max-var cache is currently invalidated.
-        self.bump_content_stamp();
-        if self.max_var_idx_cache.get().is_none() {
-            return;
-        }
-        match g {
-            Goal::Action(i, fa) => {
-                self.bump_cache_lvar(i);
-                self.bump_cache_fact(fa);
-            }
-            Goal::Premise(p, fa) => {
-                self.bump_cache_lvar(&p.0);
-                self.bump_cache_fact(fa);
-            }
-            Goal::Chain(c, p) => {
-                self.bump_cache_lvar(&c.0);
-                self.bump_cache_lvar(&p.0);
-            }
-            Goal::Subterm((s, t)) => {
-                self.bump_cache_term(s);
-                self.bump_cache_term(t);
-            }
-            Goal::Disj(_) | Goal::Split(_) => {}
-        }
+        self.bump_cache_with(|m| crate::constraint::solver::reduction::bm_goal(g, m));
     }
 
     /// Add an open goal.  An equal goal already in the store is merged into

@@ -154,19 +154,11 @@ pub fn is_applicable_for_display(
     })
 }
 
-/// HS `uniqueListBy (comparing fst) id distinguish` (ProofMethod.hs): singleton case names stay bare; each duplicate group of
-/// size `n` is rewritten to `<name>_case_<i>` with the running index `i`
-/// (1,2,3…) zero-padded to the width of `show n`.  Input order is
-/// preserved.  Shared by the `SolveGoal` and `Induction` arms of
-/// [`exec_proof_method`].
-///
-/// HS-faithful zero-padding: `distinguish`
-///   distinguish n =
-///     [ (\(x,y) -> (... x ++ "_case_" ++ pad (show i), y)) | i <- [1..] ]
-///     where l = length (show n); pad cs = replicate (l - length cs) '0' ++ cs
-/// so total<10 → width 1 (no padding); total>=10 → width 2 ("01"..); etc.
-// case-name counters; output order follows the ordered cases Vec, maps keyed only;
-// std kept (byte-inert) — iteration order never reaches output.
+/// HS `uniqueListBy (comparing fst) id distinguish` (ProofMethod.hs): a
+/// unique name stays bare; each of the `n` cases sharing a name gets its
+/// running index `i`, as `show i` for an empty name and otherwise as
+/// `<name>_case_<i>` zero-padded to the width of `show n`. Order is kept.
+// Counter maps are lookup-only; output order follows `cases`.
 #[allow(clippy::disallowed_types)]
 fn distinguish_case_names(cases: Vec<(String, System)>) -> Vec<(String, System)> {
     use std::collections::HashMap;
@@ -178,73 +170,42 @@ fn distinguish_case_names(cases: Vec<(String, System)>) -> Vec<(String, System)>
     let mut out = Vec::with_capacity(cases.len());
     for (name, s) in cases.into_iter() {
         let total = counts[&name];
-        let key = if total > 1 {
+        let key = if total == 1 {
+            name
+        } else {
             let n = seen.entry(name.clone()).or_default();
             *n += 1;
-            let width = total.to_string().len();
-            format!("{}_case_{:0width$}", name, *n, width = width)
-        } else {
-            name
+            if name.is_empty() {
+                n.to_string()
+            } else {
+                let width = total.to_string().len();
+                format!("{}_case_{:0width$}", name, *n, width = width)
+            }
         };
         out.push((key, s));
     }
     out
 }
 
-/// HS-faithful `removeRedundantCases ctxt [] <get_sys>` wrapper: captures the
-/// `maude_sig()`/`enable_bp`/`enable_mset`/empty-`stable_vars` boilerplate the
-/// three arms of [`exec_proof_method`] share.  HS passes `[]` for stable_vars
-/// and gates the whole dedup on BP/MSet inside `remove_redundant_cases`.
-fn remove_redundant_cases_ctx<T>(
-    ctx: &ProofContext,
-    get_sys: impl Fn(&T) -> &System,
-    cases: Vec<T>,
-) -> Vec<T> {
+/// HS `process` (ProofMethod.hs) applied to the systems `runReduction (m <*
+/// simplifySystem)` returned: drop the branches whose equation store is
+/// false (the Disj `mzero`s), `cleanup` the rest, `removeRedundantCases ctxt
+/// [] snd`, then name them with [`distinguish_case_names`].
+fn process(ctx: &ProofContext, cases: Vec<(String, System)>) -> Vec<(String, System)> {
+    let cleaned = cases
+        .into_iter()
+        .filter(|(_, s)| !s.eq_store().is_false())
+        .map(|(name, s)| (name, s.cleanup()))
+        .collect();
     let msig = ctx.maude.maude_sig();
-    let empty_stable: std::collections::BTreeSet<tamarin_term::lterm::LVar> =
-        std::collections::BTreeSet::new();
-    crate::constraint::solver::sources::remove_redundant_cases(
+    let deduped = crate::constraint::solver::sources::remove_redundant_cases(
         msig.enable_bp,
         msig.enable_mset,
-        &empty_stable,
-        get_sys,
-        cases,
-    )
-}
-
-/// HS `process` tail shared by the `SolveGoal` and `Induction` arms:
-/// BP/MSet-gated structural dedup (`removeRedundantCases ctxt [] snd`)
-/// followed by `uniqueListBy (comparing fst) id distinguish` naming.
-fn process_cases(ctx: &ProofContext, cases: Vec<(String, System)>) -> Vec<(String, System)> {
-    distinguish_case_names(remove_redundant_cases_ctx(
-        ctx,
-        |p: &(String, System)| &p.1,
-        cases,
-    ))
-}
-
-/// Opt-in hit/miss counters for the Simplify no-op shortcut
-/// (`TAM_RS_SIMP_NOOP_STATS=1`); prints every 1000 Simplify execs.
-fn simp_noop_stat(hit: bool) {
-    use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
-    static CALLS: AtomicU64 = AtomicU64::new(0);
-    static HITS: AtomicU64 = AtomicU64::new(0);
-    if !tamarin_utils::env_gate!("TAM_RS_SIMP_NOOP_STATS") {
-        return;
-    }
-    if hit {
-        HITS.fetch_add(1, Relaxed);
-    }
-    let calls = CALLS.fetch_add(1, Relaxed) + 1;
-    if calls.is_multiple_of(1_000) {
-        let h = HITS.load(Relaxed);
-        eprintln!(
-            "[SIMP_NOOP_STATS] simplify_execs={} noop_hits={} ({:.1}%)",
-            calls,
-            h,
-            100.0 * h as f64 / calls as f64
-        );
-    }
+        &std::collections::BTreeSet::new(),
+        |case: &(String, System)| &case.1,
+        cleaned,
+    );
+    distinguish_case_names(deduped)
 }
 
 /// Execute a proof method against `sys`, returning the resulting
@@ -304,130 +265,30 @@ pub fn exec_proof_method(
         ProofMethod::Sorry(_) | ProofMethod::Finished(_) => Some(Vec::new()),
         ProofMethod::Invalidated => None,
         ProofMethod::Simplify => {
-            // HS-faithful simplify-time fan-out.  When
-            // `solveUniqueActions` calls `solveGoal (ActionG i fa)`,
-            // the `Reduction = StateT System (FreshT (DisjT ...))`
-            // monad lets `disjunctionOfList` (over source-cases /
-            // variants / Maude unifiers) fan out the entire enclosing
-            // `simplifySystem` into N branches — one per fan-out case.
-            // Each branch continues independently through the rest of
-            // the simplify loop and post-loop, and surfaces here as a
-            // sibling `Simplify` case.  HS's `process` then renders
-            // them as `case 1`/`case 2`/... via `distinguish n`.
-            //
-            // Without fan-out, RS collapses 7 HS siblings to 1 on
-            // Yubikey's `no_replay` (and 50 → 1 on
-            // `slightly_weaker_invariant`), because `solve_action_goal`'s
-            // Cases outcome would be discarded.
-            let case_systems: Vec<System> =
+            // `process (return "")`: simplification may fan out (DisjT), and
+            // each branch becomes a case.
+            let case_systems =
                 crate::constraint::solver::simplify::simplify_system_with_fanout(ctx, sys.clone())?;
-            // No-op shortcut: mid-proof, every case system was already
-            // simplified+cleaned at production, so `simplifySystem` usually
-            // fixpoints immediately — one output case value-equal to the
-            // input.  The arm's remaining work is then fully determined:
-            // the is_false filter drops the case (empty case-map => Simplify
-            // succeeds with zero cases, see below) or, `cleanup` being a
-            // pure function of the System value, `cleaned[0] ==
-            // cleaned_input` holds and the single-case check returns None.
-            // Skipping straight to those answers elides two full
-            // `rename_precise` passes, a System clone, and the final O(S)
-            // compare per open node (Simplify is ranked first at EVERY
-            // node).  The value compare is cheap on the hit path: a no-op
-            // simplify never triggered COW, so the Arcs are shared and Term
-            // eq takes the ptr fast path.  `TAM_RS_NO_SIMP_NOOP_SKIP=1`
-            // disables the shortcut (A/B oracle); `TAM_RS_SIMP_NOOP_STATS=1`
-            // reports the hit rate.
-            if !tamarin_utils::env_gate!("TAM_RS_NO_SIMP_NOOP_SKIP")
-                && case_systems.len() == 1
-                && case_systems[0] == *sys
+            // Shortcut for a simplification that changed nothing: `process`
+            // would yield no case (false store) or the cleaned input.
+            if case_systems.len() == 1 && case_systems[0] == *sys {
+                return Ok(sys.eq_store().is_false().then(Vec::new));
+            }
+            let cases = process(
+                ctx,
+                case_systems
+                    .into_iter()
+                    .map(|s| (String::new(), s))
+                    .collect(),
+            );
+            // A single case equal to the cleaned input means the method
+            // does not apply. No case at all is a successful leaf.
+            if let [(_, single)] = cases.as_slice()
+                && *single == sys.clone().cleanup()
             {
-                simp_noop_stat(true);
-                return Ok(if sys.eq_store().is_false() {
-                    Some(Vec::new())
-                } else {
-                    None
-                });
+                return Ok(None);
             }
-            simp_noop_stat(false);
-            // HS-faithful filter: cases whose eq_store is false were
-            // mzero'd by `contradictoryIf` during simplify; they don't
-            // show up in HS's surviving Disj.  (Other contradiction
-            // reasons surface as explicit Finished(Contradictory) leaves.)
-            let cleaned: Vec<System> = case_systems
-                .into_iter()
-                .filter(|s| !s.eq_store().is_false())
-                .map(|s| {
-                    // HS-faithful `cleanup` (ProofMethod.hs) applied in
-                    // place: `case_systems` is owned here (from
-                    // `simplify_system_with_fanout`'s into_iter), so we
-                    // rename and clear the subst on the owned System
-                    // directly.
-                    s.cleanup()
-                })
-                .collect();
-            // HS-faithful `removeRedundantCases ctxt [] snd`
-            // (ProofMethod.hs `process`): applies it to EVERY proof
-            // method's Disj fan-out, including `Simplify` (which uses
-            // `process (return "")`).
-            // When `simplifySystem`'s `solveUniqueActions` fans out an action
-            // whose AC-multiset unification yields several unifiers that
-            // are equal up to variable renaming (e.g. alethea's
-            // `Learn_A_Ys(A,S,<'ys',<y1,no1>++<y2,no2>>)` — the straight
-            // vs swapped pairing), HS collapses them via
-            // `compareSystemsUpToNewVars` to a SINGLE surviving case (no
-            // top-level `case N`); without this call RS would surface both
-            // as `case 1`/`case 2`.  Gated on BP/MSet by `remove_redundant_cases`'s
-            // own guard (HS short-circuits to `cases0` otherwise), and
-            // empty stable_vars (HS passes `[]`).  Runs BEFORE the
-            // single-case `sys' /= cleanup sys` check, matching HS's order
-            // (the check inspects the post-dedup `M.toList cases`).
-            let cleaned: Vec<System> = remove_redundant_cases_ctx(ctx, |s: &System| s, cleaned);
-            // Empty case-map: `simplifySystem` mzero'd every branch (the
-            // restriction / formula set is contradictory).  HS's `Simplify`
-            // arm (ProofMethod.hs) inspects `M.toList cases`; the
-            // empty list matches the `_ -> return cases` branch, so it
-            // returns `Just M.empty` — Simplify SUCCEEDS with zero cases.
-            // `proveSystemDFS` (Theory/Proof.hs) then
-            // takes Simplify as the head method and builds a childless node,
-            // which `prettyProof` (Theory/Proof.hs)
-            // renders as a `by simplify` leaf closing the
-            // (exists-trace) proof.  Returning `None` here instead would
-            // drop Simplify from the ranked list and let `Induction` win —
-            // the divergence this arm must avoid.
-            if cleaned.is_empty() {
-                return Ok(Some(Vec::new()));
-            }
-            let cleaned_input = sys.clone().cleanup();
-            if cleaned.len() == 1 {
-                // Single-case path: HS's `Simplify` arm (ProofMethod.hs)
-                // checks whether the simplified system equals the cleaned
-                // input — if so, the method "failed" and we return None.
-                // Multi-case fan-out trivially can't satisfy that condition.
-                if cleaned[0] == cleaned_input {
-                    return Ok(None);
-                }
-                return Ok(Some(vec![(
-                    "".to_string(),
-                    cleaned.into_iter().next().unwrap(),
-                )]));
-            }
-            // HS-faithful naming: `distinguish n` (ProofMethod.hs)
-            // with empty case name renders as `show i` ("1", "2", "3", ...)
-            // with NO `_case_` prefix and NO zero-padding (the `pad`
-            // call only runs in the else branch when the prefix is
-            // non-empty).
-            //
-            // Inner duplicate detection: HS's `M.fromListWith (error
-            // "case names not unique")` plus `uniqueListBy` dedups
-            // exact-name duplicates structurally; for our empty-name
-            // case all siblings get unique numeric names so no real
-            // dedup is needed.
-            let out: Vec<(String, System)> = cleaned
-                .into_iter()
-                .enumerate()
-                .map(|(i, s)| ((i + 1).to_string(), s))
-                .collect();
-            Some(out)
+            Some(cases)
         }
         ProofMethod::SolveGoal(g) => {
             // The node-driving search/replay/interactive caller emits the
@@ -436,61 +297,8 @@ pub fn exec_proof_method(
             let mut r = Reduction::new(ctx, sys.clone());
             let outcome = crate::constraint::solver::goals::dispatch_solve_goal(&mut r, g)?;
             let adopted_counter = r.maude.fresh_counter_peek();
-            // Run simplify after every goal-solving step — mirrors
-            // Haskell's `m <* simplifySystem` pattern in `process`
-            // (ProofMethod.hs).  Filter out cases that simplify
-            // to a contradictory system — Haskell's Disj-monad does the
-            // same via `mzero` on `contradictoryIf`, so contradictory
-            // cases never make it into the children map.  This keeps
-            // our proof tree the same shape as Haskell's: when every
-            // case fires a contradiction, the SolveGoal node has 0
-            // children (rendered as a leaf "by solve(...)" in Haskell
-            // / "by contradiction /* closed */" in our normalised diff).
-            //
-            // Returns `Vec<System>` to surface simplify-time fan-out: when
-            // `simplifySystem` internally fans out (via
-            // `solveUniqueActions → solveAction → solveFactEqs SplitNow`
-            // or any `insertFormula → insertAtom EqE → solveTermEqs
-            // SplitNow` whose Maude AC unification returns multiple
-            // arms), the DisjT-monad in HS's `runReduction` replicates
-            // the case once per arm.  Our `simplify_system_with_fanout`
-            // mirrors that, returning N systems.  Each is then cleaned
-            // (renamePrecise + clear subst) per HS's `cleanup`.
-            let simplify =
-                |sys: System,
-                 seed: u64|
-                 -> std::result::Result<Vec<System>, crate::prove::ProveError> {
-                    let raw_systems: Vec<System> =
-                        crate::constraint::solver::simplify::simplify_system_with_fanout_seeded(
-                            ctx, sys, seed,
-                        )?;
-                    // Cleanup each surviving system per HS
-                    // `cleanup` (ProofMethod.hs):
-                    //   cleanup s = L.set sSubst emptySubst
-                    //                       (renamePrecise s)
-                    Ok(raw_systems.into_iter().map(|s| s.cleanup()).collect())
-                };
-            // Filter cases the same way Haskell's `runReduction` does:
-            // when a CR-rule called `contradictoryIf` during simplify
-            // (solveFactEqs / solveRuleEqs / solveSubstEqs hitting an
-            // incompatible unification, or Maude returning the empty
-            // unifier set on a sort/tag mismatch), the Disj entry for that
-            // case becomes `mzero` and disappears.  `eq_store.is_false()`
-            // is the direct proxy for that `mzero`, and the ONLY signal
-            // pruned on here.
-            //
-            // Cases with *other* contradictions (FormulasFalse, Cyclic,
-            // NodeAfterLast, edge-fact-tag mismatch, …)
-            // survive `runReduction` in Haskell and are picked up by the
-            // next iteration's contradictions check as explicit
-            // `Finished(Contradictory(_))` leaves.  Do *not* filter those
-            // here, or the proof tree loses siblings whose contradiction
-            // reason Haskell renders.
-            let keep = |sys: &System| -> bool { !sys.eq_store().is_false() };
-            // `process` (ProofMethod.hs) simplifies every goal-solve outcome,
-            // then deduplicates cases and distinguishes repeated names with
-            // `_case_N`. A linear outcome may split during simplification, so
-            // all outcomes share this pipeline.
+            // `process (solve goal)`: each goal case continues with its own
+            // fresh counter through `simplifySystem`, which may fan out.
             let cases: Vec<(String, System, u64)> = match outcome {
                 GoalCases::Linear => vec![("".to_string(), r.sys, adopted_counter)],
                 GoalCases::LinearNamed(name) => vec![(name, r.sys, adopted_counter)],
@@ -500,43 +308,15 @@ pub fn exec_proof_method(
                     .collect(),
                 GoalCases::Contradictory => return Ok(Some(Vec::new())),
             };
-            {
-                // De-duplicate identical case names by appending
-                // `_case_1`/`_case_2`/... — mirrors Haskell's
-                // `groupSortOn casName` printing convention
-                // (e.g. `R_1_case_1`, `R_1_case_2` for two
-                // distinct unifications against rule `R_1`).
-                //
-                // The dedup must run on the *kept* cases only.  If
-                // we count before `keep` and one of two `Create`
-                // cases gets dropped (e.g. eq_store false after
-                // simplify), we end up with a lone `Create_case_1`
-                // where Haskell shows a bare `Create` — a pure
-                // naming divergence with no proof-shape difference.
-                // So: simplify + keep first, then dedup the
-                // survivors.
-                //
-                // **Order preservation**: Vec<(name, sys)> output
-                // preserves the order from `dispatch_solve_goal`,
-                // which matches Haskell's `disjunctionOfList`
-                // iteration order (rule order in `joinAllRules`).
-                // simplify can fan out per case — flat-map.
-                let mut kept_raw = Vec::new();
-                for (name, sys, seed) in cases {
-                    kept_raw.extend(
-                        simplify(sys, seed)?
-                            .into_iter()
-                            .filter(|s| keep(s))
-                            .map(|s| (name.clone(), s)),
-                    );
+            let mut simplified = Vec::new();
+            for (name, sys, seed) in cases {
+                for s in crate::constraint::solver::simplify::simplify_system_with_fanout_seeded(
+                    ctx, sys, seed,
+                )? {
+                    simplified.push((name.clone(), s));
                 }
-                // No unconditional exact-(name, system) dedup: same-named
-                // survivors are renamed, never dropped.  Variant
-                // enumeration is threaded through SplitG by
-                // `reduction::rule_insts_with_constrs`, so each distinct
-                // variant arrives as its own RuleACInst case here.
-                Some(process_cases(ctx, kept_raw))
             }
+            Some(process(ctx, simplified))
         }
         ProofMethod::Induction => {
             // Search and replay must enforce the same applicability checks.
@@ -586,37 +366,17 @@ pub fn exec_proof_method(
             let mut named: Vec<(String, System)> = Vec::new();
             for (name, fm_case) in [("empty_trace", base), ("non_empty_trace", step)] {
                 // HS `induction` uses `setM sFormulas` — a direct field
-                // write, NOT `insertFormula` (see the `insert_formula`
-                // rationale above).
+                // write, NOT `insert_formula`.
                 let mut case_sys = sys.clone();
                 case_sys.clear_formulas();
                 case_sys.insert_open_formula(fm_case);
-                let sub_systems: Vec<System> =
-                    crate::constraint::solver::simplify::simplify_system_with_fanout(
-                        ctx, case_sys,
-                    )?;
-                for s in sub_systems {
-                    // mzero'd branches (eq-store false) don't survive HS's
-                    // Disj — same filter as the Simplify/SolveGoal arms.
-                    if s.eq_store().is_false() {
-                        continue;
-                    }
-                    // HS-faithful `cleanup` (ProofMethod.hs `process`):
-                    // renamePrecise with an empty Precise supply + clear
-                    // subst.  Without it the IH disjunction's free vars
-                    // keep their high `.N` indices (e.g. `last(#z.7)`)
-                    // instead of the canonical idx-0 form (`last(#z)`).
-                    named.push((name.to_string(), s.cleanup()));
+                for s in
+                    crate::constraint::solver::simplify::simplify_system_with_fanout(ctx, case_sys)?
+                {
+                    named.push((name.to_string(), s));
                 }
             }
-            // HS `process` tail: `removeRedundantCases ctxt [] snd`
-            // (BP/MSet-gated structural dedup, before naming) followed by
-            // `uniqueListBy (comparing fst) id distinguish`
-            // (ProofMethod.hs): singleton names stay bare;
-            // duplicate groups get `<name>_case_<i>`.  (The empty-name
-            // branch of `distinguish` is unreachable here — both
-            // induction case names are non-empty.)
-            Some(process_cases(ctx, named))
+            Some(process(ctx, named))
         }
     };
     Ok(result)
@@ -789,6 +549,28 @@ mod tests {
             Some(Result::Contradictory(Some(Contradiction::FormulasFalse))) => {}
             r => panic!("expected Contradictory(FormulasFalse), got {:?}", r),
         }
+    }
+
+    #[test]
+    fn distinguish_numbers_empty_names_without_a_prefix() {
+        let names = |cases: &[&str]| {
+            distinguish_case_names(
+                cases
+                    .iter()
+                    .map(|n| (n.to_string(), System::empty()))
+                    .collect(),
+            )
+            .into_iter()
+            .map(|(n, _)| n)
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(names(&["", "R", ""]), ["1", "R", "2"]);
+        assert_eq!(names(&[""]), [""]);
+        let ten = names(&["R"; 10]);
+        assert_eq!(
+            (ten[0].as_str(), ten[9].as_str()),
+            ("R_case_01", "R_case_10")
+        );
     }
 
     #[test]

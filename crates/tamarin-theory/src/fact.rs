@@ -11,9 +11,10 @@
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
-use tamarin_term::apply::Apply;
+use tamarin_term::apply::{Apply, LeafSubst};
 use tamarin_term::lterm::{BVar, HasFrees, LNTerm, LVar, Name};
 use tamarin_term::macro_expand::LNMacro;
+use tamarin_term::subst::Subst;
 pub use tamarin_term::tags::FactAnnotation;
 use tamarin_term::term::show_term;
 use tamarin_term::vterm::VTerm;
@@ -358,13 +359,30 @@ impl<T: HasFrees + Clone> HasFrees for Fact<T> {
     }
 }
 
+/// A free substitution the fact and rule [`Apply`] instances accept: its
+/// leaves, plus whether a fact may be returned unchanged without walking its
+/// terms.  Only the whole-system pass ([`SystemSubst`]) has such a fast path.
+pub trait FactSubst: LeafSubst<Const = Name, Var = LVar> {
+    fn skips_fact(&self, _fa: &LNFact) -> bool {
+        false
+    }
+}
+
+impl FactSubst for Subst<Name, LVar> {}
+
+impl FactSubst for SystemSubst<'_> {
+    fn skips_fact(&self, fa: &LNFact) -> bool {
+        SystemSubst::skips_fact(self, fa)
+    }
+}
+
 /// HS `Apply s t => Apply s (Fact t)` (Theory/Model/Fact.hs): the
 /// substitution reaches the fact's terms.  A rewritten fact goes through the
 /// computing constructor, which derives both cached fingerprints from the
 /// rewritten terms: their free variables differ from this fact's, so this
 /// fact's fingerprints do not describe them.
-impl Apply<SystemSubst<'_>> for LNFact {
-    fn apply_changed(&self, subst: &SystemSubst<'_>) -> Option<Self> {
+impl<S: FactSubst> Apply<S> for LNFact {
+    fn apply_changed(&self, subst: &S) -> Option<Self> {
         if subst.skips_fact(self) {
             return None;
         }
@@ -537,21 +555,6 @@ pub fn apply_macro_in_fact(macros: &[LNMacro], f: &LNFact) -> LNFact {
     Fact::fresh_annotated(f.tag, f.annotations.clone(), terms)
 }
 
-/// HS `instance Apply s t => Apply s (Fact t)` (Theory/Model/Fact.hs,
-/// `apply subst = fmap (apply subst)`): a free substitution applied to every
-/// term of a fact, tag and annotations kept.
-pub(crate) fn apply_subst_fact(
-    sigma: &tamarin_term::subst::Subst<tamarin_term::lterm::Name, LVar>,
-    f: &LNFact,
-) -> LNFact {
-    let terms: Vec<LNTerm> = f
-        .terms
-        .iter()
-        .map(|t| tamarin_term::subst::apply_vterm(sigma, t.clone()))
-        .collect();
-    Fact::fresh_annotated(f.tag, f.annotations.clone(), terms)
-}
-
 // LNFact producers: route through the bloom-COMPUTING
 // `Fact::fresh` so the dominant node/action-fact skip fires.
 pub fn fresh_fact(t: LNTerm) -> LNFact {
@@ -643,21 +646,23 @@ pub fn proto_or_out_fact_view(fa: &LNFact) -> Option<Vec<LNTerm>> {
     }
 }
 
-/// Mirrors Haskell `lvarToLnterm` (Theory/Model/Fact.hs): a variable as a term, with
-/// `LSortNat` variables re-sorted to `LSortFresh` (so they can be bound by an
-/// `Fr`-premise); every other sort is kept as is.
-pub fn lvar_to_lnterm(v: &LVar) -> LNTerm {
-    use tamarin_term::lterm::LSort;
-    let v = if v.sort == LSort::Nat {
+/// The variable HS `lvarToLnterm` (Theory/Model/Fact.hs) builds its term
+/// from: an `LSortNat` variable re-sorted to `LSortFresh` (so an
+/// `Fr`-premise can bind it), any other variable as is.
+pub fn nat_to_fresh_var(v: LVar) -> LVar {
+    if v.sort == tamarin_term::lterm::LSort::Nat {
         LVar {
-            name: v.name,
-            sort: LSort::Fresh,
-            idx: v.idx,
+            sort: tamarin_term::lterm::LSort::Fresh,
+            ..v
         }
     } else {
-        *v
-    };
-    tamarin_term::vterm::var_term(v)
+        v
+    }
+}
+
+/// HS `lvarToLnterm` (Theory/Model/Fact.hs).
+pub fn lvar_to_lnterm(v: &LVar) -> LNTerm {
+    tamarin_term::vterm::var_term(nat_to_fresh_var(*v))
 }
 
 // =============================================================================

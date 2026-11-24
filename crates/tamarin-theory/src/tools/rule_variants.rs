@@ -49,8 +49,6 @@ type LNSubst = Subst<Name, LVar>;
 /// `Disj [emptySubstVFresh]` (`trueDisj`, RuleVariants.hs), so a body-divergent rule with no residual substs still unfolds
 /// into exactly one `___VARIANT_1` rule.
 pub(crate) fn unfold_closed_rule(parent: &OpenProtoRule, ac: &ProtoRuleAC) -> Vec<OpenProtoRule> {
-    use tamarin_term::lterm::{HasFrees, LVar};
-    use tamarin_term::subst_vfresh::LNSubstVFresh;
     let o = closed_rule_as_open(parent, ac);
     if crate::rule::is_trivial_proto_variant_ac(ac, parent.rule_e()) {
         return vec![o];
@@ -70,32 +68,16 @@ pub(crate) fn unfold_closed_rule(parent: &OpenProtoRule, ac: &ProtoRuleAC) -> Ve
     // variant-disjunction DOMAIN keys are frees (keys-only,
     // Theory/Model/Rule.hs; SubstVFresh.hs), so
     // they participate in the bound alongside the body.
-    let mut max_idx: Option<u64> = None;
-    {
-        let mut see = |v: &LVar| {
-            max_idx = Some(max_idx.map_or(v.idx, |m| m.max(v.idx)));
-        };
-        for s in substs {
-            for (k, _) in s.iter() {
-                see(k);
-            }
-        }
-        ac.for_each_free(&mut see);
-    }
-    let seed = max_idx.map(|m| m + 1).unwrap_or(0);
+    let seed = tamarin_term::lterm::avoid(&(substs.to_vec(), ac.clone()));
     substs
         .iter()
         .enumerate()
         .map(|(i, s)| {
             // Each subst gets its own `evalFreshAvoiding` scope (HS maps
             // `freshToFreeAvoiding` per subst against the same `ruAC`).
-            let mut counter = seed;
-            let sigma = s.fresh_to_free_avoiding(|n| {
-                let b = counter;
-                counter += n;
-                b
-            });
-            let mut ru = crate::rule::apply_subst_rule(&sigma, ac);
+            let mut fresh = seed.clone();
+            let sigma = s.fresh_to_free_avoiding(|n| fresh.fresh_idents(n));
+            let mut ru = tamarin_term::apply::Apply::apply(ac.clone(), &sigma);
             // `rName i` (lib/theory/src/Rule.hs): FreshRule keeps its
             // name; StandRule gains the 1-based `___VARIANT_<i>` suffix.
             ru.info.name = crate::rule::rule_variant_name(ru.info.name, i + 1);
@@ -297,22 +279,10 @@ fn make_proto_rule_ac(
 
     // Compute frees of the new rule body and restrict each variant
     // subst to those (HS: `map (restrictVFresh (frees (prems, concs, acts, newvs))) freshSubsts0`).
-    use tamarin_term::lterm::HasFrees;
-    let mut frees_set: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
-    {
-        let mut visit = |v: &LVar| {
-            frees_set.insert(*v);
-        };
-        for f in premises.iter().chain(&conclusions).chain(&actions) {
-            for t in f.terms.iter() {
-                t.for_each_free(&mut visit);
-            }
-        }
-        for t in &new_vars {
-            t.for_each_free(&mut visit);
-        }
-    }
-    let frees_vec: Vec<LVar> = frees_set.into_iter().collect();
+    let frees_vec = tamarin_term::lterm::frees(&(
+        (premises.clone(), conclusions.clone()),
+        (actions.clone(), new_vars.clone()),
+    ));
     let variants: Vec<LNSubstVFresh> = variants
         .into_iter()
         .map(|s| s.restrict(&frees_vec))
@@ -564,33 +534,13 @@ pub fn abstract_rule_and_variants(
     rule: &ProtoRuleE,
 ) -> Result<Option<(ProtoRuleE, Vec<LNSubstVFresh>)>, VariantsError> {
     use tamarin_term::function_symbols::FunSym;
-    use tamarin_term::lterm::HasFrees;
     let irreducible = maude.maude_sig().irreducible_fun_syms.clone();
 
     // Avoid clashes with the rule's existing free vars.  HS:
     // `convertRule \`evalFreshTAvoiding\` ru` — Fresh counter starts at
     // (max idx of rule's free vars) + 1.
-    let mut avoid_max: u64 = 0;
-    {
-        let mut visit = |v: &LVar| {
-            if v.idx > avoid_max {
-                avoid_max = v.idx;
-            }
-        };
-        for f in rule
-            .premises
-            .iter()
-            .chain(&rule.actions)
-            .chain(&rule.conclusions)
-        {
-            for t in f.terms.iter() {
-                t.for_each_free(&mut visit);
-            }
-        }
-        for t in &rule.new_vars {
-            t.for_each_free(&mut visit);
-        }
-    }
+    let rule_frees = tamarin_term::lterm::frees(rule);
+    let avoid_max = rule_frees.iter().map(|v| v.idx).max().unwrap_or(0);
     // `convertRule` runs under `evalFreshTAvoiding ru` (RuleVariants.hs).
     // Share the Maude process while giving each rule its own counter, seeded
     // above all variables in that rule.
@@ -670,22 +620,7 @@ pub fn abstract_rule_and_variants(
     // abstracting compound terms. `frees` supplies them in sorted, deduplicated
     // LVar order (index, sort, name); that order determines fresh indices and
     // the subsequent ordering of variant substitutions.
-    let mut leaf_set: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
-    let mut visit = |v: &LVar| {
-        leaf_set.insert(*v);
-    };
-    for f in rule
-        .premises
-        .iter()
-        .chain(&rule.actions)
-        .chain(&rule.conclusions)
-    {
-        f.terms.iter().for_each(|t| t.for_each_free(&mut visit));
-    }
-    for t in &rule.new_vars {
-        t.for_each_free(&mut visit);
-    }
-    for v in leaf_set {
+    for v in rule_frees {
         let leaf_term: LNTerm = Term::Lit(tamarin_term::vterm::Lit::Var(v));
         // The result is discarded; the side effect on `bindings` is
         // what matters.
@@ -733,12 +668,9 @@ pub fn abstract_rule_and_variants(
         // return `renamePrecise(rule)` with the trivial disjunction directly
         // (no Maude call).  This only diverges from the short-circuit for
         // rules renamePrecise actually rewrites (issue527's Register_pk).
-        if rule_renames_under_precise(rule) {
-            let (ac, substs) =
-                rename_precise_rule_with_variants(rule.clone(), vec![LNSubstVFresh::empty()]);
-            return Ok(Some((ac, substs)));
-        }
-        return Ok(None);
+        return Ok(
+            rename_precise_rule_if_changed(rule).map(|ac| (ac, vec![LNSubstVFresh::empty()]))
+        );
     }
 
     // Build the abstracted rule.
@@ -791,28 +723,7 @@ pub fn abstract_rule_and_variants(
     // The `compose_vfresh` helper mirrors HS's full pipeline:
     // extendWithRenaming + freshToFreeAvoidingFast + compose + freeToFreshRaw.
     // Its freshening keeps independently scoped variant range variables apart.
-    let abstr_frees: Vec<LVar> = {
-        let mut s: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
-        {
-            let mut visit = |v: &LVar| {
-                s.insert(*v);
-            };
-            for f in abstracted_rule
-                .premises
-                .iter()
-                .chain(&abstracted_rule.actions)
-                .chain(&abstracted_rule.conclusions)
-            {
-                for t in f.terms.iter() {
-                    t.for_each_free(&mut visit);
-                }
-            }
-            for t in &abstracted_rule.new_vars {
-                t.for_each_free(&mut visit);
-            }
-        }
-        s.into_iter().collect()
-    };
+    let abstr_frees = tamarin_term::lterm::frees(&abstracted_rule);
 
     // HS-faithful: filter variants via `isFreshRedundant` (RuleVariants.hs)
     // BEFORE composition. A variant is redundant if it forces a freshly
@@ -836,12 +747,6 @@ pub fn abstract_rule_and_variants(
         if freshly_introduced.is_empty() || premise_terms_for_filter.is_empty() {
             raw_substs
         } else {
-            let mut frees = std::collections::BTreeSet::new();
-            for t in &premise_terms_for_filter {
-                t.for_each_free(&mut |v| {
-                    frees.insert(*v);
-                });
-            }
             // HS-faithful: `freshToFreeAvoidingFast sFresh (frees premiseTerms)`
             // (RuleVariants.hs; defined Term/Substitution.hs) runs `rename` inside `evalFreshAvoiding
             // (frees premiseTerms)` — a LOCAL Fresh scope seeded at
@@ -858,18 +763,13 @@ pub fn abstract_rule_and_variants(
             // Mirror HS by seeding LOCALLY from `frees premiseTerms` and
             // advancing only a local `counter`.  Maude's global counter
             // stays untouched by this filter.
-            let frees_max: u64 = frees.iter().map(|v| v.idx).max().unwrap_or(0);
-            let filter_base: u64 = frees_max.saturating_add(1);
+            let filter_base = tamarin_term::lterm::avoid(&premise_terms_for_filter);
             raw_substs
                 .into_iter()
                 .filter(|pairs| {
                     let s_fresh = LNSubstVFresh::from_list(pairs.clone());
-                    let mut counter = filter_base;
-                    let subst = s_fresh.fresh_to_free_avoiding(|n| {
-                        let b = counter;
-                        counter += n;
-                        b
-                    });
+                    let mut fresh = filter_base.clone();
+                    let subst = s_fresh.fresh_to_free_avoiding(|n| fresh.fresh_idents(n));
                     let premises: Vec<LNTerm> = premise_terms_for_filter
                         .iter()
                         .map(|t| {
@@ -883,7 +783,7 @@ pub fn abstract_rule_and_variants(
                         .collect();
                     for ft in &fresh_terms {
                         for p in &premises {
-                            if contains_subterm(ft, p) {
+                            if tamarin_term::term::is_subterm(ft, p) {
                                 return false;
                             }
                         }
@@ -988,79 +888,19 @@ pub fn abstract_rule_and_variants(
     Ok(Some((abstracted_rule, final_substs)))
 }
 
-/// HS-faithful `renamePrecise` (RuleVariants.hs) applied to a protocol
-/// rule that has NO reducible-headed sub-terms (so no AC-variant narrowing).
-/// `variantsProtoRule` runs `renamePrecise` on EVERY closed rule, which
-/// re-indexes each variable to a PER-NAME fresh index — packing distinct-named
-/// variables that share no index dependency onto the same low index (e.g. a
-/// SAPiC `lock` + `v` become `lock.0` + `v.0`, not `lock.0` + `v.1`).  Returns
-/// the repacked rule iff `renamePrecise` actually rewrites at least one var;
-/// `None` when the rule is already in per-name precise normal form (so the
-/// caller can leave `abstracted_rule` unset and use the rule as-is).
-///
-/// For these rules the variant disjunction is always the trivial
-/// `[emptySubstVFresh]` (empty domain), so repacking the rule body cannot
-/// misalign any variant substitution.
+/// HS `renamePrecise` (RuleVariants.hs) of a rule whose variant disjunction
+/// is the trivial `[emptySubstVFresh]`: the per-name renumbered rule, or
+/// `None` when the rule is already in that normal form.
 pub fn rename_precise_rule_if_changed(rule: &ProtoRuleE) -> Option<ProtoRuleE> {
-    if !rule_renames_under_precise(rule) {
-        return None;
-    }
-    let (packed, _substs) =
-        rename_precise_rule_with_variants(rule.clone(), vec![LNSubstVFresh::empty()]);
-    Some(packed)
-}
-
-/// Would HS's `renamePrecise` (per-name fresh indices, RuleVariants.hs)
-/// rewrite any of this rule's free vars?  True iff some var's renamePrecise
-/// index differs from its original — the realistic trigger being two free
-/// vars sharing a name (e.g. `~ltk` and `ltk` → the second becomes `ltk.1`).
-/// Walks vars in the SAME order as `rename_precise_rule_with_variants` (the
-/// variant disjunction has no keys for the trivial-disjunction case, so it
-/// reduces to prems, concs, acts, new_vars).
-// var->var precise-rename map; keyed lookup only, never iterated;
-// std kept (byte-inert) — iteration order never reaches output.
-#[allow(clippy::disallowed_types)]
-fn rule_renames_under_precise(rule: &ProtoRuleE) -> bool {
-    use std::collections::HashMap;
-    use tamarin_term::lterm::HasFrees;
-    use tamarin_utils::fresh::PreciseFreshState;
-    let mut vars: Vec<LVar> = Vec::new();
-    {
-        let mut collect = |v: &LVar| vars.push(*v);
-        for f in rule
-            .premises
-            .iter()
-            .chain(&rule.conclusions)
-            .chain(&rule.actions)
-        {
-            for t in f.terms.iter() {
-                t.for_each_free(&mut collect);
-            }
-        }
-        for t in &rule.new_vars {
-            t.for_each_free(&mut collect);
-        }
-    }
-    let mut state = PreciseFreshState::nothing_used();
-    let mut map: HashMap<LVar, LVar> = HashMap::new();
-    for v in &vars {
-        if map.contains_key(v) {
-            continue;
-        }
-        let idx = state.fresh_ident(v.name);
-        if idx != v.idx {
-            return true;
-        }
-        map.insert(
-            *v,
-            LVar {
-                name: v.name,
-                sort: v.sort,
-                idx,
-            },
-        );
-    }
-    false
+    // The first occurrence of each variable draws its per-name index, as in
+    // `renamePrecise`; the rule changes iff some variable's index does.
+    let mut state = tamarin_utils::fresh::PreciseFreshState::nothing_used();
+    let mut seen = std::collections::BTreeSet::new();
+    let changes = tamarin_term::lterm::frees_list(rule)
+        .into_iter()
+        .filter(|v| seen.insert(*v))
+        .any(|v| state.fresh_ident(v.name) != v.idx);
+    changes.then(|| rename_precise_rule_with_variants(rule.clone(), vec![LNSubstVFresh::empty()]).0)
 }
 
 /// Apply HS-style `renamePrecise` to a rule + its variant disjunction substs.
@@ -1084,24 +924,6 @@ fn rename_precise_rule_with_variants(
 ) -> (ProtoRuleE, Vec<LNSubstVFresh>) {
     let (substs, rule) = tamarin_term::bind::rename_precise((substs, rule));
     (rule, substs)
-}
-
-/// `findPos`-style subterm check: returns true if `needle` appears
-/// anywhere within `haystack` (including as the whole term).  Mirrors
-/// HS's `isJust . findPos` used in `isFreshRedundant`.
-fn contains_subterm(needle: &LNTerm, haystack: &LNTerm) -> bool {
-    use tamarin_term::term::Term;
-    if needle == haystack {
-        return true;
-    }
-    if let Term::App(_, args) = haystack {
-        for a in args.iter() {
-            if contains_subterm(needle, a) {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 /// WF-only check: mirrors HS `variantsCheck` (Wellformedness.hs)
@@ -1186,9 +1008,11 @@ pub fn rule_has_no_variants_for_wf_with(
         }
         // isFreshRedundant {} = True iff any fresh term appears in a
         // non-Fr premise (i.e. all identity variants are redundant).
-        return freshly_introduced
-            .iter()
-            .any(|ft| premise_terms.iter().any(|p| contains_subterm(ft, p)));
+        return freshly_introduced.iter().any(|ft| {
+            premise_terms
+                .iter()
+                .any(|p| tamarin_term::term::is_subterm(ft, p))
+        });
     }
 
     // Path 2: reducible rule — `abstract_rule_and_variants` returns
