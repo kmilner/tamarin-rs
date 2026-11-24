@@ -315,3 +315,66 @@ fn builtin_facts_are_not_injective() {
         inj.iter().map(|(t, _)| *t).collect::<Vec<_>>()
     );
 }
+
+/// HS `trimmedPairTerms` (Simplify.hs): an instance whose term has fewer
+/// pairs than its position's shape cannot be shaped, so it is `Nothing` and
+/// `behaviourTerms`'s `mapMaybe` drops it.  A deep enough instance keeps its
+/// leaves, the last one unflattened.
+#[test]
+fn trimmed_pair_terms_drops_an_instance_too_short_for_the_shape() {
+    use crate::fact::{Fact, FactTag, Multiplicity};
+    use tamarin_term::builtin::{fresh_var, msg_var, pair};
+    use MonotonicBehaviour::{Constant, StrictlyIncreasing};
+
+    let s_tag = FactTag::Proto(Multiplicity::Linear, "S", 2);
+    let behaviours = vec![vec![Constant, StrictlyIncreasing]];
+    let id = fresh_var("id", 0);
+
+    let short = Fact::new(s_tag, vec![id.clone(), msg_var("x", 0)]);
+    assert_eq!(trimmed_pair_terms(&short, &behaviours), None);
+
+    let (a, b, c) = (msg_var("a", 0), msg_var("b", 0), msg_var("c", 0));
+    let deep = Fact::new(
+        s_tag,
+        vec![id.clone(), pair(pair(a.clone(), b.clone()), c.clone())],
+    );
+    assert_eq!(
+        trimmed_pair_terms(&deep, &behaviours),
+        Some((id, vec![(Constant, pair(a, b)), (StrictlyIncreasing, c)]))
+    );
+}
+
+/// HS unions forced and inferred `(tag, behaviours)` pairs, so a forced tag
+/// the analysis also infers appears twice: the oracle prints
+/// `L_CellLocked/2, L_PureState/2, L_PureState/2` for this theory.
+#[test]
+fn forced_and_inferred_instances_of_a_tag_both_survive() {
+    let theory = crate::elaborate::elaborate(
+        &tamarin_parser::parse_theory(
+            "theory T begin\n\
+             rule BeginCell: [Fr(~k)] --> [L_PureState(~k, 'v')]\n\
+             rule Copy: [L_PureState(~k, x)] --> [L_PureState(~k, x)]\n\
+             end",
+            &[],
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let pure_state = FactTag::Proto(crate::fact::Multiplicity::Linear, "L_PureState", 2);
+    let cell_locked = FactTag::Proto(crate::fact::Multiplicity::Linear, "L_CellLocked", 2);
+    let insts = injective_fact_instances_for_rules(
+        theory.rules(),
+        &[],
+        &theory.signature.reducible_fun_syms_fast,
+        &[pure_state, cell_locked].into(),
+    );
+    let forced = vec![vec![MonotonicBehaviour::Unspecified]; 2];
+    assert_eq!(
+        insts.into_iter().collect::<Vec<_>>(),
+        [
+            (cell_locked, forced.clone()),
+            (pure_state, vec![vec![MonotonicBehaviour::Constant]]),
+            (pure_state, forced),
+        ]
+    );
+}

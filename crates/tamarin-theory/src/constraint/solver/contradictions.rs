@@ -1470,7 +1470,7 @@ fn injective_interference_candidates_with_graph<'a>(
             Some(f) => f,
             None => continue,
         };
-        if !ctxt.injective_fact_insts.contains_key(&k_fa_prem.tag) {
+        if !ctxt.is_injective_tag(&k_fa_prem.tag) {
             continue;
         }
         let k_term = k_fa_prem.terms.first();

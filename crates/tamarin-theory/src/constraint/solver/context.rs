@@ -170,10 +170,7 @@ pub struct ProofContextShared {
     pub other_restrictions: Vec<std::sync::Arc<crate::guarded::Guarded>>,
     /// Fact tags whose instances are uniquely identified by their first
     /// argument. Computed once from the theory and immutable thereafter.
-    pub injective_fact_insts: std::collections::BTreeMap<
-        crate::fact::FactTag,
-        Vec<Vec<crate::tools::injective_fact_instances::MonotonicBehaviour>>,
-    >,
+    pub injective_fact_insts: crate::tools::injective_fact_instances::InjectiveFactInsts,
     /// `pcTrueSubterm` — True iff every destructor rule has its
     /// RHS as a proper subterm of its LHS (`all isSubtermRule $
     /// filter isDestrRule $ intruder_rules`).  Mirrors Haskell's
@@ -257,7 +254,7 @@ pub struct ProofContextOptions {
     /// executable rules have been unfolded or annotated by auto-sources.
     pub macros: Vec<tamarin_term::macro_expand::LNMacro>,
     pub restrictions: Vec<crate::guarded::Guarded>,
-    pub forced_injective_facts: Vec<crate::fact::FactTag>,
+    pub forced_injective_facts: std::collections::BTreeSet<crate::fact::FactTag>,
     pub intruder_rules: Option<IntrRuleCache>,
     pub parameters: crate::constraint::solver::sources::IntegerParameters,
     pub sys_retention: crate::constraint::solver::search::SysRetention,
@@ -344,6 +341,14 @@ impl std::ops::Deref for ProofContext {
     type Target = ProofContextShared;
     fn deref(&self) -> &ProofContextShared {
         &self.shared
+    }
+}
+
+impl ProofContextShared {
+    /// Membership in HS `S.map fst $ L.get pcInjectiveFactInsts ctxt`
+    /// (Contradictions.hs, Simplify.hs).
+    pub fn is_injective_tag(&self, tag: &crate::fact::FactTag) -> bool {
+        self.injective_fact_insts.iter().any(|(t, _)| t == tag)
     }
 }
 
@@ -841,22 +846,13 @@ impl ProofContext {
         Self::dump_intruder_rules(&intruder_rules);
         // HS closeRuleCache analyzes macro-expanded cprRuleE, including
         // after auto-sources has replaced executable bodies by AC members.
-        let mut injective_fact_insts =
+        let injective_fact_insts =
             crate::tools::injective_fact_instances::injective_fact_instances_for_rules(
                 &rules,
                 &macros,
                 &sig.reducible_fun_syms_fast,
+                &forced_injective_facts,
             );
-        // HS `closeRuleCache` (CloseRule.hs): union the FORCED injective
-        // fact tags BEFORE source precomputation reads `injective_fact_insts`.
-        if !forced_injective_facts.is_empty() {
-            injective_fact_insts =
-                crate::tools::injective_fact_instances::union_forced_injective_fact_instances(
-                    injective_fact_insts,
-                    &forced_injective_facts,
-                );
-        }
-        let injective_fact_insts = injective_fact_insts.into_iter().collect();
         // Explicit AC families are executable rules, not display-only metadata.
         // Keep injectivity based on the original expanded E rules, but build
         // all solver indices and loop breakers from the supplied members.
@@ -1267,12 +1263,18 @@ end"#
                     ..Default::default()
                 },
             );
-            let expected =
-                (first_argument == "~id").then(|| vec![vec![MonotonicBehaviour::Unstable]]);
+            let expected: Vec<_> = (first_argument == "~id")
+                .then(|| {
+                    (
+                        FactTag::Proto(Multiplicity::Linear, "S", 2),
+                        vec![vec![MonotonicBehaviour::Unstable]],
+                    )
+                })
+                .into_iter()
+                .collect();
             assert_eq!(
-                ctx.injective_fact_insts
-                    .get(&FactTag::Proto(Multiplicity::Linear, "S", 2)),
-                expected.as_ref()
+                ctx.injective_fact_insts.iter().cloned().collect::<Vec<_>>(),
+                expected
             );
         }
     }
@@ -1323,10 +1325,11 @@ end"#;
             ("C", MonotonicBehaviour::Unstable),
             ("P", MonotonicBehaviour::Unstable),
         ] {
-            assert_eq!(
-                ctx.injective_fact_insts
-                    .get(&FactTag::Proto(Multiplicity::Linear, tag, 2)),
-                Some(&vec![vec![behaviour]]),
+            assert!(
+                ctx.injective_fact_insts.contains(&(
+                    FactTag::Proto(Multiplicity::Linear, tag, 2),
+                    vec![vec![behaviour]]
+                )),
                 "{tag} must be analysed after macro expansion"
             );
         }

@@ -645,21 +645,12 @@ pub fn web_macros(thy: &Theory) -> Option<String> {
 fn render_injective_fact_insts(elab: &Theory) -> String {
     use crate::fact::{FactTag, Multiplicity};
     use crate::pretty_hpj::{self as hpj, punctuate, Doc};
-    let mut tags = crate::tools::injective_fact_instances::injective_fact_instances_for_rules(
+    let tags = crate::tools::injective_fact_instances::injective_fact_instances_for_rules(
         elab.rules(),
         &elab.macros().cloned().collect::<Vec<_>>(),
         &elab.signature.reducible_fun_syms_fast,
+        &elab.options.forced_injective_facts,
     );
-    // HS `closeRuleCache` (CloseRule.hs): union the FORCED injective facts
-    // (`setforcedInjectiveFacts {L_PureState, L_CellLocked}`,
-    // lib/sapic/src/Sapic.hs) when
-    // the state-channel optimisation is on.
-    if elab.options.state_channel_opt() {
-        tags = crate::tools::injective_fact_instances::union_forced_injective_fact_instances(
-            tags,
-            &crate::tools::injective_fact_instances::pure_state_forced_fact_tags(),
-        );
-    }
     if tags.is_empty() {
         return String::new();
     }

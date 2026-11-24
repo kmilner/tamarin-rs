@@ -346,6 +346,10 @@ pub struct Options {
     pub deduction_chain_check: bool,
     /// HS `_lemmasToProve`: lemma names the user requested via `--prove=NAME`.
     pub lemmas_to_prove: Vec<String>,
+    /// HS `_forcedInjectiveFacts`: set only by a successful SAPIC translation
+    /// (`setforcedInjectiveFacts`, sapic/src/Sapic.hs) and unioned into the
+    /// inferred injective fact instances by `closeRuleCache` (CloseRule.hs).
+    pub forced_injective_facts: std::collections::BTreeSet<crate::fact::FactTag>,
 }
 
 /// HS `defaultOption` (OpenTheory.hs), whose tenth field is the
@@ -356,6 +360,7 @@ impl Default for Options {
             declarable: [false; tamarin_parser::DeclarableOption::ALL.len()],
             deduction_chain_check: true,
             lemmas_to_prove: Vec::new(),
+            forced_injective_facts: Default::default(),
         }
     }
 }

@@ -8,6 +8,7 @@
 //!   - `foldM liftedAddProtoRule th  (map (`OpenProtoRule` []) eProtoRule)`
 //!   - `foldM liftedAddRestriction th1 rest`
 //!   - `addHeuristic [SapicRanking]` unless the user set one
+//!   - `setforcedInjectiveFacts` under the state-channel optimisation
 //!
 //! HS's final `_thyIsSapic = True` has no stored counterpart here: the theory
 //! derives the translation gate from its top-level process items.
@@ -21,6 +22,7 @@
 use tamarin_theory::wellformedness::WfError;
 
 use tamarin_theory::elaborate::{add_restriction, lifted_add_proto_rule, ElabError};
+use tamarin_theory::fact::{FactTag, Multiplicity};
 use tamarin_theory::predicate::Predicate;
 use tamarin_theory::restriction::apply_macro_in_restriction;
 use tamarin_theory::theory::{LNMacro, Theory};
@@ -114,6 +116,16 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
     if !user_set_heuristic && thy.heuristic.is_empty() {
         thy.heuristic
             .push(tamarin_theory::constraint::solver::goals::GoalRanking::Sapic);
+    }
+
+    // For the state optimisation, force `pureStateFactTag` and
+    // `pureStateLockFactTag` (Facts.hs) to be injective (sapic/src/Sapic.hs).
+    if thy.options.state_channel_opt() {
+        thy.options.forced_injective_facts = [
+            FactTag::Proto(Multiplicity::Linear, "L_PureState", 2),
+            FactTag::Proto(Multiplicity::Linear, "L_CellLocked", 2),
+        ]
+        .into();
     }
 
     Ok(wf_report)
@@ -255,6 +267,27 @@ mod tests {
                 .any(|r| r.rule.info.name == ProtoRuleName::Stand("outfclol_0_1")),
             "the top-level process was typed without the equivLemma's types"
         );
+    }
+
+    /// `translation-state-optimisation` forces the pure-state facts injective
+    /// only through a translated process: `translate` returns an MSR theory
+    /// unchanged (sapic/src/Sapic.hs).
+    #[test]
+    fn state_optimisation_forces_injective_facts_only_with_a_process() {
+        let forced = |body: &str| {
+            let src =
+                format!("theory T begin\noptions: translation-state-optimisation\n{body}\nend");
+            let parsed = tamarin_parser::parse_theory(&src, &[]).unwrap();
+            let mut thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
+            apply_sapic(&mut thy, false).unwrap();
+            thy.options
+                .forced_injective_facts
+                .iter()
+                .map(tamarin_theory::fact::show_fact_tag)
+                .collect::<Vec<_>>()
+        };
+        assert!(forced("rule A: [Fr(~k)] --> [L_PureState(~k, 'a')]").is_empty());
+        assert_eq!(forced("process:\n  0"), ["L_CellLocked", "L_PureState"]);
     }
 
     /// Translation and `_restrict` expansion exceptions reach the user as

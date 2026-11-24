@@ -205,7 +205,7 @@ fn last_injective_nodes_merge_unless_strictly_ordered() {
     std::sync::Arc::get_mut(&mut ctx.shared)
         .unwrap()
         .injective_fact_insts
-        .insert(tag, Vec::new());
+        .insert((tag, Vec::new()));
     let fact = Fact::new(tag, vec![tamarin_term::lterm::pub_term("id")]);
     let rule = |name, prems, concs| {
         Rule::new(

@@ -287,7 +287,7 @@ fn non_injective_fact_instances_pairs(
             Some(f) => f,
             None => continue,
         };
-        if !ctxt.injective_fact_insts.contains_key(&k_fa_prem.tag) {
+        if !ctxt.is_injective_tag(&k_fa_prem.tag) {
             continue;
         }
         let k_term = match k_fa_prem.terms.first() {
@@ -1769,7 +1769,8 @@ fn simp_injective_fact_eq_mon_pass(
         return Ok(SystemOutcome::Linear);
     }
     // HS `getPairs`: per injective tag (in set order), `behaviourTerms` maps
-    // each node, in `M.toList` order, to its `trimmedPairTerms` premises.
+    // each node, in `M.toList` order, to its `trimmedPairTerms` premises
+    // (`mapMaybe`: a premise whose terms do not fit the shape is dropped).
     type BehaviourTerms = Vec<(
         tamarin_term::lterm::LNTerm,
         Vec<(MonotonicBehaviour, tamarin_term::lterm::LNTerm)>,

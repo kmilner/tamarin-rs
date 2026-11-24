@@ -1040,16 +1040,6 @@ impl ProverSession {
             restrictions.push(guarded_or_error(&r.formula)?);
         }
         let rules: Vec<OpenProtoRule> = theory.rules().cloned().collect();
-        // HS `setforcedInjectiveFacts {L_PureState, L_CellLocked}`
-        // (lib/sapic/src/Sapic.hs): when the state-channel optimisation is
-        // on, those two facts are forced
-        // injective for the WHOLE proof (`closeRuleCache`, CloseRule.hs).
-        let forced_injective_facts: Vec<crate::fact::FactTag> =
-            if theory.options.state_channel_opt() {
-                crate::tools::injective_fact_instances::pure_state_forced_fact_tags()
-            } else {
-                Vec::new()
-            };
         // HS closes the theory once and each proof seeds its fresh supply
         // from `avoid sys`; restore the counter so the template build does
         // not shift any lemma's numbering.
@@ -1061,7 +1051,7 @@ impl ProverSession {
                 maude_pool,
                 macros: theory.macros().cloned().collect(),
                 restrictions,
-                forced_injective_facts,
+                forced_injective_facts: theory.options.forced_injective_facts.clone(),
                 intruder_rules: ndc_cache,
                 parameters,
                 sys_retention,
