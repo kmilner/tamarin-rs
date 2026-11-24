@@ -562,62 +562,28 @@ fn recurse_subterm(
     }
 }
 
-/// The Nat guards of HS `isTrueFalse reducible Nothing` (SubtermStore.hs),
-/// which fire BEFORE the `redElem` cases:
-///
-/// ```haskell
-/// | onlyOnes small && l small < l big && sortOfLNTerm big == LSortNat = Just True
-/// | (sortOfLNTerm small == LSortNat || isMsgVar small) && sortOfLNTerm big == LSortNat =
-///     case processACSubterm NatPlus (small, big) of
-///       Right res -> Just res
-///       Left _    -> Nothing
-/// ```
-///
-/// A matching guard is the WHOLE answer for the pair, inconclusive
-/// (`Some(None)`) included — HS's guarded equation does not fall through to
-/// the later `redElem` / constructor equations.  `None` means neither guard
-/// applies, so the caller continues with [`is_true_false_structural`].
-pub fn nat_guards(small: &LNTerm, big: &LNTerm) -> Option<Option<bool>> {
+/// `isTrueFalse reducible Nothing (small, big)` (SubtermStore.hs):
+/// `Some(true)` / `Some(false)` for a trivially true / false subterm
+/// relation, `None` when it depends on the substitution. The guards follow
+/// HS's equation order; a matching Nat guard is the whole answer.
+pub fn is_true_false(reducible: &FastSet<FunSym>, small: &LNTerm, big: &LNTerm) -> Option<bool> {
     use tamarin_term::function_symbols::AcSym;
-    use tamarin_term::lterm::{flattened_ac_terms, is_msg_var, sort_of_lnterm, LSort};
-    let big_nat = sort_of_lnterm(big) == LSort::Nat;
-    if !big_nat {
-        return None;
-    }
-    let small_flat = flattened_ac_terms(AcSym::NatPlus, small);
-    let big_flat = flattened_ac_terms(AcSym::NatPlus, big);
-    let only_ones = small_flat.iter().all(|t| tamarin_term::term::is_nat_one(t));
-    if only_ones && small_flat.len() < big_flat.len() {
-        return Some(Some(true));
-    }
-    if sort_of_lnterm(small) == LSort::Nat || is_msg_var(small) {
-        // processACSubterm NatPlus (SubtermStore.hs): sort +
-        // removeSame on flattenedACTerms; empty big -> False, empty small
-        // -> True, otherwise inconclusive.  The rebuilt `Ok` terms are the
-        // caller's business (`splitSubterm`'s `step` re-runs it for the
-        // `NatSubtermD` leaf).
-        return Some(process_ac_subterm(AcSym::NatPlus, small, big).err());
-    }
-    None
-}
-
-/// The structural guards of HS `isTrueFalse reducible Nothing`
-/// (SubtermStore.hs), i.e. everything after the Nat guards: the
-/// `redElem` pair, the constant big side, CR-rule S_invalid on a variable
-/// big side, and CR-rule S_subterm-ac-recurse on a non-reducible AC big
-/// side.  `None` when the pair is undecidable.
-///
-/// `simp_injective_fact_eq_mon_pass` (Simplify.hs) splices this
-/// between the Nat guards and HS's `(Just sst)` store-membership arms
-/// (SubtermStore.hs); `propagate_subterm_obvious` calls it alone.
-pub fn is_true_false_structural(
-    reducible: &FastSet<FunSym>,
-    small: &LNTerm,
-    big: &LNTerm,
-) -> Option<bool> {
-    use tamarin_term::function_symbols::FunSym;
-    use tamarin_term::lterm::{is_fresh_var, is_msg_var, is_pub_var, sort_of_lnterm, LSort};
+    use tamarin_term::lterm::{
+        flattened_ac_terms, is_fresh_var, is_msg_var, is_pub_var, sort_of_lnterm, LSort,
+    };
     use tamarin_term::vterm::Lit;
+    let small_nat_or_msg_var = sort_of_lnterm(small) == LSort::Nat || is_msg_var(small);
+    if sort_of_lnterm(big) == LSort::Nat {
+        let small_flat = flattened_ac_terms(AcSym::NatPlus, small);
+        let only_ones = small_flat.iter().all(|t| tamarin_term::term::is_nat_one(t));
+        if only_ones && small_flat.len() < flattened_ac_terms(AcSym::NatPlus, big).len() {
+            return Some(true);
+        }
+        // CR-rule S_nat (delayed).
+        if small_nat_or_msg_var {
+            return process_ac_subterm(AcSym::NatPlus, small, big).err();
+        }
+    }
     // `big redElem small` covers `small == big`.
     if elem_not_below_reducible(reducible, big, small) {
         return Some(false);
@@ -625,39 +591,22 @@ pub fn is_true_false_structural(
     if elem_not_below_reducible(reducible, small, big) {
         return Some(true);
     }
-    // Nothing can be a strict subterm of a constant.
-    if let Term::Lit(Lit::Con(_)) = big {
-        return Some(false);
-    }
-    // CR-rule S_invalid: a pub/fresh var (atom var) has no subterms, and a
-    // Nat-sorted big with a non-Nat/non-MsgVar small is invalid.
-    if let Term::Lit(Lit::Var(_)) = big {
-        if is_pub_var(big) || is_fresh_var(big) {
-            return Some(false);
+    match big {
+        // Nothing can be a strict subterm of a constant.
+        Term::Lit(Lit::Con(_)) => Some(false),
+        // CR-rule S_invalid.
+        Term::Lit(Lit::Var(_))
+            if is_pub_var(big)
+                || is_fresh_var(big)
+                || (!small_nat_or_msg_var && sort_of_lnterm(big) == LSort::Nat) =>
+        {
+            Some(false)
         }
-        let small_ok = sort_of_lnterm(small) == LSort::Nat || is_msg_var(small);
-        if !small_ok && sort_of_lnterm(big) == LSort::Nat {
-            return Some(false);
+        // CR-rule S_subterm-ac-recurse.
+        Term::App(FunSym::Ac(ac_sym), _) if !reducible.contains(&FunSym::Ac(*ac_sym)) => {
+            process_ac_subterm(*ac_sym, small, big).err()
         }
-    }
-    // CR-rule S_subterm-ac-recurse: an AC big side goes through
-    // processACSubterm; the rebuilt `Ok` terms are the caller's business.
-    if let Term::App(FunSym::Ac(ac_sym), _) = big
-        && !reducible.contains(&FunSym::Ac(*ac_sym))
-    {
-        return process_ac_subterm(*ac_sym, small, big).err();
-    }
-    None
-}
-
-/// `isTrueFalse reducible Nothing (small, big)` — HS SubtermStore.hs,
-/// the Nat guards followed by the structural ones.  `Some(true)` /
-/// `Some(false)` for a trivially true / false subterm relation, `None` when
-/// it depends on the substitution.
-pub fn is_true_false(reducible: &FastSet<FunSym>, small: &LNTerm, big: &LNTerm) -> Option<bool> {
-    match nat_guards(small, big) {
-        Some(verdict) => verdict,
-        None => is_true_false_structural(reducible, small, big),
+        _ => None,
     }
 }
 
@@ -712,36 +661,17 @@ pub fn collect_fresh_vars_not_below_reducible(
 /// while still detecting back-edges into the current recursion
 /// stack.
 pub fn has_subterm_cycle(reducible: &FastSet<FunSym>, store: &SubtermStore) -> bool {
-    has_subterm_cycle_with(reducible, store, None)
-}
-
-/// [`has_subterm_cycle`] after hypothetically adding one active positive
-/// subterm. This is the `hasSubtermCycle (insertSubterm st sst)` probe used by
-/// `isTrueFalse` without cloning the entire store.
-pub(crate) fn has_subterm_cycle_with(
-    reducible: &FastSet<FunSym>,
-    store: &SubtermStore,
-    extra: Option<(&LNTerm, &LNTerm)>,
-) -> bool {
-    // Build the dag from positive subterms — every active (small, big)
-    // constraint is an edge in the dependency dag.
-    let mut dag: Vec<(LNTerm, LNTerm)> = Vec::with_capacity(store.subterms.len() + 1);
-    dag.extend(
-        store
-            .subterms
-            .iter()
-            .map(|c| (c.small.clone(), c.big.clone())),
-    );
-    if let Some((small, big)) = extra
-        && !dag.iter().any(|(s, t)| s == small && t == big)
-    {
-        dag.push((small.clone(), big.clone()));
-    }
+    let dag: Vec<(LNTerm, LNTerm)> = store
+        .subterms
+        .iter()
+        .map(|c| (c.small.clone(), c.big.clone()))
+        .collect();
     has_subterm_cycle_in_dag(reducible, &dag)
 }
 
-/// Pair-slice form of [`has_subterm_cycle_with`] for callers that already
-/// hold the active store projection.
+/// [`has_subterm_cycle`] after hypothetically adding one active positive
+/// subterm: the `hasSubtermCycle (insertSubterm st sst)` probe of
+/// `isTrueFalse`, over a store projection the caller already holds.
 pub(crate) fn has_subterm_cycle_with_pairs(
     reducible: &FastSet<FunSym>,
     pairs: &[(LNTerm, LNTerm)],
@@ -799,6 +729,561 @@ fn find_loop(
     parents.remove(x);
     visited.insert(x.clone());
     Some(())
+}
+
+/// `natSubtermEqualities` — UTVPI-based cycle detection and equality
+/// derivation on the nat-subterm fragment of the constraint graph.
+///
+/// HS source: `Theory.Tools.SubtermStore.natSubtermEqualities`
+/// (SubtermStore.hs) — the algorithm itself.
+///
+/// HS caller: `simpNatCycles` (SubtermStore.hs) inside
+/// `simpSubtermStore` (SubtermStore.hs).
+///
+/// Returns:
+///   - `None` ⇒ the UTVPI system is unsatisfiable (= the posSubterm
+///     graph has a negative cycle), so the subterm store is
+///     contradictory.
+///   - `Some(eqs)` ⇒ list of `(l, r)` LNTerm pairs to emit as
+///     positive equalities (`EqE l r`).  `eqs` may be empty (no
+///     equalities implied) without indicating contradiction.
+///
+/// Algorithm (mirrors HS line-by-line):
+///   1. Vertex encoding: `(Bool, LVar)` — `True` = positive sign,
+///      `False` = negative sign.  Vertices come from the set of
+///      variables that appear in nat-subterm edges.
+///   2. `formatEdge`: each nat-subterm `s ⊏ t` (with `isNatSubterm`)
+///      becomes either:
+///      Edge weight `d = 2 * (countOnes(r) - countOnes(l) - 1)`, and:
+///        - 1 var total → 1 edge.
+///        - 2 vars total → 2 edges (symmetric).
+///   3. `oneEdges`: self-loop `(False, x) → (True, x)` with weight
+///      `-2` for every `(True, x)` vertex.
+///   4. `rawEdges = realEdges ++ oneEdges`.
+///   5. Floyd-Warshall closure on `rawEdges`.
+///   6. `tightenedEdges`: for `(True, x)` vertex `v`, if
+///      `distFW(v, ~v)` is reachable and odd, add edge
+///      `(v, ~v, distFW(v, ~v) - 1)`.  (Reachable+even ⇒ skip.)
+///   7. `edges = rawEdges ++ tightenedEdges`.
+///   8. Bellman-Ford on `edges` from a 0-init solution.  Unsat iff
+///      after `|V|` relax rounds, some edge `(u, v, w)` satisfies
+///      `w + dist(u) < dist(v)` — i.e. a relaxable edge remains.
+///   9. `slackEdges`: edges where `w + dist(u) == dist(v)` (tight).
+///  10. SCCs of `slackEdges` (Kosaraju on the directed slack graph).
+///  11. For each SCC, pick the vertex with smallest `dist`; emit
+///      `x = y + n` equalities for all OTHER `True`-tagged vertices
+///      in the SCC (HS filters `filter fst sccs` then `delete x`).
+///  12. For variables that appear in BOTH `True` and `False` in the
+///      same SCC, emit absolute `x = N` equalities, where
+///      `N = (dist(False, v) - dist(True, v)) / 2`.
+pub(crate) fn nat_subterm_equalities(
+    relation: &[(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)],
+) -> Option<Vec<(tamarin_term::lterm::LNTerm, tamarin_term::lterm::LNTerm)>> {
+    use tamarin_term::function_symbols::{nat_one_sym, AcSym};
+    use tamarin_term::lterm::{flattened_ac_terms, get_var, LNTerm, LSort, LVar};
+    use tamarin_term::term::{f_app_ac, f_app_no_eq, Term};
+
+    // ---- helpers ----------------------------------------------------------
+
+    // `fAppNatOne = fAppNoEq natOneSym []` — the surface form of `%1`.
+    fn nat_one_term() -> LNTerm {
+        f_app_no_eq(nat_one_sym(), vec![])
+    }
+
+    // Vertex = (Bool sign, LVar var).  We use `(bool, LVar)` directly.
+    type Vertex = (bool, LVar);
+
+    // `formatEdge` (SubtermStore.hs).
+    // For each `(small, big)`:
+    //   - flatten both sides as NatPlus AC-summands;
+    //   - extract `getVars = mapMaybe getVar . filter (/= fAppNatOne)`;
+    //   - `countOnes = length . filter (== fAppNatOne)`;
+    //   - 1 var total → 1 edge; 2 vars total → 2 edges; else → no edges.
+    // Returns a list of `((from, to), weight)`.
+    fn format_edge(st: &(LNTerm, LNTerm)) -> Vec<((Vertex, Vertex), i64)> {
+        let (a, b) = st;
+        let one = nat_one_term();
+        // `flattened_ac_terms` borrows out of `a`/`b`, so the summands are
+        // inspected in place — no per-summand clone.
+        let l_flat: Vec<&LNTerm> = flattened_ac_terms(AcSym::NatPlus, a);
+        let r_flat: Vec<&LNTerm> = flattened_ac_terms(AcSym::NatPlus, b);
+        // Upstream #958: do not silently discard non-natural summands or
+        // encode message variables as natural-number ordering vertices.
+        if !l_flat
+            .iter()
+            .chain(&r_flat)
+            .all(|t| **t == one || matches!(get_var(t), Some(v) if v.sort == LSort::Nat))
+        {
+            return Vec::new();
+        }
+        let l_vars: Vec<LVar> = l_flat
+            .iter()
+            .copied()
+            .filter(|t| *t != &one)
+            .filter_map(|t| get_var(t).copied())
+            .collect();
+        let r_vars: Vec<LVar> = r_flat
+            .iter()
+            .copied()
+            .filter(|t| *t != &one)
+            .filter_map(|t| get_var(t).copied())
+            .collect();
+        let l_ones = l_flat.iter().filter(|t| ***t == one).count() as i64;
+        let r_ones = r_flat.iter().filter(|t| ***t == one).count() as i64;
+        let total_vars = l_vars.len() + r_vars.len();
+        if total_vars == 1 {
+            let d: i64 = 2 * (r_ones - l_ones - 1);
+            // `from = head $ map (True,) (getVars l) ++ map (False,) (getVars r)`
+            let from: Vertex = if let Some(v) = l_vars.first() {
+                (true, *v)
+            } else {
+                // Must exist because total_vars == 1
+                (false, r_vars[0])
+            };
+            let to: Vertex = (!from.0, from.1);
+            vec![((from, to), d)]
+        } else if total_vars == 2 {
+            let d: i64 = r_ones - l_ones - 1;
+            // `froms = map (True,) (getVars l) ++ map (False,) (getVars r)`
+            let mut froms: Vec<Vertex> = Vec::with_capacity(2);
+            for v in &l_vars {
+                froms.push((true, *v));
+            }
+            for v in &r_vars {
+                froms.push((false, *v));
+            }
+            // `tos = map (first not) (reverse froms)`; `froms` and `tos` both
+            // hold exactly the two vars, so zipping pairs them positionally.
+            let tos: Vec<Vertex> = froms.iter().rev().map(|(s, v)| (!s, *v)).collect();
+            froms
+                .into_iter()
+                .zip(tos)
+                .map(|(f, t)| ((f, t), d))
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    // ---- realEdges + vertex set ------------------------------------------
+    let mut real_edges: Vec<((Vertex, Vertex), i64)> = Vec::new();
+    for st in relation {
+        real_edges.extend(format_edge(st));
+    }
+
+    // `vertices = S.toList $ S.fromList $ concatMap ...` (SubtermStore.hs)
+    // BTreeSet for deterministic ordering matching HS Set semantics.
+    let mut vertex_set: std::collections::BTreeSet<Vertex> = std::collections::BTreeSet::new();
+    for ((a, b), _) in &real_edges {
+        vertex_set.insert(*a);
+        vertex_set.insert(*b);
+    }
+    let vertices: Vec<Vertex> = vertex_set.into_iter().collect();
+    let n = vertices.len();
+    if n == 0 {
+        return Some(Vec::new());
+    }
+
+    // `vertexToInt v = lookup v $ zip vertices [0..]` (SubtermStore.hs)
+    let vertex_to_int: std::collections::BTreeMap<Vertex, usize> =
+        vertices.iter().enumerate().map(|(i, v)| (*v, i)).collect();
+    let vti = |v: &Vertex| -> usize { vertex_to_int[v] };
+
+    // `oneEdges = map ... $ filter fst vertices` (SubtermStore.hs) —
+    // self-loops `(False, x) → (True, x)` with weight -2 for every
+    // `(True, x)` vertex.
+    let mut one_edges: Vec<((Vertex, Vertex), i64)> = Vec::new();
+    for v in &vertices {
+        if v.0 {
+            one_edges.push((((false, v.1), (true, v.1)), -2));
+        }
+    }
+
+    // `rawEdges = realEdges ++ oneEdges` (SubtermStore.hs)
+    let mut raw_edges: Vec<((Vertex, Vertex), i64)> = Vec::new();
+    raw_edges.extend(real_edges.iter().copied());
+    raw_edges.extend(one_edges.iter().copied());
+
+    // `inf = maxBound `div` 2` — large sentinel, avoid overflow in `ik + kj`.
+    let inf: i64 = i64::MAX / 4;
+
+    // ---- Floyd-Warshall (SubtermStore.hs) -----------------------
+    // 2-D matrix flattened to a Vec<i64> of length n*n.
+    let mut fw: Vec<i64> = vec![inf; n * n];
+    for ((from, to), w) in &raw_edges {
+        // HS overwrites duplicate edges (last write wins); we mirror that
+        // by simple assignment (no min).
+        fw[vti(from) * n + vti(to)] = *w;
+    }
+    for i in 0..n {
+        fw[i * n + i] = 0;
+    }
+    for k in 0..n {
+        for i in 0..n {
+            for j in 0..n {
+                let ik = fw[i * n + k];
+                let kj = fw[k * n + j];
+                if ik < inf && kj < inf {
+                    let cand = ik + kj;
+                    if cand < fw[i * n + j] {
+                        fw[i * n + j] = cand;
+                    }
+                }
+            }
+        }
+    }
+
+    // ---- tightenedEdges (SubtermStore.hs) -----------------------
+    // For each `(True, x)` vertex `v`: let `d = fw(v, ~v)`.
+    // HS: `if even d && d < inf/2 then Nothing else Just ((v, ~v), d - 1)`.
+    // i.e. add the tightened edge unless `d` is reachable AND even.
+    let mut tightened_edges: Vec<((Vertex, Vertex), i64)> = Vec::new();
+    for v in &vertices {
+        if !v.0 {
+            continue;
+        }
+        let nv: Vertex = (false, v.1);
+        let d = fw[vti(v) * n + vti(&nv)];
+        let reachable = d < inf / 2;
+        let is_even = d.rem_euclid(2) == 0;
+        if reachable && is_even {
+            continue;
+        }
+        tightened_edges.push(((*v, nv), d - 1));
+    }
+
+    // `edges = rawEdges ++ tightenedEdges` (SubtermStore.hs)
+    let mut edges: Vec<((Vertex, Vertex), i64)> = raw_edges.clone();
+    edges.extend(tightened_edges);
+
+    // ---- Bellman-Ford (SubtermStore.hs) -------------------------
+    // Solution init = 0 for all vertices; relax `|V|` times.
+    let mut sol: Vec<i64> = vec![0; n];
+    for _ in 0..n {
+        for ((from, to), w) in &edges {
+            let df = sol[vti(from)];
+            let dt = sol[vti(to)];
+            // Guard against +inf overflow.
+            if df < inf / 2 {
+                let cand = w + df;
+                if cand < dt {
+                    sol[vti(to)] = cand;
+                }
+            }
+        }
+    }
+    // `solvable`: no edge can be further relaxed.
+    let solvable = edges.iter().all(|((from, to), w)| {
+        let df = sol[vti(from)];
+        let dt = sol[vti(to)];
+        if df >= inf / 2 {
+            return true;
+        }
+        w + df >= dt
+    });
+    if !solvable {
+        return None;
+    }
+
+    // ---- slackEdges (SubtermStore.hs) ---------------------------
+    let slack_edges: Vec<(Vertex, Vertex)> = edges
+        .iter()
+        .filter(|((from, to), w)| {
+            let df = sol[vti(from)];
+            let dt = sol[vti(to)];
+            if df >= inf / 2 {
+                return false;
+            }
+            w + df == dt
+        })
+        .map(|((from, to), _)| (*from, *to))
+        .collect();
+
+    // ---- SCC of slackEdges (SubtermStore.hs) -------------------
+    // Kosaraju: build successor map (from → [to]) over `vertices`.
+    // Use BTreeMap so iteration order matches HS Set order.
+    let mut succ: std::collections::BTreeMap<usize, Vec<usize>> = std::collections::BTreeMap::new();
+    for v in &vertices {
+        succ.insert(vti(v), Vec::new());
+    }
+    for (from, to) in &slack_edges {
+        succ.get_mut(&vti(from)).unwrap().push(vti(to));
+    }
+    // Tarjan's SCC algorithm (deterministic, single-pass).
+    let mut index_counter: usize = 0;
+    let mut stack: Vec<usize> = Vec::new();
+    let mut on_stack: Vec<bool> = vec![false; n];
+    let mut indices: Vec<Option<usize>> = vec![None; n];
+    let mut lowlinks: Vec<usize> = vec![0; n];
+    let mut sccs: Vec<Vec<usize>> = Vec::new();
+
+    // Iterative Tarjan to avoid deep recursion stacks.
+    fn strongconnect(
+        v: usize,
+        succ: &std::collections::BTreeMap<usize, Vec<usize>>,
+        index_counter: &mut usize,
+        stack: &mut Vec<usize>,
+        on_stack: &mut Vec<bool>,
+        indices: &mut Vec<Option<usize>>,
+        lowlinks: &mut Vec<usize>,
+        sccs: &mut Vec<Vec<usize>>,
+    ) {
+        // Work-stack-based simulation
+        let mut work: Vec<(usize, usize)> = vec![(v, 0)];
+        while let Some(&(node, pi)) = work.last() {
+            if pi == 0 {
+                indices[node] = Some(*index_counter);
+                lowlinks[node] = *index_counter;
+                *index_counter += 1;
+                stack.push(node);
+                on_stack[node] = true;
+            }
+            // Borrowed, not cloned: `succ` outlives the whole walk and the
+            // only mutation below is to `work`/`lowlinks`/`stack`.
+            let neighbours: &[usize] = succ.get(&node).map(Vec::as_slice).unwrap_or(&[]);
+            if pi < neighbours.len() {
+                let w = neighbours[pi];
+                work.last_mut().unwrap().1 += 1;
+                if indices[w].is_none() {
+                    work.push((w, 0));
+                    continue;
+                } else if on_stack[w] {
+                    lowlinks[node] = lowlinks[node].min(indices[w].unwrap());
+                }
+            } else {
+                if lowlinks[node] == indices[node].unwrap() {
+                    let mut comp: Vec<usize> = Vec::new();
+                    loop {
+                        let w = stack.pop().unwrap();
+                        on_stack[w] = false;
+                        comp.push(w);
+                        if w == node {
+                            break;
+                        }
+                    }
+                    sccs.push(comp);
+                }
+                work.pop();
+                if let Some(&(parent, _)) = work.last() {
+                    lowlinks[parent] = lowlinks[parent].min(lowlinks[node]);
+                }
+            }
+        }
+    }
+
+    for v_i in 0..n {
+        if indices[v_i].is_none() {
+            strongconnect(
+                v_i,
+                &succ,
+                &mut index_counter,
+                &mut stack,
+                &mut on_stack,
+                &mut indices,
+                &mut lowlinks,
+                &mut sccs,
+            );
+        }
+    }
+
+    // ---- equalities (SubtermStore.hs) ---------------------------
+    // For each SCC: pick the vertex with smallest dist (`getValue`).
+    // For `(True, x)` vertices in the SCC (other than the smallest),
+    // emit `x = smallest_var + (dist(this) - dist(smallest)) * 1`.
+    //
+    // Note: HS uses `foldr1` which respects HS Set iteration order on
+    // the SCC.  We use BTreeSet ordering on `Vertex` for the same
+    // determinism — the HS ordering of `(Bool, LVar)` is
+    // `Bool > Bool` first (False < True), then LVar order — Rust's
+    // derived Ord on `(bool, LVar)` matches.
+    //
+    // `addN y n`: `varTerm y + n * fAppNatOne`.
+    fn add_n(y: &LVar, n: i64) -> LNTerm {
+        let var_term: LNTerm = Term::Lit(tamarin_term::vterm::Lit::Var(*y));
+        if n == 0 {
+            return var_term;
+        }
+        // `iterate (++: fAppNatOne) (varTerm y) !! n` — right-fold:
+        // `varTerm y + 1 + 1 + ... + 1` (n times).
+        let one = nat_one_term();
+        let mut ones: Vec<LNTerm> = Vec::with_capacity(n as usize);
+        for _ in 0..n {
+            ones.push(one.clone());
+        }
+        // f_app_ac flattens/sorts; we want one big NatPlus call.
+        let mut args = vec![var_term];
+        args.extend(ones);
+        f_app_ac(AcSym::NatPlus, args)
+    }
+    // `termN n`: `1 + 1 + ... + 1` (n ones), as in HS `termN`.
+    fn term_n(n: i64) -> LNTerm {
+        debug_assert!(n > 0);
+        let one = nat_one_term();
+        if n == 1 {
+            return one;
+        }
+        let mut args: Vec<LNTerm> = Vec::with_capacity(n as usize);
+        for _ in 0..n {
+            args.push(one.clone());
+        }
+        f_app_ac(AcSym::NatPlus, args)
+    }
+
+    let get_value = |v: &Vertex| -> i64 { sol[vti(v)] };
+
+    let mut equalities: Vec<(LNTerm, LNTerm)> = Vec::new();
+
+    // Sort SCCs canonically (by their member set) for determinism.
+    // HS `graphFromEdges` returns SCCs in reverse-postorder over the
+    // original vertex order; the equality output is then folded by
+    // `concatMap` over the SCC list in that same order.  We sort by
+    // first member's vertex index to match HS BTreeSet semantics —
+    // though equality output is deduplicated downstream, ordering
+    // affects the emit sequence.
+    let mut scc_vertices: Vec<Vec<Vertex>> = sccs
+        .iter()
+        .map(|comp| {
+            let mut s: Vec<Vertex> = comp.iter().map(|i| vertices[*i]).collect();
+            s.sort();
+            s
+        })
+        .collect();
+    scc_vertices.sort();
+
+    for scc in &scc_vertices {
+        // `smallest = foldr1 (\x y -> if getValue x < getValue y then x else y)`
+        // HS `foldr1` walks right-to-left and ties go to the rightmost.
+        let mut smallest: Vertex = scc[scc.len() - 1];
+        for v in scc.iter().rev().skip(1) {
+            if get_value(v) < get_value(&smallest) {
+                smallest = *v;
+            }
+        }
+        // `filter fst scc` — keep only True-tagged vertices.
+        let positives: Vec<Vertex> = scc.iter().filter(|v| v.0).copied().collect();
+        // `delete smallest positives` — remove if present.
+        let mut ys: Vec<Vertex> = Vec::new();
+        let mut removed = false;
+        for v in positives {
+            if !removed && v == smallest {
+                removed = true;
+                continue;
+            }
+            ys.push(v);
+        }
+        for y in &ys {
+            // `buildEq x y = Equal (varTerm (snd x)) (addN (snd y) (getValue y - getValue x))`
+            // i.e. lhs is `varTerm smallest.var`, rhs is `varTerm y.var + (gv(y)-gv(smallest))`.
+            let lhs_var = &smallest.1;
+            let rhs_var = &y.1;
+            let n = get_value(y) - get_value(&smallest);
+            let lhs: LNTerm = Term::Lit(tamarin_term::vterm::Lit::Var(*lhs_var));
+            let rhs: LNTerm = add_n(rhs_var, n);
+            equalities.push((lhs, rhs));
+        }
+
+        // Absolute equalities: variables that appear with BOTH signs in
+        // this SCC (`duplicates = concatMap ((\xs -> xs \\ S.toList (S.fromList xs)) . map snd) sccs`,
+        // SubtermStore.hs).
+        // Implementation: list ALL `snd` from the SCC; build the
+        // multiset; the variables that appear more than once are the
+        // duplicates.  We mirror HS's `xs \\ S.toList (S.fromList xs)` —
+        // i.e. take each var and remove one copy of its first occurrence.
+        let snds: Vec<LVar> = scc.iter().map(|v| v.1).collect();
+        let mut seen: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
+        let mut dups: Vec<LVar> = Vec::new();
+        for v in &snds {
+            if !seen.insert(*v) {
+                dups.push(*v);
+            }
+        }
+        for v in &dups {
+            let neg_v: Vertex = (false, *v);
+            let pos_v: Vertex = (true, *v);
+            let val = (get_value(&neg_v) - get_value(&pos_v)) / 2;
+            if val <= 0 {
+                // HS `termN` precondition `n > 0`; if `val ≤ 0` the absolute
+                // equality is degenerate (= 0 ones is not representable as a
+                // NatPlus term).  Skip — this case shouldn't arise under a
+                // sat solution (`getValue (False,v) ≥ getValue (True,v) + 2`
+                // is enforced by the `oneEdges`).  Defensive.
+                continue;
+            }
+            let lhs: LNTerm = Term::Lit(tamarin_term::vterm::Lit::Var(*v));
+            let rhs: LNTerm = term_n(val);
+            equalities.push((lhs, rhs));
+        }
+    }
+
+    Some(equalities)
+}
+
+/// HS `isTrueFalse reducible (Just sst)` (SubtermStore.hs): the
+/// store-independent checks, then store membership, then the relation's
+/// consistency after hypothetically inserting it into the positive store.
+/// Built once per pass; the active positive projection is computed on first use.
+pub(crate) struct StoreValuation<'a> {
+    reducible: &'a FastSet<FunSym>,
+    store: &'a SubtermStore,
+    active: std::cell::OnceCell<Vec<(LNTerm, LNTerm)>>,
+    active_nat_inconsistent: std::cell::OnceCell<bool>,
+}
+
+impl<'a> StoreValuation<'a> {
+    pub(crate) fn new(reducible: &'a FastSet<FunSym>, store: &'a SubtermStore) -> Self {
+        Self {
+            reducible,
+            store,
+            active: std::cell::OnceCell::new(),
+            active_nat_inconsistent: std::cell::OnceCell::new(),
+        }
+    }
+
+    pub(crate) fn is_true_false(&self, small: &LNTerm, big: &LNTerm) -> Option<bool> {
+        use tamarin_term::lterm::{is_msg_var, sort_of_lnterm, LSort};
+        if let Some(verdict) = is_true_false(self.reducible, small, big) {
+            return Some(verdict);
+        }
+        let is_inside = self
+            .store
+            .subterms
+            .iter()
+            .chain(self.store.solved_subterms.iter())
+            .any(|c| &c.small == small && &c.big == big);
+        let is_negated_inside = self
+            .store
+            .neg_subterms
+            .iter()
+            .any(|(s, t)| s == small && t == big);
+        if is_inside != is_negated_inside {
+            return Some(is_inside);
+        }
+        let active = self.active.get_or_init(|| {
+            self.store
+                .subterms
+                .iter()
+                .map(|c| (c.small.clone(), c.big.clone()))
+                .collect()
+        });
+        if has_subterm_cycle_with_pairs(self.reducible, active, (small, big)) {
+            return Some(false);
+        }
+        // A pair that is not natural-number shaped adds no ordering edge, so
+        // only the store's own consistency can reject it.
+        let natural = (sort_of_lnterm(small) == LSort::Nat || is_msg_var(small))
+            && sort_of_lnterm(big) == LSort::Nat;
+        let nat_inconsistent = *self
+            .active_nat_inconsistent
+            .get_or_init(|| nat_subterm_equalities(active).is_none())
+            || natural && {
+                let mut relation = active.clone();
+                if !relation.iter().any(|(s, t)| s == small && t == big) {
+                    relation.push((small.clone(), big.clone()));
+                }
+                nat_subterm_equalities(&relation).is_none()
+            };
+        nat_inconsistent.then_some(false)
+    }
 }
 
 #[cfg(test)]
@@ -987,6 +1472,23 @@ mod tests {
         let via_h = store(&[(a.clone(), b.clone()), (h(b), a)]);
         assert!(has_subterm_cycle(&none, &via_h));
         assert!(!has_subterm_cycle(&reducible_h(), &via_h));
+    }
+
+    /// `isTrueFalse reducible (Just sst)` decides a relation from store
+    /// membership, and rejects one whose hypothetical insertion closes a cycle.
+    #[test]
+    fn store_valuation_uses_membership_and_hypothetical_cycles() {
+        let none: FastSet<FunSym> = FastSet::default();
+        let (a, b, c) = (var("a"), var("b"), var("c"));
+        let mut store = SubtermStore::empty();
+        store.add(a.clone(), b.clone());
+        store.add_neg(c.clone(), b.clone());
+        let valuation = StoreValuation::new(&none, &store);
+        assert_eq!(valuation.is_true_false(&a, &b), Some(true));
+        assert_eq!(valuation.is_true_false(&c, &b), Some(false));
+        // b ⊏ a would close a ⊏ b ⊏ a.
+        assert_eq!(valuation.is_true_false(&b, &a), Some(false));
+        assert_eq!(valuation.is_true_false(&a, &c), None);
     }
 
     /// [`SortedPairSet`] takes the place of HS's `S.Set (LNTerm, LNTerm)`.

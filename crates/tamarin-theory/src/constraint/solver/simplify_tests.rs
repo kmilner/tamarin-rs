@@ -1233,11 +1233,15 @@ fn partial_atom_valuation_last_returns_none_when_successor_not_in_trace() {
     let last_n = |sys: &crate::constraint::system::System| {
         let ab_adj = sys.build_always_before_adj();
         let node_rule_map = sys.node_rule_map();
+        let reducible = h.maude_sig().reducible_fun_syms_fast.clone();
+        let subterms =
+            crate::tools::subterm_store::StoreValuation::new(&reducible, &sys.subterm_store);
         partial_atom_valuation_with(
             sys,
             &h,
             &ab_adj,
             &node_rule_map,
+            &subterms,
             &ProtoAtom::Last(tamarin_term::vterm::var_term(mkvar_l("n", 0))),
         )
     };
