@@ -590,9 +590,9 @@ fn apply_partial_evaluation_splices_at_first_rule_item() {
     assert_eq!(elab.items[5], text_item("after"));
 
     // Fresh OpenProtoRules for the caller's re-close.
-    assert!(elab.rules().all(|r| r.variant_substs.is_empty()
-        && r.abstracted_rule.is_none()
-        && r.loop_breakers.is_empty()));
+    assert!(elab.rules().all(
+        |r| r.variants == crate::theory::RuleVariants::Unprepared && r.loop_breakers.is_empty()
+    ));
 }
 
 /// A refinement is already compiled: macro expansion survives export.

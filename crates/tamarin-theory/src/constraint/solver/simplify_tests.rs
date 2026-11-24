@@ -1981,3 +1981,18 @@ fn restriction_guard_matching_preserves_backend_errors() {
         }
     }
 }
+
+/// HS `solveRuleConstraints (Just (Disj []))`: an empty variant disjunction
+/// makes the equation store contradictory.
+#[test]
+fn empty_rule_variant_disjunction_is_contradictory() {
+    let Some(ctx) = ctx() else { return };
+    let mut red = Reduction::new(&ctx, System::empty());
+    assert!(red.solve_rule_constraints(Some(Vec::new())).unwrap());
+    let mut red = Reduction::new(&ctx, System::empty());
+    assert!(!red
+        .solve_rule_constraints(Some(vec![
+            tamarin_term::subst_vfresh::LNSubstVFresh::empty()
+        ]))
+        .unwrap());
+}

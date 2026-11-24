@@ -85,7 +85,7 @@ fn only_the_no_variant_rule_is_dropped() {
     };
     let (mut thy, maude) = loaded(&mp);
     thy.items.retain(|item| match item {
-        TheoryItem::Rule(opr) => !open_rule_has_no_variants(&maude, opr),
+        TheoryItem::Rule(opr) => !open_rule_has_no_variants(&maude, opr).expect("variants"),
         _ => true,
     });
     let names: Vec<&str> = thy.rules().map(|opr| opr.name()).collect();

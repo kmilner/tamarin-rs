@@ -763,13 +763,18 @@ const RESERVED_RULE_NAMES: [&str; 7] = [
 /// facts at each position share a tag.  Terms, fact annotations and the rule
 /// infos beyond the name are not compared.
 pub fn equal_up_to_terms(ru_ac: &ProtoRuleAC, ru_e: &ProtoRuleE) -> bool {
+    ru_ac.info.name == ru_e.info.name && same_fact_tags(ru_ac, ru_e)
+}
+
+/// [`equal_up_to_terms`] without the names: the facts at each position of
+/// the premises, conclusions and actions share a tag.
+pub fn same_fact_tags<I, J>(a: &Rule<I>, b: &Rule<J>) -> bool {
     let same_tags = |xs: &[LNFact], ys: &[LNFact]| {
         xs.len() == ys.len() && xs.iter().zip(ys).all(|(f1, f2)| f1.tag == f2.tag)
     };
-    ru_ac.info.name == ru_e.info.name
-        && same_tags(&ru_ac.premises, &ru_e.premises)
-        && same_tags(&ru_ac.conclusions, &ru_e.conclusions)
-        && same_tags(&ru_ac.actions, &ru_e.actions)
+    same_tags(&a.premises, &b.premises)
+        && same_tags(&a.conclusions, &b.conclusions)
+        && same_tags(&a.actions, &b.actions)
 }
 
 /// Products in premises, actions or conclusions outside exponent positions

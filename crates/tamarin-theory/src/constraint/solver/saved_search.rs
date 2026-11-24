@@ -269,8 +269,9 @@ mod tests {
         let theory = crate::elaborate::elaborate(&parsed).unwrap();
         let maude =
             tamarin_term::maude_proc::MaudeHandle::start(&path, theory.signature.clone()).unwrap();
+        let (theory, _) = crate::closed_theory::close_theory(theory, &maude, None).unwrap();
         let session = crate::prove::ProverSession::build(
-            std::sync::Arc::new(theory),
+            &theory,
             maude,
             crate::prove::ProverSessionOptions {
                 cut: CutStrategy::Bfs,

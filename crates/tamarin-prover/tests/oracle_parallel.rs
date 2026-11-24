@@ -497,8 +497,11 @@ fn check_stalled_startup(real: &str, restart: bool, fail: bool) {
         .unwrap(),
     );
     let primary = MaudeHandle::start_with_caches(real, theory.signature.clone(), caches).unwrap();
+    let (theory, _) =
+        tamarin_theory::closed_theory::close_theory(Arc::unwrap_or_clone(theory), &primary, None)
+            .unwrap();
     let session = ProverSession::build(
-        theory,
+        &theory,
         primary,
         ProverSessionOptions {
             maude_pool: Some(pool.clone()),

@@ -224,14 +224,13 @@ fn set_false_marks_store_false() {
 #[test]
 fn rule_variants_added_as_disjunction() {
     let mut store = EquationStore::empty();
-    let id = store
-        .add_rule_variants(vec![fresh_subst_n(0), fresh_subst_n(1)])
-        .expect("add_rule_variants");
+    let id = store.add_rule_variants(vec![fresh_subst_n(0), fresh_subst_n(1)]);
     assert_eq!(id, SplitId(0));
     assert_eq!(store.split_size(id), Some(2));
 }
 
 #[test]
+#[should_panic(expected = "addRuleVariants")]
 fn rule_variants_rejects_overlapping_domain() {
     let mut store = EquationStore::empty();
     // Pre-populate the free subst with `x`.
@@ -240,8 +239,7 @@ fn rule_variants_rejects_overlapping_domain() {
         tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(LVar::new("z", LSort::Msg, 0)));
     store.subst = LNSubst::from_list(vec![(v, t)]);
     // Variant subst also touches `x`.
-    let res = store.add_rule_variants(vec![fresh_subst()]);
-    assert!(res.is_err());
+    store.add_rule_variants(vec![fresh_subst()]);
 }
 
 #[test]

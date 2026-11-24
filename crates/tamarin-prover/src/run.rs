@@ -1012,8 +1012,11 @@ fn build_prover_session(
 ) -> Result<tamarin_theory::prove::ProverSession, RunError> {
     let in_file = &st.theory.in_file;
     let maude = st.require_maude().map_err(|e| RunError::load(e, in_file))?;
+    let theory = st
+        .require_closed()
+        .map_err(|e| RunError::load(e, in_file))?;
     Ok(tamarin_theory::prove::ProverSession::build(
-        st.theory.clone(),
+        theory,
         maude,
         tamarin_theory::prove::ProverSessionOptions {
             maude_pool: st.maude_pool.clone(),
@@ -1027,7 +1030,6 @@ fn build_prover_session(
                 tamarin_theory::constraint::solver::search::SysRetention::DropAll
             },
             show_saturation_steps: true,
-            loop_breakers_prepared: true,
         },
     )?)
 }

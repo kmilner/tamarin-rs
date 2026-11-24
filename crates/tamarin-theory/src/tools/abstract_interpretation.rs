@@ -479,11 +479,8 @@ pub fn apply_partial_evaluation(
             }
             let mut recomputed = OpenProtoRule::new(rule.clone());
             prepare_open_rule_variant(&mut recomputed, maude)?;
-            let computed = recomputed
-                .abstracted_rule
-                .as_ref()
-                .unwrap_or(&recomputed.rule);
-            let variants = &recomputed.variant_substs;
+            let computed = recomputed.ac_body();
+            let variants = recomputed.variant_substs();
             if variants.len() != 1
                 || !variants[0].is_empty()
                 || canonicalize_freshness_no_ac(rule.clone())

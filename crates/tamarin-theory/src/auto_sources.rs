@@ -27,7 +27,7 @@ use crate::fact::{
 };
 use crate::formula::{BLNTerm, LNFormula};
 use crate::rule::{print_fact_position, print_position, rule_name_string, ExtendedPosition};
-use crate::theory::{OpenProtoRule, TheoryItem};
+use crate::theory::{OpenProtoRule, RuleVariants, TheoryItem};
 use crate::tools::rule_variants::unfold_closed_rule;
 use tamarin_term::lterm::{rename_avoiding, BVar, LNTerm, LSort};
 use tamarin_term::maude_proc::MaudeHandle;
@@ -214,16 +214,10 @@ pub struct AutoSourcesResult {
 }
 
 fn ac_concs(o: &OpenProtoRule) -> &[LNFact] {
-    match &o.abstracted_rule {
-        Some(ar) => &ar.conclusions,
-        None => &o.rule.conclusions,
-    }
+    &o.ac_body().conclusions
 }
 fn ac_prems(o: &OpenProtoRule) -> &[LNFact] {
-    match &o.abstracted_rule {
-        Some(ar) => &ar.premises,
-        None => &o.rule.premises,
-    }
+    &o.ac_body().premises
 }
 
 fn ln_proto(name: &str, terms: Vec<LNTerm>) -> LNFact {
@@ -597,8 +591,8 @@ fn add_action_to_open_rule(o: &mut OpenProtoRule, action: LNFact) {
     if o.rule_e.is_none() {
         o.rule_e = Some(Box::new(o.rule.clone()));
     }
-    if let Some(ar) = o.abstracted_rule.as_mut() {
-        ar.add_action(action.clone());
+    if let RuleVariants::Closed { body, .. } = &mut o.variants {
+        body.add_action(action.clone());
     }
     o.rule.add_action(action);
 }
@@ -794,8 +788,8 @@ fn auto_source_rule_names(rules: &[OpenProtoRule]) -> Vec<OpenProtoRule> {
                 // Changing only the executable half preserves the original family.
                 named.rule_e = Some(Box::new(rule.rule_e().clone()));
                 named.rule.info.name = name;
-                if let Some(abstracted) = &mut named.abstracted_rule {
-                    abstracted.info.name = name;
+                if let RuleVariants::Closed { body, .. } = &mut named.variants {
+                    body.info.name = name;
                 }
             }
             named
@@ -839,15 +833,13 @@ mod tests {
             vec![],
         );
         let mut nt = OpenProtoRule::new(nt_rule.clone());
-        let (abstr, substs) = crate::tools::rule_variants::abstract_rule_and_variants(&h, &nt.rule)
-            .expect("variants")
-            .expect("non-trivial variants");
+        nt.variants =
+            crate::tools::rule_variants::variants_proto_rule(&h, &nt.rule).expect("variants");
+        let substs = nt.variant_substs().to_vec();
         assert!(
             substs.iter().any(|s| !s.is_empty()),
             "test premise: NT must have a non-trivial disjunction"
         );
-        nt.abstracted_rule = Some(abstr);
-        nt.variant_substs = substs.clone();
         nt.loop_breakers = vec![PremIdx(0)];
 
         // TR: [Fr(~k)] --> [Out(~k)] — no reducible sub-term, trivial.
@@ -879,9 +871,9 @@ mod tests {
         for v in &variants {
             // `Disj [emptySubstVFresh]` + carried breakers + the ORIGINAL
             // rule as the `cprRuleE` half (lib/theory/src/Rule.hs).
-            assert_eq!(v.variant_substs.len(), 1);
-            assert!(v.variant_substs[0].is_empty());
-            assert!(v.abstracted_rule.is_none());
+            assert_eq!(v.variant_substs().len(), 1);
+            assert!(v.variant_substs()[0].is_empty());
+            assert_eq!(v.ac_body(), &v.rule);
             assert_eq!(v.loop_breakers, vec![PremIdx(0)]);
             assert_eq!(v.rule_e.as_deref(), Some(&nt_rule));
         }
@@ -928,23 +920,17 @@ mod tests {
         let mut rules: Vec<_> = theory.rules().cloned().collect();
         // Model a compiled member colliding with an independent source rule.
         rules[0].rule.info.name = rules[1].rule.info.name;
-        assert!(rules[1].abstracted_rule.is_some());
+        assert!(matches!(rules[1].variants, RuleVariants::Closed { .. }));
         assert!(crate::theory::closed_rules_ac(&rules[1])
             .iter()
             .all(|ac| crate::rule::is_trivial_proto_variant_ac(ac, rules[1].rule_e())));
         let named = auto_source_rule_names(&rules);
         assert_ne!(named[0].name(), named[1].name());
         assert_eq!(named[1].rule_e(), rules[1].rule_e());
-        assert_eq!(
-            named[1].abstracted_rule.as_ref().unwrap().info.name,
-            named[1].rule.info.name
-        );
+        assert_eq!(named[1].ac_body().info.name, named[1].rule.info.name);
         let ctx = crate::constraint::solver::context::ProofContext::new(maude, named);
         let rule = &ctx.rules[1];
-        assert_eq!(
-            rule.abstracted_rule.as_ref().unwrap().info.name,
-            rule.rule.info.name
-        );
+        assert_eq!(rule.ac_body().info.name, rule.rule.info.name);
     }
 
     #[test]

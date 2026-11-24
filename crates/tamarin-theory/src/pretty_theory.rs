@@ -128,7 +128,7 @@ pub fn pretty_closed_theory(
     // HS `prettyClosedTheory` (ClosedTheory.hs) renders the merged
     // rule items through `prettyOpenProtoRuleAsClosedRule` when some of them
     // carries an AC rule of its own, and the closed items through
-    // `prettyClosedProtoRule` otherwise.
+    // `prettyClosedProtoRule` otherwise.  Only the list printed is built.
     let proof_bodies: tamarin_utils::FastMap<&str, &str> = proved
         .iter()
         .filter_map(|p| Some((p.name.as_str(), p.proof_body.as_deref()?)))
@@ -140,10 +140,9 @@ pub fn pretty_closed_theory(
     // HS `emptyString` (lib/theory/src/Pretty.hs) as `ppSap`
     // (ClosedTheory.hs).
     let translation = |_: &TranslationElement| String::new();
-    let blocks = if crate::theory::contains_open_rule_variants(&thy.items) {
-        let merged = crate::theory::merge_open_proto_rules(&thy.items);
+    let blocks = if crate::theory::merged_contain_manual_rule_variants(&thy.items) {
         pretty_theory_items(
-            &merged,
+            &crate::theory::merge_open_proto_rules(&thy.items),
             &ItemPrinters {
                 rule: &|r| crate::rule::pretty_open_proto_rule_as_closed_rule(r).render(),
                 proof: &proof,
@@ -2456,7 +2455,7 @@ mod manual_rule_variants_tests {
     use crate::fact::{proto_fact, Multiplicity};
     use crate::rule::{ProtoRuleE, ProtoRuleEInfo, Rule};
     use crate::theory::{
-        contains_manual_rule_variants, contains_open_rule_variants, merge_open_proto_rules,
+        contains_manual_rule_variants, merge_open_proto_rules, merged_contain_manual_rule_variants,
         OpenProtoRule,
     };
 
@@ -2479,9 +2478,9 @@ mod manual_rule_variants_tests {
     }
 
     fn gate(items: &[Item]) -> bool {
-        let old = contains_manual_rule_variants(&merge_open_proto_rules(items));
-        assert_eq!(contains_open_rule_variants(items), old);
-        old
+        let merged = contains_manual_rule_variants(&merge_open_proto_rules(items));
+        assert_eq!(merged, merged_contain_manual_rule_variants(items));
+        merged
     }
 
     /// `containsManualRuleVariants` (OpenTheory.hs) is the OR over the
@@ -2567,10 +2566,13 @@ mod ac_variants_block_tests {
         ));
         let a = LVar::new("a", LSort::Fresh, 4);
         let b = LVar::new("b", LSort::Fresh, 4);
-        open.variant_substs = vec![
-            LNSubstVFresh::from_list([(z, f_app_no_eq(zero_sym(), vec![]))]),
-            LNSubstVFresh::from_list([(z, f_app_ac(AcSym::Xor, vec![term(a), term(b)]))]),
-        ];
+        open.variants = crate::theory::RuleVariants::Closed {
+            body: open.rule.clone(),
+            variants: vec![
+                LNSubstVFresh::from_list([(z, f_app_no_eq(zero_sym(), vec![]))]),
+                LNSubstVFresh::from_list([(z, f_app_ac(AcSym::Xor, vec![term(a), term(b)]))]),
+            ],
+        };
         open
     }
 

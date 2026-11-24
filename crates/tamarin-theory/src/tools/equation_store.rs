@@ -383,25 +383,20 @@ fn subst_domain_range_overlap(asubst: &LNSubst) -> bool {
 // =============================================================================
 
 impl EquationStore {
-    /// `addRuleVariants disj store` — extends the store's conjunction
-    /// with the given precomputed AC variants (a disjunction of
-    /// fresh-range substitutions). Mirrors Haskell's `addRuleVariants`.
-    /// Errors if the variants share variables with the free
-    /// substitution's domain (Haskell `error`'s here).
-    pub fn add_rule_variants(
-        &mut self,
-        variants: Vec<LNSubstVFresh>,
-    ) -> Result<SplitId, &'static str> {
-        // Domain-disjointness check: free-subst domain must not
-        // overlap with any variant's domain.
-        let free_dom: BTreeSet<LVar> = self.subst.dom().copied().collect();
-        for v in &variants {
-            if v.dom().any(|x| free_dom.contains(x)) {
-                return Err("addRuleVariants: nonempty intersection between domain \
-                     of variants and free substitution");
-            }
+    /// `addRuleVariants` (EquationStore.hs): add a rule's precomputed
+    /// variant disjunction. Like Haskell, aborts if a variant's domain meets
+    /// the free substitution's domain, a case that is not implemented.
+    pub fn add_rule_variants(&mut self, variants: Vec<LNSubstVFresh>) -> SplitId {
+        if variants
+            .iter()
+            .any(|v| v.dom().any(|x| self.subst.image_of(x).is_some()))
+        {
+            panic!(
+                "addRuleVariants: Nonempty intersection between domain of variants and free \
+                 substitution. This case has not been implemented, add rule variants earlier."
+            );
         }
-        Ok(self.add_disj(variants))
+        self.add_disj(variants)
     }
 }
 

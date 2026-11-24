@@ -23,14 +23,6 @@ use std::path::PathBuf;
 
 use tamarin_server::theory_io;
 
-/// A path that cannot spawn.  The report below comes from the static
-/// wellformedness pass.  The load runs that pass before it needs a Maude
-/// handle.  The load therefore skips the best-effort Maude block, and the
-/// test is hermetic.  A run of this check under a real Maude gives the same
-/// bytes.  Nothing here skips for want of a binary.  A skip would pass
-/// without comparing anything.
-const NO_MAUDE: &str = "/nonexistent/maude-for-test";
-
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -63,6 +55,10 @@ fn web_load_reports_formula_terms_for_sapic_else_restriction() {
     // The process-wide setup `serve` applies, so the report renders at the web
     // width every HTTP response uses.
     tamarin_server::init_process_globals();
+    // A web load closes the theory with Maude (HS `closeTheory`).
+    let Some(maude) = tamarin_test_support::require_maude_path() else {
+        return;
+    };
     // `derivcheck_timeout = 0` skips the dynamic derivation checks, matching
     // the `--derivcheck-timeout=0` oracle probe (HS `compare derivChecks 0`
     // returns `Just []` on EQ, TheoryLoader.hs), so the report holds
@@ -70,7 +66,7 @@ fn web_load_reports_formula_terms_for_sapic_else_restriction() {
     let mut cfg = tamarin_server::ServerConfig::new(
         "127.0.0.1:0".parse().unwrap(),
         std::path::PathBuf::new(),
-        NO_MAUDE.to_string(),
+        maude.to_string(),
     );
     cfg.load.derivation_checks = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
     let entry = theory_io::load_from_path(&fixture(), &cfg).expect("fixture loads");

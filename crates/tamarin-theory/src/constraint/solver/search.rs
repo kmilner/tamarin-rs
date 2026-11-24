@@ -1392,9 +1392,14 @@ mod tests {
              lemma attack: exists-trace \"Ex #i. Attack()@i\"\nend",
         );
         let parsed = tamarin_parser::parse_theory(&src, &[]).unwrap();
-        let theory = std::sync::Arc::new(crate::elaborate::elaborate(&parsed).unwrap());
+        let (theory, _) = crate::closed_theory::close_theory(
+            crate::elaborate::elaborate(&parsed).unwrap(),
+            &ctx.maude,
+            None,
+        )
+        .unwrap();
         let session = ProverSession::build(
-            theory,
+            &theory,
             ctx.maude.clone(),
             ProverSessionOptions {
                 maude_pool: Some(search_pool(&ctx, 3)),
@@ -1513,8 +1518,14 @@ mod tests {
             &[],
         )
         .unwrap();
+        let (theory, _) = crate::closed_theory::close_theory(
+            crate::elaborate::elaborate(&parsed).unwrap(),
+            &ctx.maude,
+            None,
+        )
+        .unwrap();
         let session = ProverSession::build(
-            std::sync::Arc::new(crate::elaborate::elaborate(&parsed).unwrap()),
+            &theory,
             ctx.maude.clone(),
             ProverSessionOptions {
                 maude_pool: Some(search_pool(&ctx, 2)),
@@ -1723,12 +1734,15 @@ mod tests {
             &[],
         )
         .unwrap();
-        let session = crate::prove::ProverSession::build(
-            std::sync::Arc::new(crate::elaborate::elaborate(&theory).unwrap()),
-            ctx.maude.clone(),
-            Default::default(),
+        let (theory, _) = crate::closed_theory::close_theory(
+            crate::elaborate::elaborate(&theory).unwrap(),
+            &ctx.maude,
+            None,
         )
         .unwrap();
+        let session =
+            crate::prove::ProverSession::build(&theory, ctx.maude.clone(), Default::default())
+                .unwrap();
         let (entered_tx, entered_rx) = mpsc::channel();
         let mut releases = Vec::new();
         for _ in 0..2 {

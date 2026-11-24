@@ -18,6 +18,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tamarin_term::maude_proc::{MaudeHandle, MaudePool, SharedMaudeCaches};
+use tamarin_theory::closed_theory::ClosedTheory;
 use tamarin_theory::constraint::solver::context::{CutStrategy, IntrRuleCache};
 use tamarin_theory::constraint::solver::sources::IntegerParameters;
 use tamarin_theory::deriv_check::DerivCheckTimeout;
@@ -209,15 +210,72 @@ pub fn load_theory(
     Ok(parsed)
 }
 
+/// A loaded theory: open until [`TheoryPipeline::check_translated_theory`]
+/// closes it, which close mode always does; translate mode leaves it open.
+#[derive(Debug, Clone)]
+pub enum LoadedTheory {
+    Open(Arc<Theory>),
+    Closed(ClosedTheory),
+}
+
+impl std::ops::Deref for LoadedTheory {
+    type Target = Theory;
+
+    fn deref(&self) -> &Theory {
+        match self {
+            Self::Open(theory) => theory,
+            Self::Closed(theory) => theory,
+        }
+    }
+}
+
+impl LoadedTheory {
+    /// The closed theory, which every prover session is built from.
+    pub fn closed(&self) -> Option<&ClosedTheory> {
+        match self {
+            Self::Open(_) => None,
+            Self::Closed(theory) => Some(theory),
+        }
+    }
+
+    /// HS `removeLemma`: the theory without the named lemma, or `None` when
+    /// there is no such lemma.
+    pub fn without_lemma(&self, name: &str) -> Option<Self> {
+        match self {
+            Self::Open(theory) => {
+                let mut theory = (**theory).clone();
+                theory
+                    .remove_lemma(name)
+                    .then(|| Self::Open(Arc::new(theory)))
+            }
+            Self::Closed(theory) => theory.without_lemma(name).map(Self::Closed),
+        }
+    }
+
+    fn open_mut(&mut self) -> &mut Theory {
+        match self {
+            Self::Open(theory) => Arc::make_mut(theory),
+            Self::Closed(_) => unreachable!("a closed theory is changed only through ClosedTheory"),
+        }
+    }
+
+    fn closed_mut(&mut self) -> Option<&mut ClosedTheory> {
+        match self {
+            Self::Open(_) => None,
+            Self::Closed(theory) => Some(theory),
+        }
+    }
+}
+
 /// One theory's state through HS's load stages.
 pub struct TheoryPipeline<'a> {
     pub opts: &'a TheoryLoadOptions,
     /// `Some` runs `translateAndCheckTheory` for that module, `None` runs
     /// `closeTheory`.
     pub translate_module: Option<TranslateModule>,
-    /// Behind `Arc` so a prover session can share it; the stages mutate it
-    /// through `Arc::make_mut` while the pipeline holds the only reference.
-    pub theory: Arc<Theory>,
+    /// Shared with the prover session; the stages mutate it while the
+    /// pipeline holds the only reference.
+    pub theory: LoadedTheory,
     /// HS `preReport ++ postReport`.
     pub wf_report: Vec<WfError>,
     /// The open theory's signature, which every Maude process for this
@@ -309,7 +367,7 @@ impl<'a> TheoryPipeline<'a> {
         Ok(Self {
             opts,
             translate_module,
-            theory: Arc::new(theory),
+            theory: LoadedTheory::Open(Arc::new(theory)),
             wf_report: Vec::new(),
             maude_sig,
             auto_sources,
@@ -344,8 +402,14 @@ impl<'a> TheoryPipeline<'a> {
         })
     }
 
+    /// The theory close mode closed.
+    pub fn require_closed(&self) -> Result<&ClosedTheory, LoadError> {
+        self.require_maude()?;
+        Ok(self.theory.closed().expect("close mode closes the theory"))
+    }
+
     fn theory_mut(&mut self) -> &mut Theory {
-        Arc::make_mut(&mut self.theory)
+        self.theory.open_mut()
     }
 
     /// HS `translateTheory` with `processOpenTheory`'s per-module dispatch
@@ -388,7 +452,7 @@ impl<'a> TheoryPipeline<'a> {
         // (lemmaSelector thyOpts)`), before the checks below.
         if module == Some(TranslateModule::Msr) {
             let lemma_names = &self.opts.lemma_names;
-            Arc::make_mut(&mut self.theory).items.retain(|i| match i {
+            self.theory_mut().items.retain(|i| match i {
                 tamarin_theory::theory::TheoryItem::Lemma(l) => {
                     crate::theory_loader::lemma_matches(lemma_names, &l.name)
                 }
@@ -399,9 +463,10 @@ impl<'a> TheoryPipeline<'a> {
     }
 
     /// HS `checkTranslatedTheory`: start Maude (the `SignatureWithMaude`),
-    /// close the protocol rules (variants, wellformedness, rejection of
-    /// unsupported input in close mode, loop breakers), run the NDC check,
-    /// and run the message-derivation checks against the open signature.
+    /// prepare the protocol rules (variants, wellformedness, rejection of
+    /// unsupported input in close mode), run the NDC check, and run the
+    /// message-derivation checks on the open theory. Close mode then closes
+    /// it (`closeTheoryWithMaude`'s zero-variant filter and loop breakers).
     pub fn check_translated_theory(&mut self) -> Result<(), LoadError> {
         let close_mode = self.translate_module.is_none();
         // One memo-cache set shared by the handle and every pool member.
@@ -412,6 +477,11 @@ impl<'a> TheoryPipeline<'a> {
             Arc::clone(&caches),
         )
         .ok();
+        // HS closes the theory with Maude, so a load that cannot start it
+        // fails; only translate mode carries on without one.
+        if close_mode {
+            self.require_maude()?;
+        }
         // Parallel sites lease pool members instead of serialising on `maude`.
         self.maude_pool = if self.opts.maude_processes >= 2 {
             match MaudePool::new(
@@ -437,10 +507,11 @@ impl<'a> TheoryPipeline<'a> {
         };
 
         if let Some(maude) = self.maude.clone() {
+            let pool = self.maude_pool.as_deref();
             let report = tamarin_theory::tools::rule_variants::prepare_theory_rules(
-                Arc::make_mut(&mut self.theory),
+                self.theory.open_mut(),
                 &maude,
-                self.maude_pool.as_deref(),
+                pool,
                 close_mode,
             )
             .map_err(LoadError::variants)?;
@@ -448,11 +519,6 @@ impl<'a> TheoryPipeline<'a> {
         } else {
             let report = tamarin_theory::wellformedness::check_wellformedness(&self.theory, None)
                 .map_err(LoadError::variants)?;
-            // HS rejects unsupported input before closing, Maude or not.
-            let fatal = tamarin_theory::wellformedness::variants::fatal_wf_errors(&report);
-            if close_mode && !fatal.is_empty() {
-                return Err(LoadError::UnsupportedInput(fatal));
-            }
             self.wf_report.extend(report);
         }
 
@@ -486,6 +552,24 @@ impl<'a> TheoryPipeline<'a> {
             }
             self.marker("Derivation checks ended");
         }
+
+        // `closeTranslatedTheory`'s `closeTheoryWithMaude`: the checks above
+        // ran on the open theory, zero-variant rules included.
+        if close_mode {
+            let maude = self.require_maude()?;
+            let placeholder = Theory::new(self.theory.name.clone(), self.maude_sig.clone());
+            let LoadedTheory::Open(open) =
+                std::mem::replace(&mut self.theory, LoadedTheory::Open(Arc::new(placeholder)))
+            else {
+                unreachable!("the theory is closed once")
+            };
+            let closed = tamarin_theory::closed_theory::close_prepared_theory(
+                Arc::unwrap_or_clone(open),
+                &maude,
+            )
+            .map_err(LoadError::variants)?;
+            self.theory = LoadedTheory::Closed(closed);
+        }
         Ok(())
     }
 
@@ -505,11 +589,13 @@ impl<'a> TheoryPipeline<'a> {
             return Err(LoadError::Warning(std::mem::take(&mut self.wf_report)));
         }
 
-        for f in std::mem::take(&mut self.ndc_funs) {
-            let theory = self.theory_mut();
-            let sig = std::mem::take(&mut theory.signature);
-            theory.signature =
-                sig.join_ndc_in_sig(f, tamarin_term::function_symbols::NdcState::IsNdc);
+        let ndc_funs = std::mem::take(&mut self.ndc_funs);
+        let theory = self
+            .theory
+            .closed_mut()
+            .expect("close mode closes the theory");
+        for f in ndc_funs {
+            theory.join_ndc_in_sig(f, tamarin_term::function_symbols::NdcState::IsNdc);
         }
 
         if self.auto_sources {
@@ -519,19 +605,17 @@ impl<'a> TheoryPipeline<'a> {
         let mut pe_trace = String::new();
         if let (Some(style), Some(maude)) = (self.opts.partial_evaluation, self.maude.clone()) {
             let in_file = self.theory.in_file.clone();
-            pe_trace =
-                tamarin_theory::tools::apply_partial_evaluation(self.theory_mut(), &maude, style)
-                    .map_err(|e| {
+            let pool = self.maude_pool.clone();
+            let theory = self
+                .theory
+                .closed_mut()
+                .expect("close mode closes the theory");
+            // The refined rules are closed again before auto-sources.
+            pe_trace = theory
+                .apply_partial_evaluation(&maude, pool.as_deref(), style)
+                .map_err(|e| {
                     LoadError::Other(format!("partial evaluation of {in_file} failed: {e}"))
                 })?;
-            // The second `closeTheoryWithMaude`: the refined rules come back
-            // open, so redo variants and loop breakers, then auto-sources.
-            tamarin_theory::tools::rule_variants::reprepare_theory_rules(
-                Arc::make_mut(&mut self.theory),
-                &maude,
-                self.maude_pool.as_deref(),
-            )
-            .map_err(LoadError::variants)?;
             if self.auto_sources {
                 self.apply_auto_sources()?;
             }
@@ -544,13 +628,11 @@ impl<'a> TheoryPipeline<'a> {
         let pool = self.maude_pool.clone();
         let ndc_cache = self.ndc_cache.clone();
         let parameters = self.opts.parameters;
-        tamarin_theory::auto_sources::apply_auto_sources(
-            self.theory_mut(),
-            maude,
-            pool,
-            ndc_cache.as_ref(),
-            parameters,
-        )?;
+        let theory = self
+            .theory
+            .closed_mut()
+            .expect("close mode closes the theory");
+        theory.apply_auto_sources(maude, pool, ndc_cache.as_ref(), parameters)?;
         Ok(())
     }
 }

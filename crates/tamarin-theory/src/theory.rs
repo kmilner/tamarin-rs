@@ -20,6 +20,24 @@ use crate::restriction::Restriction;
 use crate::rule::ProtoRuleE;
 use crate::sapic::PlainProcess;
 
+/// HS `variantsProtoRule`'s result for a rule's executable body
+/// (Theory/Tools/RuleVariants.hs).
+#[derive(Debug, Clone, PartialEq)]
+pub enum RuleVariants {
+    /// Not computed yet.
+    Unprepared,
+    /// `Nothing`: every variant is fresh-redundant.
+    NoVariants,
+    /// `Just ruAC`: the AC body, after reducible-term abstraction and precise
+    /// renaming, with its variant disjunction (`RuleACConstrs`, Rule.hs).
+    /// `solve_rule_constraints` adds a nonempty disjunction to the equation
+    /// store as a SplitG goal, deferring the variant choice to proof search.
+    Closed {
+        body: ProtoRuleE,
+        variants: Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
+    },
+}
+
 /// A protocol rule family with its original E rule, explicit AC members,
 /// and the executable body and variant machinery prepared during closing.
 /// [`closed_rules_ac`] exposes the family's compiled members.
@@ -27,15 +45,9 @@ use crate::sapic::PlainProcess;
 pub struct OpenProtoRule {
     /// Working body: it may be macro-expanded, unfolded, or auto-source annotated.
     pub rule: ProtoRuleE,
-    /// Variant disjunction for the executable body (`RuleACConstrs`, Rule.hs).
-    /// `solve_rule_constraints` adds a nonempty disjunction to the equation
-    /// store as a SplitG goal, deferring the variant choice to proof search.
-    pub variant_substs: Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
-    /// Optional canonical executable body paired with `variant_substs`.
-    /// Closing prepares it through reducible-term abstraction and precise
-    /// variable renaming (`variantsProtoRule`, RuleVariants.hs); standalone
-    /// proof contexts prepare it on demand. `None` uses `rule` as the body.
-    pub abstracted_rule: Option<ProtoRuleE>,
+    /// The variants of `rule`, computed while closing or, by standalone proof
+    /// contexts, on demand.
+    pub variants: RuleVariants,
     /// Premise indices marked as loop breakers by the dataflow
     /// analysis (`useAutoLoopBreakersAC`).  In Haskell these live on
     /// `praciLoopBreakers` of `ProtoRuleACInfo`; we attach them to
@@ -65,8 +77,7 @@ impl OpenProtoRule {
     pub fn new(rule: ProtoRuleE) -> Self {
         OpenProtoRule {
             rule,
-            variant_substs: Vec::new(),
-            abstracted_rule: None,
+            variants: RuleVariants::Unprepared,
             loop_breakers: Vec::new(),
             rule_e: None,
             rule_ac: Vec::new(),
@@ -78,6 +89,22 @@ impl OpenProtoRule {
     /// `getProtoRuleEs` (ClosedTheory.hs) reads exactly this.
     pub fn rule_e(&self) -> &ProtoRuleE {
         self.rule_e.as_deref().unwrap_or(&self.rule)
+    }
+
+    /// The executable body: the closed AC body, else `rule`.
+    pub fn ac_body(&self) -> &ProtoRuleE {
+        match &self.variants {
+            RuleVariants::Closed { body, .. } => body,
+            RuleVariants::Unprepared | RuleVariants::NoVariants => &self.rule,
+        }
+    }
+
+    /// The closed body's variant disjunction; empty when there is none.
+    pub fn variant_substs(&self) -> &[tamarin_term::subst_vfresh::LNSubstVFresh] {
+        match &self.variants {
+            RuleVariants::Closed { variants, .. } => variants,
+            RuleVariants::Unprepared | RuleVariants::NoVariants => &[],
+        }
     }
 
     /// Expand explicit members at the executable-rule boundary. Open printers
@@ -523,32 +550,47 @@ pub struct MergedProtoRule {
 /// block keeps the disjunction its parser gave it — `Disj [emptySubstVFresh]`
 /// (`protoRuleACInfo`, Theory/Text/Parser/Rule.hs) —
 /// and the narrowing [`crate::tools::rule_variants::populate_rule_variants`]
-/// ran on the E rule stays out of it.  For every other rule an empty
-/// `variant_substs` stands for that same trivial disjunction.
+/// ran on the E rule stays out of it.  A rule without closed variants gets
+/// that same trivial disjunction.
 pub fn closed_rules_ac(r: &OpenProtoRule) -> Vec<crate::rule::ProtoRuleAC> {
-    let info = |e: &ProtoRuleE, variants: Vec<tamarin_term::subst_vfresh::LNSubstVFresh>| {
-        crate::rule::ProtoRuleACInfo {
-            name: e.info.name,
-            attributes: e.info.attributes.clone(),
-            variants,
-            loop_breakers: r.loop_breakers.clone(),
+    if !r.rule_ac.is_empty() {
+        return written_rules_ac(r, &r.loop_breakers);
+    }
+    let variants = match &r.variants {
+        RuleVariants::Closed { variants, .. } => variants.clone(),
+        RuleVariants::Unprepared | RuleVariants::NoVariants => {
+            vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()]
         }
     };
-    let trivial = || vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()];
-    if r.rule_ac.is_empty() {
-        let variants = if r.variant_substs.is_empty() {
-            trivial()
-        } else {
-            r.variant_substs.clone()
-        };
-        let ac = r.abstracted_rule.as_ref().unwrap_or(&r.rule);
-        vec![rule_ac_under(ac, info(&r.rule, variants))]
-    } else {
-        r.rule_ac
-            .iter()
-            .map(|ac| rule_ac_under(ac, info(ac, trivial())))
-            .collect()
-    }
+    let info = crate::rule::ProtoRuleACInfo {
+        name: r.rule.info.name,
+        attributes: r.rule.info.attributes.clone(),
+        variants,
+        loop_breakers: r.loop_breakers.clone(),
+    };
+    vec![rule_ac_under(r.ac_body(), info)]
+}
+
+/// The written `variants (modulo AC)` members as `ProtoRuleAC`s: each keeps
+/// its own name and attributes, has the identity substitution as its
+/// variant disjunction (`protoRuleACInfo`, Theory/Text/Parser/Rule.hs) and
+/// carries `loop_breakers`.
+fn written_rules_ac(
+    r: &OpenProtoRule,
+    loop_breakers: &[crate::rule::PremIdx],
+) -> Vec<crate::rule::ProtoRuleAC> {
+    r.rule_ac
+        .iter()
+        .map(|ac| {
+            let info = crate::rule::ProtoRuleACInfo {
+                name: ac.info.name,
+                attributes: ac.info.attributes.clone(),
+                variants: vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()],
+                loop_breakers: loop_breakers.to_vec(),
+            };
+            rule_ac_under(ac, info)
+        })
+        .collect()
 }
 
 /// A rule's facts under a `ProtoRuleAC` info.  HS types both halves as one
@@ -647,20 +689,7 @@ pub fn merge_open_proto_rules(
 /// disjunction and an empty loop-breaker list
 /// (Theory/Text/Parser/Rule.hs).
 pub(crate) fn manual_rule_variants(r: &OpenProtoRule) -> Vec<crate::rule::ProtoRuleAC> {
-    r.rule_ac
-        .iter()
-        .map(|v| {
-            rule_ac_under(
-                v,
-                crate::rule::ProtoRuleACInfo {
-                    name: v.info.name,
-                    attributes: v.info.attributes.clone(),
-                    variants: vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()],
-                    loop_breakers: Vec::new(),
-                },
-            )
-        })
-        .collect()
+    written_rules_ac(r, &[])
 }
 
 /// HS `clearFunctionTypingInfos` (TheoryObject.hs): drop every
@@ -682,30 +711,25 @@ pub fn contains_manual_rule_variants(items: &[TheoryItem<MergedProtoRule>]) -> b
         .any(|i| matches!(i, TheoryItem::Rule(r) if !r.rule_ac.is_empty()))
 }
 
-/// Whether opening any stored rule would retain an AC half. This is the
-/// allocation-free gate for [`merge_open_proto_rules`]: `equalUpToTerms`
-/// compares only the rule name and the fact-tag shapes, so constructing and
-/// cloning the closed AC rules is unnecessary merely to choose a printer.
-pub fn contains_open_rule_variants(items: &[TheoryItem<OpenProtoRule>]) -> bool {
-    fn same_tags(xs: &[crate::fact::LNFact], ys: &[crate::fact::LNFact]) -> bool {
-        xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| x.tag == y.tag)
-    }
-    fn differs(ac: &ProtoRuleE, e: &ProtoRuleE) -> bool {
-        ac.info.name != e.info.name
-            || !same_tags(&ac.premises, &e.premises)
-            || !same_tags(&ac.conclusions, &e.conclusions)
-            || !same_tags(&ac.actions, &e.actions)
-    }
-
-    items.iter().any(|item| {
-        let TheoryItem::Rule(rule) = item else {
+/// [`contains_manual_rule_variants`] of [`merge_open_proto_rules`]`(items)`,
+/// without building the merged items: a merged item's AC rules are the union
+/// of those its rules open with ([`open_proto_rule`]), so it carries one
+/// exactly when one of its rules opens with one.  It compares what
+/// [`closed_rules_ac`] would build, without building it: each written member
+/// under its own name, else the AC body under the rule's name.
+pub fn merged_contain_manual_rule_variants(items: &[TheoryItem<OpenProtoRule>]) -> bool {
+    use crate::rule::same_fact_tags;
+    items.iter().any(|i| {
+        let TheoryItem::Rule(r) = i else {
             return false;
         };
-        let e = rule.rule_e();
-        if rule.rule_ac.is_empty() {
-            differs(rule.abstracted_rule.as_ref().unwrap_or(&rule.rule), e)
+        let e = r.rule_e();
+        if r.rule_ac.is_empty() {
+            r.rule.info.name != e.info.name || !same_fact_tags(r.ac_body(), e)
         } else {
-            rule.rule_ac.iter().any(|ac| differs(ac, e))
+            r.rule_ac
+                .iter()
+                .any(|ac| ac.info.name != e.info.name || !same_fact_tags(ac, e))
         }
     })
 }

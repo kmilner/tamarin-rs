@@ -809,11 +809,18 @@ fn manual_variant_keeps_the_trivial_disjunction() {
             vec![out_fact(msg_var("c", 0))],
             vec![],
         ),
-        variant_substs: vec![tamarin_term::subst_vfresh::LNSubstVFresh::from_list([(
-            LVar::new("c", tamarin_term::lterm::LSort::Msg, 0),
-            msg_var("z", 4),
-        )])],
-        abstracted_rule: None,
+        variants: crate::theory::RuleVariants::Closed {
+            body: Rule::new(
+                ProtoRuleEInfo::standard("R"),
+                vec![in_fact(msg_var("c", 0))],
+                vec![out_fact(msg_var("c", 0))],
+                vec![],
+            ),
+            variants: vec![tamarin_term::subst_vfresh::LNSubstVFresh::from_list([(
+                LVar::new("c", tamarin_term::lterm::LSort::Msg, 0),
+                msg_var("z", 4),
+            )])],
+        },
         loop_breakers: Vec::new(),
         rule_e: None,
         rule_ac: vec![Rule::new(

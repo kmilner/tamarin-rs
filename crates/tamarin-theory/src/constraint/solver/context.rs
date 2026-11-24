@@ -102,7 +102,11 @@ impl ClassifiedRules {
         };
         let mut protocol = intr(|info| !is_constr_rule(info) && !is_destr_rule(info));
         protocol.extend(rules.iter().map(|o| {
-            let constrs = (!o.variant_substs.is_empty()).then(|| o.variant_substs.clone());
+            // HS `someRuleACInst`: `Just` the disjunction, even an empty one.
+            let constrs = match &o.variants {
+                crate::theory::RuleVariants::Closed { variants, .. } => Some(variants.clone()),
+                _ => None,
+            };
             (canonical_rule_inst(o), constrs)
         }));
         ClassifiedRules {
@@ -969,7 +973,7 @@ impl ProofContext {
 /// The rules are taken by `&mut` reference each, so a caller holding them
 /// inside a theory can borrow them where they live: only `loop_breakers` is
 /// written, and a `Vec<OpenProtoRule>` copy would deep-clone every rule's
-/// `variant_substs` and `abstracted_rule` just to copy that one field back.
+/// variants just to copy that one field back.
 pub(crate) fn annotate_loop_breakers(
     rules: &mut [&mut OpenProtoRule],
     maude: &tamarin_term::maude_proc::MaudeHandle,
@@ -990,9 +994,7 @@ pub(crate) fn annotate_loop_breakers(
     // identity — HS compares the pre-annotation items, where every
     // `pracLoopBreakers` is still `[]`.
     let same_item = |a: &OpenProtoRule, b: &OpenProtoRule| -> bool {
-        a.rule == b.rule
-            && a.variant_substs == b.variant_substs
-            && a.abstracted_rule == b.abstracted_rule
+        a.rule == b.rule && a.variants == b.variants
     };
     let mut keys: Vec<usize> = Vec::with_capacity(rules.len());
     for i in 0..rules.len() {
@@ -1004,15 +1006,17 @@ pub(crate) fn annotate_loop_breakers(
     // facts. The cached abstracted bodies and variant substitutions include
     // reducible-term normalization, including flattened DH exponents. An empty
     // variant list yields the bare fact.
-    let variant_substs: Vec<&Vec<tamarin_term::subst_vfresh::LNSubstVFresh>> =
-        rules.iter().map(|o| &o.variant_substs).collect();
+    let variants: Vec<&crate::theory::RuleVariants> = rules.iter().map(|o| &o.variants).collect();
 
     // `instances ru fa`: apply each variant subst (as a free subst via
     // `freshToFreeAvoiding`) to `fa`.  Empty variant list ⇒ `[fa]`.
     let instances = |rule_idx: usize, fa: &crate::fact::LNFact| -> Vec<crate::fact::LNFact> {
         use tamarin_term::lterm::HasFrees;
-        let substs = variant_substs[rule_idx];
-        if substs.is_empty() || substs.iter().all(|s| s.is_empty()) {
+        let substs = match variants[rule_idx] {
+            crate::theory::RuleVariants::Closed { variants, .. } => variants.as_slice(),
+            _ => return vec![fa.clone()],
+        };
+        if !substs.is_empty() && substs.iter().all(|s| s.is_empty()) {
             return vec![fa.clone()];
         }
         substs
@@ -1067,12 +1071,8 @@ pub(crate) fn annotate_loop_breakers(
     // ruFrom because that's the outermost loop.
     // HS enumerates premises/conclusions of the AC rule, i.e. the
     // *abstracted* rule (whose reducible-headed sub-terms are replaced by
-    // the fresh z-vars the variant substs are keyed on).  Use
-    // `abstracted_rule` when present, falling back to the raw E-rule.
-    let ac_rules: Vec<&crate::rule::ProtoRuleE> = rules
-        .iter()
-        .map(|o| o.abstracted_rule.as_ref().unwrap_or(&o.rule))
-        .collect();
+    // the fresh z-vars the variant substs are keyed on).
+    let ac_rules: Vec<&crate::rule::ProtoRuleE> = rules.iter().map(|o| o.ac_body()).collect();
     // Memoize variant instances only after a compatible fact tag is found.
     // Upstream #978 rejects incompatible tags before instantiation; retaining
     // the memoized lists also avoids repeating substitutions for later edges.
@@ -1226,8 +1226,8 @@ end"#;
         let ctx = ProofContext::new(maude, theory.rules().cloned().collect());
         assert_eq!(ctx.rules.len(), 1);
         assert_eq!(ctx.rules[0].rule.actions.len(), 2);
-        assert_eq!(ctx.rules[0].variant_substs.len(), 1);
-        assert!(ctx.rules[0].variant_substs[0].is_empty());
+        assert_eq!(ctx.rules[0].variant_substs().len(), 1);
+        assert!(ctx.rules[0].variant_substs()[0].is_empty());
     }
 
     #[test]

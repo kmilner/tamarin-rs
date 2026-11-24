@@ -53,6 +53,16 @@ fn elaborated(pt: &tamarin_parser::ast::Theory) -> crate::theory::Theory {
     crate::elaborate::elaborate(pt).expect("elaborate")
 }
 
+/// Closes `theory` as the loader does before a prover session is built.
+fn closed(
+    theory: crate::theory::Theory,
+    maude: &MaudeHandle,
+) -> crate::closed_theory::ClosedTheory {
+    crate::closed_theory::close_theory(theory, maude, None)
+        .expect("close theory")
+        .0
+}
+
 #[test]
 fn prove_lemma_unknown_name_is_error() {
     let Some(h) = maude() else { return };
@@ -97,18 +107,6 @@ fn public_proving_rejects_invalid_manual_variants() {
         let error = prove_lemma(theory.clone(), "fixed", h.clone(), 30).unwrap_err();
         assert!(matches!(error, ProveError::UnsupportedInput(ref s) if s.contains("Variants")));
         assert_eq!(h.fresh_counter_peek(), counter);
-        // A frontend's loop-breaker flag is not evidence that validation happened.
-        for loop_breakers_prepared in [false, true] {
-            let result = ProverSession::build(
-                theory.clone(),
-                h.clone(),
-                ProverSessionOptions {
-                    loop_breakers_prepared,
-                    ..Default::default()
-                },
-            );
-            assert!(matches!(result, Err(ProveError::UnsupportedInput(_))));
-        }
     }
 }
 
@@ -128,12 +126,12 @@ fn public_proving_accepts_valid_manual_variants_and_ordinary_warnings() {
         &[],
     )
     .unwrap();
-    let theory = std::sync::Arc::new(elaborated(&parsed));
-    let report = crate::wellformedness::check_wellformedness(&theory, Some(&h)).unwrap();
+    let (theory, report) =
+        crate::closed_theory::close_theory(elaborated(&parsed), &h, None).unwrap();
     assert!(!report.is_empty());
     assert!(crate::wellformedness::variants::fatal_wf_errors(&report).is_empty());
     let counter = h.fresh_counter_peek();
-    let session = ProverSession::build(theory, h.clone(), Default::default()).unwrap();
+    let session = ProverSession::build(&theory, h.clone(), Default::default()).unwrap();
     assert_eq!(h.fresh_counter_peek(), counter);
     let proof = prove_lemma_in_session(&session, "fixed", 30).unwrap();
     assert_eq!(
@@ -191,47 +189,6 @@ fn public_proving_computes_reducible_manual_families_before_validating() {
         crate::constraint::solver::search::proof_status(&proof),
         ProofStatus::TraceFound
     );
-}
-
-#[test]
-fn public_proving_accepts_partial_evaluation_identity_families() {
-    let parsed = tamarin_parser::parse_theory(
-        r#"theory PartialIdentity begin
-        builtins: symmetric-encryption
-        rule Key: [Fr(~k)] --> [!Key(~k)]
-        rule Secret: [Fr(~m), !Key(~k)] --[Secret(~m)]-> [Out(senc(~m,~k))]
-        lemma witness: exists-trace "Ex m #i. Secret(m) @ i"
-        end"#,
-        &[],
-    )
-    .unwrap();
-    let mut theory = elaborated(&parsed);
-    let Some(h) = maude_with(theory.signature.clone()) else {
-        return;
-    };
-    crate::tools::rule_variants::prepare_theory_rules(&mut theory, &h, None, true).unwrap();
-    crate::tools::apply_partial_evaluation(&mut theory, &h, crate::tools::EvaluationStyle::Silent)
-        .unwrap();
-    crate::tools::rule_variants::reprepare_theory_rules(&mut theory, &h, None).unwrap();
-    let theory = std::sync::Arc::new(theory);
-    for loop_breakers_prepared in [false, true] {
-        let counter = h.fresh_counter_peek();
-        let session = ProverSession::build(
-            theory.clone(),
-            h.clone(),
-            ProverSessionOptions {
-                loop_breakers_prepared,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        assert_eq!(h.fresh_counter_peek(), counter);
-        let proof = prove_lemma_in_session(&session, "witness", 10).unwrap();
-        assert_eq!(
-            crate::constraint::solver::search::proof_status(&proof),
-            ProofStatus::TraceFound
-        );
-    }
 }
 
 #[test]
@@ -460,7 +417,7 @@ end
 "#;
     let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
     let session = ProverSession::build(
-        std::sync::Arc::new(elaborated(&pt)),
+        &closed(elaborated(&pt), &h),
         h,
         ProverSessionOptions {
             sys_retention: crate::constraint::solver::search::SysRetention::KeepAll,
@@ -496,7 +453,7 @@ fn session_from(src: &str) -> Option<ProverSession> {
     let pt = tamarin_parser::parse_theory(src, &[]).expect("parse");
     Some(
         ProverSession::build(
-            std::sync::Arc::new(elaborated(&pt)),
+            &closed(elaborated(&pt), &h),
             h,
             ProverSessionOptions::default(),
         )
@@ -631,9 +588,10 @@ fn ordinary_lemmas_use_the_session_process_when_only_cold_slots_remain() {
         &[],
     )
     .unwrap();
+    let maude = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     let session = ProverSession::build(
-        std::sync::Arc::new(elaborated(&theory)),
-        MaudeHandle::start(&path, pair_maude_sig()).unwrap(),
+        &closed(elaborated(&theory), &maude),
+        maude,
         ProverSessionOptions {
             maude_pool: Some(pool.clone()),
             ..Default::default()
@@ -840,12 +798,11 @@ fn source_materialization_preserves_maude_failures() {
         restriction Eq: \"All x y z w #i. A(x,y,z,w) @i ==> x ++ y = z ++ w\"\n\
         lemma goal: \"Ex x y z w #i. A(x,y,z,w) @i\"\n\
         end";
-    let theory = std::sync::Arc::new(elaborated(
-        &tamarin_parser::parse_theory(source, &[]).unwrap(),
-    ));
+    let theory = elaborated(&tamarin_parser::parse_theory(source, &[]).unwrap());
     let build = || {
         let maude = maude_with(theory.signature.clone())?;
-        Some(ProverSession::build(theory.clone(), maude, ProverSessionOptions::default()).unwrap())
+        let closed = closed(theory.clone(), &maude);
+        Some(ProverSession::build(&closed, maude, ProverSessionOptions::default()).unwrap())
     };
     let Some(healthy) = build() else {
         return;
@@ -1236,9 +1193,9 @@ fn validate_cli_heuristic_accepts_and_rejects_like_filter_heuristic() {
 fn prover_session_rejects_an_unvalidated_cli_heuristic() {
     let Some(h) = maude() else { return };
     let parsed = tamarin_parser::parse_theory("theory T begin end", &[]).expect("parse");
-    let theory = std::sync::Arc::new(elaborated(&parsed));
+    let theory = closed(elaborated(&parsed), &h);
     let result = ProverSession::build(
-        theory.clone(),
+        &theory,
         h.clone(),
         ProverSessionOptions {
             cli_heuristic: CliHeuristic {
@@ -1377,7 +1334,7 @@ fn included_oracle_locations_are_preserved_and_frozen() {
         return;
     };
     let session = ProverSession::build(
-        std::sync::Arc::new(theory),
+        &closed(theory, &maude),
         maude,
         ProverSessionOptions::default(),
     )
@@ -1409,8 +1366,13 @@ fn included_oracle_locations_are_preserved_and_frozen() {
 fn scratch_proof_checks_return_backend_errors() {
     use crate::constraint::solver::sources::IntegerParameters;
     let theory = elaborated(
-        &tamarin_parser::parse_theory("theory T begin rule R: [In(x)] --> [F(x)] end", &[])
-            .unwrap(),
+        // A premise `fst` makes the rule's and its probe's variants query
+        // Maude.
+        &tamarin_parser::parse_theory(
+            "theory T begin rule R: [In(x), In(fst(x))] --> [F(x)] end",
+            &[],
+        )
+        .unwrap(),
     );
     for failed in [false, true] {
         for derivation in [false, true] {

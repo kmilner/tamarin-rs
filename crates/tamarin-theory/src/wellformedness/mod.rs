@@ -183,7 +183,7 @@ pub type WfReport = Vec<WfError>;
 /// missing validation must not become permission to use them after recovery.
 /// With a handle, call [`crate::tools::rule_variants::populate_rule_variants`]
 /// first: the no-variant check reads those cached computation results.
-/// Frontends normally use [`crate::tools::rule_variants::prepare_theory_rules`],
+/// Frontends normally use [`crate::closed_theory::close_theory`],
 /// which owns that ordering and the subsequent fatal-error policy.
 pub fn check_wellformedness(
     thy: &Theory,

@@ -655,15 +655,11 @@ impl<'ctx> Reduction<'ctx> {
         &mut self,
         substs: Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
     ) -> Result<bool, crate::prove::ProveError> {
-        let substs = match substs {
-            Some(v) if !v.is_empty() => v,
-            _ => return Ok(false),
+        // An empty disjunction makes the store false (`simpEmptyDisj`).
+        let Some(substs) = substs else {
+            return Ok(false);
         };
-        // Haskell `addRuleVariants` errors if domain of variants
-        // intersects with eq-store free subst — that case isn't
-        // supported there either. We don't enforce it; the worst case
-        // is a redundant SplitG entry that simplify will discharge.
-        let id = self.sys.eq_store_mut().add_disj(substs);
+        let id = self.sys.eq_store_mut().add_rule_variants(substs);
         // `insertGoal (SplitG splitId)` comes before `simp` and always
         // advances the goal number, even when simp folds a singleton variant
         // disjunction into the substitution and orphans the goal.
@@ -1691,10 +1687,7 @@ impl<'ctx> Reduction<'ctx> {
 /// Model/Rule.hs): its abstracted form, with reducible-headed subterms
 /// replaced by fresh variables, when it has one.
 pub(crate) fn canonical_rule_inst(o: &crate::theory::OpenProtoRule) -> RuleACInst {
-    // Always prefer the abstracted rule (reducible-headed sub-terms
-    // narrowed to fresh `z_i` vars) when present, falling back to the
-    // raw rule otherwise.
-    let src: &crate::rule::ProtoRuleE = o.abstracted_rule.as_ref().unwrap_or(&o.rule);
+    let src: &crate::rule::ProtoRuleE = o.ac_body();
     crate::rule::Rule {
         info: crate::rule::RuleInfo::Proto(crate::rule::ProtoRuleACInstInfo {
             name: src.info.name,

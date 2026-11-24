@@ -500,10 +500,9 @@ impl SourceCache {
 /// request sources on demand.
 #[derive(Clone)]
 pub struct ProverSession {
-    /// Elaborated typed theory.  Used to look up lemmas, restrictions,
-    /// rules, heuristic.  Shares the caller's allocation (`Arc`); the
-    /// session never mutates it.
-    theory: std::sync::Arc<crate::theory::Theory>,
+    /// The closed theory: lemmas, restrictions, rules, heuristic. Shares the
+    /// caller's allocation; the session never mutates it.
+    theory: crate::closed_theory::ClosedTheory,
     /// Guarded formulas and resolved rankings aligned with `theory.lemmas()`.
     prepared_lemmas: std::sync::Arc<[PreparedLemma]>,
     /// The `[sources]` subset of `prepared_lemmas`, retained as shared handles.
@@ -564,9 +563,6 @@ pub struct ProverSessionOptions {
     /// Primary theory closes trace source-saturation progress; auxiliary
     /// deduction and derivation checks use `ProofContextOptions::default()`.
     pub show_saturation_steps: bool,
-    /// The frontend already annotated loop breakers while closing the theory,
-    /// so the session can reuse them verbatim.
-    pub loop_breakers_prepared: bool,
 }
 
 impl Default for ProverSessionOptions {
@@ -579,7 +575,6 @@ impl Default for ProverSessionOptions {
             parameters: crate::constraint::solver::sources::IntegerParameters::default(),
             sys_retention: crate::constraint::solver::search::SysRetention::DropAll,
             show_saturation_steps: true,
-            loop_breakers_prepared: false,
         }
     }
 }
@@ -805,7 +800,7 @@ fn resolve_heuristic(
 
 impl ProverSession {
     /// The immutable theory this session and all of its caches describe.
-    pub fn theory(&self) -> &crate::theory::Theory {
+    pub fn theory(&self) -> &crate::closed_theory::ClosedTheory {
         &self.theory
     }
 
@@ -1041,11 +1036,11 @@ impl ProverSession {
     /// rules and rule variants. `ndc_cache` reuses the theory's NDC-checked
     /// intruder rules.
     pub fn build(
-        theory: std::sync::Arc<crate::theory::Theory>,
+        theory: &crate::closed_theory::ClosedTheory,
         maude: tamarin_term::maude_proc::MaudeHandle,
         options: ProverSessionOptions,
     ) -> Result<Self, ProveError> {
-        crate::tools::rule_variants::validate_theory_for_proving(&theory, &maude)?;
+        let theory = theory.clone();
         let ProverSessionOptions {
             maude_pool,
             cli_heuristic,
@@ -1054,7 +1049,6 @@ impl ProverSession {
             parameters,
             sys_retention,
             show_saturation_steps,
-            loop_breakers_prepared,
         } = options;
         validate_cli_heuristic(&cli_heuristic, &theory.tactic)
             .map_err(ProveError::InvalidHeuristic)?;
@@ -1112,7 +1106,7 @@ impl ProverSession {
                 parameters,
                 sys_retention,
                 show_saturation_steps,
-                loop_breakers_prepared,
+                loop_breakers_prepared: true,
             },
         )?;
         maude.reset_counter_to(setup_counter_before);
@@ -1386,7 +1380,9 @@ pub fn prove_lemma(
     // prover session.
     guarded_or_error(&lemma.formula)?;
 
-    let session = ProverSession::build(theory, maude, ProverSessionOptions::default())?;
+    let (theory, _report) =
+        crate::closed_theory::close_theory(std::sync::Arc::unwrap_or_clone(theory), &maude, None)?;
+    let session = ProverSession::build(&theory, maude, ProverSessionOptions::default())?;
     prove_lemma_in_session(&session, lemma_name, proof_bound)
 }
 

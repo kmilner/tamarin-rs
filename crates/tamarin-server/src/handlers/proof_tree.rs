@@ -173,24 +173,22 @@ impl ProofState {
             (*entry.prover_maude_sig).clone(),
         )
         .map_err(|e| format!("maude start: {:?}", e))?;
-        Self::new_with_maude(
-            &entry.typed_theory,
-            maude,
-            entry.ndc_cache.as_ref(),
-            entry.cut,
-            cfg,
-        )
+        let theory = entry
+            .typed_theory
+            .closed()
+            .ok_or("prover session: the theory was not closed")?;
+        Self::new_with_maude(theory, maude, entry.ndc_cache.as_ref(), entry.cut, cfg)
     }
 
     fn new_with_maude(
-        typed: &std::sync::Arc<tamarin_theory::theory::Theory>,
+        typed: &tamarin_theory::closed_theory::ClosedTheory,
         maude: tamarin_term::maude_proc::MaudeHandle,
         ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
         cut: tamarin_theory::constraint::solver::context::CutStrategy,
         cfg: &crate::ServerConfig,
     ) -> Result<Self, String> {
         let session = tamarin_theory::prove::ProverSession::build(
-            typed.clone(),
+            typed,
             maude,
             tamarin_theory::prove::ProverSessionOptions {
                 cut,
@@ -198,7 +196,6 @@ impl ProofState {
                 parameters: cfg.load.parameters,
                 sys_retention: tamarin_theory::constraint::solver::search::SysRetention::KeepAll,
                 show_saturation_steps: true,
-                loop_breakers_prepared: ndc_cache.is_some(),
                 ..Default::default()
             },
         )
@@ -395,7 +392,7 @@ impl ProofState {
     /// interactive proof path.
     pub(crate) fn rebase_onto(
         &self,
-        typed: &Arc<tamarin_theory::theory::Theory>,
+        typed: &tamarin_theory::closed_theory::ClosedTheory,
         ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
         cut: tamarin_theory::constraint::solver::context::CutStrategy,
         cfg: &crate::ServerConfig,
@@ -1495,9 +1492,7 @@ end
             return;
         };
         let state = trivial_proof_state(&mp);
-        let mut typed = state.session.theory().clone();
-        assert!(typed.remove_lemma("second"));
-        let typed = Arc::new(typed);
+        let typed = state.session.theory().without_lemma("second").unwrap();
 
         let rebased = state
             .rebase_onto(
@@ -1541,9 +1536,7 @@ end"#,
             .expect("old root system");
         assert_eq!(old.lemmas.len(), 1);
 
-        let mut typed = state.session.theory().clone();
-        assert!(typed.remove_lemma("reusable"));
-        let typed = Arc::new(typed);
+        let typed = state.session.theory().without_lemma("reusable").unwrap();
         let rebased = state
             .rebase_onto(
                 &typed,
@@ -1586,11 +1579,10 @@ end"#,
             1
         );
 
-        let mut typed = state.session.theory().clone();
-        assert!(typed.remove_lemma("reusable"));
+        let typed = state.session.theory().without_lemma("reusable").unwrap();
         let rebased = state
             .rebase_onto(
-                &Arc::new(typed),
+                &typed,
                 None,
                 tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
                 &test_config(&mp),

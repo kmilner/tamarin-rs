@@ -25,8 +25,6 @@ use tamarin_utils::parallel::SharedOnce;
 
 use chrono::{DateTime, Local};
 
-use tamarin_theory::theory::Theory as TypedTheory;
-
 use crate::handlers::proof_tree::ProofState;
 
 /// One loaded theory with bookkeeping.
@@ -34,10 +32,10 @@ use crate::handlers::proof_tree::ProofState;
 pub struct TheoryEntry {
     /// Stable index used in URLs.  Set by `TheoryStore::insert`.
     pub idx: usize,
-    /// Elaborated, typed theory — the accessor helpers' source and the
-    /// theory the lazily built [`ProofState`] proves.  Wrapped in `Arc`
-    /// so we can clone the entry cheaply.
-    pub typed_theory: Arc<TypedTheory>,
+    /// Elaborated, typed theory — the accessor helpers' source and, once
+    /// closed, the theory the lazily built [`ProofState`] proves. Shared, so
+    /// the entry clones cheaply.
+    pub typed_theory: crate::theory_loader::LoadedTheory,
     /// The signature every Maude process for this theory loads its module
     /// from, taken before the load joins `check_close_intr_rule`'s verdicts
     /// into [`typed_theory`](Self::typed_theory)'s signature.  A symbol's NDC
@@ -417,7 +415,7 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use tamarin_term::maude_sig::minimal_maude_sig;
-    use tamarin_theory::theory::OpenProtoRule;
+    use tamarin_theory::theory::{OpenProtoRule, Theory as TypedTheory};
 
     type Cell = RetryCell<usize, StoreError>;
 
@@ -433,7 +431,7 @@ mod tests {
         let typed_theory = TypedTheory::<OpenProtoRule>::new(name, prover_maude_sig.clone());
         TheoryEntry {
             idx: 0,
-            typed_theory: Arc::new(typed_theory),
+            typed_theory: crate::theory_loader::LoadedTheory::Open(Arc::new(typed_theory)),
             prover_maude_sig: Arc::new(prover_maude_sig),
             cut: tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
             origin: TheoryOrigin::Interactive,

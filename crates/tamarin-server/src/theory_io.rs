@@ -127,10 +127,11 @@ mod tests {
     /// (HS `toParserFlags`, TheoryLoader.hs), and a local file's
     /// `#include` resolves against ITS OWN directory
     /// (`takeDirectory <$> inFile`, Theory/Text/Parser.hs).
-    /// `maude_path` is a nonexistent binary so the best-effort Maude block
-    /// is skipped and the test stays hermetic.
     #[test]
     fn parser_flags_and_include_base_dir_reach_the_web_load() {
+        let Some(maude) = require_maude_path() else {
+            return;
+        };
         let rule_count = |entry: &TheoryEntry| {
             entry
                 .typed_theory
@@ -140,7 +141,7 @@ mod tests {
                 .count()
         };
         let src = "theory T begin\n#ifdef FOO\nrule R: [ ] --> [ ]\n#endif\nend";
-        let mut cfg = test_config("/nonexistent/maude-for-test");
+        let mut cfg = test_config(&maude);
 
         // Flag absent: the #ifdef block is dropped.
         let entry = load_from_source(src, TheoryOrigin::Upload("t.spthy".into()), &cfg)
@@ -164,27 +165,22 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// HS closes every web load with Maude, so a load that cannot start it
+    /// fails instead of storing a theory no proof session can use.
     #[test]
-    fn web_load_does_not_store_unchecked_explicit_variants_without_maude() {
-        let complete = include_str!("../../tamarin-theory/tests/fixtures/manual_variants.spthy");
-        let incomplete = format!(
-            "{}\nend",
-            complete.split(",\n  rule (modulo AC)").next().unwrap()
-        );
+    fn web_load_fails_when_maude_cannot_start() {
+        let explicit = include_str!("../../tamarin-theory/tests/fixtures/manual_variants.spthy");
+        let plain = "theory T begin\nrule R: [Fr(~k)] --[A(~k)]-> []\nend";
         let cfg = test_config("/nonexistent/maude-for-test");
-        for source in [complete, &incomplete] {
-            let error = match load_from_source(
-                source,
-                TheoryOrigin::Upload("manual-variants.spthy".into()),
-                &cfg,
-            ) {
-                Ok(_) => panic!("unchecked family must not reach a later recovered proof session"),
-                Err(error) => error,
-            };
+        for source in [explicit, plain] {
+            let error =
+                match load_from_source(source, TheoryOrigin::Upload("no-maude.spthy".into()), &cfg)
+                {
+                    Ok(_) => panic!("a load without Maude must fail"),
+                    Err(error) => error,
+                };
             assert!(
-                error
-                    .to_string()
-                    .contains("Maude is required to validate explicit rule variants"),
+                error.to_string().contains("failed to start maude"),
                 "{error}"
             );
         }

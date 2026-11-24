@@ -127,9 +127,13 @@ pub async fn start_server_with_theory_and(
     let mut cfg = ServerConfig::new("127.0.0.1:0".parse().unwrap(), data_dir, maude_path.clone());
     mutate(&mut cfg);
 
-    // Load theory before starting server.
+    // Load theory before starting server. A web load closes the theory with
+    // Maude, so it uses the probed binary even when `mutate` points the
+    // server's later proof sessions elsewhere.
     let store = TheoryStore::default();
-    let entry = tamarin_server::theory_io::load_from_path(&theory_path, &cfg)
+    let mut load_cfg = cfg.clone();
+    load_cfg.load.maude_path = maude_path.clone();
+    let entry = tamarin_server::theory_io::load_from_path(&theory_path, &load_cfg)
         .expect("fixture should parse + elaborate");
     let _idx = store.insert(entry);
 

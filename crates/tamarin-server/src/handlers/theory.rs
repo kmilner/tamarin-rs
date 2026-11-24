@@ -1824,15 +1824,19 @@ pub async fn delete_step(
                     } else {
                         std::collections::BTreeSet::new()
                     };
-                let mut theory = (*detached.typed_theory).clone();
-                let removed = theory.remove_lemma(&name_owned);
-                debug_assert!(removed);
-                detached.typed_theory = Arc::new(theory);
+                detached.typed_theory = detached
+                    .typed_theory
+                    .without_lemma(&name_owned)
+                    .expect("the lemma was found above");
                 if let Some(previous) = detached.proof_state.take() {
+                    let closed = detached
+                        .typed_theory
+                        .closed()
+                        .expect("a proof state is built only for a closed theory");
                     detached.proof_state = Some(Arc::new(
                         previous
                             .rebase_onto(
-                                &detached.typed_theory,
+                                closed,
                                 detached.ndc_cache.as_ref(),
                                 detached.cut,
                                 &delete_state.cfg,

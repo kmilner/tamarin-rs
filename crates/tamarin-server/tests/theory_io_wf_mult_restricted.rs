@@ -25,14 +25,6 @@ use std::path::PathBuf;
 
 use tamarin_server::theory_io;
 
-/// A path that cannot start a Maude process.  The report below comes from
-/// the static wellformedness pass.  The load runs that pass before it needs
-/// a Maude handle.  The load therefore skips the best-effort Maude block,
-/// and this test needs no external program.  A run of this comparison under
-/// a real Maude gives the same bytes.  The test skips nothing when the
-/// binary is absent.  A skipped test would pass without comparing anything.
-const NO_MAUDE: &str = "/nonexistent/maude-for-test";
-
 fn fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -70,12 +62,16 @@ fn web_load_reports_multiplication_restriction_unescaped_in_the_banner() {
     // The process-wide setup `serve` applies, so every renderer runs at the
     // web width the HTTP responses use.
     tamarin_server::init_process_globals();
+    // A web load closes the theory with Maude (HS `closeTheory`).
+    let Some(maude) = tamarin_test_support::require_maude_path() else {
+        return;
+    };
     // `derivcheck_timeout = 0` skips the dynamic derivation checks, matching
     // the `--derivcheck-timeout=0` oracle probe.
     let mut cfg = tamarin_server::ServerConfig::new(
         "127.0.0.1:0".parse().unwrap(),
         std::path::PathBuf::new(),
-        NO_MAUDE.to_string(),
+        maude.to_string(),
     );
     cfg.load.derivation_checks = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
     let entry = theory_io::load_from_path(&fixture(), &cfg).expect("fixture loads");
@@ -111,27 +107,25 @@ fn web_load_reports_multiplication_restriction_unescaped_in_the_banner() {
 }
 
 #[test]
-fn unsupported_products_are_rejected_even_without_maude() {
+fn unsupported_products_are_rejected() {
     let Some(maude) = tamarin_test_support::require_maude_path() else {
         return;
     };
     let gdh = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../../tamarin-prover/examples/sp14/GDH.spthy");
-    for maude_path in [NO_MAUDE, &maude] {
-        let cfg = tamarin_server::ServerConfig::new(
-            "127.0.0.1:0".parse().unwrap(),
-            PathBuf::new(),
-            maude_path.to_string(),
-        );
-        let error = match theory_io::load_from_path(&gdh, &cfg) {
-            Err(error) => error.to_string(),
-            Ok(_) => panic!("unsupported products loaded with {maude_path}"),
-        };
-        assert!(
-            error.contains("Unsupported multiplication outside exponents"),
-            "{error}"
-        );
-        assert!(error.contains("RecvOthers"), "{error}");
-        assert!(error.contains("RecvRoundkey"), "{error}");
-    }
+    let cfg = tamarin_server::ServerConfig::new(
+        "127.0.0.1:0".parse().unwrap(),
+        PathBuf::new(),
+        maude.to_string(),
+    );
+    let error = match theory_io::load_from_path(&gdh, &cfg) {
+        Err(error) => error.to_string(),
+        Ok(_) => panic!("unsupported products loaded"),
+    };
+    assert!(
+        error.contains("Unsupported multiplication outside exponents"),
+        "{error}"
+    );
+    assert!(error.contains("RecvOthers"), "{error}");
+    assert!(error.contains("RecvRoundkey"), "{error}");
 }
