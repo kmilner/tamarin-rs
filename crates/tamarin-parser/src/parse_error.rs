@@ -464,21 +464,16 @@ impl ParseError {
         name: impl Into<String>,
         contents: impl Into<String>,
     ) -> Self {
-        let name = name.into();
-        if self
+        if self.source.is_empty() {
+            self.source = name.into();
+        }
+        if !self
             .diagnostic
             .as_ref()
             .is_some_and(|diagnostic| diagnostic.source.is_some())
         {
-            if self.source.is_empty() {
-                self.source = name;
-            }
-            return self;
+            self.diagnostic_mut().source = Some(contents.into());
         }
-        if self.source.is_empty() {
-            self.source = name;
-        }
-        self.diagnostic_mut().source = Some(contents.into());
         self
     }
 

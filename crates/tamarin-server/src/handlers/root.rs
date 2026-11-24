@@ -200,7 +200,7 @@ fn render_index(state: &AppState) -> String {
     )
 }
 
-pub use tamarin_utils::pretty_html::escape_html_entities as html_escape;
+pub use tamarin_utils::pretty_hpj::escape_html_entities as html_escape;
 
 #[cfg(test)]
 mod tests {

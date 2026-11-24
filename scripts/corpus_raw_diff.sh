@@ -70,21 +70,8 @@ HS_RTS="${HS_RTS:--N$HS_N}"
 hs_path=$(resolve_hs_oracle "$repo_root") || exit 2
 
 # --- Build + locate the RS binary (the real prover, not the dump_proof example).
-# `tamarin-prover` is the PACKAGE; its only bin target is `tamarin-rs`, so
-# --bin tamarin-prover selects nothing and cargo errors out.
-if [ -z "${TAM_RS_NO_AUTO_BUILD:-}" ]; then
-    if ! cargo build --release -p tamarin-prover \
-            --manifest-path "$repo_root/Cargo.toml" >&2; then
-        echo "corpus_raw_diff.sh: cargo build -p tamarin-prover failed" >&2
-        exit 2
-    fi
-fi
 rs_path="$repo_root/target/release/tamarin-rs"
-if [ ! -x "$rs_path" ]; then
-    echo "corpus_raw_diff.sh: RS binary not built at $rs_path" >&2
-    exit 2
-fi
-rs_stale_check "$rs_path" "$repo_root"
+ensure_rs_binary corpus_raw_diff.sh "$rs_path" "$repo_root"
 
 # --- Cache key: identical to diff_proof_raw.sh's flagless form. It carries the
 # oracle and execution fingerprints, so a rebuilt oracle, changed Maude or
@@ -124,10 +111,10 @@ worker() {
     fi
     local cache_id=${cache_template/__LEMMA__/$lemma}
     if [ -z "$NO_HS_CACHE" ]; then
-        key="$HS_CANON_CACHE/$cache_id.canon"
-        key_full="${key%.canon}.full.gz"
-        key_rc="${key%.canon}.rc"
-        key_timeout="${key%.canon}.timeout"
+        key="$HS_CANON_CACHE/$cache_id"
+        key_full="$key.full.gz"
+        key_rc="$key.rc"
+        key_timeout="$key.timeout"
         cache_entry_lock "$HS_CANON_CACHE" "$cache_id" lock_fd || {
             printf '%s\t%s\tSKIP_CACHE_LOCK\t0\t0\t-\t-\t-\n' "$f" "$lemma"
             return 0
@@ -211,7 +198,7 @@ worker() {
     hs_lines=$(grep -c . "$tmp/hs.cmp"); hs_lines=${hs_lines// /}
     rs_lines=$(grep -c . "$tmp/rs.cmp"); rs_lines=${rs_lines// /}
 
-    if [ "$hs_rc" -ge 124 ] || [ "$rs_rc" -ge 124 ]; then
+    if [ "$rs_rc" -ge 124 ]; then
         printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$f" "$lemma" "SKIP_TIMEOUT" "$hs_lines" "$rs_lines" "-" "$hs_ms" "$rs_ms"
         return 0
     fi

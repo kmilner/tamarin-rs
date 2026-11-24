@@ -392,3 +392,11 @@ fn html_mode_is_one_engine_flag() {
     assert!(!html_mode());
     assert_eq!(Doc::text("<a>").render(), "<a>");
 }
+
+#[test]
+fn escape_html_entities_basics() {
+    assert_eq!(
+        escape_html_entities("<a href=\"x\">&'</a>"),
+        "&lt;a href=&quot;x&quot;&gt;&amp;&#39;&lt;/a&gt;"
+    );
+}

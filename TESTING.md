@@ -604,11 +604,9 @@ They share one reference cache, `.gate_cache/load/`, and both can fill it:
   gate's PHASE 0 writes it — one cheap no-prove oracle load per missing entry,
   limited by `JOBS`. These entries are separate from the `--prove` output in
   `.gate_cache/proof/`.
-- `wf_gate.sh` slices the wf block out of `.load.gz`; `pretty_gate.sh` derives
-  `<key>.theory.gz` from it and skips a key only when *both* artifacts exist.
-  A cache `wf_gate.sh` filled first costs `pretty_gate.sh` no oracle run at
-  all; a cache holding only `.theory.gz` costs it one load per key to add the
-  `.load.gz` — minutes over the corpus, not the batch gate's tens of minutes.
+- Both gates slice the cached `.load.gz`. PHASE 0 of `pretty_gate.sh` also
+  caches its theory slice under a versioned filename. A slicer change or a
+  cache filled by `wf_gate.sh` reuses the full load without running the oracle.
 - `NO_HS_FILL=1` skips PHASE 0 in either: right on a warm cache, an all-`SKIP`
   (failing) run on a cold one. Both still require the oracle binary, because
   the cache key is its fingerprint.
@@ -969,36 +967,33 @@ Work top-down: which lemma → which proof step → which solver call.
 
 ```bash
 scripts/diff_proof_raw.sh tamarin-prover/examples/Tutorial.spthy Client_auth
-scripts/diff_proof_raw.sh <file> <lemma> "TAM_RS_DBG_APPLY_EQ_STORE=1"   # extra env for the RS run
+scripts/diff_proof_raw.sh <file> <lemma> "TAM_RS_TRACE_STATE=1"   # extra env for the RS run
 ```
 
 `scripts/corpus_raw_diff.sh` batches per-lemma comparisons. These are diagnostic
 tools; `scripts/test.sh proof` is the full-file parity gate.
 
-**Diagnostic env flags** (all off by default; solving behavior is never
-env-configurable — these only dump, count, verify-and-panic, or force a
-reference path whose output is byte-identical):
+**Diagnostic env flags** (all off by default). Most only dump to stderr or
+force a reference path whose output is byte-identical; the last two bound
+the search and are for experiments, never for a gate:
 
 | Variable | Effect |
 |---|---|
+| `TAM_RS_TRACE_STATE=1` | `[STATE]` line per evaluated proof node and `[PICK]` line per goal selection, var indices suppressed |
 | `TAM_RS_DBG_INTR_DUMP=1` | assembled intruder-rule cache (index, kind, budget/flags, facts) |
-| `TAM_RS_DBG_SOURCES_DUMP=1` | per-source goal + refined case names after `ensure_saturated` |
-| `TAM_DBG_PERFORM_SPLIT=1` | perform_split case lists (RS) |
-| `TAM_RS_DBG_APPLY_EQ_STORE=1` | applyEqStore IN/OUT (RS) |
-| `TAM_RS_DBG_APPLY_EQ_STORE_FILTER=substantive` | limit that dump to calls with equations or substitutions |
-| `TAM_DBG_AES_VARIANTS=1` | apply_eq_store variant before→after counts |
+| `TAM_RS_DBG_SOURCES_DUMP=1` | per-source goal + case names of each saturated (raw) source build |
+| `TAM_DBG_MAUDE_IO=1` / `=full` | every Maude command and reply, truncated to 200 chars / in full |
+| `TAM_DBG_MAUDE_IO_FILTER=<s>` | limit that dump to commands containing `<s>` (e.g. `unify`) |
+| `TAM_DBG_MAUDE_INTERRUPT=1` | report each interrupted Maude exchange and its elapsed time |
 | `TAM_RS_NO_SOURCE_CACHE=1` | disable persistent session source-case reuse (recompute for each proof/source context; A/B oracle) |
 | `TAM_RS_DISABLE_PARALLEL_EXPAND=1` | expand proof-tree siblings serially instead of per-child in parallel |
 | `TAM_RS_KEEP_SYS=1` | keep every proof node's `System` instead of dropping the ones the search no longer needs |
 | `TAM_SATURATION_LIMIT=<n>` | source-saturation step cap; outranks the CLI `-s=` |
 | `TAM_PROVE_DEADLINE_MS=<n>` | per-search wall-clock cap (co-operative) |
 
-The `TAM_RS_VERIFY_*` hooks certify the solver's internal caches and skip
-optimisations: exporting them during a full corpus-gate run re-executes every
-skipped computation and panics on any divergence, turning the byte gate into a
-self-check of the optimisation machinery as well. The `TAM_RS_NO_*` /
-`TAM_RS_DISABLE_*` switches are the A/B complement — they force the
-pre-optimisation reference path, whose output must stay byte-identical.
+The `TAM_RS_NO_*` / `TAM_RS_DISABLE_*` switches are the A/B check on the
+optimisations: they force the pre-optimisation reference path, whose output
+must stay byte-identical.
 
 The table lists every Rust-side diagnostic/solver flag. Test-only dependency
 escape hatches are separate:

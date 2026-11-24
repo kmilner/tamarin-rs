@@ -14,22 +14,22 @@
 # compare the pure Theory→text render — including the LEMMA/RESTRICTION FORMULA
 # rendering — both sides must be no-prove.  So we keep a separate no-prove HS
 # reference cache; it is auto-filled on first run (fast) and reused warm after.
-# We reuse corpus_file_diff.sh's ckey / flags / strip_env machinery verbatim so
-# per-file canonical flags stay identical to the other gates.
+# ckey / flags_for / strip_env come from gate_common.sh, so per-file canonical
+# flags stay identical to the other gates.
 #
 # PHASE 0 also stores the whole stripped load-time stdout as <key>.load.gz.
 # That is wf_gate.sh's reference: the wellformedness report is load-time output
 # too, so one oracle load per file feeds both gates, and wf_gate no longer has
 # to wait for corpus_file_diff.sh's 30-60 min `--prove` batch after a bump.
 #
-# Extraction (extract_theory): keep `^theory ` … `^end$`; DROP the trailing
-# formal-comment blocks tamarin appends inside that span — the wellformedness
-# report (`/* All wellformedness checks were successful. */` OR the multi-line
-# `/*\nWARNING …\n*/`, a SEPARATE slice owned by wf_gate.sh) and the volatile
-# `/*\nGenerated from: …\n*/` build stamp — and everything after `end` (the
-# summary-of-summaries, which carries processing time).  Interior comments
-# (rule AC-variant blocks, `guarded formula characterizing …`) are KEPT: they
-# are pretty-printer output.
+# Extraction (theory_block in gate_common.sh): keep `^theory ` … `^end$`; DROP
+# the trailing formal-comment blocks tamarin appends inside that span — the
+# wellformedness report (`/* All wellformedness checks were successful. */` OR
+# the multi-line `/*\nWARNING …\n*/`, a SEPARATE slice owned by wf_gate.sh) and
+# the volatile `/*\nGenerated from: …\n*/` build stamp — and everything after
+# `end` (the summary-of-summaries, which carries processing time).  Interior
+# comments (rule AC-variant blocks, `guarded formula characterizing …`) are
+# KEPT: they are pretty-printer output.
 #
 # Env: RS_PATH, HS_PATH, HS_CACHE (dir), JOBS, FILE_TIMEOUT, DERIVCHECK_TIMEOUT,
 #      RESULTS_TSV, ALLOWLIST, NO_HS_FILL (skip phase 0 if the cache is warm).
@@ -62,7 +62,6 @@ NO_HS_FILL="${NO_HS_FILL:-}"
 mkdir -p "$HS_CACHE"
 
 HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
-RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 [ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }
 rs_stale_check "$RS_PATH" "$repo_root"
 # The oracle binary is required even under NO_HS_FILL: its fingerprint is part
@@ -80,33 +79,9 @@ oracle_rev_check "$HS_PATH" "$MAUDE" "$repo_root"
 execution_fingerprint "$MAUDE" "$DERIVCHECK_TIMEOUT" || exit 2
 export HS_FP HS_FP_PATH HS_FP_SALT EXEC_FP EXEC_FP_SALT MAUDE_FP MAUDE_FP_PATH
 
-# strip_env (gate_common.sh): DELETE the four volatile header lines.
-# Isolate the pretty-printed theory echo: `theory … begin … end`, minus the
-# trailing wf report and Generated-from stamp, minus the post-`end` summary.
-extract_theory() {
-    awk '
-        /^theory /              { cap=1 }
-        !cap                    { next }
-        # wf SUCCESS single-line comment -> drop.
-        /^\/\* All wellformedness checks were successful\. \*\/$/ { next }
-        # column-0 `/*` opens a multi-line comment: peek to classify.
-        /^\/\*$/ {
-            if ((getline nxt) > 0) {
-                if (nxt == "WARNING: the following wellformedness checks failed!" || nxt == "Generated from:") {
-                    while ((getline z) > 0) { if (z == "*/") break }   # drop block
-                    next
-                }
-                print; print nxt; next                                 # keep interior comment
-            }
-            print; next
-        }
-        { print }
-        /^end$/                 { cap=0 }
-    '
-}
 # flags_for / ckey come from gate_common.sh — one key format for this gate,
 # wf_gate.sh (which reads THIS cache) and corpus_file_diff.sh.
-export -f file_sha256 strip_env extract_theory flags_for parser_input_manifest manifest_encode manifest_normalize \
+export -f file_sha256 strip_env theory_block slice_gate_one flags_for parser_input_manifest manifest_encode manifest_normalize \
     manifest_decode_into input_manifest \
     _include_shas_from_manifest _oracle_shas_from_manifest input_content_key ckey \
     cache_entry_lock cache_entry_unlock cache_publish_gzip cache_gzip_valid \
@@ -114,21 +89,10 @@ export -f file_sha256 strip_env extract_theory flags_for parser_input_manifest m
     binary_sha256 binary_identity_unchanged execution_identity_unchanged \
     producer_identity_unchanged rs_identity_unchanged comparison_identity_unchanged
 
-# --- Phase 0: fill any MISSING no-prove HS reference (fast; warm-cache reused).
-# TWO artifacts per key, from ONE oracle run:
-#   <key>.theory.gz — the extracted theory echo, this gate's reference;
-#   <key>.load.gz   — the WHOLE stripped load-time stdout, which wf_gate.sh
-#                     slices its warning block out of.  wf_gate used to take
-#                     that slice from corpus_file_diff.sh's `--prove` cache, so
-#                     after a bump it had nothing to compare until the 30-60
-#                     min batch gate had run; the load pass produces the same
-#                     wf report in ~1s/file.
-# So the skip test needs BOTH: a cache holding only .theory.gz (everything
-# filled before .load.gz existed) must still be completed, and completing it
-# here is what stops wf_gate re-running the same 432 oracle loads itself.
-# The reverse hole is closed without the oracle at all: .theory.gz is a pure
-# function of .load.gz, so a cache wf_gate filled first is completed by
-# extracting, not by re-loading.
+# A change to the slicer invalidates only its derived output.
+THEORY_SLICE="theory-$(file_sha256 <(declare -f theory_block))" || exit 2
+export THEORY_SLICE
+
 hs_fill_one() {
     local rel="$1" f="$CORPUS_ROOT/$1" key fl lock_fd
     [ -f "$f" ] || return 0
@@ -141,17 +105,17 @@ hs_fill_one() {
     # Ahead of the derive step below, so a .load.gz wf_gate left here cannot
     # promote a diff theory into this gate's comparison set.
     case " $fl " in *" --diff "*) return 0;; esac
-    cache_gzip_valid "$HS_CACHE/$key.theory.gz" \
+    cache_gzip_valid "$HS_CACHE/$key.$THEORY_SLICE.gz" \
         && cache_gzip_valid "$HS_CACHE/$key.load.gz" && return 0
     hs_load_cache_fill "$rel" "$f" "$key" "$fl" "$FILE_TIMEOUT"
     cache_entry_lock "$HS_CACHE" "$key" lock_fd || return 0
-    if ! cache_gzip_valid "$HS_CACHE/$key.theory.gz" \
+    if ! cache_gzip_valid "$HS_CACHE/$key.$THEORY_SLICE.gz" \
             && cache_gzip_valid "$HS_CACHE/$key.load.gz"; then
         local derived
         derived=$(mktemp) || { cache_entry_unlock "$lock_fd"; return 0; }
-        zcat "$HS_CACHE/$key.load.gz" | extract_theory > "$derived"
+        zcat "$HS_CACHE/$key.load.gz" | theory_block > "$derived"
         if [ -s "$derived" ]; then
-            cache_publish_gzip "$HS_CACHE/$key.theory.gz" "$derived" || true
+            cache_publish_gzip "$HS_CACHE/$key.$THEORY_SLICE.gz" "$derived" || true
         fi
         rm -f "$derived"
     fi
@@ -160,31 +124,7 @@ hs_fill_one() {
 export -f hs_fill_one
 
 # --- Phase 1: RS no-prove + diff vs cached HS theory echo.
-one() {
-    local rel="$1" f="$CORPUS_ROOT/$1" key checked_key fl hs rs d rrc
-    [ -f "$f" ] || { printf '%s\tSKIP_NO_HS\t0\n' "$rel"; return 0; }
-    if ! key=$(ckey "$rel" "$f"); then
-        printf '%s\tSKIP_INPUT_MANIFEST\t0\n' "$rel"
-        return 0
-    fi
-    fl=$(flags_for "$rel")
-    case " $fl " in *" --diff "*) printf '%s\tSKIP_UNSUPPORTED_DIFF\t0\n' "$rel"; return 0;; esac
-    cache_gzip_valid "$HS_CACHE/$key.theory.gz" || { printf '%s\tSKIP_NO_HS\t0\n' "$rel"; return 0; }
-    hs=$(zcat "$HS_CACHE/$key.theory.gz")
-    local tmp; tmp=$(mktemp)
-    # shellcheck disable=SC2086
-    timeout "$FILE_TIMEOUT" "$RS_PATH" --with-maude="$MAUDE" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" "$f" >"$tmp" 2>/dev/null
-    rrc=$?
-    if [ "$rrc" = 124 ]; then rm -f "$tmp"; printf '%s\tSKIP_RS_TIMEOUT\t0\n' "$rel"; return 0; fi
-    if [ "$rrc" -ne 0 ]; then rm -f "$tmp"; printf '%s\tSKIP_RS_ERROR\t0\n' "$rel"; return 0; fi
-    rs=$(strip_env < "$tmp" | extract_theory); rm -f "$tmp"
-    if ! checked_key=$(ckey "$rel" "$f") || [ "$checked_key" != "$key" ] \
-            || ! comparison_identity_unchanged; then
-        printf '%s\tSKIP_INPUT_CHANGED\t0\n' "$rel"; return 0
-    fi
-    d=$(diff <(printf '%s\n' "$hs") <(printf '%s\n' "$rs") | grep -c '^[<>]')
-    if [ "$d" = 0 ]; then printf '%s\tMATCH\t0\n' "$rel"; else printf '%s\tDIFF\t%s\n' "$rel" "$d"; fi
-}
+one() { slice_gate_one "$1" theory_block "$THEORY_SLICE"; }
 export -f one
 
 # gate_common's filelist: ALLOWLIST > parity_corpus.txt > this gate's

@@ -161,7 +161,7 @@ walks the RS test harness's ladder because its captures must use the maude
 - **`pretty_gate.sh`** — fast theory pretty-print gate (same ~45 s): diffs the
   load-time `theory … end` echo against the oracle. Run when touching parsing
   or printing. Its PHASE 0 fills the same `.load.gz` artifact and derives its
-  `.theory.gz` slice from it; `NO_HS_FILL=1` skips the fill for a warm cache,
+  versioned theory slice from it; `NO_HS_FILL=1` skips the fill for a warm cache,
   and turns a cold one into an all-`SKIP` (failing) run. Both gates need the
   oracle binary even cache-warm — its fingerprint is part of the cache key —
   and exit 2 without one, `NO_HS_FILL=1` included. `wf_gate.sh` caps its fill

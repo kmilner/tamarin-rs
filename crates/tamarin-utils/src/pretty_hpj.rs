@@ -20,11 +20,10 @@
 //! HughesPJ's `lineLength` field, `ribbonsPerLine = 1.5` (HS HughesPJ.hs),
 //! giving `ribbon = round(110/1.5) = 73` (HS HughesPJ.hs).
 //!
-//! Subset choice: we omit `Above`/`Beside` lazy constructors and the
-//! `g` (with-space) tracking around fillNB's special "Empty after
-//! Nest" handling — our concrete callers always emit explicit
-//! `TextBeside " "` between items.  We also omit annotations
-//! (`AnnotStart`/`AnnotEnd`) — text output only.
+//! Subset choice: we omit the `Above`/`Beside` lazy constructors and
+//! annotations (`AnnotStart`/`AnnotEnd`) — text output only.  The `g`
+//! (with-space) flag and fillNB's `Empty` handling are ported
+//! (`sep_nb`, `fill_nb`, `fill_nbe`).
 
 use std::rc::Rc;
 
@@ -132,7 +131,20 @@ pub fn html_mode() -> bool {
 /// HS `escapeHtmlEntities` (`Text/PrettyPrint/Html.hs`, copied there
 /// from blaze-html) — escape the five HTML metacharacters in the exact HS
 /// order/mapping so escaped column widths and output bytes match.
-pub use crate::pretty_html::escape_html_entities;
+pub fn escape_html_entities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            x => out.push(x),
+        }
+    }
+    out
+}
 
 // ============================================================================
 // Doc tree
@@ -337,7 +349,7 @@ impl Doc {
     pub fn render_with(self, line_length: usize, ribbon: usize) -> String {
         let reduced = reduce_doc(self);
         let r = ribbon as isize;
-        let best = get_doc(line_length as isize, r, &reduced);
+        let best = get(line_length as isize, r, reduced);
         let mut out = String::new();
         lay(0, &best, &mut out);
         out
@@ -1021,12 +1033,7 @@ fn fill_nbe(g: bool, k: isize, y: Doc, ys: Vec<Doc>) -> Doc {
 // best / get / get1 / nicest1 / fits
 // ============================================================================
 
-/// HS `best w r doc = get w doc`.
-fn get_doc(w: isize, r: isize, d: &Doc) -> Doc {
-    get(w, r, d.clone())
-}
-
-/// HS `get w doc` (line-start case).
+/// HS `get w doc` (line-start case); HS `best w r doc = get w doc`.
 ///
 /// LAZINESS (the whole point — see `Doc::Deferred`): every recursive
 /// reduction is wrapped in `defer`, so this returns only the HEAD

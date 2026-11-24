@@ -14,7 +14,6 @@ pub mod fresh;
 pub mod parallel;
 pub mod prelude_ext;
 pub mod pretty_hpj;
-pub mod pretty_html;
 pub mod process;
 pub mod unicode;
 

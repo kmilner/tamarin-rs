@@ -70,9 +70,9 @@ Replay needs a Haskell build from upstream's `develop` branch; see
   with stored-proof replay checked by focused regressions. See
   [coverage and remaining differences](docs/STATUS.md).
 - **Performance:** The eight-theory x86_64 Linux benchmark measured a
-  6.1–141× speedup over Tamarin 1.12.0 (median 35×) at 1, 4, and 16 cores. On one core,
-  Rust used 58–96% less peak memory, with a median reduction of 93%. See
-  [results and methodology](docs/PERFORMANCE.md).
+  4.0–76× speedup (median 16×) over the pinned upstream Tamarin build at 1, 4,
+  and 16 cores. On one core, Rust used 44–94% less peak memory, with a median
+  reduction of 88%. See [results and methodology](docs/PERFORMANCE.md).
 - **Development:** `make check` runs formatting and Clippy; `make test` runs
   the Rust tests. See [TESTING.md](TESTING.md) for parity and browser tests,
   and the [script reference](scripts/README.md) for individual tools.

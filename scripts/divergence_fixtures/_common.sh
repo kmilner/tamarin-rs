@@ -1,11 +1,10 @@
 # Shared by capture.sh and check.sh — sourced, never executed.
 #
-# The output slices below are the ones the corpus gates already compare, so a
-# fixture verdict means the same thing a gate verdict does:
-#   wf_block      == wf_gate.sh's slice
-#   theory_block  == pretty_gate.sh's slice
-#   summary_block == the tail of stdout corpus_file_diff.sh compares in full
-# Keep them in step with those scripts.
+# The output slices are the ones the corpus gates already compare, so a
+# fixture verdict means the same thing a gate verdict does: strip_env, wf_block
+# (wf_gate.sh) and theory_block (pretty_gate.sh) come from gate_common.sh, and
+# summary_block below is the tail of stdout corpus_file_diff.sh compares in
+# full.
 
 # maude and dot live in linuxbrew here, and neither engine loads a theory
 # without maude.
@@ -16,6 +15,8 @@ echo 1000 > /proc/self/oom_score_adj 2>/dev/null || true
 ulimit -v 8388608 2>/dev/null || true
 
 fixdir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=../gate_common.sh
+. "$fixdir/../gate_common.sh"
 repo_root="$(dirname "$(dirname "$fixdir")")"
 expected="$fixdir/expected"
 manifest="$fixdir/fixtures.tsv"
@@ -26,46 +27,6 @@ FILE_TIMEOUT="${FILE_TIMEOUT:-300}"
 hs_rts=(+RTS -N1 -M2G -RTS)
 
 die() { echo "ERROR: $*" >&2; exit 1; }
-
-# Drop the lines that carry build identity or wall-clock time.
-strip_env() {
-    grep -v -e '^Git revision:' -e '^Compiled at:' \
-            -e '^[[:space:]]*processing time:' -e '^[[:space:]]*analyzed:'
-}
-
-# The wf report: either the success line or the WARNING block, up to its `*/`.
-wf_block() {
-    awk '
-        /^\/\* All wellformedness checks were successful\. \*\/$/ { print; next }
-        /^WARNING: the following wellformedness checks failed!$/  { f=1 }
-        f { print }
-        f && /^\*\/$/ { f=0 }
-    '
-}
-
-# The pretty-printed theory echo: `theory … end`, minus the trailing wf report
-# and `Generated from:` build stamp, minus everything after `end`.  Interior
-# comments (AC-variant blocks, guarded-formula notes) are pretty-printer output
-# and are kept.
-theory_block() {
-    awk '
-        /^theory /              { cap=1 }
-        !cap                    { next }
-        /^\/\* All wellformedness checks were successful\. \*\/$/ { next }
-        /^\/\*$/ {
-            if ((getline nxt) > 0) {
-                if (nxt == "WARNING: the following wellformedness checks failed!" || nxt == "Generated from:") {
-                    while ((getline z) > 0) { if (z == "*/") break }
-                    next
-                }
-                print; print nxt; next
-            }
-            print; next
-        }
-        { print }
-        /^end$/                 { cap=0 }
-    '
-}
 
 # The run summary: everything from `summary of summaries:` on, which carries
 # the `WARNING: N wellformedness check failed!` count and the per-lemma
