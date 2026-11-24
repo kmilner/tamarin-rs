@@ -252,7 +252,7 @@ async fn test_next_normal_help_to_message_matches_haskell() {
     // Navigation only inspects the loaded theory; a missing post-load Maude
     // proves that this route does not start the prover as a side effect.
     let s = start_server_with_theory_and("issue193.spthy", |cfg| {
-        cfg.maude_path = "/definitely/missing/maude".to_string();
+        cfg.load.maude_path = "/definitely/missing/maude".to_string();
     })
     .await;
     let res = s.get("/thy/trace/1/next/normal/help").await;

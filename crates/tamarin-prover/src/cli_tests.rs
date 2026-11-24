@@ -12,6 +12,7 @@
 //! errors, help, and version is clap's and is not asserted on.
 
 use super::*;
+use tamarin_server::theory_loader::lemma_matches;
 
 fn parse(args: &[&str]) -> Args {
     parse_args(&args.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("parse")
@@ -429,20 +430,6 @@ fn oracle_flags_parsed() {
     );
 }
 
-#[test]
-fn replication_bound_bare_is_three() {
-    // Accepted-but-inert (DeepSec export is not ported); the HS bare
-    // default is still recorded faithfully.
-    assert_eq!(
-        parse(&["--replication-bound=7", "x.spthy"]).replication_bound,
-        Some(7)
-    );
-    assert_eq!(
-        parse(&["--replication-bound", "x.spthy"]).replication_bound,
-        Some(3)
-    );
-}
-
 // =========================================================================
 // Value-enum flags
 // =========================================================================
@@ -571,17 +558,13 @@ fn trace_output_flags() {
 
 /// Every boolean flag that the top-level command takes.  Each flag comes
 /// with the [`Args`] field that [`parse_args`] must set from it.
-const BOOL_FLAGS: [(&str, fn(&Args) -> bool); 12] = [
+const BOOL_FLAGS: [(&str, fn(&Args) -> bool); 8] = [
     ("--diff", |a| a.diff),
     ("--quit-on-warning", |a| a.quit_on_warning),
     ("--no-ndc", |a| a.no_ndc),
     ("--auto-sources", |a| a.auto_sources),
     ("--oracle-only", |a| a.oracle_only),
     ("--quiet", |a| a.quiet),
-    ("--verbose", |a| a.verbose),
-    ("--proverif-no-reuse-lemmas", |a| a.proverif_no_reuse_lemmas),
-    ("--proverif-no-restrictions", |a| a.proverif_no_restrictions),
-    ("--no-compress", |a| a.no_compress),
     ("--parse-only", |a| a.parse_only),
     ("--precompute-only", |a| a.precompute_only),
 ];
@@ -605,8 +588,26 @@ fn each_boolean_flag_sets_its_own_field_and_no_other() {
     for (name, read) in BOOL_FLAGS {
         assert!(!read(&a), "`{name}` set without the flag");
     }
-    // `-v` is the one short spelling in the set.
-    assert!(parse(&["-v", "x.spthy"]).verbose);
+}
+
+#[test]
+fn inert_compatibility_flags_are_accepted() {
+    // Accepted for HS compatibility, read by nothing.
+    for argv in [
+        &["--verbose", "x.spthy"][..],
+        &["-v", "x.spthy"],
+        &["--proverif-no-reuse-lemmas", "x.spthy"],
+        &["--proverif-no-restrictions", "x.spthy"],
+        &["--no-compress", "x.spthy"],
+        &["--replication-bound=7", "x.spthy"],
+        &["--replication-bound", "x.spthy"],
+    ] {
+        assert_eq!(
+            parse(argv).in_files,
+            vec!["x.spthy".to_string()],
+            "{argv:?}"
+        );
+    }
 }
 
 // =========================================================================
@@ -646,9 +647,6 @@ fn interface_and_web_flags() {
         ".",
     ]);
     assert_eq!(a.interface.as_deref(), Some("*4"));
-    assert_eq!(a.image_format, Some(ImageFormat::Png));
-    assert!(a.debug);
-    assert!(a.no_logging);
     assert_eq!(a.data_dir.as_deref(), Some("/srv/data"));
     // A detached `-i` value is rejected loudly, never eaten.
     assert!(parse_args(&["interactive".into(), "-i".into(), "*4".into(), ".".into()]).is_err());

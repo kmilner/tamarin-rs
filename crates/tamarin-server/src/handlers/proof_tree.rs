@@ -193,7 +193,7 @@ impl ProofState {
         ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
         cfg: &crate::ServerConfig,
     ) -> Result<Self, String> {
-        let maude = tamarin_term::maude_proc::MaudeHandle::start(&cfg.maude_path, maude_sig)
+        let maude = tamarin_term::maude_proc::MaudeHandle::start(&cfg.load.maude_path, maude_sig)
             .map_err(|e| format!("maude start: {:?}", e))?;
         Self::new_with_maude(typed, maude, ndc_cache, cfg)
     }
@@ -213,7 +213,7 @@ impl ProofState {
             TheoryItem::ConfigBlock(c) => Some(c),
             _ => None,
         });
-        let cut = match cfg.stop_on_trace {
+        let cut = match cfg.load.stop_on_trace {
             Some(c) => c,
             None => match config_block {
                 Some(cfg) => tamarin_theory::prove::config_block_options(cfg)?
@@ -228,7 +228,7 @@ impl ProofState {
             tamarin_theory::prove::ProverSessionOptions {
                 cut,
                 ndc_cache: ndc_cache.cloned(),
-                parameters: cfg.solver_parameters,
+                parameters: cfg.load.parameters,
                 sys_retention: tamarin_theory::constraint::solver::search::SysRetention::KeepAll,
                 show_saturation_steps: true,
                 loop_breakers_prepared: ndc_cache.is_some(),
@@ -1236,7 +1236,7 @@ mod tests {
             std::path::PathBuf::new(),
             maude.to_string(),
         );
-        cfg.derivcheck_timeout = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
+        cfg.load.derivation_checks = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
         cfg
     }
 

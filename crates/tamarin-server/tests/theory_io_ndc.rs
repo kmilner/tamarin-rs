@@ -94,7 +94,7 @@ fn ndc_check_flag_gates_the_web_load_ndc_pass() {
         std::path::PathBuf::new(),
         maude,
     );
-    cfg.derivcheck_timeout = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
+    cfg.load.derivation_checks = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
 
     // Flag absent — HS `ndcCheck = True` (TheoryLoader.hs), the pass runs.
     let checked = theory_io::load_from_path(&path, &cfg).expect("fixture loads");
@@ -109,7 +109,7 @@ fn ndc_check_flag_gates_the_web_load_ndc_pass() {
 
     // `--no-ndc` — HS's `else (sign, intrRules)` branch (TheoryLoader.hs):
     // no verdicts, no signature tags, cache in raw assembly order.
-    cfg.ndc_check = false;
+    cfg.load.ndc_check = false;
     let skipped = theory_io::load_from_path(&path, &cfg).expect("fixture loads");
     assert_eq!(
         functions_line(&skipped),

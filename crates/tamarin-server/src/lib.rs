@@ -55,6 +55,7 @@ pub mod handlers;
 pub mod routes;
 pub mod state;
 pub mod theory_io;
+pub mod theory_loader;
 // `Web.Utils`' `abbrev` is reached only from the JSON graph handler; nothing
 // outside this crate names it.
 pub(crate) mod web_utils_abbrev;
@@ -75,19 +76,10 @@ pub struct ServerConfig {
     pub data_dir: Option<PathBuf>,
     /// Path to the bundled frontend output (`frontend/dist/`), if any.
     pub frontend_dist: Option<PathBuf>,
-    /// Path to the Maude binary.
-    pub maude_path: String,
-    /// `--derivcheck-timeout` for the dynamic message-derivation checks
-    /// run at theory load (HS interactive default 5s; 0 disables, negative
-    /// is unbounded).  Set from the CLI flag by `interactive` setup.
-    pub derivcheck_timeout: tamarin_theory::deriv_check::DerivCheckTimeout,
-    /// Source-solver limits from `-c/--open-chains` and `-s/--saturation`.
-    pub solver_parameters: tamarin_theory::constraint::solver::sources::IntegerParameters,
-    /// CLI `--stop-on-trace` (None = flag absent).  Merged with each
-    /// theory's in-file `configuration:` block at `ProofState::new` time
-    /// per HS `closeTheory`'s `configStopOnTrace` (TheoryLoader.hs):
-    /// the CLI value wins; the block is consulted only when this is `None`.
-    pub stop_on_trace: Option<tamarin_theory::constraint::solver::context::CutStrategy>,
+    /// The CLI's theory-load options, which every web load (startup,
+    /// upload, reload) runs with (HS `withWebUI`'s `loadTheory` /
+    /// `closeTheory thyLoadOptions` closures, Interactive.hs).
+    pub load: theory_loader::TheoryLoadOptions,
     /// CLI `--with-dot` — the GraphViz binary every graph render shells out
     /// to, the bare `"dot"` (resolved through `$PATH`) when the flag is
     /// absent.  That is HS `readOutputCommand`'s `OutDot` branch
@@ -101,14 +93,6 @@ pub struct ServerConfig {
     /// (`imgThyPath` → `renderGraphCode`, Web/Theory.hs).
     /// `None` = flag absent, the `dot` pipeline above.
     pub json_path: Option<String>,
-    /// Generate a sources lemma when partial deconstructions remain.
-    pub auto_sources: bool,
-    /// Run the no-deconstruction-chain check.
-    pub ndc_check: bool,
-    /// CLI `--prove`/`--lemma` selections copied into each theory.
-    pub lemmas_to_prove: Vec<String>,
-    /// Parser defines and warning behavior.
-    pub parser_flags: Vec<String>,
     /// Optional allocator cleanup after Stop's callbacks and proof workers finish.
     /// Runs once on a separate thread before Stop responds; must not panic.
     pub cancel_cleanup: Option<fn()>,
@@ -124,17 +108,9 @@ impl ServerConfig {
             bind_addr,
             data_dir: data_dir.into(),
             frontend_dist: None,
-            maude_path,
-            derivcheck_timeout: tamarin_theory::deriv_check::DerivCheckTimeout::DEFAULT,
-            solver_parameters:
-                tamarin_theory::constraint::solver::sources::IntegerParameters::default(),
-            stop_on_trace: None,
+            load: theory_loader::TheoryLoadOptions::new(maude_path),
             dot_path: "dot".to_string(),
             json_path: None,
-            auto_sources: false,
-            ndc_check: true,
-            lemmas_to_prove: Vec::new(),
-            parser_flags: Vec::new(),
             cancel_cleanup: None,
         }
     }
@@ -153,6 +129,21 @@ pub fn init_process_globals() {
         tamarin_theory::pretty_hpj::DEFAULT_RIBBON,
     );
 }
+
+/// [`serve`] stopped while loading its startup theories: one had
+/// wellformedness warnings under `--quit-on-warning`. The report and the
+/// abort message are already printed; HS `loadTheories` exits with
+/// `exitFailure` here.
+#[derive(Debug)]
+pub struct QuitOnWarning;
+
+impl std::fmt::Display for QuitOnWarning {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("quit-on-warning mode selected - aborting on wellformedness errors.")
+    }
+}
+
+impl std::error::Error for QuitOnWarning {}
 
 /// Start the server, blocking until shutdown.
 ///
@@ -178,17 +169,21 @@ pub async fn serve(
             Ok(entry) => {
                 let name = entry.typed_theory.name.clone();
                 if !entry.wf_report.is_empty() {
-                    let dashes = "-".repeat(78);
-                    let report =
-                        tamarin_theory::pretty_theory::render_wf_error_report(&entry.wf_report);
-                    println!(
-                        "{dashes}\nTheory file '{}'\n{dashes}\n\nWARNING: ignoring the following wellformedness errors\n\n{}\n{dashes}\n",
-                        p.display(),
-                        report.trim_end_matches('\n'),
-                    );
+                    println!("{}", pp_interactive(&entry.wf_report, p));
                 }
                 let idx = store.insert(entry);
                 tracing::info!(idx, ?name, path = ?p, "loaded theory");
+            }
+            Err(theory_io::LoadError::Close(theory_loader::LoadError::Warning(report))) => {
+                println!("{}", pp_interactive(&report, p));
+                eprintln!("quit-on-warning mode selected - aborting on wellformedness errors.");
+                return Err(Box::new(QuitOnWarning));
+            }
+            Err(theory_io::LoadError::Close(theory_loader::LoadError::UnsupportedInput(
+                report,
+            ))) => {
+                println!("{}", pp_interactive(&report, p));
+                println!("Rejected {}: unsupported rule semantics.", p.display());
             }
             Err(e) => {
                 tracing::error!(error = %e, path = ?p, "failed to load theory");
@@ -221,6 +216,20 @@ pub async fn serve(
         .with_graceful_shutdown(shutdown_signal())
         .await?;
     Ok(())
+}
+
+/// HS `ppInteractive` (Web/Dispatch.hs): the load-time report block.
+fn pp_interactive(
+    report: &[tamarin_theory::wellformedness::WfError],
+    path: &std::path::Path,
+) -> String {
+    let dashes = "-".repeat(78);
+    let report = tamarin_theory::pretty_theory::render_wf_error_report(report);
+    format!(
+        "{dashes}\nTheory file '{}'\n{dashes}\n\nWARNING: ignoring the following wellformedness errors\n\n{}\n{dashes}\n",
+        path.display(),
+        report.trim_end_matches('\n'),
+    )
 }
 
 async fn shutdown_signal() {

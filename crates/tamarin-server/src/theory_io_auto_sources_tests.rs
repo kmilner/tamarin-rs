@@ -10,9 +10,9 @@ fn auto_sources_reaches_interactive_loading_from_cli_and_configuration() {
         "../../../tamarin-prover/examples/features/auto-sources/running-example/running.spthy"
     );
     let mut cfg = crate::ServerConfig::new("127.0.0.1:0".parse().unwrap(), PathBuf::new(), maude);
-    cfg.derivcheck_timeout = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
+    cfg.load.derivation_checks = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
     for (cli, block) in [(false, false), (true, false), (false, true), (true, true)] {
-        cfg.auto_sources = cli;
+        cfg.load.auto_sources = cli;
         let source = if block {
             source.replacen("begin", "configuration: \"--auto-sources\"\nbegin", 1)
         } else {
@@ -42,13 +42,13 @@ fn auto_sources_reports_unavailable_maude() {
         PathBuf::new(),
         "/nonexistent/maude".into(),
     );
-    cfg.auto_sources = true;
+    cfg.load.auto_sources = true;
     let result = load_from_source(
         "theory T begin end",
         TheoryOrigin::Local(PathBuf::from("t.spthy")),
         &cfg,
     );
     assert!(
-        matches!(result, Err(LoadError::Elaborate(message)) if message.contains("auto-sources requires Maude"))
+        matches!(result, Err(LoadError::Close(error)) if error.to_string().contains("failed to start maude at"))
     );
 }

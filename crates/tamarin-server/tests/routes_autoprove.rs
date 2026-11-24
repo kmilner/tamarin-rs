@@ -492,13 +492,13 @@ async fn cancel_navigation_during_session_start_then_retry() {
         let dir = tempfile::tempdir().unwrap();
         let wrapper = dir.path().join("maude");
         let s = start_server_with_theory_and("issue193.spthy", |cfg| {
-            let maude = cfg.maude_path.replace("'", "'\"'\"'");
+            let maude = cfg.load.maude_path.replace("'", "'\"'\"'");
             let cwd = dir.path().to_str().unwrap().replace("'", "'\"'\"'");
             std::fs::write(&wrapper, format!(
                 "#!/bin/sh\ncd '{cwd}'\nif [ -f block ]; then\n touch ready\n sleep 60 &\n wait\n exit 1\nfi\nexec '{maude}' \"$@\"\n"
             )).unwrap();
             std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
-            cfg.maude_path = wrapper.to_str().unwrap().to_owned();
+            cfg.load.maude_path = wrapper.to_str().unwrap().to_owned();
         }).await;
         std::fs::write(dir.path().join("block"), "").unwrap();
         let client = s.client.clone();

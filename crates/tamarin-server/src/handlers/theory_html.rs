@@ -1248,7 +1248,7 @@ mod tests {
             std::path::PathBuf::new(),
             maude.to_string(),
         );
-        cfg.derivcheck_timeout = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
+        cfg.load.derivation_checks = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
         cfg
     }
 

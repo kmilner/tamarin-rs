@@ -196,31 +196,6 @@ fn hs_normalise_path(p: &str) -> String {
     }
 }
 
-/// Resolve Oracle/OracleSmart rankings parsed from an in-file `heuristic:` or
-/// lemma attribute against the theory directory.
-///
-/// Mirrors HS `oraclePath oracle = fromMaybe "." workDir </> normalise relPath`
-/// (System.hs) with `workDir = takeDirectory inFile`.  Producing the
-/// `"."`-for-no-dir prefix (via [`hs_take_directory`]) is what gives the
-/// oracle path its leading `./` so Unix `exec` resolves it from the CWD rather
-/// than doing a PATH lookup.
-pub(crate) fn prepend_theory_dir_to_oracle_paths(
-    rankings: &mut [crate::constraint::solver::goals::GoalRanking],
-    in_file: &str,
-) {
-    use crate::constraint::solver::goals::GoalRanking;
-    let work_dir = hs_take_directory(in_file);
-    for r in rankings.iter_mut() {
-        match r {
-            GoalRanking::Oracle { oracle_path, .. }
-            | GoalRanking::OracleSmart { oracle_path, .. } => {
-                *oracle_path = resolve_oracle_path(oracle_path, Some(&work_dir));
-            }
-            _ => {}
-        }
-    }
-}
-
 /// A theory's in-file `configuration:` block as cmdargs RECORDS it — HS
 /// `closeTheory`'s `argsConfigString` (TheoryLoader.hs) runs
 /// `processValue` over a two-flag mode: `--stop-on-trace[=v]`
@@ -400,7 +375,6 @@ fn resolve_cli_heuristic(
     in_file: &str,
     tactics: &[crate::tactic::Tactic],
 ) -> Option<Vec<crate::constraint::solver::goals::GoalRanking>> {
-    use crate::constraint::solver::goals::GoalRanking;
     let raw = cli.raw.as_ref()?;
     // Step 1: parse the ranking string.  `parse_heuristic_str_with_tactics`
     // also computes the default `.oracle` name (HS `defaultOracleNames`) for
@@ -408,33 +382,32 @@ fn resolve_cli_heuristic(
     // (oraclename, applied below) and step 3 (default name).
     let mut rankings =
         crate::constraint::solver::goals::parse_heuristic_str_with_tactics(raw, in_file, tactics);
-    // The CLI `--oraclename` (`Just "" -> Nothing`, TheoryLoader.hs).
-    let oraclename: Option<&str> = match cli.oracle_name.as_deref() {
-        Some("") => None,
-        other => other,
-    };
-    resolve_oracle_rankings(&mut rankings, in_file, oraclename);
-    // Step 5: --oracle-only quitOnEmpty.
-    for r in rankings.iter_mut() {
-        match r {
-            GoalRanking::Oracle { quit_on_empty, .. }
-            | GoalRanking::OracleSmart { quit_on_empty, .. }
-                if cli.oracle_only =>
-            {
-                *quit_on_empty = true;
-            }
-            // Step 5: --oracle-only also sets quitOnEmpty on tactic rankings
-            // (HS `aux (InternalTacticRanking _ t) = InternalTacticRanking
-            // (quitOnEmptyOracle prover) t`, Theory/Proof.hs).
-            GoalRanking::Tactic { quit_on_empty, .. } if cli.oracle_only => {
-                *quit_on_empty = true;
-            }
-            _ => {}
-        }
+    resolve_oracle_rankings(&mut rankings, in_file, cli.oracle_name.as_deref());
+    if cli.oracle_only {
+        set_quit_on_empty(&mut rankings);
     }
     Some(rankings)
 }
 
+/// HS `setQuitOnEmpty` (Theory/Proof.hs): `--oracle-only` sets `quitOnEmpty`
+/// on every oracle and tactic ranking.
+fn set_quit_on_empty(rankings: &mut [crate::constraint::solver::goals::GoalRanking]) {
+    use crate::constraint::solver::goals::GoalRanking;
+    for ranking in rankings {
+        if let GoalRanking::Oracle { quit_on_empty, .. }
+        | GoalRanking::OracleSmart { quit_on_empty, .. }
+        | GoalRanking::Tactic { quit_on_empty, .. } = ranking
+        {
+            *quit_on_empty = true;
+        }
+    }
+}
+
+/// Resolve oracle paths. HS `oraclePath oracle = fromMaybe "." workDir </>
+/// normalise relPath` (System.hs) with `workDir = takeDirectory inFile`; the
+/// `"."` prefix gives the path its leading `./`, so `exec` resolves it from
+/// the CWD rather than by PATH lookup. A non-empty `--oraclename` (`Just ""
+/// -> Nothing`, TheoryLoader.hs) replaces the path and stays CWD-relative.
 fn resolve_oracle_rankings(
     rankings: &mut [crate::constraint::solver::goals::GoalRanking],
     in_file: &str,
@@ -867,7 +840,7 @@ fn resolve_heuristic(
         ),
         None => return None,
     };
-    prepend_theory_dir_to_oracle_paths(&mut rankings, ranking_file);
+    resolve_oracle_rankings(&mut rankings, ranking_file, None);
     Some(rankings)
 }
 
@@ -1354,21 +1327,12 @@ pub fn prove_system_in_session_with_options(
     sys: crate::constraint::system::System,
     options: SearchOptions,
 ) -> Result<ProofNode, ProveError> {
-    use crate::constraint::solver::goals::GoalRanking;
-
     let mut ctx = session.context_for_lemma(lemma_name)?;
     ctx.cut = options.cut;
     if options.oracle_only
         && let Some(rankings) = &mut ctx.heuristic
     {
-        for ranking in rankings {
-            match ranking {
-                GoalRanking::Oracle { quit_on_empty, .. }
-                | GoalRanking::OracleSmart { quit_on_empty, .. }
-                | GoalRanking::Tactic { quit_on_empty, .. } => *quit_on_empty = true,
-                _ => {}
-            }
-        }
+        set_quit_on_empty(rankings);
     }
     run_proof_search_at_depth(&ctx, sys, options.proof_bound, options.ranking_depth_offset)
 }

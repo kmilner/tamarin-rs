@@ -167,13 +167,13 @@ fn create_dirs_blames_the_level_whose_mkdir_failed() {
 #[test]
 fn mk_theory_load_options_rejects_empty_heuristic() {
     let a = parse(&["--heuristic=", "x.spthy"]);
-    let e = mk_theory_load_options(&a).unwrap_err();
+    let e = mk_theory_load_options(&a, "maude".to_string()).unwrap_err();
     assert!(
         e.to_string().contains("at least one ranking must be given"),
         "{e}",
     );
     let a = parse(&["--heuristic", "x.spthy"]);
-    assert!(mk_theory_load_options(&a).is_ok());
+    assert!(mk_theory_load_options(&a, "maude".to_string()).is_ok());
 }
 
 // GHC renders an `openFile` failure from the errno, bar the directory
@@ -221,8 +221,11 @@ fn mk_theory_load_options_accepts_valid_values() {
         "-s=3",
         "x.spthy",
     ]);
-    let o = mk_theory_load_options(&a).expect("valid values");
-    assert_eq!(o.partial_evaluation, Some(crate::cli::PartialEval::Verbose),);
+    let o = mk_theory_load_options(&a, "maude".to_string()).expect("valid values");
+    assert_eq!(
+        o.partial_evaluation,
+        Some(tamarin_theory::tools::EvaluationStyle::Tracing)
+    );
     assert_eq!(o.output_module, Some(ModuleType::Msr));
     // HS `derivDefault = 5` (TheoryLoader.hs) is resolved into
     // the record; `ndcCheck` defaults on.
@@ -231,7 +234,7 @@ fn mk_theory_load_options_accepts_valid_values() {
     assert_eq!(o.parameters.open_chains_limit(), 7);
     assert_eq!(o.parameters.saturation_limit(), 3);
     let a = parse(&["--no-ndc", "-d=0", "x.spthy"]);
-    let o = mk_theory_load_options(&a).expect("valid values");
+    let o = mk_theory_load_options(&a, "maude".to_string()).expect("valid values");
     assert_eq!(o.derivation_checks, DerivCheckTimeout::Disabled);
     assert!(!o.ndc_check);
     assert_eq!(o.output_module, None);
@@ -242,7 +245,7 @@ fn mk_theory_load_options_accepts_valid_values() {
 // probe and before it opens the input.  The input named here does not
 // exist.  A rejection placed below either of those steps would therefore
 // report the missing input instead.  Below the probe it would report it
-// only as an `Ok(rc)` from `report_open_file_error`.
+// only as the `openFile` exception.
 #[test]
 fn diff_flag_errors_cleanly() {
     let a = parse(&["--diff", "/nonexistent/in.spthy"]);
@@ -279,10 +282,10 @@ fn no_input_files_is_an_error() {
     assert_eq!(e.to_string(), "no input files given");
 }
 
-fn mk_result(verdict: LemmaVerdict, exists_trace: bool, steps: usize) -> LemmaResult {
+fn mk_result(status: ProofStatus, exists_trace: bool, steps: usize) -> LemmaResult {
     LemmaResult {
         name: "L".to_string(),
-        verdict,
+        status,
         proof_steps: steps,
         exists_trace,
     }
@@ -298,32 +301,32 @@ fn mk_result(verdict: LemmaVerdict, exists_trace: bool, steps: usize) -> LemmaRe
 fn lemma_summary_line_per_proof_status() {
     // showProofStatus _ UndeterminedProof = "analysis undetermined"
     assert_eq!(
-        format_lemma_summary_line(&mk_result(LemmaVerdict::Undetermined, false, 7)),
+        format_lemma_summary_line(&mk_result(ProofStatus::Undetermined, false, 7)),
         "L (all-traces): analysis undetermined (7 steps)",
     );
     // showProofStatus _ InvalidatedProof = "proof has been invalidated"
     assert_eq!(
-        format_lemma_summary_line(&mk_result(LemmaVerdict::Invalidated, false, 3)),
+        format_lemma_summary_line(&mk_result(ProofStatus::Invalidated, false, 3)),
         "L (all-traces): proof has been invalidated (3 steps)",
     );
     // showProofStatus _ IncompleteProof = "analysis incomplete"
     assert_eq!(
-        format_lemma_summary_line(&mk_result(LemmaVerdict::Analyzed, false, 5)),
+        format_lemma_summary_line(&mk_result(ProofStatus::Incomplete, false, 5)),
         "L (all-traces): analysis incomplete (5 steps)",
     );
     // showProofStatus ExistsNoTrace (TraceFound) = "falsified - found trace"
     assert_eq!(
-        format_lemma_summary_line(&mk_result(LemmaVerdict::Falsified, false, 9)),
+        format_lemma_summary_line(&mk_result(ProofStatus::TraceFound, false, 9)),
         "L (all-traces): falsified - found trace (9 steps)",
     );
     // showProofStatus ExistsSomeTrace (CompleteProof) = "falsified - no
     // trace found".  The summary uses the `exists-trace` quantifier label.
     assert_eq!(
-        format_lemma_summary_line(&mk_result(LemmaVerdict::Falsified, true, 9)),
+        format_lemma_summary_line(&mk_result(ProofStatus::Complete, true, 9)),
         "L (exists-trace): falsified - no trace found (9 steps)",
     );
     assert_eq!(
-        format_lemma_summary_line(&mk_result(LemmaVerdict::Verified, true, 2)),
+        format_lemma_summary_line(&mk_result(ProofStatus::TraceFound, true, 2)),
         "L (exists-trace): verified (2 steps)",
     );
 }

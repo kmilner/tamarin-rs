@@ -1320,7 +1320,7 @@ fn all_in_file_oracles_are_resolved_beside_the_theory() {
             oracle_path: "oracle".to_string(),
         },
     ];
-    prepend_theory_dir_to_oracle_paths(&mut rankings, "dir/theory.spthy");
+    resolve_oracle_rankings(&mut rankings, "dir/theory.spthy", None);
 
     assert!(matches!(
         &rankings[0],

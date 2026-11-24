@@ -1041,6 +1041,21 @@ pub async fn reload(
                 path.display(),
                 frame,
             )),
+            crate::theory_io::LoadError::Close(crate::theory_loader::LoadError::Warning(
+                report,
+            )) => json_resp::alert(format!(
+                "Wellformedness errors while reloading file:\n\n{}\n\n{} error(s) found:\n\n{}",
+                path.display(),
+                report.len(),
+                crate::theory_io::wf_report_html(&report),
+            )),
+            crate::theory_io::LoadError::Close(
+                crate::theory_loader::LoadError::UnsupportedInput(report),
+            ) => json_resp::alert(format!(
+                "Unsupported rule semantics while reloading file:\n\n{}\n\n{}",
+                path.display(),
+                crate::theory_io::wf_report_html(&report),
+            )),
             other => json_resp::alert(format!("reload failed: {}", other)),
         },
     }

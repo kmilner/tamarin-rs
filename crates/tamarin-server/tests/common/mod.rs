@@ -124,25 +124,7 @@ pub async fn start_server_with_theory_and(
     // cannot disagree about which binary they mean.
     let maude_path = detect_maude();
 
-    let mut cfg = ServerConfig {
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        data_dir,
-        frontend_dist: None,
-        maude_path: maude_path.clone(),
-        // Match ServerConfig::new's default (HS interactive default 5s).
-        derivcheck_timeout: tamarin_theory::deriv_check::DerivCheckTimeout::DEFAULT,
-        solver_parameters: Default::default(),
-        stop_on_trace: None,
-        // Match ServerConfig::new's defaults (HS `dotPath`,
-        // Environment.hs, and an absent `--with-json`).
-        dot_path: "dot".to_string(),
-        json_path: None,
-        auto_sources: false,
-        ndc_check: true,
-        lemmas_to_prove: Vec::new(),
-        parser_flags: Vec::new(),
-        cancel_cleanup: None,
-    };
+    let mut cfg = ServerConfig::new("127.0.0.1:0".parse().unwrap(), data_dir, maude_path.clone());
     mutate(&mut cfg);
 
     // Load theory before starting server.

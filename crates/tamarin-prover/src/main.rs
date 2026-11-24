@@ -61,8 +61,10 @@ fn install_hs_error_panic_hook() {
                 // GHC's laziness defers these errors past progress markers
                 // the eager port has not printed yet; the batch loop parks
                 // the pending lines for exactly that span (see
-                // `run::take_deferred_hs_error_markers`).
-                if let Some(markers) = tamarin_prover::run::take_deferred_hs_error_markers() {
+                // `theory_loader::take_deferred_hs_error_markers`).
+                if let Some(markers) =
+                    tamarin_server::theory_loader::take_deferred_hs_error_markers()
+                {
                     let _ = write!(err, "{markers}");
                 }
                 let _ = writeln!(err, "tamarin-prover: {text}");
@@ -108,6 +110,10 @@ fn main() -> ExitCode {
         }
         Err(tamarin_prover::run::RunError::UnsupportedInput { in_file, report }) => {
             tamarin_prover::run::print_unsupported_input(&in_file, &report);
+            ExitCode::from(1)
+        }
+        Err(tamarin_prover::run::RunError::Warning(report)) => {
+            tamarin_prover::run::print_quit_on_warning(&report);
             ExitCode::from(1)
         }
     }
