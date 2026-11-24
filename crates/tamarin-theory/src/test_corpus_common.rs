@@ -24,8 +24,9 @@ pub const SKIP_ELAB: &str = "elaboration rejects this upstream example";
 /// review instead of being hidden by an aggregate coverage percentage.
 pub const EXPECTED_LOAD_SKIPS: &[(&str, &str)] = &[
     ("features/predicates/functionappl.spthy", SKIP_PARSE),
-    // This diff-only theory has side-specific lemma attributes but no
-    // diff(...) term, so the corpus loader uses the trace parser.
+    // This diff-only theory has side-specific lemma attributes but neither a
+    // diff(...) term nor a test manifest, so the corpus loader uses the trace
+    // parser.
     ("regression/diff/last.spthy", SKIP_PARSE),
     // Intentional rejection fixtures introduced by the updated upstream pin.
     (
@@ -109,7 +110,8 @@ fn uses_diff_operator(src: &str) -> bool {
         lexer.skip_ws();
         if lexer.peek_symbol("diff") {
             let save = lexer.pos();
-            debug_assert!(lexer.symbol("diff"));
+            let consumed = lexer.symbol("diff");
+            debug_assert!(consumed);
             if lexer.peek() == Some('(') {
                 return true;
             }
@@ -120,8 +122,30 @@ fn uses_diff_operator(src: &str) -> bool {
     false
 }
 
-fn parse_source(src: &str, base: Option<PathBuf>) -> Option<p::Theory> {
-    if uses_diff_operator(src) {
+/// Whether the example's upstream test manifest (`<file>.test.json`) runs it
+/// in diff mode only, every test passing `--diff`.  A diff theory need not
+/// contain a `diff(...)` term, so the manifest is the other evidence of the
+/// intended mode; a manifest that also runs the file without `--diff` marks a
+/// trace theory.
+fn manifest_requests_diff(path: &Path) -> bool {
+    let mut manifest = path.as_os_str().to_owned();
+    manifest.push(".test.json");
+    let Ok(text) = std::fs::read_to_string(manifest) else {
+        return false;
+    };
+    let json: serde_json::Value = serde_json::from_str(&text).expect("valid test manifest");
+    json["tests"].as_array().is_some_and(|tests| {
+        !tests.is_empty()
+            && tests.iter().all(|test| {
+                test["args"]
+                    .as_array()
+                    .is_some_and(|args| args.iter().any(|arg| arg == "--diff"))
+            })
+    })
+}
+
+fn parse_source(src: &str, base: Option<PathBuf>, diff: bool) -> Option<p::Theory> {
+    if diff || uses_diff_operator(src) {
         tamarin_parser::parser::parse_diff_theory_with_base(src, &[], base).ok()
     } else {
         tamarin_parser::parser::parse_theory_with_base(src, &[], base).ok()
@@ -130,7 +154,7 @@ fn parse_source(src: &str, base: Option<PathBuf>) -> Option<p::Theory> {
 
 /// Read and parse one example file once per test process, resolving includes
 /// against its directory and selecting diff mode only when the source contains
-/// the gated `diff` term operator.
+/// the gated `diff` term operator or its test manifest passes `--diff`.
 pub fn parse_file(path: &Path) -> Option<Arc<p::Theory>> {
     type Entry = Arc<OnceLock<Option<Arc<p::Theory>>>>;
     static CACHE: OnceLock<Mutex<BTreeMap<PathBuf, Entry>>> = OnceLock::new();
@@ -149,7 +173,8 @@ pub fn parse_file(path: &Path) -> Option<Arc<p::Theory>> {
         .get_or_init(|| {
             let src = std::fs::read_to_string(path).ok()?;
             let base = path.parent().map(Path::to_path_buf);
-            std::panic::catch_unwind(|| parse_source(&src, base).map(Arc::new))
+            let diff = manifest_requests_diff(path);
+            std::panic::catch_unwind(|| parse_source(&src, base, diff).map(Arc::new))
                 .ok()
                 .flatten()
         })
@@ -158,13 +183,32 @@ pub fn parse_file(path: &Path) -> Option<Arc<p::Theory>> {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_source, uses_diff_operator};
+    use super::{manifest_requests_diff, parse_file, parse_source, uses_diff_operator};
+
+    #[test]
+    fn corpus_parser_takes_diff_mode_from_the_test_manifest() {
+        // Diff syntax without a diff(...) term: the trace parser rejects it,
+        // as HS does, and the manifest's `--diff` selects the diff parser.
+        let path = tamarin_test_support::corpus_root()
+            .join("regression/negative/diff-side-products.spthy");
+        let src = std::fs::read_to_string(&path).unwrap();
+        assert!(!uses_diff_operator(&src));
+        assert!(parse_source(&src, path.parent().map(Into::into), false).is_none());
+        assert!(manifest_requests_diff(&path));
+        assert!(parse_file(&path).expect("diff mode parses it").is_diff);
+
+        // A manifest that also runs the file in trace mode keeps it there.
+        let path = tamarin_test_support::corpus_root()
+            .join("regression/trace/dh-products-in-exponents.spthy");
+        assert!(!manifest_requests_diff(&path));
+        assert!(!parse_file(&path).expect("trace mode parses it").is_diff);
+    }
 
     #[test]
     fn corpus_parser_selects_diff_mode_for_a_diff_operator() {
         let src = "theory D begin\nrule R: [ In(x) ] --> [ Out(diff(x, x)) ]\nend\n";
         assert!(tamarin_parser::parser::parse_theory(src, &[]).is_err());
-        let parsed = parse_source(src, None).expect("the diff operator selects diff mode");
+        let parsed = parse_source(src, None, false).expect("the diff operator selects diff mode");
         assert!(parsed.is_diff);
     }
 
@@ -182,6 +226,6 @@ mod tests {
         // diff mode, so it takes only the default parser path.
         let src = "theory D begin\nrule R: [ ] -->\nend\n";
         assert!(!uses_diff_operator(src));
-        assert!(parse_source(src, None).is_none());
+        assert!(parse_source(src, None, false).is_none());
     }
 }
