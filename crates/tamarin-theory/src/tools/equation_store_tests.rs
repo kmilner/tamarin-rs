@@ -808,3 +808,31 @@ fn simp_minimize_matches_pairwise_dedup() {
         assert_simp_minimize_matches_pairwise(disjs);
     }
 }
+
+/// `simpAbstractFun` (EquationStore.hs) errors when a non-AC operator is
+/// applied at different arities (only `List` can be); it never truncates.
+#[test]
+#[should_panic(expected = "simpAbstract: impossible")]
+fn abstract_fun_rejects_non_ac_arity_mismatch() {
+    let Some(path) = require_maude_path() else {
+        panic!("simpAbstract: impossible (no maude; skip)");
+    };
+    let maude = tamarin_term::maude_proc::MaudeHandle::start(
+        &path,
+        tamarin_term::maude_sig::pair_maude_sig(),
+    )
+    .unwrap();
+    let x = LVar::new("x", LSort::Msg, 0);
+    let a = || tamarin_term::vterm::var_term(LVar::new("a", LSort::Msg, 1));
+    let list = |n: usize| {
+        tamarin_term::term::Term::App(
+            tamarin_term::function_symbols::FunSym::List,
+            (0..n).map(|_| a()).collect::<Vec<_>>().into(),
+        )
+    };
+    let substs = [
+        LNSubstVFresh::from_list(vec![(x, list(2))]),
+        LNSubstVFresh::from_list(vec![(x, list(3))]),
+    ];
+    let _ = simp_abstract_fun(&maude, &LNSubst::empty(), &substs);
+}

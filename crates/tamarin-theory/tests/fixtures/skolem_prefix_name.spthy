@@ -1,0 +1,18 @@
+theory SkolemPrefixName begin
+
+/* A user public name spelled like the port's former skolem prefix is
+   still an ordinary public name, so `$x` matches it exactly as it
+   matches the control name 'ordinary'. */
+
+builtins: multiset
+
+rule A: [] --> [State('__skMSG__ordinary' ++ 'z')]
+rule B: [State($x ++ 'z')] --[Done($x)]-> []
+
+rule AControl: [] --> [Control('ordinary' ++ 'z')]
+rule BControl: [Control($x ++ 'z')] --[DoneControl($x)]-> []
+
+lemma prefixed_reachable: exists-trace "Ex x #i. Done(x)@i"
+lemma control_reachable: exists-trace "Ex x #i. DoneControl(x)@i"
+
+end

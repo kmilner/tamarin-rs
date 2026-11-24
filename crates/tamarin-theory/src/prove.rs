@@ -77,6 +77,18 @@ fn guarded_or_error(f: &crate::formula::LNFormula) -> Result<Guarded, ProveError
     })
 }
 
+impl ProveError {
+    /// A failed Maude call made for `context`. A cancelled call stays a
+    /// cancellation instead of becoming a Maude error.
+    pub(crate) fn maude(context: &str, error: tamarin_term::maude_proc::MaudeError) -> Self {
+        match error {
+            tamarin_term::maude_proc::MaudeError::Cancelled => ProveError::Cancelled,
+            error if context.is_empty() => ProveError::Maude(error.to_string()),
+            error => ProveError::Maude(format!("{context}: {error}")),
+        }
+    }
+}
+
 impl std::fmt::Display for ProveError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {

@@ -720,7 +720,7 @@ fn ndc_check_prepare<'a>(
             rhs: kd_prem1,
         }],
     )
-    .map_err(|error| crate::prove::ProveError::Maude(error.to_string()))?;
+    .map_err(|error| crate::prove::ProveError::maude("", error))?;
     if unifs.is_empty() {
         return Ok(None);
     }

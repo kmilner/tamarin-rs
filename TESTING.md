@@ -984,7 +984,6 @@ the search and are for experiments, never for a gate:
 | `TAM_RS_DBG_SOURCES_DUMP=1` | per-source goal + case names of each saturated (raw) source build |
 | `TAM_DBG_MAUDE_IO=1` / `=full` | every Maude command and reply, truncated to 200 chars / in full |
 | `TAM_DBG_MAUDE_IO_FILTER=<s>` | limit that dump to commands containing `<s>` (e.g. `unify`) |
-| `TAM_DBG_MAUDE_INTERRUPT=1` | report each interrupted Maude exchange and its elapsed time |
 | `TAM_RS_NO_SOURCE_CACHE=1` | disable persistent session source-case reuse (recompute for each proof/source context; A/B oracle) |
 | `TAM_RS_DISABLE_PARALLEL_EXPAND=1` | expand proof-tree siblings serially instead of per-child in parallel |
 | `TAM_RS_KEEP_SYS=1` | keep every proof node's `System` instead of dropping the ones the search no longer needs |

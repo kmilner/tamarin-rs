@@ -141,12 +141,8 @@ several open branches until an earlier one yields the trace, so a run close to
 `--memory-limit` with one worker can exceed it with more.
 
 A branch uses a Maude process of its own when the pool has one free, and
-otherwise shares its parent's. Branches that share a process take turns on it.
-If a branch that a single-worker search would reach sooner has to wait for a
-later branch's Maude call, it stops that call once the call has run for a
-quarter of a second, or for four times as long as Maude takes to start if that
-is longer. The later branch repeats the call on a new Maude process, after
-waiting longer each time this happens. With `--maude-processes=1`, branches
+otherwise shares its parent's. Branches that share a process take turns on it,
+each Maude call running to completion. With `--maude-processes=1`, branches
 are searched in parallel and only their Maude calls queue.
 
 ## Memory limits

@@ -275,8 +275,7 @@ fn forks(ctx: &ProofContext, cases: usize) -> bool {
 /// Visit cases in order on several workers, up to the first solved one.
 /// A worker other than the caller looks for a pooled process of its own
 /// before each case. The cases of workers without one share the caller's,
-/// where a case that a sequential search would reach first can take it from
-/// a later one.
+/// whose Maude calls then queue.
 fn visit_forked(
     ctx: &ProofContext,
     search: &mut Search,

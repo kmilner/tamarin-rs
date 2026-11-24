@@ -395,22 +395,15 @@ fn root_sym(t: &tamarin_term::lterm::LNTerm) -> Option<RootSym> {
     use tamarin_term::vterm::Lit;
     match t {
         Term::App(sym, _) => Some(RootSym::Sym(*sym)),
-        Term::Lit(Lit::Var(v)) if v.sort == LSort::Msg => None,
-        Term::Lit(Lit::Var(v)) => Some(RootSym::Sort(v.sort)),
-        Term::Lit(Lit::Con(n)) => {
-            use tamarin_term::lterm::NameTag;
-            let s = match n.tag {
-                NameTag::Pub => LSort::Pub,
-                NameTag::Fresh => LSort::Fresh,
-                NameTag::Nat => LSort::Nat,
-                NameTag::Node => LSort::Node,
-                // `sortOfName (Name AbbrevName _) = LSortMsg` (LTerm.hs),
-                // and HS's guard `Lit _ | sortOfLNTerm t == LSortMsg ->
-                // Nothing` (Contradictions.hs) drops every message-sorted
-                // literal, constants included.
-                NameTag::Abbrev => return None,
+        // HS's guard `Lit _ | sortOfLNTerm t == LSortMsg -> Nothing`
+        // (Contradictions.hs) drops every message-sorted literal, constants
+        // (`sortOfName`, LTerm.hs) included.
+        Term::Lit(l) => {
+            let s = match l {
+                Lit::Var(v) => v.sort,
+                Lit::Con(n) => tamarin_term::lterm::sort_of_name(n),
             };
-            Some(RootSym::Sort(s))
+            (s != LSort::Msg).then_some(RootSym::Sort(s))
         }
     }
 }
@@ -1386,9 +1379,7 @@ fn non_injective_fact_instances<'a>(
         let incompatible_last = if !ordered && sys.last_atom == Some(k) {
             let rules = node_rules.get_or_init(|| sys.node_rule_map());
             crate::constraint::solver::simplify::non_unifiable_nodes(&ctxt.maude, rules, &j, &k)
-                .map_err(|error| {
-                    crate::prove::ProveError::Maude(format!("last-node unification: {error:?}"))
-                })?
+                .map_err(|error| crate::prove::ProveError::maude("last-node unification", error))?
         } else {
             false
         };

@@ -65,6 +65,12 @@ pub fn pp_name(n: &Name, out: &mut String) {
             out.push_str(n.id.0);
             return;
         }
+        // A skolem exists only inside one guarded match and HS never prints
+        // its `SkConst`; show the frozen variable.
+        NameTag::Skolem { idx, .. } => {
+            let _ = write!(out, "sk({}.{})", n.id.0, idx);
+            return;
+        }
     }
     out.push('\'');
     out.push_str(n.id.0);

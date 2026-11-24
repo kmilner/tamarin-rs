@@ -4,7 +4,7 @@
 //!
 //! * A job may run on any pool thread, including on the stack of a thread
 //!   that is waiting for a map or [`SharedOnce`] and helps meanwhile. It
-//!   inherits only the cancellation token and its [`Rank`]. It must install
+//!   inherits only the cancellation token. It must install
 //!   every other thread-local it reads and restore the previous value before
 //!   returning.
 //! * A job must not block in a plain Rayon `join`, `scope` or parallel
@@ -27,110 +27,6 @@ thread_local! {
     // A worker can finish many maps without returning to Rayon's event loop.
     // Reuse its dispatch queue across maps instead of queuing a wrapper per job.
     static DISPATCHER: Arc<Dispatcher> = Arc::new(Dispatcher::default());
-    static CURRENT_RANK: RefCell<Option<Rank>> = const { RefCell::new(None) };
-}
-
-/// Where a job sits in the traversal order of its work tree: the item
-/// indices on the way down from the outermost map. A sequential run visits
-/// jobs in ascending rank, so of two live jobs the one with the smaller rank
-/// is needed first. Ranks of unrelated trees do not compare.
-#[derive(Clone, Debug)]
-pub struct Rank(Arc<RankPath>);
-
-#[derive(Debug)]
-struct RankPath {
-    root: u64,
-    path: Vec<u32>,
-}
-
-impl Rank {
-    /// The rank of the job running on this thread, if it is part of a map.
-    /// Inside the build of a [`SharedOnce`] value that an earlier job is
-    /// waiting for, the builder's part of the rank is replaced by the
-    /// waiter's, so that the wait cannot be outlasted by jobs that come
-    /// between the two.
-    pub fn current() -> Option<Self> {
-        let own = Self::own()?;
-        let mut rank = own.clone();
-        CURRENT_GROUP.with(|cell| {
-            let current = cell.borrow();
-            for group in std::iter::successors(current.as_deref(), |g| g.parent.as_deref()) {
-                if let Some(loan) = &group.loan
-                    && let Some(lent) = loan.lent.lock().as_ref()
-                    && own.0.root == loan.builder.0.root
-                    && let Some(below) = own.0.path.strip_prefix(&loan.builder.0.path[..])
-                {
-                    // Several enclosing builds can each hold a loan. The
-                    // earliest resulting rank is the one that counts.
-                    let path: Vec<u32> = lent.0.path.iter().chain(below).copied().collect();
-                    if path < rank.0.path {
-                        rank = Self::new(lent.0.root, path);
-                    }
-                }
-            }
-        });
-        Some(rank)
-    }
-
-    /// The rank of the job running on this thread, without any loan.
-    fn own() -> Option<Self> {
-        CURRENT_RANK.with(|cell| cell.borrow().clone())
-    }
-
-    /// Whether a sequential run would visit this job before `other`.
-    pub fn precedes(&self, other: &Self) -> bool {
-        self.0.root == other.0.root && self.0.path < other.0.path
-    }
-
-    fn new(root: u64, path: Vec<u32>) -> Self {
-        Self(Arc::new(RankPath { root, path }))
-    }
-}
-
-struct RankGuard(Option<Rank>);
-impl RankGuard {
-    fn new(rank: Option<Rank>) -> Self {
-        Self(CURRENT_RANK.with(|cell| cell.replace(rank)))
-    }
-}
-impl Drop for RankGuard {
-    fn drop(&mut self) {
-        CURRENT_RANK.with(|cell| cell.replace(self.0.take()));
-    }
-}
-
-/// The ranks of one map's items: the rank of the job that started the map,
-/// or a new root, followed by the item's index.
-struct Ranks {
-    root: u64,
-    base: Vec<u32>,
-}
-
-impl Ranks {
-    fn new() -> Self {
-        static ROOTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-        match Rank::own() {
-            Some(rank) => Self {
-                root: rank.0.root,
-                base: rank.0.path.clone(),
-            },
-            None => Self {
-                root: ROOTS.fetch_add(1, Ordering::Relaxed),
-                base: Vec::new(),
-            },
-        }
-    }
-
-    fn enter(&self, index: usize) -> RankGuard {
-        let path = self.base.iter().copied().chain([index as u32]).collect();
-        RankGuard::new(Some(Rank::new(self.root, path)))
-    }
-}
-
-/// A rank lent to the build of a [`SharedOnce`] value by a job waiting for it.
-struct Loan {
-    builder: Rank,
-    lent: parking_lot::Mutex<Option<Rank>>,
 }
 
 type Job = Box<dyn FnOnce() + Send>;
@@ -149,8 +45,6 @@ struct Group {
     /// Items not yet visited. The group's jobs are lanes that can each visit
     /// several of them.
     items: AtomicUsize,
-    /// Set on the group of a `SharedOnce` build started by a ranked job.
-    loan: Option<Loan>,
 }
 
 impl Group {
@@ -159,7 +53,6 @@ impl Group {
         token: CancellationToken,
         remaining: usize,
         items: usize,
-        builder: Option<Rank>,
     ) -> Arc<Self> {
         let dispatcher = parent
             .as_ref()
@@ -171,10 +64,6 @@ impl Group {
             dispatcher,
             remaining: AtomicUsize::new(remaining),
             items: AtomicUsize::new(items),
-            loan: builder.map(|builder| Loan {
-                builder,
-                lent: Default::default(),
-            }),
         })
     }
 
@@ -412,20 +301,11 @@ impl<T> SharedOnce<T> {
                     .as_deref()
                     .zip(group.parent.as_deref())
                     .is_some_and(|(waiter, builder)| std::ptr::eq(waiter.root(), builder.root()));
-                if let Some(loan) = &group.loan
-                    && let Some(rank) = Rank::current()
-                    && rank.precedes(&loan.builder)
-                {
-                    let mut lent = loan.lent.lock();
-                    if lent.as_ref().is_none_or(|earliest| rank.precedes(earliest)) {
-                        *lent = Some(rank);
-                    }
-                }
                 group.dispatcher.wait(&group, help, token.as_ref())?;
                 continue;
             }
             let attempt = CancellationScope::new(token.clone());
-            let group = Group::new(map.clone(), attempt.token(), 1, 1, Rank::own());
+            let group = Group::new(map.clone(), attempt.token(), 1, 1);
             *owner = Some(group.clone());
             drop(owner);
 
@@ -458,7 +338,6 @@ fn run_cancellable_job<R: Send + 'static, E: From<Cancelled> + Send + 'static>(
     use std::sync::{mpsc, Arc, Mutex};
     cancellation::check()?;
     let token = cancellation::current();
-    let rank = Rank::current();
     // Taking the closure is the admission decision: exactly one of the
     // caller cancelling it and a worker starting it can acquire its payload.
     let pending = Arc::new(Mutex::new(Some(f)));
@@ -479,7 +358,6 @@ fn run_cancellable_job<R: Send + 'static, E: From<Cancelled> + Send + 'static>(
         let Some(work) = work else { return };
         let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let _guard = CancellationGuard::new(token);
-            let _rank = RankGuard::new(rank);
             cancellation::check()?;
             work()
         }));
@@ -695,7 +573,6 @@ struct LaneMap<I, A, V, T> {
     admission: CancellationScope,
     pending: Mutex<std::iter::Enumerate<std::vec::IntoIter<I>>>,
     results: Mutex<Vec<Option<T>>>,
-    ranks: Ranks,
     group: Arc<Group>,
     acquire: A,
     visit: V,
@@ -744,7 +621,6 @@ where
             if pending == 0 {
                 self.admission.token().cancel();
             }
-            let _rank = self.ranks.enter(index);
             let Some(result) = (self.visit)(lease, index, item) else {
                 self.group.items.fetch_sub(1, Ordering::Relaxed);
                 break;
@@ -811,13 +687,12 @@ where
     }
     let mut items = items.into_iter().enumerate();
     let first = items.next();
-    let group = Group::new(Group::current_member(), token, lanes, count, None);
+    let group = Group::new(Group::current_member(), token, lanes, count);
     let map = Arc::new(LaneMap {
         group: group.clone(),
         admission,
         pending: Mutex::new(items),
         results: Mutex::new((0..count).map(|_| None).collect()),
-        ranks: Ranks::new(),
         acquire,
         visit,
     });
@@ -948,172 +823,6 @@ mod tests {
         cancellation::check()?;
         panic!("callback fired without cancellation");
     }
-
-    // Item 1 builds the value, and reports the ranks of a nested map once
-    // item 0 of `waiters` is waiting for it.
-    fn ranks_in_a_build_with_a_waiter(waiters: Vec<usize>) -> (Vec<Vec<u32>>, u64, u64) {
-        let cell = Arc::new(SharedOnce::<(Vec<Vec<u32>>, u64, u64)>::default());
-        let building = Arc::new(std::sync::Barrier::new(2));
-        let built = cell.clone();
-        let build = building.clone();
-        let builder = std::thread::spawn(move || {
-            pool().install(|| {
-                try_map(vec![0, 1], move |index| {
-                    if index == 0 {
-                        return Ok(());
-                    }
-                    let build = build.clone();
-                    built.get_or_try_init(move || {
-                        let own = Rank::current().unwrap();
-                        build.wait();
-                        // Give the waiter time to block on this build.
-                        let waited = std::time::Instant::now();
-                        while !Rank::current().unwrap().precedes(&own)
-                            && waited.elapsed() < Duration::from_millis(300)
-                        {
-                            std::thread::yield_now();
-                        }
-                        let nested = try_map(vec![0, 1], |_| {
-                            Ok::<_, Cancelled>(Rank::current().unwrap().0.path.clone())
-                        })?;
-                        Ok::<_, Cancelled>((nested, own.0.root, Rank::current().unwrap().0.root))
-                    })?;
-                    Ok::<_, Cancelled>(())
-                })
-            })
-        });
-        let waiting = cell.clone();
-        pool()
-            .install(|| {
-                try_map(waiters, move |index| {
-                    if index == 0 {
-                        building.wait();
-                        waiting.get_or_try_init(|| -> Result<_, Cancelled> {
-                            panic!("the value is already being built")
-                        })?;
-                    }
-                    Ok::<_, Cancelled>(())
-                })
-            })
-            .unwrap();
-        builder.join().unwrap().unwrap();
-        cell.get().unwrap().clone()
-    }
-
-    #[test]
-    fn a_waiter_from_another_tree_does_not_lend_its_rank() {
-        let (nested, own_root, root_during_build) = ranks_in_a_build_with_a_waiter(vec![0, 1]);
-        assert_eq!(own_root, root_during_build);
-        assert_eq!(nested, [[1, 0], [1, 1]]);
-    }
-
-    // Item 2 builds a value. Item 1 waits for it first, and the build starts
-    // a nested map; only then does item 0 wait too.
-    #[test]
-    fn a_second_earlier_waiter_lends_its_rank_to_jobs_already_started() {
-        use std::sync::Barrier;
-        let cell = Arc::new(SharedOnce::<(Vec<bool>, bool)>::default());
-        let building = Arc::new(Barrier::new(2));
-        let (nested_started, nested) = mpsc::channel::<()>();
-        let nested = Mutex::new(nested);
-        let first_waiter = Arc::new(Mutex::new(None::<Rank>));
-        let built = cell.clone();
-        rayon::ThreadPoolBuilder::new()
-            .num_threads(3)
-            .build()
-            .unwrap()
-            .install(|| {
-                try_map(vec![0usize, 1, 2], move |index| {
-                    let being_built = || -> Result<_, Cancelled> { panic!("being built") };
-                    match index {
-                        0 => {
-                            nested
-                                .lock()
-                                .unwrap()
-                                .recv_timeout(Duration::from_secs(5))
-                                .unwrap();
-                            built.get_or_try_init(being_built)?;
-                        }
-                        1 => {
-                            *first_waiter.lock().unwrap() = Rank::current();
-                            building.wait();
-                            built.get_or_try_init(being_built)?;
-                        }
-                        _ => {
-                            let (building, first_waiter, nested_started) = (
-                                building.clone(),
-                                first_waiter.clone(),
-                                Mutex::new(nested_started.clone()),
-                            );
-                            built.get_or_try_init(move || {
-                                let own = Rank::current().unwrap();
-                                building.wait();
-                                while !Rank::current().unwrap().precedes(&own) {
-                                    cancellation::check()?;
-                                    std::thread::yield_now();
-                                }
-                                let first = first_waiter.lock().unwrap().clone().unwrap();
-                                let seen = first.clone();
-                                let nested = try_map(vec![0usize, 1], move |_| {
-                                    let _ = nested_started.lock().unwrap().send(());
-                                    let started = std::time::Instant::now();
-                                    while !Rank::current().unwrap().precedes(&seen)
-                                        && started.elapsed() < Duration::from_secs(5)
-                                    {
-                                        std::thread::sleep(Duration::from_millis(1));
-                                    }
-                                    Ok::<_, Cancelled>(Rank::current().unwrap().precedes(&seen))
-                                })?;
-                                Ok::<_, Cancelled>((
-                                    nested,
-                                    Rank::current().unwrap().precedes(&first),
-                                ))
-                            })?;
-                        }
-                    }
-                    Ok::<_, Cancelled>(())
-                })
-            })
-            .unwrap();
-        assert_eq!(cell.get().unwrap(), &(vec![true, true], true));
-    }
-
-    #[test]
-    fn a_shared_once_build_takes_the_rank_of_an_earlier_waiter() {
-        let cell = Arc::new(SharedOnce::<Vec<Vec<u32>>>::default());
-        let building = Arc::new(std::sync::Barrier::new(2));
-        let built = cell.clone();
-        pool()
-            .install(|| {
-                try_map(vec![0, 1], move |index| {
-                    if index == 0 {
-                        building.wait();
-                        built.get_or_try_init(|| -> Result<_, Cancelled> {
-                            panic!("the value is already being built")
-                        })?;
-                        return Ok(());
-                    }
-                    let building = building.clone();
-                    built.get_or_try_init(move || {
-                        let own = Rank::current().unwrap();
-                        building.wait();
-                        // The waiter lends its rank just before it blocks.
-                        while !Rank::current().unwrap().precedes(&own) {
-                            cancellation::check()?;
-                            std::thread::yield_now();
-                        }
-                        // Jobs inside the build keep their order among themselves.
-                        try_map(vec![0, 1], |_| {
-                            Ok::<_, Cancelled>(Rank::current().unwrap().0.path.clone())
-                        })
-                    })?;
-                    Ok::<_, Cancelled>(())
-                })
-            })
-            .unwrap();
-        assert_eq!(cell.get().unwrap(), &[[0, 0], [0, 1]]);
-    }
-
     #[test]
     fn a_helper_that_leaves_does_not_take_the_remaining_items_with_it() {
         let result = pool().install(|| {

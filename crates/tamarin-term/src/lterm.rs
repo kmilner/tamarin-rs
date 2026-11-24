@@ -102,6 +102,15 @@ impl NameId {
 /// `Abbrev` is the tag `Web.Utils.shorten` (`src/Web/Utils.hs`) puts on
 /// the short constant it substitutes for a long term; it never occurs in a
 /// parsed or solved term.
+///
+/// `Skolem` is HS `SkConst LVar` of `data SkConst = SkName Name | SkConst
+/// LVar` (Guarded.hs): a free variable frozen into a constant while a
+/// guarded clause is matched.  It carries the variable's index and sort, and
+/// the `Name`'s id carries its name, so the variable is recovered exactly.
+/// Being the last variant, every skolem orders after every real name, and
+/// skolems order among themselves by `idx`, `sort`, then name, which is
+/// `LVar`'s order: together, HS's derived `Ord` on `SkConst`.  The parser
+/// cannot produce it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NameTag {
     Fresh,
@@ -109,6 +118,7 @@ pub enum NameTag {
     Node,
     Nat,
     Abbrev,
+    Skolem { idx: u64, sort: LSort },
 }
 
 /// HS `data Name = Name {nTag :: NameTag, nId :: NameId}` with a derived `Ord`
@@ -147,6 +157,8 @@ pub fn sort_of_name(n: &Name) -> LSort {
         NameTag::Nat => LSort::Nat,
         // LTerm.hs.
         NameTag::Abbrev => LSort::Msg,
+        // `sortOfSkol (SkConst v) = lvarSort v` (Guarded.hs).
+        NameTag::Skolem { sort, .. } => sort,
     }
 }
 
@@ -917,6 +929,33 @@ mod tests {
         assert!(NameTag::Pub < NameTag::Node);
         assert!(NameTag::Node < NameTag::Nat);
         assert!(NameTag::Nat < NameTag::Abbrev);
+    }
+
+    /// Guarded.hs: `data SkConst = SkName Name | SkConst LVar` with a derived
+    /// `Ord`.  Every skolem orders after every real name, and skolems order
+    /// as their variables do.
+    #[test]
+    fn skolem_names_order_like_hs_skconst() {
+        let skolem = |v: LVar| Name {
+            tag: NameTag::Skolem {
+                idx: v.idx,
+                sort: v.sort,
+            },
+            id: NameId(v.name),
+        };
+        let real = Name::new(NameTag::Abbrev, "~~~");
+        let vars = [
+            LVar::new("z", LSort::Msg, 0),
+            LVar::new("a", LSort::Msg, 2),
+            LVar::new("a", LSort::Node, 2),
+            LVar::new("b", LSort::Node, 2),
+            LVar::new("a", LSort::Pub, 10),
+        ];
+        for pair in vars.windows(2) {
+            assert!(pair[0] < pair[1]);
+            assert!(skolem(pair[0]) < skolem(pair[1]));
+        }
+        assert!(real < skolem(vars[0]));
     }
 
     /// Haskell `sortCompare` (LTerm.hs) is a PARTIAL ORDER, NOT

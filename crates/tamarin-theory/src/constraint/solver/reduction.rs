@@ -2263,6 +2263,7 @@ pub fn chain_direct_case_name(fa_conc: &crate::fact::LNFact) -> Option<String> {
                 NameTag::Node => format!("Const_node_{}", name.id.as_str()),
                 NameTag::Nat => format!("Const_nat_{}", name.id.as_str()),
                 NameTag::Abbrev => format!("Const_abbrev_{}", name.id.as_str()),
+                NameTag::Skolem { .. } => format!("Const_skolem_{}", name.id.as_str()),
             }
         }
         // `showFunSymName` (Term.hs, #883 rendering): builtin AC/C symbols

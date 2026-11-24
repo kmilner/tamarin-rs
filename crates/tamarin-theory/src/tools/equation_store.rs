@@ -823,22 +823,24 @@ fn simp_abstract_fun(maude: &MaudeHandle, _free: &LNSubst, substs: &[LNSubstVFre
         idx: maude.reserve_idxs(1),
     };
     let arity = argss[0].len();
-    let (fvars, mappings): (Vec<LVar>, Vec<Vec<LNTerm>>) =
-        if !op.is_ac() || argss.iter().all(|a| a.len() == arity) {
-            ((0..arity).map(|_| fresh_x()).collect(), argss)
-        } else {
-            let fvars = vec![fresh_x(), fresh_x()];
-            let mappings = argss
-                .into_iter()
-                .map(|args| match args.as_slice() {
-                    [] => panic!("simpAbstract: impossible, AC symbols must have arity >= 2."),
-                    [a1, a2] => vec![a1.clone(), a2.clone()],
-                    // HS abstracts left to right, without using AC.
-                    [a1, rest @ ..] => vec![a1.clone(), Term::App(op, rest.to_vec().into())],
-                })
-                .collect();
-            (fvars, mappings)
-        };
+    let (fvars, mappings): (Vec<LVar>, Vec<Vec<LNTerm>>) = if argss.iter().all(|a| a.len() == arity)
+    {
+        ((0..arity).map(|_| fresh_x()).collect(), argss)
+    } else if !op.is_ac() {
+        panic!("simpAbstract: impossible, invalid arities or List operator encountered.")
+    } else {
+        let fvars = vec![fresh_x(), fresh_x()];
+        let mappings = argss
+            .into_iter()
+            .map(|args| match args.as_slice() {
+                [] => panic!("simpAbstract: impossible, AC symbols must have arity >= 2."),
+                [a1, a2] => vec![a1.clone(), a2.clone()],
+                // HS abstracts left to right, without using AC.
+                [a1, rest @ ..] => vec![a1.clone(), Term::App(op, rest.to_vec().into())],
+            })
+            .collect();
+        (fvars, mappings)
+    };
     let substs = substs
         .iter()
         .zip(&mappings)

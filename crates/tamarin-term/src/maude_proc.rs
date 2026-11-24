@@ -121,7 +121,6 @@ pub struct SharedMaudeCaches {
 struct MaudeProcessInner {
     maude_path: String,
     child: Arc<Mutex<MaudeChildReaper>>,
-    turn: Arc<Turn>,
     initialized: bool,
     /// All x0 .. x{ordered_variables - 1} have been read in a consistent
     /// order. This belongs to the subprocess, not the shared reply cache.
@@ -174,7 +173,7 @@ impl MaudeProcessInner {
                 std::panic::resume_unwind(panic);
             }
         };
-        // Any interrupted or failed exchange invalidates this connection.
+        // A cancelled or failed exchange invalidates this connection.
         // Keep complete memo entries, but discard its pipes before reuse.
         if result.is_err() {
             self.initialized = false;
@@ -189,13 +188,6 @@ impl MaudeProcessInner {
             let mut reaper = self.child.lock().unwrap();
             cancellation::check()?;
             if reaper.child.is_none() {
-                // An interrupted job gives the process up before a new one
-                // is started. The interrupter kills the process under this
-                // lock after marking the exchange, so a start that gets
-                // past this check is killed in its turn.
-                if self.turn.interrupted.load(Ordering::Acquire) {
-                    return Err(MaudeError::Other("Maude was interrupted".into()));
-                }
                 if !reaper.restart {
                     return Err(MaudeError::Other("Maude exited unexpectedly".into()));
                 }
@@ -209,7 +201,6 @@ impl MaudeProcessInner {
         }
         if !self.initialized {
             self.ordered_variables = 0;
-            let started = std::time::Instant::now();
             self.read_until_prompt()?;
             for cmd in [
                 "set show command off .\n",
@@ -243,17 +234,7 @@ impl MaudeProcessInner {
             let reply = self.execute_raw(cmd.as_bytes())?;
             check_name_registration(&reply)?;
             self.ordered_variables = 1;
-            #[cfg(test)]
-            {
-                let preamble = self.turn.preamble.lock().unwrap().clone();
-                if !preamble.is_empty() {
-                    self.execute_raw(&preamble)?;
-                }
-            }
             self.initialized = true;
-            self.turn
-                .startup_micros
-                .store(started.elapsed().as_micros() as u64, Ordering::Relaxed);
         }
         Ok(())
     }
@@ -390,245 +371,6 @@ impl MaudeProcessInner {
     }
 }
 
-/// The least time an exchange may keep a job that a sequential run would
-/// visit earlier waiting before that job interrupts it.
-const INTERRUPT_FLOOR: std::time::Duration = std::time::Duration::from_millis(250);
-/// An interrupt costs a new process. Only pay that for an exchange that has
-/// already run this many times as long as a process takes to start.
-const INTERRUPT_STARTUPS: u32 = 4;
-/// The longest an interrupted job stays away before it tries again, unless
-/// an exchange may run for longer than this before it is interrupted.
-const BACKOFF_CEILING: std::time::Duration = std::time::Duration::from_secs(4);
-
-/// The exchange in flight on a process, visible to jobs waiting for it.
-///
-/// Jobs of one parallel map share a process when they have none of their
-/// own. Some of them are speculative: a sequential run might never reach
-/// them. A speculative exchange must not hold up a job that run would reach
-/// first, so such a job may kill the process under it. The interrupted job
-/// gives the process up, stays away for a while, and then repeats its
-/// command on a new process.
-#[derive(Default)]
-struct Turn {
-    state: parking_lot::Mutex<TurnState>,
-    changed: parking_lot::Condvar,
-    /// The waiter the process is held for after an interruption, or 0.
-    /// Only that waiter may lock the process.
-    reserved: AtomicU64,
-    /// How long the last process took to start and load the theory.
-    startup_micros: AtomicU64,
-    /// Interrupted jobs staying away, and how often the process was locked
-    /// or unlocked while any of them was.
-    away: AtomicU64,
-    uses: AtomicU64,
-    /// Whether the exchange in flight has been interrupted. Readable
-    /// without `state`, by a job that holds the lock on the child.
-    interrupted: std::sync::atomic::AtomicBool,
-    /// Commands a test has every new process run after loading the theory.
-    #[cfg(test)]
-    preamble: Mutex<Vec<u8>>,
-}
-
-#[derive(Default)]
-struct TurnState {
-    exchange: Option<Exchange>,
-    waiters: u64,
-}
-
-struct Exchange {
-    rank: Option<tamarin_utils::parallel::Rank>,
-    since: std::time::Instant,
-    interrupted: bool,
-}
-
-/// Marks an exchange as in flight until it is finished or dropped.
-struct InFlight<'a>(&'a Turn);
-
-impl InFlight<'_> {
-    /// End the exchange and report whether a waiter interrupted it.
-    fn finish(self) -> bool {
-        let exchange = self.0.end();
-        std::mem::forget(self);
-        exchange.is_some_and(|exchange| exchange.interrupted)
-    }
-}
-
-impl Drop for InFlight<'_> {
-    fn drop(&mut self) {
-        self.0.end();
-    }
-}
-
-impl Turn {
-    fn begin(&self) -> InFlight<'_> {
-        let rank = tamarin_utils::parallel::Rank::current();
-        self.state.lock().exchange = Some(Exchange {
-            rank,
-            since: std::time::Instant::now(),
-            interrupted: false,
-        });
-        InFlight(self)
-    }
-
-    fn end(&self) -> Option<Exchange> {
-        let mut state = self.state.lock();
-        self.interrupted.store(false, Ordering::Release);
-        state.exchange.take()
-    }
-
-    /// Mark the exchange in flight as interrupted. The caller kills its
-    /// process next, still holding `state`.
-    fn interrupt(&self, state: &mut TurnState) {
-        let exchange = state.exchange.as_mut().expect("an exchange is in flight");
-        if tamarin_utils::env_gate!("TAM_DBG_MAUDE_INTERRUPT") {
-            eprintln!("[maude-interrupt] after {:?}", exchange.since.elapsed());
-        }
-        exchange.interrupted = true;
-        self.interrupted.store(true, Ordering::Release);
-    }
-
-    /// How long an exchange may run before an earlier job may interrupt it.
-    fn interrupt_after(&self) -> std::time::Duration {
-        let startup = std::time::Duration::from_micros(self.startup_micros.load(Ordering::Relaxed));
-        INTERRUPT_FLOOR.max(startup * INTERRUPT_STARTUPS)
-    }
-
-    /// How long until a job of this rank may interrupt the exchange in
-    /// flight. `None` if it may not: there is none, it was interrupted
-    /// already, or a sequential run would not reach the job first.
-    fn patience(
-        &self,
-        state: &TurnState,
-        rank: Option<&tamarin_utils::parallel::Rank>,
-    ) -> Option<std::time::Duration> {
-        let exchange = state.exchange.as_ref()?;
-        let holder = exchange.rank.as_ref()?;
-        (!exchange.interrupted && rank?.precedes(holder)).then(|| {
-            self.interrupt_after()
-                .saturating_sub(exchange.since.elapsed())
-        })
-    }
-
-    fn release(&self, waiter: u64) {
-        if waiter != 0
-            && self
-                .reserved
-                .compare_exchange(waiter, 0, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-        {
-            let _state = self.state.lock();
-            self.changed.notify_all();
-        }
-    }
-
-    /// Wait until the process is no longer held for `other`.
-    fn wait_for_release(&self, other: u64) {
-        let mut state = self.state.lock();
-        if self.reserved.load(Ordering::Acquire) == other {
-            self.changed
-                .wait_for(&mut state, std::time::Duration::from_millis(50));
-        }
-    }
-
-    /// Tell jobs that are staying away that the process is in use.
-    #[inline]
-    fn note_use(&self) {
-        if self.away.load(Ordering::Relaxed) != 0 {
-            self.uses.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    /// Stay away after an interruption: for `backoff`, or until nobody has
-    /// used the process for as long as an exchange may run undisturbed.
-    fn stay_away(&self, backoff: std::time::Duration) {
-        const POLL: std::time::Duration = std::time::Duration::from_millis(20);
-        self.away.fetch_add(1, Ordering::Relaxed);
-        let away = std::time::Instant::now();
-        let mut quiet = away;
-        let mut uses = self.uses.load(Ordering::Relaxed);
-        while cancellation::check().is_ok() {
-            let other = self.reserved.load(Ordering::Acquire);
-            if other != 0 {
-                self.wait_for_release(other);
-                quiet = std::time::Instant::now();
-                continue;
-            }
-            let seen = self.uses.load(Ordering::Relaxed);
-            if seen != uses {
-                uses = seen;
-                quiet = std::time::Instant::now();
-            }
-            if away.elapsed() >= backoff || quiet.elapsed() >= self.interrupt_after() {
-                break;
-            }
-            std::thread::sleep(POLL);
-        }
-        self.away.fetch_sub(1, Ordering::Relaxed);
-    }
-}
-
-/// The reservation a waiter holds after interrupting an exchange.
-struct Waiter<'a> {
-    turn: &'a Turn,
-    id: u64,
-}
-
-impl Drop for Waiter<'_> {
-    fn drop(&mut self) {
-        self.turn.release(self.id);
-    }
-}
-
-/// Exclusive use of a process's transport and counters. The lock is given
-/// up only while an interrupted command waits to be repeated.
-struct InnerGuard<'a> {
-    guard: Option<parking_lot::MutexGuard<'a, MaudeProcessInner>>,
-    handle: &'a MaudeHandle,
-}
-
-impl Deref for InnerGuard<'_> {
-    type Target = MaudeProcessInner;
-    fn deref(&self) -> &MaudeProcessInner {
-        self.guard.as_ref().expect("the process is locked")
-    }
-}
-
-impl std::ops::DerefMut for InnerGuard<'_> {
-    fn deref_mut(&mut self) -> &mut MaudeProcessInner {
-        self.guard.as_mut().expect("the process is locked")
-    }
-}
-
-impl Drop for InnerGuard<'_> {
-    fn drop(&mut self) {
-        self.guard = None;
-        self.handle.turn.note_use();
-    }
-}
-
-impl InnerGuard<'_> {
-    /// Run one command. If a job that needs the process sooner interrupts
-    /// it, give the process up and run the command again later.
-    fn execute(&mut self, cmd: &[u8], variable_bound: u64) -> Result<Vec<u8>, MaudeError> {
-        let turn = &self.handle.turn;
-        let mut backoff = turn.interrupt_after();
-        loop {
-            let exchange = turn.begin();
-            let result = MaudeProcessInner::execute(self, cmd, variable_bound);
-            if !exchange.finish() || result.is_ok() {
-                return result;
-            }
-            // A job that interrupts once will usually be back. Stay away
-            // for longer each time, so that repeating this command does not
-            // keep holding it up.
-            self.guard = None;
-            turn.stay_away(backoff);
-            self.guard = Some(self.handle.lock_process()?);
-            backoff = (backoff * 2).min(BACKOFF_CEILING.max(turn.interrupt_after()));
-        }
-    }
-}
-
 fn spawn_maude(maude_path: &str) -> Result<(ChildStdin, ChildStdout, Child), MaudeError> {
     let mut command = Command::new(maude_path);
     tamarin_utils::process::isolate_process_group(&mut command);
@@ -750,7 +492,6 @@ fn check_name_registration(reply: &[u8]) -> Result<(), MaudeError> {
 pub struct MaudeHandle {
     inner: Arc<parking_lot::Mutex<MaudeProcessInner>>,
     child: Arc<Mutex<MaudeChildReaper>>,
-    turn: Arc<Turn>,
     caches: Arc<SharedMaudeCaches>,
     /// The solver's fresh supply (HS `MonadFresh` of `Reduction`).  Each
     /// `with_fresh_counter_*` clone gets its own counter.
@@ -813,11 +554,9 @@ impl MaudeHandle {
             child: Some(child),
             restart: false,
         }));
-        let turn = Arc::<Turn>::default();
         let mut inner = MaudeProcessInner {
             maude_path: maude_path.to_owned(),
             child: reaper.clone(),
-            turn: turn.clone(),
             initialized: false,
             ordered_variables: 0,
             stdin,
@@ -829,7 +568,6 @@ impl MaudeHandle {
         Ok(MaudeHandle {
             inner: Arc::new(parking_lot::Mutex::new(inner)),
             child: reaper,
-            turn,
             caches,
             // The global fresh counter starts at 0 (HS-faithful: HS's
             // `MonadFresh` global counter starts at 0).
@@ -913,7 +651,6 @@ impl MaudeHandle {
         MaudeHandle {
             inner: self.inner.clone(),
             child: self.child.clone(),
-            turn: self.turn.clone(),
             caches: self.caches.clone(),
             fresh_counter: Arc::new(AtomicU64::new(next)),
             st_lhs_ac_free: self.st_lhs_ac_free,
@@ -937,94 +674,38 @@ impl MaudeHandle {
     }
 
     /// Lock the process for this job. A cancelled waiter leaves without it.
+    ///
+    /// Callers hold the lock for one exchange, and Tamarin's Maude queries
+    /// terminate, so a job that needs the process waits for at most the
+    /// query in flight, even one a speculative branch started. parking_lot's
+    /// eventual fairness keeps a job that queries back to back from starving
+    /// a waiter.
     #[inline]
-    fn lock_inner(&self) -> Result<InnerGuard<'_>, cancellation::Cancelled> {
-        Ok(InnerGuard {
-            guard: Some(self.lock_process()?),
-            handle: self,
-        })
-    }
-
-    #[inline]
-    fn lock_process(
+    fn lock_inner(
         &self,
     ) -> Result<parking_lot::MutexGuard<'_, MaudeProcessInner>, cancellation::Cancelled> {
         // Cached operations frequently take an uncontended lock.
-        if self.turn.reserved.load(Ordering::Relaxed) == 0
-            && let Some(guard) = self.inner.try_lock()
-            // An interrupting job may have reserved the process meanwhile.
-            && self.turn.reserved.load(Ordering::Acquire) == 0
-        {
-            self.turn.note_use();
-            cancellation::check()?;
-            return Ok(guard);
-        }
-        self.lock_process_contended()
+        let guard = match self.inner.try_lock() {
+            Some(guard) => guard,
+            None => self.lock_inner_contended()?,
+        };
+        cancellation::check()?;
+        Ok(guard)
     }
 
     #[cold]
-    fn lock_process_contended(
+    fn lock_inner_contended(
         &self,
     ) -> Result<parking_lot::MutexGuard<'_, MaudeProcessInner>, cancellation::Cancelled> {
         const POLL: std::time::Duration = std::time::Duration::from_secs(1);
-        let turn = &*self.turn;
-        let mut waiter = Waiter { turn, id: 0 };
         loop {
             cancellation::check()?;
-            // A job waiting for a value this one is building can lend it an
-            // earlier rank at any time.
-            let rank = tamarin_utils::parallel::Rank::current();
-            let reserved = turn.reserved.load(Ordering::Acquire);
-            if reserved != 0 && reserved != waiter.id {
-                turn.wait_for_release(reserved);
-                continue;
-            }
             // Wake on unlock, like an ordinary mutex. The timeout bounds
-            // cancellation latency and the wait behind a speculative exchange.
-            let wait = turn
-                .patience(&turn.state.lock(), rank.as_ref())
-                .map_or(POLL, |wait| {
-                    wait.clamp(std::time::Duration::from_millis(1), POLL)
-                });
-            if let Some(guard) = self.inner.try_lock_for(wait) {
-                let reserved = turn.reserved.load(Ordering::Acquire);
-                if reserved != 0 && reserved != waiter.id {
-                    continue;
-                }
-                turn.note_use();
-                cancellation::check()?;
+            // cancellation latency.
+            if let Some(guard) = self.inner.try_lock_for(POLL) {
                 return Ok(guard);
             }
-            waiter.id = self.interrupt_exchange(rank.as_ref(), waiter.id);
         }
-    }
-
-    /// Kill the exchange in flight if a sequential run would reach `rank`
-    /// first and the exchange has had its time, and hold the process for
-    /// this waiter. Returns the waiter's reservation: `held`, or a new one.
-    fn interrupt_exchange(&self, rank: Option<&tamarin_utils::parallel::Rank>, held: u64) -> u64 {
-        let turn = &*self.turn;
-        let mut state = turn.state.lock();
-        if turn.reserved.load(Ordering::Acquire) != held
-            || !turn
-                .patience(&state, rank)
-                .is_some_and(|left| left.is_zero())
-        {
-            return held;
-        }
-        turn.interrupt(&mut state);
-        let id = if held == 0 {
-            state.waiters += 1;
-            turn.reserved.store(state.waiters, Ordering::Release);
-            state.waiters
-        } else {
-            held
-        };
-        self.child
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .invalidate();
-        id
     }
 
     /// Run a command whose reply depends on the command alone, or return
@@ -1236,7 +917,6 @@ impl MaudeHandle {
         eqs: &[Equal<LNTerm>],
         pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
-        use crate::lterm::LVar;
         if eqs.is_empty() {
             return Ok(vec![Vec::new()]);
         }
@@ -1259,23 +939,21 @@ impl MaudeHandle {
             return Ok(structural_match(eqs));
         }
         // One skolem constant per free variable, shared by both sides.
-        let mut free_vars: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
-        for eq in eqs {
-            collect_free_non_pattern_vars(&eq.lhs, pattern_vars, &mut free_vars);
-            collect_free_non_pattern_vars(&eq.rhs, pattern_vars, &mut free_vars);
-        }
-        let (skolem_map, reverse) = build_skolem_maps(&free_vars);
         let rewritten_eqs: Vec<Equal<LNTerm>> = eqs
             .iter()
             .map(|eq| Equal {
-                lhs: rewrite_skolem(&eq.lhs, &skolem_map),
-                rhs: rewrite_skolem(&eq.rhs, &skolem_map),
+                lhs: rewrite_skolem(&eq.lhs, pattern_vars),
+                rhs: rewrite_skolem(&eq.rhs, pattern_vars),
             })
             .collect();
         Ok(self
             .match_query(&rewritten_eqs, true)?
             .into_iter()
-            .map(|sub| unskolemize_subst(sub, &reverse))
+            .map(|sub| {
+                sub.into_iter()
+                    .map(|(lv, lt)| (lv, unskolemize(&lt)))
+                    .collect()
+            })
             .collect())
     }
 
@@ -1346,18 +1024,6 @@ impl MonadFresh for &MaudeHandle {
     }
 }
 
-/// One-letter sort tag for synthesizing skolem constant names.
-fn sort_tag(s: crate::lterm::LSort) -> &'static str {
-    use crate::lterm::LSort;
-    match s {
-        LSort::Msg => "M",
-        LSort::Pub => "P",
-        LSort::Fresh => "F",
-        LSort::Node => "N",
-        LSort::Nat => "T",
-    }
-}
-
 /// Build a conjunction-equation Maude command: `<prefix>lhs =? rhs /\ ... .\n`.
 /// Each side is converted via `lterm_to_mterm_global` threading the shared
 /// `ctx`, so one wire encoding serves the whole conjunction.
@@ -1400,111 +1066,49 @@ fn structural_match(eqs: &[Equal<LNTerm>]) -> Vec<Vec<(crate::lterm::LVar, LNTer
     }
 }
 
-/// Build the forward (LVar→skolem `Name`) and reverse (`Name`→LVar) skolem maps
-/// for `vars`, assigning synthetic constants in BTreeSet iteration order via
-/// `skolem_name`.  Used by `match_eqs_skolemize_both`.
-fn build_skolem_maps(
-    vars: &std::collections::BTreeSet<crate::lterm::LVar>,
-) -> (
-    std::collections::BTreeMap<crate::lterm::LVar, crate::lterm::Name>,
-    std::collections::BTreeMap<crate::lterm::Name, crate::lterm::LVar>,
-) {
-    let mut skolem_map = std::collections::BTreeMap::new();
-    let mut reverse = std::collections::BTreeMap::new();
-    for (counter, lv) in (0_u64..).zip(vars.iter()) {
-        let n = skolem_name(counter, lv);
-        skolem_map.insert(*lv, n);
-        reverse.insert(n, *lv);
+/// HS `SkConst lv` (Guarded.hs): `lv` frozen into a constant of its own
+/// sort (`sortOfSkol`), ordered after every real name.  See
+/// `NameTag::Skolem`.
+fn skolem_name(lv: &crate::lterm::LVar) -> crate::lterm::Name {
+    use crate::lterm::{Name, NameId, NameTag};
+    Name {
+        tag: NameTag::Skolem {
+            idx: lv.idx,
+            sort: lv.sort,
+        },
+        id: NameId(lv.name),
     }
-    (skolem_map, reverse)
 }
 
-/// Un-skolemize the range of each binding in `sub`, mapping synthetic
-/// constants back to their original LVars via `reverse`.  Used by
-/// `match_eqs_skolemize_both`'s result loop.
-fn unskolemize_subst(
-    sub: Vec<(crate::lterm::LVar, LNTerm)>,
-    reverse: &std::collections::BTreeMap<crate::lterm::Name, crate::lterm::LVar>,
-) -> Vec<(crate::lterm::LVar, LNTerm)> {
-    sub.into_iter()
-        .map(|(lv, lt)| (lv, unskolemize(&lt, reverse)))
-        .collect()
-}
-
-/// The skolem constant for `lv`.  HS gives a `SkConst` the variable's own
-/// sort (`sortOfSkol`, Guarded.hs).  `NameTag` has no `Msg`, so a
-/// `Msg`-sorted skolem is a `Pub` name with the `SKOLEM_MSG_PREFIX` id that
-/// `maude_types::sort_of_name` maps back to `Msg`; encoding it as `Pub`
-/// would let it match `Msg` pattern positions HS rejects.
-fn skolem_name(counter: u64, lv: &crate::lterm::LVar) -> crate::lterm::Name {
-    use crate::lterm::{LSort, Name, NameTag};
-    // Every sort shares the `<prefix><counter>_<name>_<idx>_<sortTag>` id
-    // layout, so distinct LVars stay distinct; only `Msg` swaps the prefix
-    // for the sentinel `sort_of_name` decodes back to `LSortMsg`.
-    let (tag, prefix) = match lv.sort {
-        LSort::Msg => (NameTag::Pub, crate::maude_types::SKOLEM_MSG_PREFIX),
-        LSort::Pub => (NameTag::Pub, "__sk"),
-        LSort::Fresh => (NameTag::Fresh, "__sk"),
-        LSort::Nat => (NameTag::Nat, "__sk"),
-        LSort::Node => (NameTag::Node, "__sk"),
-    };
-    let id = format!(
-        "{}{}_{}_{}_{}",
-        prefix,
-        counter,
-        lv.name,
-        lv.idx,
-        sort_tag(lv.sort)
-    );
-    Name::new(tag, id)
-}
-
-/// Map skolem constants in `t` back to their original variables.  HS
-/// `unskolemizeBTerm` (Guarded.hs) is an `fmapTerm`, so AC and C argument
-/// lists are re-sorted under the restored variables.
-fn unskolemize(
-    t: &LNTerm,
-    reverse: &std::collections::BTreeMap<crate::lterm::Name, crate::lterm::LVar>,
-) -> LNTerm {
+/// HS `unskolemizeBTerm` (Guarded.hs): map skolem constants in `t` back to
+/// their variables.  It is an `fmapTerm`, so AC and C argument lists are
+/// re-sorted under the restored variables.
+fn unskolemize(t: &LNTerm) -> LNTerm {
+    use crate::lterm::{LVar, Name, NameTag};
     use crate::vterm::Lit;
-    crate::term::map_lits(t, &mut |l| match l {
-        Lit::Con(n) => reverse.get(n).map_or(*l, |lv| Lit::Var(*lv)),
+    crate::term::map_lits(t, &mut |l| match *l {
+        Lit::Con(Name {
+            tag: NameTag::Skolem { idx, sort },
+            id,
+        }) => Lit::Var(LVar {
+            name: id.0,
+            sort,
+            idx,
+        }),
         _ => *l,
     })
 }
 
-/// Collect every free `LVar` in `t` whose `(name, idx)` is NOT in
-/// `pattern_vars`, appending into `out`.  `match_eqs_skolemize_both` calls
-/// it once per side.
-fn collect_free_non_pattern_vars(
-    t: &LNTerm,
-    pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
-    out: &mut std::collections::BTreeSet<crate::lterm::LVar>,
-) {
-    use crate::vterm::Lit;
-    match t {
-        crate::term::Term::Lit(Lit::Var(lv)) if !pattern_vars.contains(&(lv.name, lv.idx)) => {
-            out.insert(*lv);
-        }
-        crate::term::Term::App(_, args) => {
-            for a in args.iter() {
-                collect_free_non_pattern_vars(a, pattern_vars, out);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Replace each `LVar` bound in `map` with its skolem constant.  HS
-/// `skolemizeTerm` (Guarded.hs) is an `fmapTerm`, so AC and C argument
+/// Replace each variable outside `pattern_vars` with its skolem constant.
+/// HS `skolemizeTerm` (Guarded.hs) is an `fmapTerm`, so AC and C argument
 /// lists are re-sorted under the new literals.
 fn rewrite_skolem(
     t: &LNTerm,
-    map: &std::collections::BTreeMap<crate::lterm::LVar, crate::lterm::Name>,
+    pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
 ) -> LNTerm {
     use crate::vterm::Lit;
     crate::term::map_lits(t, &mut |l| match l {
-        Lit::Var(lv) => map.get(lv).map_or(*l, |n| Lit::Con(*n)),
+        Lit::Var(lv) if !pattern_vars.contains(&(lv.name, lv.idx)) => Lit::Con(skolem_name(lv)),
         _ => *l,
     })
 }

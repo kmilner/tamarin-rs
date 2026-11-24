@@ -1011,7 +1011,7 @@ fn match_skolemized(
             // A Maude failure is an error, never an absent match.
             let matches = maude
                 .match_eqs_skolemize_both(&eqs, pattern_vars)
-                .map_err(|error| crate::prove::ProveError::Maude(error.to_string()))?;
+                .map_err(|error| crate::prove::ProveError::maude("", error))?;
             Ok(matches
                 .into_iter()
                 .map(|m| m.into_iter().filter(|(v, _)| bindable(v)).collect())

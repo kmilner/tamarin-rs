@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::lterm::{LNTerm, LSort, LVar, Name, NameTag};
+use crate::lterm::{LNTerm, LSort, LVar, Name};
 use crate::term::Term;
 use crate::vterm::Lit;
 
@@ -92,46 +92,6 @@ impl ConvCtx {
 }
 
 // =============================================================================
-// Sort lookup for constants
-// =============================================================================
-
-/// Name-id prefix used by `maude_proc.rs` to mark a synthetic skolem
-/// constant whose intended Maude sort is `Msg`.
-///
-/// `NameTag` has no `Msg` variant (a `Name` constant is always Fresh,
-/// Pub, Node or Nat), and adding one would require non-exhaustive
-/// `match`es across many crates to be updated.  The Maude wire encoding,
-/// however, *does* support a `Msg`-sorted constant directly: the emitted
-/// theory declares `op c : Nat -> Msg` and `MaudeConst(i, LSort::Msg)`
-/// prints as `c(i)`.  So to faithfully mirror HS's
-/// `sortOfSkol (SkConst v) = lvarSort v` (Guarded.hs) — where a
-/// skolemized free variable keeps its *own* sort, which may be `Msg` —
-/// we carry a `Msg`-sorted skolem as a `NameTag::Pub` `Name` whose id
-/// begins with this sentinel, and recognise it here so that
-/// `sort_of_name` returns `LSort::Msg` (not the carrier tag's `Pub`).
-///
-/// `Pub` is a strict subsort of `Msg`, so without this a `Msg` skolem
-/// would be emitted as `p(i)` and Maude order-sorted matching would
-/// *over-match* (succeeding where HS, treating it as `Msg`, would not).
-///
-/// This sentinel is namespaced (double-underscore + `skMSG` + double
-/// underscore) so it cannot collide with any real protocol constant
-/// (which originate from `'...'`/`~'...'` literals).
-pub const SKOLEM_MSG_PREFIX: &str = "__skMSG__";
-
-/// `sortOfName` — the sort of a `Name` literal.
-pub fn sort_of_name(n: &Name) -> LSort {
-    // Msg-sorted skolem constants are carried as `NameTag::Pub` names
-    // with a sentinel id prefix; recover their true `Msg` sort here so
-    // the Maude wire constant is `c(i)` (Msg), not `p(i)` (Pub).  See
-    // `SKOLEM_MSG_PREFIX`.
-    if matches!(n.tag, NameTag::Pub) && n.id.as_str().starts_with(SKOLEM_MSG_PREFIX) {
-        return LSort::Msg;
-    }
-    crate::lterm::sort_of_name(n)
-}
-
-// =============================================================================
 // LNTerm -> MTerm (forward)
 // =============================================================================
 
@@ -156,7 +116,7 @@ fn import_lit(l: &Lit<Name, LVar>, ctx: &mut ConvCtx) -> MaudeLit {
             MaudeLit::MaudeVar(id, lv.sort)
         }
         Lit::Con(n) => {
-            let s = sort_of_name(n);
+            let s = crate::lterm::sort_of_name(n);
             let id = ctx.fresh_id();
             MaudeLit::MaudeConst(id, s)
         }
@@ -279,6 +239,7 @@ pub fn lookup_canonical_var_lit(ctx: &ConvCtx, sort: LSort, idx: u64) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lterm::{NameId, NameTag};
 
     /// The variant order `MaudeVar < FreshVar < MaudeConst`, and inside a
     /// variant the index before the sort, as HS's `MaudeLit` declares them.
@@ -291,39 +252,26 @@ mod tests {
         assert!(MaudeLit::MaudeVar(0, LSort::Pub) < MaudeLit::MaudeVar(0, LSort::Fresh));
     }
 
+    /// HS sends a constant with `sortOfSkol` (Guarded.hs): a skolem keeps its
+    /// variable's sort, here `Msg` (`c`), while a real public name is `Pub`
+    /// (`p`) whatever its id.
     #[test]
-    fn skolem_msg_constant_sorts_as_msg() {
-        use crate::lterm::{Name, NameId, NameTag};
-        // A sentinel-prefixed Pub-carrier name is reported as Msg so the
-        // Maude wire constant is `c(i)` (HS `sortOfSkol = lvarSort v`).
+    fn skolem_constant_keeps_its_variable_sort() {
         let msg_skol = Name {
-            tag: NameTag::Pub,
-            id: NameId::new(format!("{}0_x_7_M", SKOLEM_MSG_PREFIX)),
+            tag: NameTag::Skolem {
+                idx: 7,
+                sort: LSort::Msg,
+            },
+            id: NameId::new("x"),
         };
-        assert_eq!(sort_of_name(&msg_skol), LSort::Msg);
-        // A non-skolem Pub constant is still Pub.
-        let real_pub = Name {
-            tag: NameTag::Pub,
-            id: NameId::new("alice"),
-        };
-        assert_eq!(sort_of_name(&real_pub), LSort::Pub);
-        // The sentinel only applies to Pub-tagged carriers.
-        let fresh = Name {
-            tag: NameTag::Fresh,
-            id: NameId::new("k"),
-        };
-        assert_eq!(sort_of_name(&fresh), LSort::Fresh);
-        // The emitted Maude constant also uses the `c` (Msg) symbol.  It does
-        // not use the `p` (Pub) symbol that the carrier tag would give.
-        let t: LNTerm = Term::Lit(Lit::Con(msg_skol));
+        let user_pub = Name::new(NameTag::Pub, "__skMSG__ordinary");
         let mut ctx = ConvCtx::new();
-        let mt = lterm_to_mterm_global(&t, &mut ctx);
-        let wire = String::from_utf8(crate::maude_print::pp_mterm(&mt)).unwrap();
-        assert_eq!(wire, "c(0)");
-        let real: LNTerm = Term::Lit(Lit::Con(real_pub));
-        let mt = lterm_to_mterm_global(&real, &mut ctx);
-        let wire = String::from_utf8(crate::maude_print::pp_mterm(&mt)).unwrap();
-        assert_eq!(wire, "p(1)");
+        let wire = |n: Name, ctx: &mut ConvCtx| {
+            let mt = lterm_to_mterm_global(&Term::Lit(Lit::Con(n)), ctx);
+            String::from_utf8(crate::maude_print::pp_mterm(&mt)).unwrap()
+        };
+        assert_eq!(wire(msg_skol, &mut ctx), "c(0)");
+        assert_eq!(wire(user_pub, &mut ctx), "p(1)");
     }
 
     /// A variable survives the `LNTerm -> MTerm -> LNTerm` round trip and

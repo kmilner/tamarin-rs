@@ -881,6 +881,20 @@ fn verdict_match_suite_all_solved_against_tamarin() {
         ),
         // Simple In/Out chain — no pair construction.
         ("single_recv.spthy", "chain", NodeStatus::Solved, "verified"),
+        // A public name spelled like a reserved skolem id still matches a
+        // public variable inside a multiset, as its control does.
+        (
+            "skolem_prefix_name.spthy",
+            "prefixed_reachable",
+            NodeStatus::Solved,
+            "verified",
+        ),
+        (
+            "skolem_prefix_name.spthy",
+            "control_reachable",
+            NodeStatus::Solved,
+            "verified",
+        ),
         // All-traces lemmas → Contradictory (negation dead-ends).
         (
             "safety_unique.spthy",
@@ -979,16 +993,12 @@ fn verdict_match_suite_all_solved_against_tamarin() {
     // all of the rows of a fixture.
     let mut summaries: tamarin_utils::FastMap<&str, String> = tamarin_utils::FastMap::default();
     for (fixture, lemma, expected, marker) in cases {
-        let h = tamarin_term::maude_proc::MaudeHandle::start(
-            &mp,
-            tamarin_term::maude_sig::pair_maude_sig(),
-        )
-        .unwrap();
         let path = fixtures_dir().join(fixture);
         let src =
             std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {}", fixture, e));
         let theory = parse_theory(&src, &[]).expect("parse");
         let elab = tamarin_theory::elaborate::elaborate(&theory).expect("elaborate");
+        let h = tamarin_term::maude_proc::MaudeHandle::start(&mp, elab.signature.clone()).unwrap();
         let root = prove_lemma(std::sync::Arc::new(elab), lemma, h, 200)
             .unwrap_or_else(|e| panic!("prove_lemma({}/{}): {:?}", fixture, lemma, e));
         assert_eq!(

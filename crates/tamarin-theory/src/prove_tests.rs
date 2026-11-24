@@ -1542,3 +1542,19 @@ fn cancel_active_parallel_sources_then_retry_the_same_context() {
     assert_eq!(session.source_stats().raw, clean.source_stats().raw);
     assert_eq!(session.source_stats().refined, clean.source_stats().refined);
 }
+
+#[test]
+fn a_cancelled_maude_call_stays_a_cancellation() {
+    use tamarin_term::maude_proc::MaudeError;
+    assert!(matches!(
+        ProveError::maude("last-node unification", MaudeError::Cancelled),
+        ProveError::Cancelled
+    ));
+    match ProveError::maude(
+        "source matching failed",
+        MaudeError::Spawn("no maude".into()),
+    ) {
+        ProveError::Maude(message) => assert!(message.starts_with("source matching failed: ")),
+        other => panic!("expected a Maude error, got {other:?}"),
+    }
+}

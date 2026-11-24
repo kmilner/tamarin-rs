@@ -1280,7 +1280,7 @@ fn prepare_source_match(
                     .map(|(lhs, rhs)| tamarin_term::rewriting::Equal { lhs, rhs })
                     .collect::<Vec<_>>();
                 let mut matches = ctx.maude.match_eqs(&eqs).map_err(|error| {
-                    crate::prove::ProveError::Maude(format!("source matching failed: {error}"))
+                    crate::prove::ProveError::maude("source matching failed", error)
                 })?;
                 if matches.is_empty() {
                     return Ok(None);
