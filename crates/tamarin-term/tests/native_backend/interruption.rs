@@ -75,9 +75,10 @@ fn a_runaway_unification_stops_when_its_request_is_cancelled() {
 
 #[test]
 fn a_runaway_unifiability_decision_stops_when_its_request_is_cancelled() {
-    // A constant among the operands sends the decision to the listing.
+    // A constant among the operands sends the decision to the listing, which
+    // runs for about 50 s before the default search bound stops it.
     let h = native();
-    let [u, y, x, z, w] = ["u", "y", "x", "z", "w"].map(variable);
+    let [u, y, t, x, z, w] = ["u", "y", "t", "x", "z", "w"].map(variable);
     let side = |terms: &[&LNTerm]| {
         f_app_ac(
             AcSym::Union,
@@ -86,7 +87,7 @@ fn a_runaway_unifiability_decision_stops_when_its_request_is_cancelled() {
     };
     let a = pub_term("a");
     let eq = Equal {
-        lhs: side(&[&a, &u, &u, &u, &u, &y, &y, &y, &y, &y]),
+        lhs: side(&[&a, &u, &u, &u, &u, &y, &y, &y, &y, &y, &t]),
         rhs: side(&[&x, &x, &x, &x, &z, &z, &z, &z, &z, &w]),
     };
     let (result, latency) = cancelled(|| h.unifiable(std::slice::from_ref(&eq)));
