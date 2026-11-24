@@ -1037,3 +1037,17 @@ fn goal_status_merge_is_associative_commutative_and_idempotent() {
         }
     }
 }
+
+/// HS `alwaysBefore sys i j` is reachability in `rawLessRel`, whose
+/// `reachableSet [i]` contains `i`: a node is always before itself.
+#[test]
+fn always_before_is_reflexive_reachability() {
+    use crate::constraint::constraints::Reason;
+    let mut s = System::empty();
+    let n = |i| node_id("i", i);
+    s.add_less(LessAtom::new(n(1), n(2), Reason::Formula));
+    let adj = s.build_always_before_adj();
+    assert!(s.always_before_with(&adj, &n(1), &n(1)));
+    assert!(s.always_before_with(&adj, &n(1), &n(2)));
+    assert!(!s.always_before_with(&adj, &n(2), &n(1)));
+}

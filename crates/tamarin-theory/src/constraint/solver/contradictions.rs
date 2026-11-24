@@ -76,9 +76,6 @@ pub fn contradictions(
     if sys.subterm_store.is_false() {
         out.push(Contradiction::SubtermCyclic);
     }
-    if has_subterm_cycle_contra(_ctxt, sys) {
-        out.push(Contradiction::SubtermCyclic);
-    }
     // 3. NonNormalTerms.
     if has_non_normal_terms(_ctxt, sys) {
         out.push(Contradiction::NonNormalTerms);
@@ -268,16 +265,6 @@ fn maybe_not_nf_subterms(
             out.insert(t.clone());
         }
     }
-}
-
-/// Run `has_subterm_cycle` against the system's positive subterm
-/// dag.  Equivalent to one prong of Haskell's `simpSubterms` →
-/// `hasSubtermCycle` check; we run it eagerly during contradiction
-/// detection (the `simpSubterms` simplification pass — see
-/// `propagate_subterm_obvious` in `simplify.rs` — handles the rest).
-fn has_subterm_cycle_contra(ctx: &ProofContext, sys: &System) -> bool {
-    let reducible = &ctx.maude.maude_sig().reducible_fun_syms_fast;
-    crate::tools::subterm_store::has_subterm_cycle(reducible, &sys.subterm_store)
 }
 
 /// `hasImpossibleChain` — port of Haskell's
@@ -808,9 +795,11 @@ fn has_forbidden_chain<'a>(
         }
         // (3) Some KU(t_start) action precedes the chain start (HS
         // `allKUActions`). Only a KU of exactly `t_start` counts.
-        if sys.all_ku_actions().iter().any(|(id, _, t)| {
-            *t == t_start && *id != c.0 && sys.always_before_with(ab_adj, id, &c.0)
-        }) {
+        if sys
+            .all_ku_actions()
+            .iter()
+            .any(|(id, _, t)| *t == t_start && sys.always_before_with(ab_adj, id, &c.0))
+        {
             return true;
         }
     }

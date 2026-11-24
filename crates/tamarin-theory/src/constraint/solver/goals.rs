@@ -1960,44 +1960,17 @@ fn chain_kd_conc_term(
     fact.terms.first().cloned()
 }
 
-/// Shared `allKUActions`-before-target scan.  True iff some KU action for
-/// `term` fires at a node strictly always-before `target`.
-///
-/// HS `allKUActions sys = unsolvedActionAtoms sys ++ node actions`
-/// (System.hs): the KU action may exist only as an unsolved
-/// `ActionG i (KU term)` goal (node i not yet in sNodes), so scan unsolved
-/// ActionG goals in ADDITION to node rule actions.  `always_before(id,
-/// target)` does not depend on `fa` and the relation is invariant across the
-/// loops in one `open_goals` pass (`sys` is read-only), so the caller builds
-/// the adjacency once and threads it in.  Used by `chain_to_equality` and
-/// (per-arg) `all_msg_vars_known_earlier`.
+/// True iff some KU action for `term` is always-before `target`: HS
+/// `allKUActions` filtered by `alwaysBefore` (Goals.hs `chainToEquality`,
+/// `allMsgVarsKnownEarlier`).
 fn exists_ku_action_before(
     sys: &System,
     ab_adj: &crate::constraint::system::PrebuiltAdj,
     term: &tamarin_term::lterm::LNTerm,
     target: &crate::constraint::constraints::NodeId,
 ) -> bool {
-    let is_ku_of = |fa: &crate::fact::LNFact| -> bool {
-        matches!(fa.tag, crate::fact::FactTag::Ku) && fa.terms.first() == Some(term)
-    };
-    // Unsolved ActionG goals half of allActions.
-    let in_goals = sys
-        .goals
-        .iter()
-        .filter(|(_, st)| !st.solved)
-        .any(|(g, _)| match g {
-            Goal::Action(i, fa) => is_ku_of(fa) && sys.always_before_with(ab_adj, i, target),
-            _ => false,
-        });
-    if in_goals {
-        return true;
-    }
-    // Node rule actions half of allActions.
-    sys.nodes.iter().any(|(id, rule)| {
-        id != target
-            && rule.actions.iter().any(is_ku_of)
-            && sys.always_before_with(ab_adj, id, target)
-    })
+    sys.ku_actions()
+        .any(|(j, _, m)| m == term && sys.always_before_with(ab_adj, &j, target))
 }
 
 /// Haskell `chainToEquality` (Goals.hs).  Open the msg-var

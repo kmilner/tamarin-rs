@@ -940,6 +940,34 @@ impl System {
         })
     }
 
+    /// HS `allActions` (System.hs): unsolved action goals (`M.toList sGoals`
+    /// order), then node actions (`M.toList sNodes` order).
+    pub fn all_actions(&self) -> Vec<(NodeId, &crate::fact::LNFact)> {
+        let mut actions: Vec<(NodeId, &crate::fact::LNFact)> =
+            self.unsolved_action_atoms().collect();
+        actions.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+        for (i, ru) in self.nodes_in_map_order() {
+            actions.extend(ru.actions.iter().map(|fa| (*i, fa)));
+        }
+        actions
+    }
+
+    /// The actions of [`all_ku_actions`](Self::all_ku_actions) in no
+    /// particular order, for callers that only test for one.
+    pub fn ku_actions(
+        &self,
+    ) -> impl Iterator<Item = (NodeId, &crate::fact::LNFact, &tamarin_term::lterm::LNTerm)> + '_
+    {
+        self.unsolved_action_atoms()
+            .chain(
+                self.nodes
+                    .iter()
+                    .flat_map(|(i, ru)| ru.actions.iter().map(move |fa| (*i, fa))),
+            )
+            .filter(|(_, fa)| fa.is_ku())
+            .filter_map(|(i, fa)| fa.terms.first().map(|m| (i, fa, m)))
+    }
+
     /// HS `allKUActions` (System.hs): every `KU(m)` action as
     /// `(node, fact, m)`, unsolved action goals first (`M.toList sGoals`
     /// order), then node actions (`M.toList sNodes` order).
@@ -1396,17 +1424,10 @@ impl System {
     /// reachability over `rawLessRel` is the `alwaysBefore` query itself;
     /// hoisting the adjacency build out is a pure refactor.
     pub fn always_before_with(&self, adj: &PrebuiltAdj, i: &NodeId, j: &NodeId) -> bool {
-        // DELIBERATE deviation from HS `alwaysBefore`: HS's
-        // `reachableSet [i] lessRel` seeds the visited set with `i`
-        // itself (Data/DAG/Simple.hs), so `alwaysBefore sys i i`
-        // is `True`.  We short-circuit `i == j` to `false`.  This is
-        // caller-safe: every live caller already filters equal nodes
-        // before reaching here (Less/EqE simplify guards, the
-        // `simpInjectiveFactEq` `i /= j` filter, contradictions.rs's
-        // `id == c.0` skip), exactly as HS does, so the `i == i => true`
-        // result is never observable in either codebase.
+        // HS `reachableSet [i] lessRel` contains `i` itself
+        // (Data/DAG/Simple.hs), so `alwaysBefore sys i i` is `True`.
         if i == j {
-            return false;
+            return true;
         }
         let adj = &adj.adj;
         // BFS from i until j.

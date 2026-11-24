@@ -630,7 +630,6 @@ fn insert_implied_formulas_pass(
 ) -> Result<SystemOutcome, crate::prove::ProveError> {
     use crate::atom::Atom as AAtom;
     use crate::atom::ProtoAtom;
-    use crate::constraint::constraints::Goal;
     use crate::formula::Quantifier;
     use crate::guarded::Guarded;
     use tamarin_term::lterm::{LNTerm, LVar};
@@ -684,23 +683,8 @@ fn insert_implied_formulas_pass(
         return Ok(SystemOutcome::Linear);
     }
 
-    // HS `allActions` (System.hs): unsolved action goals in goal order, then
-    // node actions in node-id order.
-    let mut unsolved_actions: Vec<(crate::constraint::constraints::NodeId, crate::fact::LNFact)> =
-        red.sys
-            .goals
-            .iter()
-            .filter(|(_, st)| !st.solved)
-            .filter_map(|(g, _)| match g {
-                Goal::Action(i, fa) => Some((*i, fa.clone())),
-                _ => None,
-            })
-            .collect();
-    unsolved_actions.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
-    let mut sys_actions = unsolved_actions;
-    for (id, rule) in red.sys.nodes_in_map_order() {
-        sys_actions.extend(rule.actions.iter().map(|a| (*id, a.clone())));
-    }
+    // HS `allActions` (System.hs).
+    let sys_actions = red.sys.all_actions();
 
     // Lookup-only index of `sys_actions` by fact name, ascending within a
     // name, so matching visits the same actions in the same order.
@@ -771,7 +755,7 @@ fn try_match_all_guards(
     maude: &tamarin_term::maude_proc::MaudeHandle,
     vars: &[tamarin_term::lterm::LVar],
     action_guards: &[&crate::atom::Atom<tamarin_term::lterm::LNTerm>],
-    sys_actions: &[(crate::constraint::constraints::NodeId, crate::fact::LNFact)],
+    sys_actions: &[(crate::constraint::constraints::NodeId, &crate::fact::LNFact)],
     // Pass-invariant name index over `sys_actions` (see
     // `insert_implied_formulas_pass`): the Action-guard arm iterates only the
     // name-equal group, in original `sys_actions` order.
@@ -794,7 +778,7 @@ fn try_match_all_guards(
         pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
         guards: &[&crate::atom::Atom<tamarin_term::lterm::LNTerm>],
         guard_idx: usize,
-        sys_actions: &[(crate::constraint::constraints::NodeId, crate::fact::LNFact)],
+        sys_actions: &[(crate::constraint::constraints::NodeId, &crate::fact::LNFact)],
         actions_by_name: &tamarin_utils::FastMap<String, Vec<u32>>,
         acc: &LNSubst,
         body: &crate::guarded::Guarded,

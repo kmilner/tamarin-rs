@@ -2873,32 +2873,31 @@ impl<'ctx> Reduction<'ctx> {
 
         let mut all_cases: Vec<GoalBranch> = Vec::new();
         // ---------------- Branch 1: direct edge ----------------
-        if let Some(p_rule) = &p_rule_opt {
-            let fa_prem_opt = p_rule.lookup_premise(p.1).cloned();
-            if let Some(_fa_prem) = fa_prem_opt {
-                // `illegalCoerce pRule mPrem` tests the chain conclusion's
-                // KD message, which `illegal_coerce` reads from `fa_conc`.
-                if !forbidden_edge(&c_rule, p_rule) && !illegal_coerce(p_rule, &fa_conc) {
-                    // HS-faithful `insertEdges` (Reduction.hs):
-                    // route through `insert_edge` so unification fires
-                    // BEFORE the edge enters sEdges.  Mirrors HS's
-                    // `solveFactEqs SplitNow` + `modM sEdges` order.
-                    let sys_clone = self.sys.clone();
-                    let mut sub = Reduction::new_inheriting(
-                        self.ctx,
-                        sys_clone,
-                        self.maude.fresh_counter_peek(),
-                    );
-                    let res =
-                        sub.insert_edge(crate::constraint::constraints::Edge { src: *c, tgt: *p })?;
-                    // Haskell names a direct case by the chain conclusion's
-                    // KD term (`caseName mPrem`, Goals.hs), one case per
-                    // unifier arm of `insertEdges`.
-                    let case_name =
-                        chain_direct_case_name(&fa_conc).unwrap_or_else(|| rule_case_name(&c_rule));
-                    all_cases.extend(named_cases(&case_name, sub.outcome_branches(res)));
-                }
-            }
+        // `illegalCoerce pRule mPrem` tests the chain conclusion's KD message,
+        // which `illegal_coerce` reads from `fa_conc`.
+        if let Some(p_rule) = &p_rule_opt
+            && let Some(fa_prem) = p_rule.lookup_premise(p.1)
+            && !forbidden_edge(&c_rule, p_rule)
+            && !illegal_coerce(p_rule, &fa_conc)
+        {
+            // HS-faithful `insertEdges` (Reduction.hs):
+            // route through `insert_edge_with_facts` so unification fires
+            // BEFORE the edge enters sEdges.  Mirrors HS's
+            // `solveFactEqs SplitNow` + `modM sEdges` order.
+            let sys_clone = self.sys.clone();
+            let mut sub =
+                Reduction::new_inheriting(self.ctx, sys_clone, self.maude.fresh_counter_peek());
+            let res = sub.insert_edge_with_facts(
+                crate::constraint::constraints::Edge { src: *c, tgt: *p },
+                &fa_conc,
+                fa_prem,
+            )?;
+            // Haskell names a direct case by the chain conclusion's
+            // KD term (`caseName mPrem`, Goals.hs), one case per
+            // unifier arm of `insertEdges`.
+            let case_name =
+                chain_direct_case_name(&fa_conc).unwrap_or_else(|| rule_case_name(&c_rule));
+            all_cases.extend(named_cases(&case_name, sub.outcome_branches(res)));
         }
 
         // Extend by one destructor step, in saturation as well

@@ -1946,7 +1946,8 @@ fn restriction_guard_matching_preserves_backend_errors() {
         ProtoAtom::Action(var_term(t), fact(pattern.clone())),
         ProtoAtom::EqE(pattern, subject.clone()),
     ];
-    let actions = vec![(i, fact(subject))];
+    let subject_fact = fact(subject);
+    let actions = vec![(i, &subject_fact)];
     let mut by_name = tamarin_utils::FastMap::default();
     by_name.insert("A".to_string(), vec![0]);
     for guard in guards {
