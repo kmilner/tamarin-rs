@@ -1293,9 +1293,9 @@ where
                 new_args = vec![right_nest_pair(new_args)?];
             }
             // `em(a, b)` under the bilinear-pairing builtin lowers to a
-            // C-symbol application, not NoEq.  Mirrors HS `naryOpApp`
-            // (Theory/Text/Parser/Term.hs):
-            //   `(o,(_,_,_,_)) | o == emapSymString -> return $ fAppC EMap ts`
+            // C-symbol application, not NoEq. HS `naryOpApp`
+            // (Theory/Text/Parser/Term.hs) selects EMap only when the
+            // bilinear-pairing symbol is present in the signature.
             // Classifying `em` as NoEq instead would declare the Maude
             // operator as `op tamem : Msg Msg -> Msg [comm]` (`op_c` in
             // maude_print.rs) while rule terms carry the NoEq prefix
@@ -1305,17 +1305,8 @@ where
             // smartRanking ranks un-narrowed `em` shapes (the RYY_PFS
             // `key_secrecy_PFS` proof-path divergence).
             //
-            // DELIBERATE DIVERGENCE (documented upstream bug):
-            // HS's arm is name-keyed with NO builtin gate, so a user
-            // `functions: em/2` WITHOUT bilinear-pairing also becomes C EMap —
-            // whose Maude operator (`tamem`) is only declared under `enableBP`,
-            // so upstream's first `get variants` query over such a term crashes
-            // the run.  Mirroring that ungated classification here would leave
-            // the port silently wrong instead (empty variant replies swallowed
-            // as "no variants"; the intruder's NoEq `c_em` rule never unifying
-            // with C-classified protocol terms, flipping exists-trace
-            // verdicts), so the arm is gated on the builtin: without it, `em`
-            // stays an ordinary user symbol.
+            // Without bilinear pairing, a declared `em` remains an ordinary
+            // user function. With the builtin it uses the commutative symbol.
             if name == "em" && new_args.len() == 2 && sig.enable_bp {
                 let mut it = new_args.into_iter();
                 let a = it.next().unwrap();

@@ -60,7 +60,10 @@ pub enum Contradiction {
 }
 
 /// Collect every contradiction currently witnessed by the system.
-pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> {
+pub fn contradictions(
+    _ctxt: &ProofContext,
+    sys: &System,
+) -> Result<Vec<Contradiction>, crate::prove::ProveError> {
     let mut out = Vec::new();
     // Build Haskell's `rawLessRel = sLessAtoms ++ sEdges ++ unsolvedChains`
     // once for cycle detection and every ordering-dependent check below.
@@ -139,16 +142,12 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
     if has_forbidden_constr_chain(sys, &node_rules) {
         out.push(Contradiction::ForbiddenACConstrChain);
     }
-    // 9. IncompatibleEqs — HS-faithful: `eqsIsFalse sEqStore`
-    //    (Contradictions.hs `contradictions`). The two preceding probes are RS-only
-    //    soundness backstops, NOT a port of the eqsIsFalse check: each fires
-    //    where HS's Maude unifier / `solveFactEqs` would have already pruned
-    //    this branch at construction time. The real fix is upstream — make
-    //    RS's edge insertion / fact-eq solving reject these systems at
-    //    construction (as HS does), after which both become dead code.
-    //    - has_incompatible_edge_facts / has_fresh_fact_sort_violation: lower
-    //      risk — mirror real HS invariants (edges connect equal fact tags;
-    //      Fr requires Fresh sort) that the unifier/solveFactEqs enforce.
+    // 9. IncompatibleEqs: enforce equal fact tags across edges and Fresh
+    // arguments for Fr facts, then check `eqsIsFalse sEqStore`
+    // (Contradictions.hs). The first two probes are Rust soundness checks:
+    // edge insertion/fact-equation solving does not yet reject every invalid
+    // tag or Fresh sort at construction, as Haskell does. Keep these checks
+    // until construction enforces those invariants.
     if has_incompatible_edge_facts(sys, &node_rules) {
         out.push(Contradiction::IncompatibleEqs);
     }
@@ -169,10 +168,10 @@ pub fn contradictions(_ctxt: &ProofContext, sys: &System) -> Vec<Contradiction> 
         sys,
         ab_adj.map(),
         &node_rules,
-    ));
+    )?);
     // 12. NodeAfterLast (×n).
     out.extend(node_after_last(sys, ab_adj.map()));
-    out
+    Ok(out)
 }
 
 /// `hasNonNormalTerms` — port of Haskell's
@@ -637,16 +636,11 @@ fn possible_root_syms(t: &tamarin_term::lterm::LNTerm) -> Option<Vec<RootSym>> {
 /// the regular `System`, NOT the LHS/RHS `Side`, which in HS lives
 /// only on `DiffSystem`).
 ///
-/// LATENT DIVERGENCE: RS has no `sDiffSystem` field, so this guard
-/// proxies it via `sys.side`. `formula_to_system` always sets `side`
-/// to `None` (diff is not yet handled), so the guard never fires for a
-/// diff system. Harmless today (no diff support in the corpus); when
-/// diff support lands, add a real `diff_system: bool` to `System` and
-/// guard on it instead of `side`.
+/// Current limitation: `sys.side` is not Haskell's `sDiffSystem` flag.
+/// Trace systems have no side and run this check; implementing diff mode
+/// requires a separate system-mode flag.
 fn has_forbidden_kd(sys: &System) -> bool {
     use crate::fact::FactTag;
-    // Diff-system guard — see LATENT DIVERGENCE note above; `side` is a
-    // stand-in for the missing `sDiffSystem` boolean.
     if sys.side.is_some() {
         return false;
     }
@@ -1000,13 +994,6 @@ fn has_forbidden_chain<'a>(
 ///   (2) conc has shape `KD(g)` (not an exp) AND
 ///       - `g` is simple
 ///       - all `MsgVar` args of `g` are KU-known earlier than `i`
-///
-/// Without this, RS lets through every variant d_exp chain extend
-/// regardless of whether the resulting destruction is constructible
-/// from the original KU premise — at the saturate step for
-/// `KU(exp(t.1,t.2))`, RS produces 16 cases vs HS's 3, because each
-/// of the 4 surviving d_exp chain-extend variants would be dropped
-/// by ForbiddenExp in HS.
 fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltAdj) -> bool {
     use crate::fact::FactTag;
     use crate::rule::{IntrRuleACInfo, RuleInfo};
@@ -1189,13 +1176,6 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
 ///      (Contradictions.hs `isForbiddenDEMapOrder`).
 ///
 /// First found case suffices to flag the system contradictory.
-///
-/// Triggering example: Chen_Kudla::key_agreement_reachable.  RS's
-/// variant fan-out (vs HS's deferred SplitG) produced extra KGC_Setup
-/// and Init_1 source cases at runtime that HS dropped via
-/// `hasForbiddenBP` (the d_pmult case applied to a KGC_Setup chain
-/// is overcomplicated under HS's normal-form).  Without this port,
-/// RS kept 5 cases where HS keeps 2 — diverging the proof shape.
 fn has_forbidden_bp(sys: &System) -> bool {
     if sys.nodes.iter().any(|(_, ru)| is_forbidden_d_pmult(ru)) {
         return true;
@@ -1604,7 +1584,8 @@ fn bp_over_complicated(
 /// injective tag and first term `t`, find every reachable node `j`
 /// (via the raw less-relation) such that `j ≠ i, k` and `j`'s rule
 /// produces or consumes a fact of the same tag with the same first
-/// term, AND `k` is reachable from `j` (or `k` is the last node).
+/// term, AND `k` is reachable from `j` (or `k` is a last node whose
+/// rule instance cannot unify with `j`).
 ///
 /// Such a `(i, j, k)` triple witnesses two simultaneous "live"
 /// instances of the injective fact, contradicting injectivity.
@@ -1613,7 +1594,59 @@ fn non_injective_fact_instances<'a>(
     sys: &'a System,
     adj: &tamarin_utils::FastMap<NodeId, Vec<NodeId>>,
     node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
-) -> Vec<Contradiction> {
+) -> Result<Vec<Contradiction>, crate::prove::ProveError> {
+    let mut out = Vec::new();
+    let candidates =
+        injective_interference_candidates_with_graph(ctxt, sys, adj, node_rules, |_| true);
+    let mut reach = BTreeMap::new();
+    for (i, j, k) in candidates {
+        let ordered = reach
+            .entry(j)
+            .or_insert_with(|| crate::constraint::solver::goals::reachable_set_adj(adj, &j, false))
+            .contains(&k);
+        let incompatible_last = if !ordered && sys.last_atom == Some(k) {
+            let rules = node_rules.get_or_init(|| sys.node_rule_map());
+            match (rules.get(&j), rules.get(&k)) {
+                (Some(a), Some(b)) => !crate::rule::unifiable_rule_ac_insts(&ctxt.maude, a, b)
+                    .map_err(|error| {
+                        crate::prove::ProveError::Maude(format!("last-node unification: {error:?}"))
+                    })?,
+                _ => false,
+            }
+        } else {
+            false
+        };
+        if ordered || incompatible_last {
+            out.push(Contradiction::NonInjectiveFactInstance(i, j, k));
+        }
+    }
+    Ok(out)
+}
+
+/// Upstream aec550a2: identify interference independently of the final-node
+/// contradiction test so simplification can merge compatible final events.
+pub(crate) fn injective_interference_candidates(
+    ctxt: &ProofContext,
+    sys: &System,
+    adj: &crate::constraint::system::PrebuiltAdj,
+    endpoint: impl Fn(NodeId) -> bool,
+) -> Vec<(NodeId, NodeId, NodeId)> {
+    injective_interference_candidates_with_graph(
+        ctxt,
+        sys,
+        adj.map(),
+        &std::cell::OnceCell::new(),
+        endpoint,
+    )
+}
+
+fn injective_interference_candidates_with_graph<'a>(
+    ctxt: &ProofContext,
+    sys: &'a System,
+    adj: &tamarin_utils::FastMap<NodeId, Vec<NodeId>>,
+    node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
+    endpoint: impl Fn(NodeId) -> bool,
+) -> Vec<(NodeId, NodeId, NodeId)> {
     let mut out = Vec::new();
     if ctxt.injective_fact_insts.is_empty() {
         return out;
@@ -1626,8 +1659,7 @@ fn non_injective_fact_instances<'a>(
     // `adj` is invariant across this function, so memoize each node's
     // reachable set: `reachable(i)` is taken once per edge and `reachable(j)`
     // once per reachable `j`, with the same `j` recurring across edges.
-    // The cache stores the exact value the un-memoized closure returned
-    // (the set with `from` removed), so this is a pure speedup.
+    // Cached reachable sets exclude the starting node.
     fn reachable(
         cache: &mut BTreeMap<NodeId, Rc<BTreeSet<NodeId>>>,
         adj: &tamarin_utils::FastMap<NodeId, Vec<NodeId>>,
@@ -1651,9 +1683,14 @@ fn non_injective_fact_instances<'a>(
     let lookup_node =
         |id: &NodeId| -> Option<&crate::rule::RuleACInst> { node_rule_map.get(id).copied() };
 
-    for e in &sys.edges {
+    let mut edges: Vec<_> = sys.edges.iter().collect();
+    edges.sort();
+    for e in edges {
         let (i, conc_idx) = (e.src.0, e.src.1);
         let k = e.tgt.0;
+        if !endpoint(k) {
+            continue;
+        }
         // Look up the conclusion fact at (i, conc_idx).
         let i_rule = match lookup_node(&i) {
             Some(r) => r,
@@ -1666,10 +1703,7 @@ fn non_injective_fact_instances<'a>(
         if !ctxt.injective_fact_insts.contains_key(&k_fa_prem.tag) {
             continue;
         }
-        let k_term = match k_fa_prem.terms.first() {
-            Some(t) => t,
-            None => continue,
-        };
+        let k_term = k_fa_prem.terms.first();
         // Reachable set from i.
         let reach = reachable(&mut reach_cache, adj, &i);
         for j in reach.iter() {
@@ -1682,20 +1716,14 @@ fn non_injective_fact_instances<'a>(
             };
             // Conflicting fact in j's prems or concs.
             let conflicting = |fa: &crate::fact::LNFact| -> bool {
-                fa.tag == k_fa_prem.tag && fa.terms.first() == Some(k_term)
+                fa.tag == k_fa_prem.tag && fa.terms.first() == k_term
             };
             let has_conflict = j_rule.premises.iter().any(conflicting)
                 || j_rule.conclusions.iter().any(conflicting);
             if !has_conflict {
                 continue;
             }
-            // k reachable from j OR k is the last node.
-            let j_reach = reachable(&mut reach_cache, adj, j);
-            let k_after_j = j_reach.contains(&k);
-            let k_is_last = sys.last_atom.as_ref() == Some(&k);
-            if k_after_j || k_is_last {
-                out.push(Contradiction::NonInjectiveFactInstance(i, *j, k));
-            }
+            out.push((i, *j, k));
         }
     }
     out
@@ -1908,12 +1936,8 @@ pub fn maybe_non_normal_terms_nodes(
 /// thunk).  The fsubst application is recomputed only when
 /// the free-subst VALUE changes (at most once per `simp1` iteration:
 /// `simp_with_fresh_avoiding` snapshots `self.subst` per iteration and
-/// probes every candidate against that same snapshot).  Without this
-/// sharing, `simp_minimize` probes each disj subst and every probe
-/// re-walks every node of the system — a 20+ minute spin on
-/// post-autoprove eCK-class web proof pages (TAK1) that HS serves in
-/// under a minute.  Pure predicate — no fresh-counter movement, no
-/// output impact.
+/// probes every candidate against that same snapshot). The predicate does
+/// not advance the fresh counter.
 pub struct SubstNfChecker {
     maude: tamarin_term::maude_proc::MaudeHandle,
     /// O(1) `Arc` snapshot of `sys.nodes`, pinned at construction.
@@ -2046,9 +2070,8 @@ impl SubstNfChecker {
             // `nfApply subst0 t = t == t' || nf' t' \`runReader\` hnd`
             // where `nf' = nfViaHaskell` (Norm.hs) — run with the
             // handle, as HS does: the st-rule arm needs Maude AC matching
-            // for rules whose LHS contains an Ac-/C-headed subterm (user
-            // `[AC]` cancellation equations; csf26-ac CRxor `splitEqs(2)`
-            // keeps 6 cases instead of HS's 2 without it).  This is still
+            // for rules whose LHS contains an Ac-/C-headed subterm, including
+            // user `[AC]` cancellation equations. This is
             // the STRUCTURAL check, NOT `maude.reduce(t) == t`.  The
             // distinction matters because Maude canonicalises AC operator
             // arguments (multiset / mult / xor / nat-plus), so

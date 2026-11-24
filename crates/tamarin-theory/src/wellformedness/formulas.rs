@@ -4,29 +4,21 @@
 //! Port of HS `formulaReports` (Wellformedness.hs) — the
 //! wellformedness pass over every lemma / restriction formula.
 //!
-//! HS runs it as ONE list-monad loop:
-//!
-//! ```text
-//! formulaReports thy = do
-//!     (header, fm) <- annFormulas
-//!     msum [ ((,) (underlineTopic "Quantifier sorts"))     <$> checkQuantifiers header fm
-//!          , ((,) (underlineTopic "Formula terms"))        <$> checkTerms header maudeSig fm
-//!          , ((,) (underlineTopic " Formula guardedness")) <$> checkGuarded header fm
-//!          ]
-//! ```
+//! For each annotated formula, upstream concatenates the quantifier-sort,
+//! formula-term, guardedness and `last`-atom reports, in that order.
 //!
 //! Two consequences the report bytes depend on:
 //!
 //!   * `WfErrorReport = [WfError]`, so the list monad's `msum` is `concat`
-//!     and `<$>` is `map`: all three checks run UNCONDITIONALLY for every
-//!     formula and their findings are concatenated.  A formula that trips
-//!     both `checkTerms` and `checkGuarded` is reported twice.
-//!   * The three topics are emitted PER FORMULA, so they interleave in item
+//!     and `<$>` is `map`: all four checks run UNCONDITIONALLY for every
+//!     formula and their findings are concatenated. A formula that trips
+//!     several checks receives a report for each.
+//!   * The four topics are emitted PER FORMULA, so they interleave in item
 //!     order, and a topic REOPENS after an intervening one.  Since
 //!     `prettyWfErrorReport` groups with `groupOn fst = groupBy ((==) `on`
 //!     fst)` (Extension/Prelude.hs), which only merges CONSECUTIVE
 //!     entries, each run gets its own underlined header — e.g. `Formula
-//!     terms` / ` Formula guardedness` / `Formula terms` for three lemmas
+//!     terms` / `Formula guardedness` / `Formula terms` for three lemmas
 //!     where only the middle one is unguardable.  Splicing all findings of
 //!     one topic together instead would collapse those runs into a single
 //!     header and reorder the bodies.
@@ -35,7 +27,7 @@
 //! so it is ALL lemmas (theory order) followed by ALL restrictions (theory
 //! order) — not a single interleaved item walk.
 //!
-//! The formulas the three arms read are macro- and predicate-expanded:
+//! The formulas the four arms read are macro- and predicate-expanded:
 //! `annFormulas` applies `applyMacroInFormula (theoryMacros thy)` itself, and
 //! predicates are inlined at PARSE time
 //! (`liftedAddLemma`→`expandLemma`→`expandFormula`, Theory/Text/Parser.hs;
@@ -43,7 +35,7 @@
 //! [`Lemma::formula`](crate::theory::Lemma::formula) and
 //! [`Restriction::formula`](crate::restriction::ProtoRestriction::formula) are
 //! that formula: `elaborate` inlines the predicates and applies the theory's
-//! macros as it builds each item, so all three checks see the inlined
+//! macros as it builds each item, so all four checks see the inlined
 //! predicate bodies — including their terms and their quantifiers.
 
 use tamarin_term::lterm::LSort;
@@ -80,8 +72,8 @@ fn ann_formulas(thy: &Theory) -> Vec<(String, &LNFormula)> {
 }
 
 /// Port of HS `formulaReports` (Wellformedness.hs): one pass over
-/// `annFormulas` running `checkQuantifiers`, `checkTerms` and `checkGuarded`
-/// per formula, so the three topics interleave exactly as HS emits them.
+/// `annFormulas` running `checkQuantifiers`, `checkTerms`, `checkGuarded` and `checkNoLast`
+/// per formula, so the four topics interleave exactly as HS emits them.
 ///
 /// `thy` is the TRANSLATED theory — HS's single `checkWellformedness` runs on
 /// the `OpenTranslatedTheory` (`checkTranslatedTheory`,
@@ -94,12 +86,23 @@ pub fn formula_reports(thy: &Theory) -> Vec<WfError> {
     let sig = &thy.signature;
     let mut out: Vec<WfError> = Vec::new();
     for (header, fm) in ann_formulas(thy) {
-        // HS `msum [checkQuantifiers, checkTerms, checkGuarded]` = `concat`:
+        // HS `msum [checkQuantifiers, checkTerms, checkGuarded, checkNoLast]` = `concat`:
         // every arm runs for every formula, findings concatenated in this
         // order (Wellformedness.hs).
         out.extend(check_quantifiers(&header, fm));
         out.extend(check_terms(sig, &header, fm));
         out.extend(check_guarded_entry(&header, fm));
+        let mut has_last = false;
+        crate::formula::for_each_formula_atom(fm, &mut |atom| {
+            has_last |= matches!(atom, crate::atom::ProtoAtom::Last(_));
+        });
+        if has_last {
+            let topic = "Last atom usage";
+            out.push(WfError::underlined_block(
+                topic,
+                Doc::text(format!("{header} contains last atom")),
+            ));
+        }
     }
     out
 }
@@ -111,7 +114,7 @@ pub fn formula_reports(thy: &Theory) -> Vec<WfError> {
 /// Message layout, matching HS's `prettyWfErrorReport` + `checkGuarded`:
 ///
 /// ```text
-///  Formula guardedness
+/// Formula guardedness
 /// ====================
 ///
 ///   {header} cannot be converted to a guarded formula:
@@ -131,10 +134,10 @@ fn check_guarded_entry(header: &str, formula: &LNFormula) -> Option<WfError> {
         Err(e) => e,
     };
 
-    // The `underlineTopic` of " Formula guardedness" includes the trailing
+    // The `underlineTopic` of "Formula guardedness" includes the trailing
     // newline; the blank line after it is `ppTopic`'s `$-$` in
     // `prettyWfErrorReport`.
-    let topic = " Formula guardedness";
+    let topic = "Formula guardedness";
     let mut msg = String::new();
     msg.push_str(&underline_topic(topic));
     msg.push('\n');
@@ -221,7 +224,22 @@ fn disallowed_sort_show(sort: LSort) -> Option<&'static str> {
 /// its left operand's before its right's.  A source `All x y. …` closes into
 /// nested `Qua`s, so its binders come out left to right.
 fn collect_binders<'a>(fm: &'a LNFormula, out: &mut Vec<&'a (String, LSort)>) {
-    use crate::formula::ProtoFormula;
+    use crate::formula::{Connective, ProtoFormula, Quantifier};
+    fn pattern_exclusion(fm: &LNFormula) -> bool {
+        match fm {
+            ProtoFormula::Qua(Quantifier::All, _, body) => pattern_exclusion(body),
+            ProtoFormula::Conn(Connective::Imp, lhs, rhs) => {
+                matches!(
+                    lhs.as_ref(),
+                    ProtoFormula::Atom(crate::atom::ProtoAtom::EqE(_, _))
+                ) && matches!(rhs.as_ref(), ProtoFormula::Tf(false))
+            }
+            _ => false,
+        }
+    }
+    if pattern_exclusion(fm) {
+        return;
+    }
     match fm {
         ProtoFormula::Tf(_) | ProtoFormula::Atom(_) => {}
         ProtoFormula::Not(f) => collect_binders(f, out),
@@ -287,9 +305,9 @@ mod tests {
         );
     }
 
-    /// `msum` = `concat` per formula, so the three topics interleave and a
+    /// `msum` = `concat` per formula, so the four topics interleave and a
     /// topic reopens after an intervening one (Wellformedness.hs).
-    /// Oracle bytes: `Formula terms` / ` Formula guardedness` / `Formula
+    /// Oracle bytes: `Formula terms` / `Formula guardedness` / `Formula
     /// terms` as THREE groups for this theory.
     #[test]
     fn topics_interleave_per_formula() {
@@ -303,7 +321,7 @@ mod tests {
         let topics: Vec<String> = reports(src).iter().map(|e| e.topic.clone()).collect();
         assert_eq!(
             topics,
-            vec!["Formula terms", " Formula guardedness", "Formula terms"]
+            vec!["Formula terms", "Formula guardedness", "Formula terms"]
         );
     }
 
@@ -319,7 +337,7 @@ mod tests {
         let topics: Vec<String> = reports(src).iter().map(|e| e.topic.clone()).collect();
         assert_eq!(
             topics,
-            vec!["Formula terms", " Formula guardedness", "Formula terms"],
+            vec!["Formula terms", "Formula guardedness", "Formula terms"],
             "L1 trips checkTerms AND checkGuarded, L2 only checkTerms"
         );
     }
@@ -344,6 +362,46 @@ mod tests {
                 "Quantifier sorts\n================\n\n  Restriction `r1' uses quantifiers with wrong sort: (\"m\",LSortFresh)",
             ]
         );
+    }
+
+    #[test]
+    fn name_sorts_are_allowed_only_inside_equality_pattern_exclusions() {
+        let source = r#"theory SortedPatterns begin
+            lemma fresh_pattern: "All ~n. ~n = 'a' ==> F"
+            lemma public_pattern: "All $a. $a = 'a' ==> F"
+            lemma nested: "All ~outer. (All ~inner. ~inner = 'a' ==> F)"
+            lemma existential: "Ex ~n. ~n = 'a' ==> F"
+            end"#;
+        let reports = reports(source);
+        let errors: Vec<_> = reports
+            .iter()
+            .filter(|e| e.topic == QUANTIFIER_TOPIC)
+            .collect();
+        // The outer universal is also part of the equality-pattern prefix;
+        // guardedness separately rejects its undetermined variable.
+        assert_eq!(errors.len(), 1, "{reports:?}");
+        assert!(errors[0].message.contains("Lemma `existential'"));
+        assert!(reports
+            .iter()
+            .any(|e| e.topic == "Formula guardedness" && e.message.contains("nested")));
+    }
+
+    #[test]
+    fn last_atom_warning_follows_guardedness_and_covers_restrictions() {
+        let source = r#"theory Last begin
+            lemma l: "not (Ex #i. last(#i))"
+            restriction r: "All #i. last(#i) ==> F"
+            end"#;
+        let reports = reports(source);
+        let warnings: Vec<_> = reports
+            .iter()
+            .filter(|e| e.topic == "Last atom usage")
+            .collect();
+        assert_eq!(warnings.len(), 2, "{reports:?}");
+        assert!(warnings[0].message.contains("Lemma `l' contains last atom"));
+        assert!(warnings[1]
+            .message
+            .contains("Restriction `r' contains last atom"));
     }
 
     /// Node-, message- and nat-sorted binders are allowed

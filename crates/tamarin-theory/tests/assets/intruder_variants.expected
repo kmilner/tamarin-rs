@@ -1,13 +1,7 @@
 // Expected stdout of `tamarin-prover variants`, byte for byte.
-// Captured from the pinned Haskell oracle
-//   tamarin-prover-testing/.stack-work/install/x86_64-linux-tinfo6/
-//   ec0cb11b1bfcf8776d45e0357bbc6d6ff2077f9222735af22115429c8cdfcef1/9.6.7/
-//   bin/tamarin-prover
-// (`tamarin-prover 1.13.0`, submodule revision ef3f0468 plus this branch's
-// local patch) against maude 3.5.1, run as
-//   PATH=/home/linuxbrew/.linuxbrew/bin:$PATH tamarin-prover variants
-// Every line above this one starts with `//` and is the header the test
-// strips; everything from the next line on is the expected output.
+// Verified against pristine upstream a75fec7ff13cbfcbb0a67813afb16707e981c06e
+// with Maude 3.5.1 on 2026-11-23.
+// The test strips this comment header before comparing stdout.
 rule (modulo AC) c_exp:
    [ !KU( x ), !KU( x.1 ) ] --[ !KU( x^x.1 ) ]-> [ !KU( x^x.1 ) ]
 

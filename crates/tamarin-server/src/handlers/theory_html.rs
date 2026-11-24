@@ -190,21 +190,20 @@ fn proof_state(entry: &TheoryEntry) -> Result<String, String> {
     Ok(postprocess_html(&elems.join("\n")))
 }
 
-/// HS `length (getClassifiedRules thy)._crProtocol` — the count shown in the
-/// `Multiset rewriting rules … (N)` link.  Equal to the number of rules the
-/// `main/rules` page renders (`extraACRules ++ protoRules`), i.e.
-/// `web_proto_rules.len()` plus the ISend/IRecv-style intruder members of
-/// `crProtocol` (`ctx.intruder_rules` minus construction/destruction rules).
+/// Protocol-class rule count from the same compiled cache used by proof search.
 fn proto_rule_count(entry: &TheoryEntry) -> usize {
-    let proto = tamarin_theory::pretty_theory::web_proto_rules(&entry.typed_theory).len();
-    let extra = entry.proof_state.as_ref().map_or(0, |ps| {
-        let ctx = ps.template_context();
-        ctx.intruder_rules
-            .iter()
-            .filter(|ir| !is_constr_rule(&ir.info) && !is_destr_rule(&ir.info))
-            .count()
-    });
-    proto + extra
+    entry.proof_state.as_ref().map_or_else(
+        || {
+            tamarin_utils::prelude_ext::nub(
+                entry
+                    .typed_theory
+                    .rules()
+                    .flat_map(tamarin_theory::theory::closed_rules_ac),
+            )
+            .len()
+        },
+        |ps| ps.template_context().protocol_rule_count(),
+    )
 }
 
 /// HS `casesInfo` rendering: `(N cases, deconstructions complete)` or
@@ -720,7 +719,7 @@ fn help_html(entry: &TheoryEntry) -> String {
     // template returned directly as `Html` (NOT through `renderHtmlDoc`), so it
     // emits a single line with no `<br/>`.  The env line carries the theory
     // name + load time/origin + wellformedness banner; the rest is a fixed
-    // static block reproduced byte-for-byte from the patched oracle.
+    // static block reproduced byte-for-byte from the pinned oracle.
     let env_line = format!(
         "<p>Theory: {name} (Loaded at {time} from {origin})</p> {errors}",
         name = html_escape(&entry.typed_theory.name),
@@ -1016,7 +1015,7 @@ fn sources_html(entry: &TheoryEntry, kind: &SourceKind) -> Result<String, String
 /// `(goal, cases)` pairs.  Shared by `sources_html` (the page) and
 /// `source_case_counts` (the theory-index `(N cases, …)` annotation) so they
 /// stay consistent; the graph routes take the single case they draw from
-/// [`source_list_case`].  Returns empty when the proof state is not yet built.
+/// [`super::theory::source_case_system`]. Returns empty without a proof state.
 pub(crate) fn compute_source_lists(
     entry: &TheoryEntry,
     want_refined: bool,
@@ -1062,56 +1061,6 @@ pub(crate) fn compute_source_lists(
         })
         .map_err(|error| format!("proof context: {error}"))?;
     Ok(sources)
-}
-
-/// The one case system the `(src_idx, case_idx)` pair names in `getSource kind
-/// thy` — [`compute_source_lists`]'s selection without cloning out the cases
-/// the request does not serve.  Both indices are 1-based and read signed;
-/// `None` when either names no case, and when the proof state is not yet built.
-pub(crate) fn source_list_case(
-    entry: &TheoryEntry,
-    want_refined: bool,
-    src_idx: i64,
-    case_idx: i64,
-) -> Result<Option<tamarin_theory::constraint::system::System>, String> {
-    use tamarin_theory::constraint::system::SourceKind as SysSourceKind;
-    let Some(ps) = entry.proof_state.as_ref() else {
-        return Ok(None);
-    };
-    let kind = if want_refined {
-        SysSourceKind::RefinedSources
-    } else {
-        SysSourceKind::RawSources
-    };
-    let ctx = ps.context_for_sources(kind)?;
-    let mut system = nth_case_system(&ctx, src_idx, case_idx)?;
-    if want_refined && let Some(system) = &mut system {
-        system.source_kind = Some(SysSourceKind::RefinedSources);
-    }
-    Ok(system)
-}
-
-/// `sources !! (src_idx - 1) !! (case_idx - 1)` over a materialised source
-/// list: `None` for any index that names no case.
-fn nth_case_system(
-    ctx: &tamarin_theory::constraint::solver::context::ProofContext,
-    src_idx: i64,
-    case_idx: i64,
-) -> Result<Option<tamarin_theory::constraint::system::System>, String> {
-    let Some(src_nth) = src_idx
-        .checked_sub(1)
-        .and_then(|index| usize::try_from(index).ok())
-    else {
-        return Ok(None);
-    };
-    let Some(case_nth) = case_idx
-        .checked_sub(1)
-        .and_then(|index| usize::try_from(index).ok())
-    else {
-        return Ok(None);
-    };
-    ctx.source_case_system_at(src_nth, case_nth)
-        .map_err(|error| format!("proof context: {error}"))
 }
 
 /// HS `casesInfo kind` (Web/Theory.hs): `(nCases, chainInfo)` where
@@ -1220,6 +1169,35 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use tamarin_test_support::require_maude_path;
+
+    #[test]
+    fn rule_count_uses_deduplicated_protocol_cache() {
+        let Some(maude) = require_maude_path() else {
+            return;
+        };
+        let config = test_config(&maude);
+        let mut entry = crate::theory_io::load_from_source(
+            r#"theory DuplicateCount begin
+            rule R: [In(x)] --[A(x)]-> [Out(x)]
+            rule R: [In(x)] --[A(x)]-> [Out(x)]
+            lemma witness: exists-trace "Ex x #i. A(x)@i"
+            end"#,
+            crate::state::TheoryOrigin::Upload("duplicates.spthy".into()),
+            &config,
+        )
+        .unwrap();
+        assert_eq!(proto_rule_count(&entry), 1);
+        entry.proof_state = Some(Arc::new(
+            crate::handlers::proof_tree::ProofState::new(
+                &entry.typed_theory,
+                (*entry.prover_maude_sig).clone(),
+                entry.ndc_cache.as_ref(),
+                &config,
+            )
+            .unwrap(),
+        ));
+        assert_eq!(proto_rule_count(&entry), 3);
+    }
 
     #[test]
     fn long_lemma_attributes_wrap_in_the_shared_header() {

@@ -169,7 +169,7 @@ pub(crate) fn base_trans_action(
         // (ChIn channel t' matchVar) (Basetranslation.hs): handle channel
         // input `in(c,pat); P` like `in(c,x); let pat = x in P`.  Mint a fresh
         // message variable `x` avoiding `tildex`, build the Let combinator rules
-        // for `let pat = x`, then prepend the channel facts via
+        // for `let pat = x`, then append the channel facts via
         // `mergeWithStateRule` (only onto rules that have a State premise).
         SapicAction::ChIn {
             chan,
@@ -490,8 +490,7 @@ pub(crate) fn base_trans_action(
             Ok((vec![body], tildex.clone()))
         }
         // (MSR l' a' r' res' _): an embedded multiset-rewrite rule inside the
-        // process (Basetranslation.hs).  Match-vars are ignored here
-        // (they were consumed at parse time).
+        // process (Basetranslation.hs). Match-vars do not affect this step.
         //   (l,a,r,res) = (map toLNFact l', map toLNFact a', map toLNFact r',
         //                  map toLFormula res')
         //   tx' = freeset' l ∪ tildex          (freeset' = vars of all premises)
@@ -658,9 +657,8 @@ pub(crate) fn base_trans_comb(
         //   let tx' = vs `insert` (v `insert` tildex) in
         //   ([([def_state, PureCell t (varTerm v), Fr vs], [],
         //      [def_state1 tx', CellLocked t (varTerm vs)], [])],
-        //    tx', Just tildex)
-        // (The right `IsNotSet` arm is commented out in HS — pure lookups have a
-        // single arm.)
+        //    tx', Nothing)
+        // Pure lookups emit only the success arm.
         PC::Lookup(t, v) if an.pure_state && an.unlock.is_some() => {
             let vs = an.unlock.as_ref().unwrap().0;
             let lt = to_ln_term(t);
@@ -681,7 +679,8 @@ pub(crate) fn base_trans_comb(
                 ],
                 vec![],
             );
-            Ok((vec![body], tx_prime, Some(tildex.clone())))
+            // Pure lookups cannot fail; do not translate an unreachable branch.
+            Ok((vec![body], tx_prime, None))
         }
         // Classical Lookup (Basetranslation.hs):
         //   let tx' = v `insert` tildex
@@ -707,88 +706,100 @@ pub(crate) fn base_trans_comb(
             );
             Ok((vec![body_in, body_notset], tx_prime, Some(tildex.clone())))
         }
-        // Let (Basetranslation.hs).  Match-vars are ignored in the
-        // translation (they are bound in the def_state).  The RHS / matched LHS
-        // are threaded through a `Let_<pos>` (FLet) fact:
-        //   t1or = toLNTerm left
-        //   (t1, t2, freevars) = case an.destructor_equation of
-        //       None        -> (t1or, toLNTerm right, frees t1or)
-        //       Some(tl1,tl2) -> (tl1, tl2, frees tl1 \ tildex)
-        //   fa  = (t1 = t2) ⇒ ⊥          (the else-arm restriction body)
-        //   faN = ∀ freevars. fa
-        //   tildexl = frees t1or ∪ tildex
-        //   pos = p++[1]
-        //   if elseBranch:
-        //     [ ([def_state], [], [FLet pos t2 tildex], []),
-        //       ([FLet pos t1 tildex], [], [def_state1 tildexl], []),
-        //       ([FLet pos t2 tildex], [], [def_state2 tildex], [faN]) ],
-        //      tildexl, Just tildex
-        //   else:
-        //     [ ([def_state], [], [FLet pos t2 tildex], []),
-        //       ([FLet pos t1 tildex], [], [def_state1 tildexl], []) ],
-        //      tildexl, Nothing
+        // Strict plans retain shared source continuations. Backwards liveness
+        // drops generated intermediates as soon as they are dead, but keeps
+        // caller variables through every success/failure boundary.
         PC::Let { left, right, .. } => {
-            let t1or = to_ln_term(left);
-            let (t1, t2, freevars): (LNTerm, LNTerm, BTreeSet<LVar>) = match &an.destructor_equation
-            {
-                None => {
-                    let fv = ln_term_vars(&t1or);
-                    (t1or.clone(), to_ln_term(right), fv)
-                }
-                Some((tl1, tl2)) => {
-                    let mut fv = ln_term_vars(tl1);
-                    for v in tildex {
-                        fv.remove(v);
-                    }
-                    (tl1.clone(), tl2.clone(), fv)
-                }
+            use crate::annotation::{let_stage_position, LetStage};
+            let lhs = to_ln_term(left);
+            let mut result_vars = tildex.clone();
+            result_vars.extend(ln_term_vars(&lhs));
+            let fallback;
+            let stages = if an.let_plan.is_empty() {
+                fallback = vec![LetStage {
+                    input: to_ln_term(right),
+                    alternatives: vec![(lhs, None)],
+                    bound: result_vars.clone(),
+                }];
+                &fallback
+            } else {
+                &an.let_plan
             };
-            // `tildexl = frees t1or ∪ tildex`
-            let mut tildexl = tildex.clone();
-            tildexl.extend(ln_term_vars(&t1or));
-            // `pos = p ++ [1]`
-            let pos = p1.clone();
-            let body0: RuleBody = (
+            let mut live = result_vars.clone();
+            let mut live_after = vec![BTreeSet::new(); stages.len()];
+            for (i, stage) in stages.iter().enumerate().rev() {
+                live_after[i] = live.clone();
+                live = live.difference(&stage.bound).copied().collect();
+                live.extend(ln_term_vars(&stage.input));
+            }
+            let mut bodies = vec![(
                 vec![def_state(tildex)],
                 vec![],
                 vec![TransFact::FLet(
-                    pos.clone(),
-                    t2.clone(),
+                    let_stage_position(p, 0),
+                    stages[0].input.clone(),
                     tildex.iter().copied().collect(),
                 )],
                 vec![],
-            );
-            // The failure restriction is unused when no else rule is emitted.
-            let fa_n = an
-                .else_branch
-                .then(|| let_else_restriction(&t1, &t2, &freevars));
-            let body1: RuleBody = (
-                vec![TransFact::FLet(
-                    pos.clone(),
-                    t1,
-                    tildex.iter().copied().collect(),
-                )],
-                vec![],
-                vec![def_state1(&tildexl)],
-                vec![],
-            );
-            if an.else_branch {
-                let body2: RuleBody = (
-                    vec![TransFact::FLet(pos, t2, tildex.iter().copied().collect())],
-                    vec![],
-                    vec![def_state2(tildex)],
-                    vec![fa_n.expect("else-branch restriction was built")],
-                );
-                Ok((vec![body0, body1, body2], tildexl, Some(tildex.clone())))
-            } else {
-                Ok((vec![body0, body1], tildexl, None))
+            )];
+            let mut vars = tildex.clone();
+            for (i, stage) in stages.iter().enumerate() {
+                let available: BTreeSet<_> = vars.union(&stage.bound).copied().collect();
+                let mut next_vars = tildex.clone();
+                next_vars.extend(available.intersection(&live_after[i]).copied());
+                for (pattern, reduct) in &stage.alternatives {
+                    let destination = if let Some(next) = stages.get(i + 1) {
+                        TransFact::FLet(
+                            let_stage_position(p, i + 1),
+                            reduct.as_ref().unwrap_or(&next.input).clone(),
+                            next_vars.iter().copied().collect(),
+                        )
+                    } else {
+                        def_state1(&result_vars)
+                    };
+                    let body: RuleBody = (
+                        vec![TransFact::FLet(
+                            let_stage_position(p, i),
+                            pattern.clone(),
+                            vars.iter().copied().collect(),
+                        )],
+                        vec![],
+                        vec![destination],
+                        vec![],
+                    );
+                    bodies.push(body);
+                }
+                if an.else_branch {
+                    let failures = stage
+                        .alternatives
+                        .iter()
+                        .map(|(pattern, _)| {
+                            let freevars =
+                                ln_term_vars(pattern).difference(&vars).copied().collect();
+                            let_else_restriction(pattern, &stage.input, &freevars)
+                        })
+                        .collect();
+                    let failure = (
+                        vec![TransFact::FLet(
+                            let_stage_position(p, i),
+                            stage.input.clone(),
+                            vars.iter().copied().collect(),
+                        )],
+                        vec![],
+                        vec![def_state2(tildex)],
+                        failures,
+                    );
+                    bodies.push(failure);
+                }
+                vars = next_vars;
             }
+            Ok((bodies, result_vars, an.else_branch.then(|| tildex.clone())))
         }
     }
 }
 
 /// `mergeWithStateRule' (l',a',r') (l,a,r,f)` (Basetranslation.hs):
-/// prepend the channel facts `(l',a',r')` onto a rule body `(l,a,r,f)` ONLY
+/// append the channel facts `(l',a',r')` to a rule body `(l,a,r,f)` ONLY
 /// when the rule's premise list `l` contains a `State` fact (`List.find
 /// isState l`); otherwise the rule is left unchanged.  `mergeWithStateRule`
 /// maps this over a list of rule bodies.
@@ -892,6 +903,7 @@ pub(crate) fn base_init(
         concs: vec![TransFact::State(StateKind::LState, vec![], vec![])],
         restr: vec![],
         index: 0,
+        matches_destructor_equation: false,
     };
     (vec![rule], BTreeSet::new())
 }
@@ -947,12 +959,10 @@ pub(crate) fn predicate_restrictions() -> Vec<tamarin_theory::restriction::Restr
 }
 
 /// The `set_in` / `set_notin` restrictions (Basetranslation.hs), added
-/// by `baseRestr` when the process `contains isLookup`.  HS hardcodes
-/// these as restriction strings and parses them with `toEx`/`parseRestriction`;
-/// we do the same with the RS `parse_formula_str` (so the rendered output is
-/// byte-identical to HS's hand-written strings, and AC/sort handling matches the
-/// parser path).  `has_delete` selects the full variants (the process also
-/// `contains isDelete`) over the NoDelete variants.
+/// by `baseRestr` when the process `contains isLookup`. `has_delete` selects
+/// the full variants (the process also `contains isDelete`) over the
+/// NoDelete variants. The builders preserve the binder order and connective
+/// associativity of the formulas parsed by Haskell's `toEx`/`parseRestriction`.
 pub(crate) fn state_restrictions(
     has_delete: bool,
 ) -> Vec<tamarin_theory::restriction::Restriction> {
@@ -1016,10 +1026,9 @@ pub(crate) fn state_restrictions(
 }
 
 /// The `in_event` restriction `resInEv` (Basetranslation.hs), added by
-/// `baseRestr` when `needsInEvRes` (a lemma needs the in-event axiom).  As with
-/// the other hardcoded restrictions, HS parses the string with
-/// `parseRestriction`; we parse the same formula body so the rendered output is
-/// byte-identical to HS.
+/// `baseRestr` when `needsInEvRes` (a lemma needs the in-event axiom), built
+/// with the binder order and implication structure of Haskell's
+/// `parseRestriction` result.
 pub(crate) fn in_event_restriction() -> tamarin_theory::restriction::Restriction {
     use crate::restriction_builder as rb;
     let x = rb::msg("x");
@@ -1123,11 +1132,8 @@ mod tests {
         var_term(SapicLVar::untyped(lv(name, 0)))
     }
 
-    /// The hard-coded restriction strings lower to the internal formulas the
-    /// oracle prints (pinned build ef3f0468; `restriction single_session` /
-    /// `predicate_eq` / `predicate_not_eq` blocks of any translated theory).
-    /// The unsigiled `@i` references must resolve to the node variables the
-    /// `All #i` binders introduce.
+    /// Built-in restrictions bind action timepoints to their node quantifiers
+    /// and render those references without a sort sigil after `@`.
     #[test]
     fn hardcoded_restrictions_lower_to_the_oracle_formulas() {
         use tamarin_theory::pretty_formula::pretty_lnformula;
@@ -1156,18 +1162,16 @@ mod tests {
         );
     }
 
-    /// The direct internal builders preserve the exact formula trees produced
-    /// by the former hard-coded-string -> parser AST -> internal formula path.
-    /// This pins connective associativity, quantifier order and the shadowed
-    /// binders in the state and locking restrictions.
+    /// Direct builders and parsed formulas agree on connective associativity,
+    /// quantifier order and shadowed binders in state and locking restrictions.
     #[test]
-    fn direct_restriction_builders_match_previous_parser_lowering() {
+    fn direct_restriction_builders_match_parsed_formulas() {
         use tamarin_theory::formula::{from_parser, to_lnformula, LNFormula};
 
         let msig = tamarin_term::maude_sig::pair_maude_sig();
         let lower = |src: &str| -> LNFormula {
             let parsed = tamarin_parser::parser::parse_formula_str(src, &msig)
-                .expect("former hard-coded restriction parses");
+                .expect("restriction formula parses");
             to_lnformula(&from_parser(&parsed, &msig).expect("restriction lowers"))
                 .expect("hard-coded restriction contains no predicate sugar")
         };
@@ -1361,10 +1365,6 @@ mod tests {
     /// HS's term parser resolves it against the signature while parsing
     /// (`nullaryApp`), leaving an `FApp` leaf that `freesList` ignores.
     ///
-    /// Oracle bytes (pinned build, Git revision ef3f0468): `functions: nil/0` +
-    /// `predicates: Eq(a, b) <=> a = b` +
-    /// `in(k); if Eq(nil, k) then out('yes') else out('no')` LOADS, emitting
-    /// `process="if Eq( nil, k.1 )"`.
     #[test]
     fn cond_nullary_constant_is_not_an_unbound_var() {
         let cond = |decl: &str| {
@@ -1455,8 +1455,8 @@ mod tests {
         assert_eq!(*b, lift_free(&t2));
     }
 
-    /// Current `sapicvar` defaults node-sorted binders to type `node`, so a
-    /// quantified `#j` now matches and closes the `sapicnodevar` occurrence.
+    /// `sapicvar` defaults node-sorted binders to type `node`, so quantified
+    /// `#j` binds the corresponding `sapicnodevar` occurrence.
     #[test]
     fn a_quantified_timepoint_in_a_cond_is_bound_by_its_binder() {
         let msig = tamarin_term::maude_sig::pair_maude_sig();
@@ -1502,8 +1502,7 @@ mod tests {
     // (Term/Term.hs): the translation's restriction bodies carry these
     // terms into emitted bytes, so a prefix `add(…)` here would diverge from
     // the oracle in both the rendered predicate and the derived
-    // rule/restriction names.  No corpus theory combines SAPIC with a user
-    // `[AC]` symbol, so this shape is only pinned here.
+    // rule/restriction names.
     #[test]
     fn user_ac_terms_print_infix() {
         use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, Privacy};
@@ -1538,10 +1537,8 @@ mod tests {
     /// The terms the SAPIC translation builds print through HS `prettyTerm`,
     /// so `exp` comes out infix and a `pair` chain is split down the RIGHT
     /// spine only (Term/Term.hs).  Both shapes reach emitted
-    /// bytes through `let_else_restriction`: on
-    /// `let <x, y> = <'g'^k, <<'a','b'>,'c'>> in … else …` the pinned oracle
-    /// (ef3f0468) renders the generated action as
-    /// `Restr_letxygkabc_2_1_1( <'g'^k.1, <'a', 'b'>, 'c'> )`.
+    /// bytes through `let_else_restriction`, including the generated
+    /// action's name and term arguments.
     #[test]
     fn exp_and_nested_pairs_print_like_prettyterm() {
         use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};

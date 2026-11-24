@@ -23,10 +23,10 @@ use tamarin_theory::pretty_theory::format_wf_block;
 fn wf_block(src: &str) -> String {
     let parsed = tamarin_parser::parse_theory(src, &[]).expect("probe parses");
     let elaborated = tamarin_theory::elaborate::elaborate(&parsed).expect("probe elaborates");
-    format_wf_block(&tamarin_theory::wellformedness::check_wellformedness(
-        &elaborated,
-        None,
-    ))
+    format_wf_block(
+        &tamarin_theory::wellformedness::check_wellformedness(&elaborated, None)
+            .expect("static wellformedness checks"),
+    )
 }
 
 /// Cells that each fit the 67-column ribbon: `fsep` packs them greedily and

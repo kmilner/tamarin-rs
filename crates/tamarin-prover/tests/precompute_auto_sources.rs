@@ -10,24 +10,55 @@
 //! neither construction nor destruction rules (`closeRuleCache`,
 //! CloseRule.hs).  When `--auto-sources` finds partial deconstructions
 //! in the refined sources, `closeTheoryWithMaude` closes over `unfoldRules
-//! items` (CloseRule.hs), and `unfoldRules` maps
+//! items` (CloseRule.hs#closeTheoryWithMaude), and `unfoldRules` maps
 //! `unfoldRuleVariants` over every rule item (CloseRule.hs), so a rule
 //! whose AC variant is non-trivial contributes one `ClosedProtoRule` per
 //! variant (`unfoldRuleVariants`, lib/theory/src/Rule.hs) rather than one
 //! for the whole rule.
 //!
-//! No corpus file passes both flags, so neither the prove gate nor the pretty
-//! gate reaches this count.  Both expectations below are verbatim oracle bytes
-//! from the pinned v1.13.0 binary (Git revision ef3f0468) on [`THEORY`]; the
-//! pair is the anti-vacuity statement that `--auto-sources` moves the count on
-//! this theory, so a count that parks the unfolded variants under one entry
-//! reads 4 twice and fails the second test alone.
+//! These tests pin the oracle counts on [`THEORY`]: four closed protocol
+//! rules without auto-sources and five with its unfolded variants.
 //!
 //! `--derivcheck-timeout=300` is on both runs because a derivation check that
 //! times out adds a wellformedness entry, and `ppWf` (Batch.hs) puts
 //! its WARNING line ahead of the stats.
 
 mod common;
+
+#[test]
+fn auto_sources_preserves_supported_products_in_compiled_variant_actions() {
+    if !common::maude_available() {
+        return;
+    }
+    let source = r#"theory CoveredProductAutoSources begin
+    builtins: diffie-hellman, symmetric-encryption
+    rule Emit: [] --[Power(('g'^'a')^'b')]-> []
+    variants
+    rule (modulo AC) Emit___VARIANT_1:
+      [] --[Power('g'^('a'*'b')),Added('a'*'b')]-> []
+    rule Setup: [Fr(~k)] --> [!Key(~k)]
+    rule Dec: [!Key(~k),In(x)] --[Dec(sdec(x,~k))]-> [Out(sdec(x,~k))]
+    lemma witness: exists-trace "Ex x y #i. Power(x)@i & Added(y)@i"
+    end"#;
+    let (code, stdout, stderr) = common::run_raw(
+        "tamarin_auto_sources_covered_product",
+        "covered",
+        source,
+        &[
+            "--auto-sources",
+            "--prove=witness",
+            "--bound=8",
+            "--no-ndc",
+            "--derivcheck-timeout=0",
+            "--processors=1",
+        ],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.contains("witness (exists-trace): verified (2 steps)"),
+        "{stdout}"
+    );
+}
 
 use common::{joined, maude_available};
 
@@ -38,7 +69,7 @@ const TMP_DIR: &str = "tamarin_prover_precompute_auto_sources";
 /// two AC variants: the generic one and the one where the input is
 /// `senc(m, ~k)`.  Its `Out(sdec(x, ~k))` conclusion leaves the refined
 /// sources with partial deconstructions, the condition `--auto-sources` tests
-/// before it unfolds (`containsPartialDeconstructions`,
+/// using the preliminary cache of unfolded rules (`containsPartialDeconstructions`,
 /// lib/theory/src/Rule.hs).
 const THEORY: &str = "theory AutoSourcesUnfold\nbegin\n\n\
                       builtins: symmetric-encryption\n\n\
@@ -47,6 +78,57 @@ const THEORY: &str = "theory AutoSourcesUnfold\nbegin\n\n\
                       [ !Key(~k), In(x) ] --[ Dec(sdec(x, ~k)) ]-> \
                       [ Out(sdec(x, ~k)) ]\n\n\
                       lemma reach:\n  exists-trace \"Ex m #i. Dec(m) @ #i\"\n\nend\n";
+
+#[test]
+fn auto_sources_annotates_explicit_identity_members_and_replays() {
+    if !maude_available() {
+        return;
+    }
+    let source = r#"theory TrivialSource begin
+    builtins: symmetric-encryption
+    rule Start:
+      [Fr(~k), Fr(~v)] --[Sent(~v)]-> [!Key(~k), Out(senc(<'tag',~v>,~k))]
+    variants rule (modulo AC) Start___VARIANT_1:
+      [Fr(~k), Fr(~v)] --[Sent(~v)]-> [!Key(~k), Out(senc(<'tag',~v>,~k))]
+    rule Consume:
+      [!Key(k), In(c)] --[Got(snd(sdec(c,k)))]-> [Out(snd(sdec(c,k)))]
+    lemma witness: exists-trace "Ex x #i. Got(x)@i"
+    end"#;
+    let args = [
+        "--prove",
+        "--auto-sources",
+        "--no-ndc",
+        "--derivcheck-timeout=0",
+        "--quit-on-warning",
+        "--processors=1",
+    ];
+    let (code, stdout, stderr) = common::run_raw(TMP_DIR, "identity_member", source, &args);
+    assert_eq!(code, 0, "{stderr}");
+    // Saved replay drops contradiction-reason comments in both provers,
+    // but must retain the executable annotations and both proof verdicts.
+    let (code, replay, stderr) = common::run_raw(TMP_DIR, "identity_replay", &stdout, &args);
+    assert_eq!(code, 0, "{stderr}");
+    for output in [&stdout, &replay] {
+        // Pinned pristine upstream a75fec7f verifies both in these steps.
+        for verdict in [
+            "witness (exists-trace): verified (4 steps)",
+            "AUTO_typing (all-traces): verified (12 steps)",
+        ] {
+            assert!(output.contains(verdict), "{output}");
+        }
+    }
+    fn start_member(output: &str) -> &str {
+        output
+            .split("rule (modulo AC) Start___VARIANT_1:")
+            .nth(1)
+            .expect("explicit identity member retained")
+            .split("rule ")
+            .next()
+            .unwrap()
+    }
+    assert!(start_member(&stdout).contains("AUTO_OUT_"), "{stdout}");
+    assert_eq!(start_member(&stdout), start_member(&replay));
+}
 
 /// Run the built binary on [`THEORY`] with `extra` flags, returning its raw
 /// stdout.  The precompute document carries no build-info block, no
@@ -99,5 +181,60 @@ fn precompute_counts_the_unfolded_variants_under_auto_sources() {
             "Raw sources: 6 cases, 5 partial deconstructions left",
             "Refined sources: 6 cases, deconstructions complete",
         ])
+    );
+}
+
+/// Existing sources lemmas can disable automatic generation even when the
+/// shared preliminary cache has raw chains. The public rules must then remain
+/// folded, and refining the cache must not erase its raw chains.
+#[test]
+fn manual_sources_preserve_raw_chains_and_disable_unfolding() {
+    if !maude_available() {
+        return;
+    }
+    let source = r#"theory ManualSources begin
+    builtins: symmetric-encryption
+    rule Setup: [Fr(~k)] --> [!Key(~k)]
+    rule Dec: [!Key(~k), In(x)] --[Dec(sdec(x,~k))]-> [Out(sdec(x,~k))]
+    lemma manually_closed [sources]: "All x #i. Dec(x)@i ==> F"
+    end"#;
+    // Exact output from pristine upstream a75fec7f, in both modes.
+    let expected = joined(&[
+        "Multiset rewriting rules: 4",
+        "Raw sources: 6 cases, 5 partial deconstructions left",
+        "Refined sources: 6 cases, deconstructions complete",
+    ]);
+    for (stem, extra) in [
+        ("manual_sources", vec![]),
+        ("manual_sources_auto", vec!["--auto-sources"]),
+    ] {
+        let mut args = vec!["--precompute-only", "--derivcheck-timeout=0"];
+        args.extend(extra);
+        let (code, stdout, stderr) = common::run_raw(TMP_DIR, stem, source, &args);
+        assert_eq!(code, 0, "{stderr}");
+        assert_eq!(stdout, expected, "{stem}");
+    }
+}
+
+#[test]
+fn precompute_counts_identical_rules_once() {
+    if !maude_available() {
+        return;
+    }
+    let source = r#"theory DuplicateCount begin
+        rule R: [In(x)] --[A(x)]-> [Out(x)]
+        rule R: [In(x)] --[A(x)]-> [Out(x)]
+        lemma witness: exists-trace "Ex x #i. A(x)@i"
+        end"#;
+    let (code, stdout, stderr) = common::run_raw(
+        TMP_DIR,
+        "duplicates",
+        source,
+        &["--precompute-only", "--derivcheck-timeout=0"],
+    );
+    assert_eq!(code, 0, "{stderr}");
+    assert!(
+        stdout.starts_with("Multiset rewriting rules: 3\n"),
+        "{stdout}"
     );
 }

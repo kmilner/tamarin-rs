@@ -3,9 +3,9 @@
 //! the pinned oracle's own `/* WARNING … */` block.
 //!
 //! The `examples/wellformedness_fixtures.rs` differential runner compares
-//! topic names only, and four fixtures list a single topic:
-//! `formula_unguarded`, `multiplication_in_rule_lhs`, `non_subterm_equation`
-//! and `quantifier_wrong_sort`.  This harness compares the full report bytes
+//! topic names only, including single-topic fixtures such as
+//! `formula_unguarded`, `non_subterm_equation` and `quantifier_wrong_sort`.
+//! This harness compares the full report bytes
 //! of every fixture instead, so a fixture cannot be hollowed out and still
 //! pass.  It also holds that runner's `expected.txt` roster to the fixture
 //! directory, in [`expected_txt_lists_every_fixture`].
@@ -20,11 +20,8 @@
 //! * the SAPIC / accountability translation both drivers run before the pass.
 //!   No fixture declares a process, and the render asserts this.
 //! * the Maude-backed `Message Derivation Checks` and `Rule variants` blocks
-//!   that the batch loop splices afterwards.  Four expectation files
-//!   therefore carry an `# omits:` line.  That line names the derivation-check
-//!   section that the oracle prints and this pipeline does not.
-//!   `expected.txt` documents the same asymmetry for the differential
-//!   runner.
+//!   that the batch loop splices afterwards. The reference captures disable
+//!   derivation checks explicitly with `--derivcheck-timeout=0`.
 //!
 //! The expected bytes live in one file per fixture, at
 //! `tests/wellformedness_fixtures/reports/<fixture>.report`.  Each file opens
@@ -93,10 +90,10 @@ fn render_report(name: &str) -> String {
          translation stage both drivers run before the wellformedness pass, so its \
          report would be missing the generated rules' findings",
     );
-    format_wf_block(&tamarin_theory::wellformedness::check_wellformedness(
-        &elaborated,
-        None,
-    ))
+    format_wf_block(
+        &tamarin_theory::wellformedness::check_wellformedness(&elaborated, None)
+            .expect("static wellformedness checks"),
+    )
 }
 
 /// The leading `#` provenance lines of an expectation file.

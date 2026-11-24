@@ -334,9 +334,10 @@ fn pretty_formal_comment(fc: &crate::theory::FormalComment) -> String {
 }
 
 // =============================================================================
-// Open theory — port of HS `prettyOpenTheory` (OpenTheory.hs) =
-// `prettyTheory prettySignaturePure (const emptyDoc) prettyOpenProtoRule
-// prettyProof prettyTranslationElement` (TheoryObject.hs).
+// Open theory — port of HS `prettyOpenTheory` (OpenTheory.hs#prettyOpenTheory) =
+// `prettyTheory` with the pure signature and declared options, an empty cache,
+// `prettyOpenProtoRule`, `prettyProof` and `prettyTranslationElement`
+// (TheoryObject.hs).
 // Differences from the closed print:
 //   - the signature is the PARSE-time pure signature (same `prettyMaudeSig`
 //     renderer — for a theory that has not been closed the two signatures
@@ -360,7 +361,7 @@ fn pretty_formal_comment(fc: &crate::theory::FormalComment) -> String {
 //     both.
 // =============================================================================
 
-/// HS `prettyOpenTheory` (OpenTheory.hs) as `--parse-only` emits it
+/// HS `prettyOpenTheory` (OpenTheory.hs#prettyOpenTheory) as `--parse-only` emits it
 /// (Batch.hs `putStrLn . renderDoc`): the returned string carries NO
 /// trailing newline, the caller's `println!` supplies `putStrLn`'s.
 pub fn pretty_open_theory(thy: &Theory) -> String {
@@ -376,7 +377,7 @@ pub fn pretty_open_theory(thy: &Theory) -> String {
 /// wellformedness block (`reportToDoc` — pass the pre-rendered
 /// [`format_wf_block`] string) and the `Generated from:` version block.
 /// `prettyOpenTheoryByModule`'s `spthy` and `spthytyped` arms
-/// (TheoryLoader.hs) both land here; they differ only in the theory
+/// (TheoryLoader.hs#prettyOpenTheoryByModule) both land here; they differ only in the theory
 /// VALUE, which `tamarin_sapic::type_theory::type_theory_env` has rewritten
 /// for `spthytyped`.
 pub fn pretty_open_theory_by_module(thy: &Theory, wf_block: &str, build: &BuildInfo) -> String {
@@ -537,14 +538,14 @@ fn pretty_translation_element(el: &TranslationElement, in_file: &str) -> String 
                 .render()
         }
         // Only builtins not recoverable from the printed signature survive
-        // here; all others deliberately render empty (TheoryObject.hs).
+        // here; all others deliberately render empty (TheoryObject.hs#prettyTranslationElement).
         TranslationElement::SignatureBuiltin(name) => match name.as_str() {
             "locations-report" | "reliable-channel" | "dest-pairing" => {
                 format!("builtins: {name}")
             }
             _ => String::new(),
         },
-        // The two `FunctionTypingInfo` cases.
+        // The two `FunctionTypingInfo` cases (TheoryObject.hs).
         TranslationElement::FunctionTypingInfo(fti) => pretty_function_typing_info(fti).render(),
         TranslationElement::ExportInfo { tag, body } => {
             let mut escaped = String::with_capacity(body.len());
@@ -834,9 +835,9 @@ pub fn web_macros(thy: &Theory) -> Option<String> {
 fn render_injective_fact_insts(elab: &Theory) -> String {
     use crate::fact::{FactTag, Multiplicity};
     use crate::pretty_hpj::{self as hpj, punctuate, Doc};
-    let proto_rules: Vec<&crate::rule::ProtoRuleE> = elab.rules().map(|r| &r.rule).collect();
-    let mut tags = crate::tools::injective_fact_instances::simple_injective_fact_instances(
-        &proto_rules,
+    let mut tags = crate::tools::injective_fact_instances::injective_fact_instances_for_rules(
+        elab.rules(),
+        &elab.macros().cloned().collect::<Vec<_>>(),
         &elab.signature.reducible_fun_syms_fast,
     );
     // HS `closeRuleCache` (CloseRule.hs): union the FORCED injective facts
@@ -1236,6 +1237,19 @@ pub fn format_wf_block(report: &[crate::wellformedness::WfError]) -> String {
 /// interactive server's `ppInteractive` console echo of the report at
 /// theory-load time (Web/Dispatch.hs).
 pub fn render_wf_error_report(report: &[crate::wellformedness::WfError]) -> String {
+    render_wf_error_report_with(report, |error| &error.message)
+}
+
+/// Batch fatal errors use Console.renderDoc directly, rather than the
+/// default-width render used to embed ordinary warning reports in theories.
+pub fn render_console_wf_error_report(report: &[crate::wellformedness::WfError]) -> String {
+    render_wf_error_report_with(report, crate::wellformedness::WfError::console_message)
+}
+
+fn render_wf_error_report_with(
+    report: &[crate::wellformedness::WfError],
+    message: impl Fn(&crate::wellformedness::WfError) -> &str,
+) -> String {
     let mut out = String::new();
     // HS `groupOn fst = groupBy ((==) `on` fst)` (Extension/Prelude.hs)
     // splits the report into runs of CONSECUTIVE same-topic entries, so a topic
@@ -1245,8 +1259,8 @@ pub fn render_wf_error_report(report: &[crate::wellformedness::WfError]) -> Stri
     let mut groups: Vec<(&str, Vec<&str>)> = Vec::new();
     for e in report {
         match groups.last_mut() {
-            Some((topic, msgs)) if *topic == e.topic => msgs.push(&e.message),
-            _ => groups.push((&e.topic, vec![&e.message])),
+            Some((topic, msgs)) if *topic == e.topic => msgs.push(message(e)),
+            _ => groups.push((&e.topic, vec![message(e)])),
         }
     }
     for (i, (topic, msgs)) in groups.iter().enumerate() {
@@ -1817,16 +1831,14 @@ fn pretty_macros(macros: &[crate::theory::LNMacro]) -> String {
     Doc::text("macros:").above(body).render()
 }
 
-/// HS `isSafetyFormula . formulaToGuarded_` (Guarded.hs) over
+/// HS `formulaToGuarded` followed by `isSafetyFormula` (Guarded.hs) over
 /// a restriction's formula.
 ///
-/// `isSafetyFormula gf0 = null (frees [gf0]) && noExistential gf0`
-/// (Guarded.hs): the guarded formula must be CLOSED *and* free of
-/// existential quantifiers.  `crate::guarded::is_safety_formula` is that exact
-/// predicate; this wrapper supplies the `LNFormula → LNGuarded` step.
-/// HS's `formulaToGuarded_` `error`s out when the formula is not guardable
-/// (`either (error . render) id`, Guarded.hs) and takes the whole run down;
-/// an unguardable restriction here yields `false` (no annotation) instead.
+/// The guarded formula must be closed and contain neither existential
+/// quantifiers nor last atoms. This wrapper supplies the guarded conversion
+/// for `crate::guarded::is_safety_formula`.
+/// An unguardable restriction yields `false` (no safety annotation), as in
+/// Haskell's `prettyRestriction`.
 fn is_safety_formula(f: &crate::formula::LNFormula) -> bool {
     match crate::guarded::formula_to_guarded(f) {
         Ok(g) => crate::guarded::is_safety_formula(&g),
@@ -1943,8 +1955,7 @@ fn pp_proof<T: ProofBody>(node: &T, out: &mut String, depth: usize) {
             // out BESIDE `by `.  For a `SolveGoal` step the goal can wrap, and
             // HughesPJ counts the `by ` (3 cols) toward the ribbon when
             // deciding the `fsep`/`sep` break — so we must render `by ` as
-            // line CONTENT, not as part of the indent (cf. the live string path;
-            // the NAXOS/KAS2 `Match( a,` / `<…>` divergence).  The `by `
+            // line content, not as part of the indent. The `by `
             // prefix is laid out by `step_line_with_unann` BESIDE the WHOLE
             // `sep [method, comment]` (HS `prettyCase ps (kwBy<>" ") <>
             // prettyStep ps`), so a dropped `/* unannotated */` aligns at
@@ -2083,9 +2094,7 @@ fn pp_step_doc(
         PM::Induction => crate::pretty_hpj::keyword_("induction"),
         PM::Finished(MR::Solved) => crate::pretty_hpj::keyword_("SOLVED")
             .beside_sp(crate::pretty_hpj::line_comment_("trace found")),
-        PM::Finished(MR::Unfinishable) => crate::pretty_hpj::keyword_("UNFINISHABLE").beside_sp(
-            crate::pretty_hpj::line_comment_("reducible operator in subterm"),
-        ),
+        PM::Finished(MR::Unfinishable) => crate::pretty_hpj::keyword_("UNFINISHABLE"),
         PM::Invalidated => crate::pretty_hpj::line_comment_(
             "proof may have been invalidated by editing a reuse lemma above. You should ",
         ),

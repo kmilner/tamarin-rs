@@ -20,32 +20,21 @@ use crate::restriction::Restriction;
 use crate::rule::ProtoRuleE;
 use crate::sapic::PlainProcess;
 
-/// A protocol rule modulo E with its variant machinery.  Mirrors the
-/// `ProtoRuleE` half of HS's `OpenProtoRule = (ProtoRuleE, [ProtoRuleAC])`;
-/// the port never materialises the `[ProtoRuleAC]` half — variants are
-/// enumerated lazily through `variant_substs` + `abstracted_rule` (the
-/// SplitG route).
+/// A protocol rule family with its original E rule, explicit AC members,
+/// and the executable body and variant machinery prepared during closing.
+/// [`closed_rules_ac`] exposes the family's compiled members.
 #[derive(Debug, Clone, PartialEq)]
 pub struct OpenProtoRule {
+    /// Working body: it may be macro-expanded, unfolded, or auto-source annotated.
     pub rule: ProtoRuleE,
-    /// Variant substitutions as a disjunction (`RuleACConstrs` in
-    /// Haskell — `Disj LNSubstVFresh`).  The canonical rule (`rule`)
-    /// represents the un-narrowed E-rule; when this disjunction is
-    /// non-empty, `solve_rule_constraints` adds it as a SplitG goal
-    /// in the eq-store so the variant choice is enumerated lazily
-    /// per Haskell's `solveRuleConstraints` (Reduction.hs).
-    /// Mirrors `RuleACConstrs = Disj LNSubstVFresh`
-    /// (Theory/Model/Rule.hs).
+    /// Variant disjunction for the executable body (`RuleACConstrs`, Rule.hs).
+    /// `solve_rule_constraints` adds a nonempty disjunction to the equation
+    /// store as a SplitG goal, deferring the variant choice to proof search.
     pub variant_substs: Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
-    /// The abstracted form of `rule` for the SplitG path (Haskell
-    /// `variantsProtoRule` returns this in the `ProtoRuleAC`'s
-    /// prems/concs/acts/nvs).  Every reducible-headed sub-term in
-    /// the rule's terms is replaced by a fresh `LVar`; the
-    /// `variant_substs` disjunction is keyed by those fresh vars,
-    /// so applying any picked variant subst yields a fully-narrowed
-    /// rule.  `None` when no reducible-headed sub-terms exist
-    /// (canonical rule equals raw rule). Populated while closing the theory,
-    /// or by a standalone `ProofContext` on demand.
+    /// Optional canonical executable body paired with `variant_substs`.
+    /// Closing prepares it through reducible-term abstraction and precise
+    /// variable renaming (`variantsProtoRule`, RuleVariants.hs); standalone
+    /// proof contexts prepare it on demand. `None` uses `rule` as the body.
     pub abstracted_rule: Option<ProtoRuleE>,
     /// Premise indices marked as loop breakers by the dataflow
     /// analysis (`useAutoLoopBreakersAC`).  In Haskell these live on
@@ -55,28 +44,19 @@ pub struct OpenProtoRule {
     /// populated while closing the theory, or by a standalone
     /// `ProofContext` on demand.
     pub loop_breakers: Vec<crate::rule::PremIdx>,
-    /// HS's `cprRuleE` half (`ClosedProtoRule`, Items/RuleItem.hs),
-    /// stored only where it differs from `rule`: **`None` iff `rule` IS that
-    /// half**.  Three steps drive them apart.  `elaborate_items` applies the
-    /// theory's macros to `rule` alone, because `closeProtoRule` narrows
-    /// `applyMacroInRule macros ruE` and keeps the unexpanded `ruE`
-    /// (lib/theory/src/Rule.hs).  `addActionClosedProtoRule` adds AUTO
-    /// actions to `cprRuleAC` only (lib/theory/src/Rule.hs).
-    /// `unfoldRuleVariants` carries the ORIGINAL rule as every variant's
-    /// `cprRuleE` (lib/theory/src/Rule.hs).  Consumers of
-    /// HS's `getProtoRuleEs` (`S.toList . S.fromList . map oprRuleE`,
-    /// ClosedTheory.hs) — partial evaluation — must read this half
-    /// through [`OpenProtoRule::rule_e`]: it is macro-unexpanded, carries no
-    /// AUTO actions, and the Set round-trip collapses the per-variant
-    /// duplicates.
+    /// Saved original E rule (`cprRuleE`, Items/RuleItem.hs). `None` makes
+    /// [`OpenProtoRule::rule_e`] fall back to `rule`; a saved copy may equal it.
+    /// Macro expansion, auto-source annotation and unfolding preserve this
+    /// half for original-family consumers such as partial evaluation and
+    /// injectivity analysis. Closing leaves this saved body unchanged;
+    /// generated AUTO annotations belong to the executable bodies.
     pub rule_e: Option<Box<ProtoRuleE>>,
-    /// HS's `_oprRuleAC` (Items/RuleItem.hs): the `variants (modulo
-    /// AC)` blocks the source writes out, parsed by `protoRuleAC` and
-    /// collected by `protoRule` (Theory/Text/Parser/Rule.hs).  A rule that declares them is closed by mapping `ClosedProtoRule
-    /// ruE` over the list rather than by computing variants, so neither the
-    /// macros nor Maude ever touch them (lib/theory/src/Rule.hs).  HS types them `ProtoRuleAC`; the parser fills that info's
-    /// variant and loop-breaker slots with `Disj [emptySubstVFresh]` and `[]`
-    /// (`protoRuleACInfo`, Theory/Text/Parser/Rule.hs),
+    /// Explicit `variants (modulo AC)` members (`_oprRuleAC`, Items/RuleItem.hs).
+    /// Open theories preserve source macros. Closing expands the members while
+    /// preserving declared new variables, without computing Maude variants
+    /// (`closeProtoRule`, lib/theory/src/Rule.hs).
+    ///
+    /// Parsed members have a trivial variant disjunction and no loop breakers,
     /// so a [`ProtoRuleE`] holds everything a parsed block carries.
     pub rule_ac: Vec<ProtoRuleE>,
 }
@@ -98,6 +78,14 @@ impl OpenProtoRule {
     /// `getProtoRuleEs` (ClosedTheory.hs) reads exactly this.
     pub fn rule_e(&self) -> &ProtoRuleE {
         self.rule_e.as_deref().unwrap_or(&self.rule)
+    }
+
+    /// Expand explicit members at the executable-rule boundary. Open printers
+    /// retain their source spelling until this step.
+    pub(crate) fn expand_variant_macros(&mut self, macros: &[LNMacro]) {
+        for member in &mut self.rule_ac {
+            *member = crate::rule::apply_macro_in_rule_preserving_new_vars(macros, member.clone());
+        }
     }
 
     pub fn name(&self) -> &str {
@@ -628,7 +616,7 @@ pub fn merge_open_proto_rules(
 ) -> Vec<TheoryItem<MergedProtoRule>> {
     let mut out: Vec<TheoryItem<MergedProtoRule>> = Vec::new();
     for item in items {
-        let opened = match item.split_rule() {
+        let mut opened = match item.split_rule() {
             Ok(other) => {
                 out.push(other);
                 continue;
@@ -640,9 +628,13 @@ pub fn merge_open_proto_rules(
         // item is what the next one is compared against.
         match out.last_mut() {
             Some(TheoryItem::Rule(prev)) if prev.rule_e == opened.rule_e => {
-                prev.rule_ac.extend(opened.rule_ac)
+                prev.rule_ac =
+                    tamarin_utils::prelude_ext::nub(prev.rule_ac.drain(..).chain(opened.rule_ac));
             }
-            _ => out.push(TheoryItem::Rule(opened)),
+            _ => {
+                opened.rule_ac = tamarin_utils::prelude_ext::nub(opened.rule_ac);
+                out.push(TheoryItem::Rule(opened));
+            }
         }
     }
     out

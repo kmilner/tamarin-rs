@@ -105,19 +105,19 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
         trans_report: thy.has_signature_builtin("locations-report"),
         state_channel_opt: thy.options.state_channel_opt(),
     };
-    let translation = translate(&typed, needs_in_ev, st_rules, opts).map_err(|e| ElabError {
-        message: format!("SAPIC translation: {e}"),
-    })?;
+    // Process lets and generated rules/restrictions use the same macro
+    // declarations (`closeTheoryItem`, CloseRule.hs).
+    let macros: Vec<LNMacro> = thy.macros().cloned().collect();
+    let translation =
+        translate(&typed, needs_in_ev, st_rules, &macros, opts).map_err(|e| ElabError {
+            message: format!("SAPIC translation: {e}"),
+        })?;
 
     // The `predicate:` declarations the embedded `_restrict` formulas expand
     // against: HS `liftedExpandFormula` reads `theoryPredicates thy`
     // (Theory/Text/Parser.hs), the list `elaborate` built from the
     // theory's `predicates:` items.
     let predicates: Vec<Predicate> = thy.predicates().cloned().collect();
-    // The `macros:` declarations `closeTheoryItem` applies to every rule and
-    // restriction of the translated theory (CloseRule.hs).
-    let macros: Vec<LNMacro> = thy.macros().cloned().collect();
-
     // Inject each generated rule, running the `_restrict` expansion HS
     // `liftedAddProtoRule` (Theory/Text/Parser.hs) performs per rule:
     // for each embedded restriction formula, mint a fresh action
@@ -248,6 +248,7 @@ mod tests {
             &typed,
             false,
             &maude_sig.st_rules,
+            &[],
             TranslateOptions::default(),
         )
         .unwrap();

@@ -19,9 +19,7 @@ jobs:
         run: cargo fmt --all --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
-      # Keep Cargo.toml's compatibility claim honest without another runner.
-      # The version is [workspace.package] rust-version, read via cargo
-      # metadata so Cargo.toml stays its only source.
+      # Read the shared workspace MSRV through Cargo metadata.
       - name: Install MSRV toolchain
         run: |
           msrv=$(cargo metadata --no-deps --format-version 1 \
@@ -36,8 +34,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     env:
-      # The ~44 integration-test binaries each link the full stack; lld
-      # links them several times faster than the default bfd ld.
+      # lld speeds up linking the integration-test binaries.
       RUSTFLAGS: -C link-arg=-fuse-ld=lld
     steps:
       # Submodule: intruder-variant data the build include_str!'s.
@@ -51,13 +48,8 @@ jobs:
           node-version: '24'
       - name: Install lld
         run: command -v ld.lld >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq lld)
-      # Graphviz: two tests run a real `dot`.  The first is the success-path
-      # self-test in probe_reports.rs (the GraphViz block of the `test` mode).
-      # The second is dot_tests.rs's lint of the DOT this port writes.  Both
-      # panic instead of a skip when `dot` cannot run, and TAM_ALLOW_NO_DOT=1
-      # opts out of the panic.  This step is therefore what keeps them from
-      # failing the job.  A runner image that stops shipping graphviz then
-      # fails the job instead of dropping both pins in silence.
+      # Graphviz-dependent tests require dot; TAM_ALLOW_NO_DOT=1 explicitly
+      # skips them when Graphviz is unavailable.
       - name: Install Graphviz
         run: command -v dot >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq graphviz)
       # Same pinned Maude as the rs-parity job (see the comment there).
@@ -67,17 +59,10 @@ jobs:
           sudo mkdir -p /opt/maude
           sudo unzip -q /tmp/maude.zip -d /opt/maude
           sudo chmod +x /opt/maude/maude
-      # MAUDE_PATH: every crate's maude-gated tests honour this env override.
-      # Pin the test harness to this installation. Missing Maude fails tests
-      # unless TAM_ALLOW_NO_MAUDE=1 explicitly opts into skipping them.
-      # PATH too: the port itself resolves a bare `maude` the way HS does
-      # (/usr/local/bin, /usr/bin, then $PATH) and does NOT read MAUDE_PATH,
-      # so tests that drive the real CLI paths — `--version`'s ensureMaude
-      # probe in run::tests::version_returns_zero — need maude reachable
-      # by name.
-      # profile ci = release opt without fat-LTO links / serial codegen (see
-      # Cargo.toml) — the release profile re-runs whole-graph LTO at every
-      # test-binary link, which dwarfs everything else this job does.
+      # MAUDE_PATH pins test helpers; PATH also makes Maude available to CLI
+      # probes, which do not read MAUDE_PATH. Missing Maude fails tests unless
+      # TAM_ALLOW_NO_MAUDE=1 explicitly permits skipping them. The ci profile
+      # optimizes tests without the release profile's per-binary fat-LTO cost.
       - run: export PATH="/opt/maude:$PATH" && cargo test --profile ci --workspace
         env:
           MAUDE_PATH: /opt/maude/maude
@@ -96,31 +81,15 @@ jobs:
         env:
           MAUDE_PATH: /opt/maude/maude
           TAM_RS_NO_SOURCE_CACHE: "1"
-      # Wellformedness fixture roster, port side (~2s; the step above has
-      # already built this example). `cargo test` runs the same 18 fixtures
-      # through tamarin-theory's wellformedness fixture tests. The one thing
-      # this runner adds is its EMPTY_RUST_EXPECTATION_ALLOWLIST, and that
-      # harness has no equivalent of it.  A fixture whose every expected topic
-      # is post-elaboration must appear in that list with a reason.  A listed
-      # fixture whose expectation set stops being empty must come off the
-      # list.  Without this check, a new post-elaboration-only fixture joins
-      # the roster while the tests/ harness still passes.  Such a fixture
-      # asserts nothing beyond "the file parses" on the port side.
-      #
-      # `--no-tamarin` is required, not a convenience.  The runner's third
-      # step shells out to the pinned `tamarin-prover`, which no CI job builds.
-      # The fixtures' differential against the oracle therefore stays a
-      # milestone gate.  Steps 1 and 2 need only the port and the committed
-      # tests/wellformedness_fixtures/expected.txt.
+      # Check EMPTY_RUST_EXPECTATION_ALLOWLIST: fixtures with no Rust-side
+      # topics must be listed with a reason; fixtures with topics must not be.
+      # --no-tamarin uses committed expected topics because CI does not build
+      # Haskell. The oracle comparison runs separately as a milestone gate.
       - name: Wellformedness fixture roster
         run: cargo run --profile ci -p tamarin-theory --example wellformedness_fixtures -- --no-tamarin
-      # The corners no corpus theory reaches (~5s).  Only the port runs here:
-      # the oracle side is the committed capture under
-      # scripts/divergence_fixtures/expected/, so this needs the submodule
-      # (fixtures + the pin the check compares against) and maude — both
-      # already provisioned above — and no Haskell build.  The check refuses to
-      # run when expected/oracle_rev is not the current pin, so a submodule
-      # bump that lands without re-running capture.sh fails CI loudly.
+      # Compare focused fixtures against committed oracle captures, requiring
+      # Maude and the submodule but no Haskell build. The captured oracle_rev
+      # must match the submodule pin.
       - name: Divergence fixtures
         run: |
           # The port probes /usr/local/bin/maude and /usr/bin/maude, then lets
@@ -138,6 +107,10 @@ jobs:
       - uses: actions/checkout@v7
         with:
           submodules: true
+      # Prepare fixture sources, applying this branch's patch series if any.
+      # Only sources are needed: CI uses committed oracle hashes and
+      # upstream command assertions, without compiling Haskell.
+      - run: ./setup.sh testing-sources
       - run: rustup update stable --no-self-update && rustup default stable
       - uses: Swatinem/rust-cache@v2
       - uses: actions/setup-node@v4
@@ -147,10 +120,8 @@ jobs:
       # producer identity; keep that dependency explicit in this job too.
       - name: Install Graphviz
         run: command -v dot >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq graphviz)
-      # Pinned Maude — must match the '# maude:' header in
-      # scripts/ci_ref_fast.tsv (rs_ref_check.sh enforces this; unifier
-      # enumeration order can change between Maude versions).  The release zip
-      # ships prelude.maude next to the binary, so the dir stays together.
+      # rs_ref_check.sh requires the Maude version in ci_ref_fast.tsv because
+      # unifier ordering depends on it. Keep prelude.maude beside the binary.
       - name: Install Maude 3.5.1
         run: |
           curl -sSL -o /tmp/maude.zip https://github.com/maude-lang/Maude/releases/download/Maude3.5.1/Maude-3.5.1-linux-x86_64.zip
@@ -160,12 +131,11 @@ jobs:
           echo /opt/maude >> "$GITHUB_PATH"
       - run: cargo build --release
       - name: Parity harness regression tests
-        run: python3 scripts/test_web_harness.py
-      # Prove-output parity: this branch's binary vs the committed reference
-      # of main's outputs (scripts/ci_ref_fast.tsv over
-      # scripts/parity_corpus_fast.txt).  On DIFF: reproduce locally with
-      # scripts/rs_vs_rs_diff.sh.  After a DELIBERATE output change or a
-      # submodule bump, regenerate the reference on a trusted build of main
-      # (generate refuses to run without a certifying oracle gate result):
+        run: scripts/test.sh harness
+      - name: Upstream command regressions (all supported scenarios)
+        run: scripts/test.sh regressions
+      # Compare prove output with oracle-certified hashes in ci_ref_fast.tsv
+      # for parity_corpus_fast.txt. Reproduce DIFFs with rs_vs_rs_diff.sh.
+      # Reference updates require a certifying oracle gate result:
       #   scripts/rs_ref_check.sh generate --certified-by <gate-results>
       - run: scripts/rs_ref_check.sh check

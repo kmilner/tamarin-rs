@@ -7,27 +7,16 @@
 //!
 //! Algorithm (HS `interpretAbstractly`, AbstractInterpretation.hs):
 //! starting from the abstract state `{ Fr(~z), In(z) }`, repeatedly refine
-//! every rule against the state (each premise E-unified — via Maude —
+//! every compiled rule against the state (each premise AC-unified via Maude
 //! against every state fact with the same tag) and add the refined rules'
 //! abstracted conclusions to the state, until the state stabilises.  The
 //! final rule list is each refined rule `rename`d so its minimum variable
 //! index is 0, deduplicated modulo variable freshness
 //! (`eqModuloFreshnessNoAC`, first occurrence wins).
-//!
-//! A structural subtlety this module must reproduce: a rule carries its
-//! `_restrict` formulas in `ProtoRuleEInfo::restrictions` (HS
-//! `preRestriction`), `HasFrees (Rule i)` folds over them before the body
-//! (Theory/Model/Rule.hs, Theory/Model/Rule.hs) and `Apply
-//! ProtoRuleEInfo` is the identity (Theory/Model/Rule.hs).  So a
-//! refined rule keeps its ORIGINAL restriction frees unsubstituted, and they
-//! floor the final `rename`'s index shift (a fully-substituted body keeps its
-//! refined indices — the oracle renders `In( x.2 )` for
-//! features/predicates/minimal.spthy) and are bound first by
-//! `eqModuloFreshnessNoAC`'s canonicalisation.  [`info_frees`] reads them off
-//! the rule.  `HasFrees for Rule<I>` (rule.rs) skips `info`, so the shift and
-//! the canonicalisation pass the frees as a separate list and leave the
-//! formulas alone: every refinement of one rule carries the same formulas, so
-//! they cannot tell two refinements apart.
+//! Input must be the complete, unfolded family of compiled E-variants, not
+//! the original E rules. Family IDs survive refinement and deduplication;
+//! export retains the original family whenever recompilation would change a
+//! member's instances. Embedded restrictions have already become theory items.
 //!
 //! Divergences from HS, all deliberate:
 //! * **Trace emission**: HS traces via `Debug.Trace` thunks that fire when
@@ -36,14 +25,6 @@
 //!   therefore RETURN the exact trace bytes instead of `eprint!`ing them;
 //!   the caller must emit them right after its "Theory closed" marker to
 //!   match HS stderr ordering.
-//! * **Rule ordering key**: HS sorts `getProtoRuleEs` under the derived
-//!   `Ord (Rule i)` = (info, prems, concs, acts, newVars) with
-//!   `Ord ProtoRuleEInfo` = (name, attributes, restrictions).  RS
-//!   `SyntacticLNFormula` has no `Ord`, so the restrictions cannot enter a
-//!   sort key and this one is (name, prems, concs, acts, new_vars).  The
-//!   attribute/restriction tiebreak is unreachable: duplicate rule names are
-//!   rejected at parse time, so the name alone already discriminates the
-//!   input.
 
 use std::collections::BTreeSet;
 
@@ -58,7 +39,7 @@ use tamarin_utils::fresh::FastFreshState;
 
 use crate::fact::{fresh_fact, in_fact, out_fact, pretty_lnfact, FactTag, LNFact};
 use crate::pretty_hpj::{self as hpj, Doc};
-use crate::rule::{unify_ln_fact_eqs, ProtoRuleE};
+use crate::rule::{unify_ln_fact_eqs, ProtoRuleE, Rule};
 use crate::theory::{OpenProtoRule, Theory, TheoryItem};
 
 /// How to report on performing a partial evaluation.  HS
@@ -141,24 +122,24 @@ fn abs_fact(fa: &LNFact) -> LNFact {
 /// choose a state fact with the same tag (state facts visited in sorted
 /// `S.toList` order — premise 1 varies SLOWEST) and `rename` it above the
 /// branch's fresh counter; at the leaf, E-unify the whole equation list
-/// once, and for each unifier `freshToFree` it from the branch counter and
+/// once modulo AC, and for each unifier `freshToFree` it from the branch counter and
 /// apply it to the rule.  Branch alternatives never share a counter — each
 /// starts from the incoming value (HS `mplus` on `StateT Integer []` runs
 /// both alternatives from the same state).
-fn refine_rule(
+fn refine_rule<I: Clone + PartialEq>(
     maude: &MaudeHandle,
     state_facts: &[&LNFact],
-    ru: &ProtoRuleE,
-    out: &mut Vec<ProtoRuleE>,
+    ru: &Rule<I>,
+    out: &mut Vec<Rule<I>>,
 ) -> Result<(), MaudeError> {
-    fn go(
+    fn go<I: Clone + PartialEq>(
         maude: &MaudeHandle,
         state_facts: &[&LNFact],
-        ru: &ProtoRuleE,
+        ru: &Rule<I>,
         prem_idx: usize,
         counter: FastFreshState,
         eqs: &mut Vec<Equal<LNFact>>,
-        out: &mut Vec<ProtoRuleE>,
+        out: &mut Vec<Rule<I>>,
     ) -> Result<(), MaudeError> {
         if prem_idx == ru.premises.len() {
             // Leaf: one unification query over the whole equation list
@@ -188,13 +169,7 @@ fn refine_rule(
         }
         Ok(())
     }
-    // Seed: `evalFreshT (avoid ru)` — the counter starts above the rule's
-    // maximum free variable index.  HS's `avoid` folds the rule info too
-    // (`HasFrees (Rule i)`, Theory/Model/Rule.hs), so the `_restrict`
-    // formulas' frees participate in the bound.
-    let body_bound = avoid(ru).fresh_idents(0);
-    let info_bound = info_frees(ru).iter().map(|v| v.idx + 1).max().unwrap_or(0);
-    let seed = FastFreshState::seeded(body_bound.max(info_bound));
+    let seed = avoid(ru);
     let mut eqs: Vec<Equal<LNFact>> = Vec::new();
     go(maude, state_facts, ru, 0, seed, &mut eqs, out)
 }
@@ -214,11 +189,11 @@ fn refine_rule(
 /// Returns `(fixpoint state, the rules refined against it, trace)`.  The
 /// fixpoint iteration itself contributes no trace line: HS traces adjacent
 /// pairs, and the final pair's state equals its predecessor's successor.
-fn interpret_abstractly(
+fn interpret_abstractly<I: Clone + PartialEq>(
     maude: &MaudeHandle,
     style: EvaluationStyle,
-    rules: &[ProtoRuleE],
-) -> Result<(BTreeSet<LNFact>, Vec<ProtoRuleE>, String), MaudeError> {
+    rules: &[Rule<I>],
+) -> Result<(BTreeSet<LNFact>, Vec<Rule<I>>, String), MaudeError> {
     let mut st: BTreeSet<LNFact> = BTreeSet::new();
     st.insert(abs_fact(&fresh_fact(var_term(LVar::new(
         "z",
@@ -230,7 +205,7 @@ fn interpret_abstractly(
     let mut trace = String::new();
     let mut step = 0usize;
     loop {
-        let mut refined: Vec<ProtoRuleE> = Vec::new();
+        let mut refined: Vec<Rule<I>> = Vec::new();
         {
             let state_facts: Vec<&LNFact> = st.iter().collect();
             for ru in rules {
@@ -267,7 +242,7 @@ fn interpret_abstractly(
             }
             EvaluationStyle::Tracing => {
                 let diff: Vec<Doc> = st_next.difference(&st).map(pretty_lnfact).collect();
-                let body = render_default_style(hpj::numbered_prime(diff).nest(2));
+                let body = render_numbered_facts(diff.into_iter(), 2);
                 trace.push_str(&format!(
                     " partial evaluation: step {} added {} facts\n\n{}\n\n",
                     step, added, body
@@ -283,37 +258,11 @@ fn interpret_abstractly(
 // eqModuloFreshnessNoAC for rules (Term/LTerm.hs)
 // =============================================================================
 
-/// The rule's `_restrict`-formula frees: HS `foldFrees f rstr`
-/// (Theory/Model/Rule.hs) over `preRestriction`, in `freesList`
-/// order — first occurrence first, duplicates kept, since the caller
-/// numbers them by first occurrence.
-fn info_frees(r: &ProtoRuleE) -> Vec<LVar> {
-    r.info
-        .restrictions
-        .iter()
-        .flat_map(crate::formula::formula_frees_list)
-        .collect()
-}
-
-/// Canonicalise every free variable of `r` to `LVar "" <sort> <seq-idx>`
-/// in `mapFrees` traversal order.  HS traverses the rule INFO first
-/// (Theory/Model/Rule.hs), binding the unsubstituted
-/// `_restrict`-formula frees
-/// before the body (premises, conclusions, actions, new_vars) — so a body
-/// variable identical to a restriction free reuses its canon slot, and
-/// body-only variables start numbering after them.  `info_vars` carries those
-/// info frees as [`rename_rule_from_zero`] shifted them.  Mirrors HS
-/// `eqModuloFreshnessNoAC`'s `normIndices`.
-fn canon_rule_frees(r: &ProtoRuleE, info_vars: &[LVar]) -> ProtoRuleE {
+/// Canonical variable indices for structural comparison modulo freshness.
+/// Compiled members have no local restrictions; only body variables participate.
+fn canon_rule_frees<I: Clone + PartialEq>(r: &Rule<I>) -> Rule<I> {
     let mut map: tamarin_utils::FastMap<LVar, LVar> = Default::default();
     let mut ctr: u64 = 0;
-    for v in info_vars {
-        if !map.contains_key(v) {
-            let nv = LVar::new("", v.sort, ctr);
-            ctr += 1;
-            map.insert(*v, nv);
-        }
-    }
     r.clone().map_free_with(
         &mut |v| {
             if let Some(nv) = map.get(&v) {
@@ -332,13 +281,12 @@ fn canon_rule_frees(r: &ProtoRuleE, info_vars: &[LVar]) -> ProtoRuleE {
 /// HS `nubBy eqModuloFreshnessNoAC` over rules: first occurrence wins;
 /// two rules are equal iff their free-canonicalised forms are structurally
 /// equal (including `info` — the rule NAME is part of it, so dedup can
-/// only merge refinements of the same original rule, which also carry the
-/// same unsubstituted `_restrict` formulas).
-fn nub_modulo_freshness(rules: Vec<(ProtoRuleE, Vec<LVar>)>) -> Vec<ProtoRuleE> {
-    let mut kept: Vec<ProtoRuleE> = Vec::new();
-    let mut kept_canon: Vec<ProtoRuleE> = Vec::new();
-    for (r, info_vars) in rules {
-        let c = canon_rule_frees(&r, &info_vars);
+/// only merge refinements of the same original rule).
+fn nub_modulo_freshness<I: Clone + PartialEq>(rules: Vec<Rule<I>>) -> Vec<Rule<I>> {
+    let mut kept: Vec<Rule<I>> = Vec::new();
+    let mut kept_canon: Vec<Rule<I>> = Vec::new();
+    for r in rules {
+        let c = canon_rule_frees(&r);
         if !kept_canon.contains(&c) {
             kept.push(r);
             kept_canon.push(c);
@@ -359,6 +307,24 @@ fn render_default_style(d: Doc) -> String {
     d.render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON)
 }
 
+/// Render each fact at its final indentation. Joining rendered entries keeps
+/// the numbered list's document depth independent of the abstract-state size.
+fn render_numbered_facts(facts: impl ExactSizeIterator<Item = Doc>, indent: usize) -> String {
+    let width = facts.len().to_string().len();
+    let separator = format!("\n{}\n", " ".repeat(indent));
+    let mut out = String::new();
+    for (index, fact) in facts.enumerate() {
+        if index > 0 {
+            out.push_str(&separator);
+        }
+        let entry = Doc::text(format!("{:>width$}. ", index + 1))
+            .beside(fact)
+            .nest(indent as isize);
+        out.push_str(&render_default_style(entry));
+    }
+    out
+}
+
 /// HS `partialEvaluation` (AbstractInterpretation.hs).  Returns
 /// `(abstract state, refined rules, trace)`:
 /// * the fixpoint abstract state;
@@ -371,62 +337,31 @@ fn render_default_style(d: Doc) -> String {
 ///   `Silent`.  NOT printed here: HS's trace thunks fire during rendering,
 ///   after the `[Theory X] Theory closed` marker, so the caller must
 ///   `eprint!` the returned string at that point.
-fn partial_evaluation(
+fn partial_evaluation<I: Clone + PartialEq>(
     maude: &MaudeHandle,
     style: EvaluationStyle,
-    ru_es: &[ProtoRuleE],
-) -> Result<(BTreeSet<LNFact>, Vec<ProtoRuleE>, String), MaudeError> {
+    ru_es: &[Rule<I>],
+) -> Result<(BTreeSet<LNFact>, Vec<Rule<I>>, String), MaudeError> {
     let (final_st, final_rules, trace) = interpret_abstractly(maude, style, ru_es)?;
-    // `map ((`evalFresh` nothingUsed) . rename)`: per rule, a uniform
-    // index shift making the minimum free var index 0.  The minimum is
-    // taken over the body frees AND the rule's unsubstituted
-    // `_restrict`-formula frees (HS `boundsVarIdx` folds the rule info,
-    // Theory/Model/Rule.hs), which HS's `mapFrees` shifts along with
-    // the body —
-    // the shifted info frees then seed the dedup's canonicalisation.
-    let renamed: Vec<(ProtoRuleE, Vec<LVar>)> =
-        final_rules.into_iter().map(rename_rule_from_zero).collect();
-    Ok((final_st, nub_modulo_freshness(renamed), trace))
-}
-
-/// HS `(`evalFresh` nothingUsed) . rename` over a refined rule
-/// (LTerm.hs): compute `boundsVarIdx` over the body frees ∪ the
-/// rule's `_restrict`-formula frees, then shift every index uniformly so the
-/// minimum becomes 0.  The info frees are shifted too (HS's `mapFrees` maps
-/// the info, Theory/Model/Rule.hs) and returned for the dedup's canon
-/// pass.
-fn rename_rule_from_zero(r: ProtoRuleE) -> (ProtoRuleE, Vec<LVar>) {
-    let info_vars = info_frees(&r);
-    let mut lo: Option<u64> = None;
-    let mut see = |idx: u64| {
-        lo = Some(lo.map_or(idx, |m: u64| m.min(idx)));
-    };
-    r.for_each_free(&mut |v| see(v.idx));
-    for v in &info_vars {
-        see(v.idx);
-    }
-    let Some(min) = lo else {
-        return (r, info_vars);
-    };
-    // `freshIdents` on `nothingUsed` returns 0, so the shift is `-min`.
-    let shifted = r.map_free_with(&mut |v| LVar::new(v.name, v.sort, v.idx - min), true);
-    let info_vars = info_vars
+    let renamed = final_rules
         .into_iter()
-        .map(|v| LVar::new(v.name, v.sort, v.idx - min))
+        .map(|rule| rename(rule, &mut FastFreshState::nothing_used()))
         .collect();
-    (shifted, info_vars)
+    Ok((final_st, nub_modulo_freshness(renamed), trace))
 }
 
 // =============================================================================
 // applyPartialEvaluation (Prover.hs)
 // =============================================================================
 
-/// The sort key of HS's derived-`Ord (Rule i)` order, minus the unreachable
-/// attribute/restriction tiebreak (see the module doc): name, then premises,
-/// conclusions, actions, new_vars.
+/// HS's full derived `Ord (Rule i)` order. Programmatic callers may reuse
+/// names with different metadata, so every equality field must participate
+/// before adjacent deduplication and family-name allocation.
 fn proto_rule_key(r: &ProtoRuleE) -> impl Ord + '_ {
     (
         &r.info.name,
+        &r.info.attributes,
+        &r.info.restrictions,
         &r.premises,
         &r.conclusions,
         &r.actions,
@@ -437,122 +372,205 @@ fn proto_rule_key(r: &ProtoRuleE) -> impl Ord + '_ {
 /// The `text{* … *}` report body (HS `ppAbsState`, Prover.hs),
 /// byte-exact: leading space, `$--$`-joined header / `numbered'` fact list
 /// / footer, trailing `".\n\n"` from the footer's literal newlines.
-fn abs_state_report(st: &BTreeSet<LNFact>, n_refined: usize, n_orig: usize) -> String {
-    let header = Doc::text(format!(
-        " the abstract state after partial evaluation contains {} facts:",
+fn abs_state_report(
+    st: &BTreeSet<LNFact>,
+    n_refined: usize,
+    n_orig: usize,
+    retained: usize,
+) -> String {
+    let mut report = format!(
+        " the abstract state after partial evaluation contains {} facts:\n\n",
         st.len()
-    ));
-    let facts: Vec<Doc> = st.iter().map(pretty_lnfact).collect();
-    let footer = Doc::text(format!(
+    );
+    if !st.is_empty() {
+        report.push_str(&render_numbered_facts(st.iter().map(pretty_lnfact), 0));
+        report.push_str("\n\n");
+    }
+    let kept = if retained == 0 {
+        String::new()
+    } else {
+        format!("Kept {retained} original rule families to preserve their variants on export.\n")
+    };
+    report.push_str(&format!(
         "This abstract state results in {} refined multiset rewriting rules.\n\
+         {}\
          Note that the original number of multiset rewriting rules was {}.\n\n",
-        n_refined, n_orig
+        n_refined, kept, n_orig
     ));
-    render_default_style(hpj::above_blank(
-        hpj::above_blank(header, hpj::numbered_prime(facts)),
-        footer,
-    ))
+    report
 }
 
-/// HS `applyPartialEvaluation` (Prover.hs) over the internal theory:
-///
-/// 1. `ru_es` = the rules' `ProtoRuleE`s through a Set round-trip
-///    (`getProtoRuleEs`, ClosedTheory.hs) — this is what re-orders
-///    the rules ALPHABETICALLY by name.
-/// 2. Run [`partial_evaluation`].
-/// 3. Splice the item list (HS `replaceProtoRules`): items before the first
-///    rule item stay put; at that position go the `text{*…*}` report item
-///    and ALL refined rules; every other rule item is removed; later
-///    non-rule items follow in order.
-/// 4. A theory whose closed form has no rule item gets no report block and
-///    is left untouched (HS `replaceProtoRules [] = []`).
-///
-/// The refined rules are fresh `OpenProtoRule`s (no variants, no loop
-/// breakers): the caller must re-run `populate_rule_variants` and
-/// `annotate_loop_breakers` on the rewritten theory — HS's second
-/// `closeTheoryWithMaude`.
-///
-/// Returns the stderr trace bytes to emit after the "Theory closed"
-/// marker (see [`partial_evaluation`]).
+/// Refine compiled AC members, preserving family ownership independently of
+/// names. Keep any family whose refinements are not safe to reopen as E rules.
+/// The caller re-closes the resulting theory before proof search.
 pub fn apply_partial_evaluation(
     elaborated: &mut Theory,
     maude: &MaudeHandle,
     style: EvaluationStyle,
-) -> Result<String, MaudeError> {
-    // HS `getProtoRuleEs` (ClosedTheory.hs) extracts `cprRuleE` — the
-    // E-half that keeps the macro calls as the source writes them
-    // (`closeProtoRule`, lib/theory/src/Rule.hs), that
-    // `addActionClosedProtoRule` never annotates
-    // (lib/theory/src/Rule.hs) and that `unfoldRuleVariants` duplicates
-    // verbatim across variants (lib/theory/src/Rule.hs) —
-    // so when the `--auto-sources` close preceded this call the refinement
-    // input carries NO AUTO_* actions, and the Set round-trip below
-    // collapses the per-variant duplicates ("we remove duplicates if they
-    // exist due to variant unfolding", ClosedTheory.hs).
-    // Feeding the annotated `rule` half instead lets the baked AUTO actions
-    // reach the second close, whose refined-source trigger they then
-    // wrongly satisfy.
-    let mut ru_es: Vec<ProtoRuleE> = elaborated.rules().map(|o| o.rule_e().clone()).collect();
-    if ru_es.is_empty() {
-        // No closed rule item: HS's `replaceProtoRules` never fires and
-        // the trivial evaluation produces no trace.
+) -> Result<String, crate::tools::rule_variants::VariantsError> {
+    use crate::rule::{rule_products_outside_exponents, ProtoRuleName};
+    use crate::theory::{closed_rules_ac, merge_open_proto_rules};
+    use crate::tools::rule_variants::{
+        closed_rule_as_open, prepare_open_rule_variant, unfold_closed_rule,
+    };
+
+    let mut originals: Vec<_> = elaborated.rules().map(|r| r.rule_e().clone()).collect();
+    if originals.is_empty() {
         return Ok(String::new());
     }
-    let anchor = elaborated
-        .items
-        .iter()
-        .position(|it| matches!(it, TheoryItem::Rule(_)))
-        .expect("elaborated.rules() non-empty implies a rule item");
-
-    // `getProtoRuleEs`' Set round-trip: sort under the derived rule order,
-    // drop exact duplicates.
-    ru_es.sort_by(|a, b| proto_rule_key(a).cmp(&proto_rule_key(b)));
-    ru_es.dedup_by(|a, b| a == b);
-
-    let (st, refined, trace) = partial_evaluation(maude, style, &ru_es)?;
-    let body = abs_state_report(&st, refined.len(), ru_es.len());
-
-    // The refined rules carry empty variant/loop-breaker fields for the
-    // caller's re-close.  That re-close is HS's second
-    // `closeTheoryWithMaude` (Prover.hs), which reaches
-    // `closeProtoRule` and narrows `applyMacroInRule macros ruE` while
-    // keeping the refined rule itself as `cprRuleE`
-    // (lib/theory/src/Rule.hs).
-    let macros: Vec<crate::theory::LNMacro> = elaborated.macros().cloned().collect();
-    let mut inserted: Vec<TheoryItem> = Vec::with_capacity(refined.len() + 1);
-    inserted.push(TheoryItem::Text(("text".to_string(), body)));
-    inserted.extend(refined.into_iter().map(|r| {
-        let expanded = crate::rule::apply_macro_in_rule(&macros, r.clone());
-        let mut opr = OpenProtoRule::new(expanded);
-        if opr.rule != r {
-            opr.rule_e = Some(Box::new(r));
+    originals.sort_by(|a, b| proto_rule_key(a).cmp(&proto_rule_key(b)));
+    originals.dedup();
+    let owner = |rule: &ProtoRuleE| {
+        originals
+            .iter()
+            .position(|r| r == rule)
+            .expect("each compiled rule has an original family")
+    };
+    let mut compiled = Vec::new();
+    for parent in elaborated.rules() {
+        let mut parent = parent.clone();
+        prepare_open_rule_variant(&mut parent, maude)?;
+        let family = owner(parent.rule_e());
+        for ac in closed_rules_ac(&parent) {
+            let members =
+                if ac.info.variants == [tamarin_term::subst_vfresh::LNSubstVFresh::empty()] {
+                    vec![closed_rule_as_open(&parent, &ac)]
+                } else {
+                    unfold_closed_rule(&parent, &ac)
+                };
+            for member in members {
+                let mut rule = member.rule;
+                // Embedded restrictions already live as theory items. Their
+                // pre-variant variables must not influence refinement.
+                rule.info.restrictions.clear();
+                compiled.push(Rule {
+                    info: (family, rule.info),
+                    premises: rule.premises,
+                    conclusions: rule.conclusions,
+                    actions: rule.actions,
+                    new_vars: rule.new_vars,
+                });
+            }
         }
-        TheoryItem::Rule(opr)
-    }));
-    elaborated.items = splice_refined(std::mem::take(&mut elaborated.items), anchor, inserted);
+    }
+    let name_string = |name| match name {
+        ProtoRuleName::Fresh => "Fresh".to_string(),
+        ProtoRuleName::Stand(name) => name.to_string(),
+    };
+    let reserved: BTreeSet<_> = originals
+        .iter()
+        .map(|r| name_string(r.info.name))
+        .chain(compiled.iter().map(|r| name_string(r.info.1.name)))
+        .collect();
+    let (state, refined, trace) = partial_evaluation(maude, style, &compiled)?;
+    let mut families: Vec<Vec<ProtoRuleE>> = vec![Vec::new(); originals.len()];
+    for rule in refined {
+        families[rule.info.0].push(Rule {
+            info: rule.info.1,
+            premises: rule.premises,
+            conclusions: rule.conclusions,
+            actions: rule.actions,
+            new_vars: rule.new_vars,
+        });
+    }
 
+    // None is KeepOriginal; Some([]) deliberately prunes an unreachable family.
+    let mut plans: Vec<Option<Vec<ProtoRuleE>>> = Vec::new();
+    for family in families {
+        let mut exportable = true;
+        for rule in &family {
+            if !rule_products_outside_exponents(rule).is_empty() {
+                exportable = false;
+                break;
+            }
+            let mut recomputed = OpenProtoRule::new(rule.clone());
+            prepare_open_rule_variant(&mut recomputed, maude)?;
+            let computed = recomputed
+                .abstracted_rule
+                .as_ref()
+                .unwrap_or(&recomputed.rule);
+            let variants = &recomputed.variant_substs;
+            if variants.len() != 1
+                || !variants[0].is_empty()
+                || canon_rule_frees(rule) != canon_rule_frees(computed)
+            {
+                exportable = false;
+                break;
+            }
+        }
+        plans.push(exportable.then_some(family));
+    }
+    let retained = plans.iter().filter(|p| p.is_none()).count();
+    let mut used: BTreeSet<_> = originals
+        .iter()
+        .zip(&plans)
+        .filter(|(_, p)| p.is_none())
+        .map(|(r, _)| name_string(r.info.name))
+        .collect();
+    let mut reserved = reserved;
+    for family in plans.iter_mut().flatten() {
+        for rule in family {
+            let original = name_string(rule.info.name);
+            let name = if used.contains(&original) {
+                (1usize..)
+                    .map(|n| format!("{original}_PE_{n}"))
+                    .find(|name| !reserved.contains(name))
+                    .unwrap()
+            } else {
+                original.clone()
+            };
+            if name != original {
+                rule.info.name = ProtoRuleName::Stand(tamarin_term::intern::intern_str(&name));
+            }
+            used.insert(name.clone());
+            reserved.insert(name);
+        }
+    }
+    let count: usize = plans.iter().flatten().map(Vec::len).sum();
+    let body = abs_state_report(&state, count, originals.len(), retained);
+    let macros: Vec<_> = elaborated.macros().cloned().collect();
+    let mut items = Vec::new();
+    let mut inserted_report = false;
+    // Opening merges adjacent imported members of one original family first.
+    for item in merge_open_proto_rules(&elaborated.items) {
+        let rule = match item.split_rule() {
+            Ok(other) => {
+                items.push(other);
+                continue;
+            }
+            Err(rule) => rule,
+        };
+        if !inserted_report {
+            items.push(TheoryItem::Text(("text".into(), body.clone())));
+            inserted_report = true;
+        }
+        match &plans[owner(&rule.rule_e)] {
+            None => {
+                let expanded = crate::rule::apply_macro_in_rule(&macros, rule.rule_e.clone());
+                let mut kept = OpenProtoRule::new(expanded);
+                kept.rule_e = Some(Box::new(rule.rule_e.clone()));
+                kept.rule_ac = rule
+                    .rule_ac
+                    .iter()
+                    .map(|ac| {
+                        let mut member = closed_rule_as_open(&kept, ac).rule;
+                        member.info.restrictions.clear();
+                        member
+                    })
+                    .collect();
+                items.push(TheoryItem::Rule(kept));
+            }
+            Some(refinements) => {
+                for refinement in refinements {
+                    let mut open = OpenProtoRule::new(refinement.clone());
+                    open.rule_ac = vec![refinement.clone()];
+                    items.push(TheoryItem::Rule(open));
+                }
+            }
+        }
+    }
+    elaborated.items = items;
     Ok(trace)
-}
-
-/// HS `replaceProtoRules` as one list rewrite: keep everything before
-/// `anchor` verbatim, put `inserted` (the report block followed by the
-/// refined rules) in the anchor's place, then keep the later NON-rule items
-/// in order.  `anchor` itself is a rule item, so the filter over the tail
-/// drops it along with every later rule item.
-fn splice_refined(
-    items: Vec<TheoryItem>,
-    anchor: usize,
-    inserted: Vec<TheoryItem>,
-) -> Vec<TheoryItem> {
-    let mut out = items;
-    let tail = out.split_off(anchor);
-    out.reserve(inserted.len() + tail.len());
-    out.extend(inserted);
-    out.extend(
-        tail.into_iter()
-            .filter(|it| !matches!(it, TheoryItem::Rule(_))),
-    );
-    out
 }
 
 #[cfg(test)]

@@ -1,7 +1,7 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Pins the LAYOUT of the ` Formula guardedness` report body.
+//! Pins the LAYOUT of the `Formula guardedness` report body.
 //!
 //! HS throws a `Doc`, not a string (Guarded.hs): the
 //! unguarded-variable list is an `fsep` (Guarded.hs) and each quoted
@@ -49,8 +49,8 @@ fn the_quoted_formula_wraps_at_the_report_nesting() {
         "/*",
         "WARNING: the following wellformedness checks failed!",
         "",
-        " Formula guardedness",
-        "====================",
+        "Formula guardedness",
+        "===================",
         "",
         "  Lemma `with_predicate' cannot be converted to a guarded formula:",
         "    unguarded variable(s) 'zz' in the subformula",
@@ -84,8 +84,8 @@ fn the_unguarded_name_list_wraps_between_names() {
         "/*",
         "WARNING: the following wellformedness checks failed!",
         "",
-        " Formula guardedness",
-        "====================",
+        "Formula guardedness",
+        "===================",
         "",
         "  Lemma `many' cannot be converted to a guarded formula:",
         "    unguarded variable(s) 'x2', 'x3', 'x4', 'x5', 'x6', 'x7', 'x8',",

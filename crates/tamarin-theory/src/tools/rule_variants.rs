@@ -37,15 +37,134 @@ use crate::theory::{OpenProtoRule, Theory, TheoryItem};
 
 type LNSubst = Subst<Name, LVar>;
 
+/// HS `unfoldRuleVariants` on ONE closed rule (lib/theory/src/Rule.hs),
+/// non-trivial case: for each substitution i (1-based) of the rule's variant
+/// disjunction, `freshToFreeAvoiding` it against the AC rule, apply it to
+/// (premises, conclusions, actions, new vars), and emit a rule named
+/// `<name>___VARIANT_<i>` (a FreshRule keeps its name) whose own variants
+/// are `Disj [emptySubstVFresh]`, carrying over the original's attributes
+/// and (pre-computed) loop breakers verbatim.
+///
+/// An empty disjunction stands for HS's ever-present trivial
+/// `Disj [emptySubstVFresh]` (`trueDisj`, RuleVariants.hs), so a body-divergent rule with no residual substs still unfolds
+/// into exactly one `___VARIANT_1` rule.
+pub(crate) fn unfold_closed_rule(parent: &OpenProtoRule, ac: &ProtoRuleAC) -> Vec<OpenProtoRule> {
+    use tamarin_term::lterm::{HasFrees, LVar};
+    use tamarin_term::subst_vfresh::LNSubstVFresh;
+    let o = closed_rule_as_open(parent, ac);
+    if crate::rule::is_trivial_proto_variant_ac(ac, parent.rule_e()) {
+        return vec![o];
+    }
+    let ac = &o.rule;
+    let trivial_disj = [LNSubstVFresh::empty()];
+    let substs: &[LNSubstVFresh] = if o.variant_substs.is_empty() {
+        &trivial_disj
+    } else {
+        &o.variant_substs
+    };
+    if substs == trivial_disj && ac.info.name != o.rule_e().info.name {
+        return vec![o];
+    }
+    // `freshToFreeAvoiding subst ruAC` allocates above `avoid ruAC`; HS's
+    // `HasFrees (Rule ProtoRuleACInfo)` folds the rule INFO first, whose
+    // variant-disjunction DOMAIN keys are frees (keys-only,
+    // Theory/Model/Rule.hs; SubstVFresh.hs), so
+    // they participate in the bound alongside the body.
+    let mut max_idx: Option<u64> = None;
+    {
+        let mut see = |v: &LVar| {
+            max_idx = Some(max_idx.map_or(v.idx, |m| m.max(v.idx)));
+        };
+        for s in substs {
+            for (k, _) in s.iter() {
+                see(k);
+            }
+        }
+        ac.for_each_free(&mut see);
+    }
+    let seed = max_idx.map(|m| m + 1).unwrap_or(0);
+    substs
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            // Each subst gets its own `evalFreshAvoiding` scope (HS maps
+            // `freshToFreeAvoiding` per subst against the same `ruAC`).
+            let mut counter = seed;
+            let sigma = s.fresh_to_free_avoiding(|n| {
+                let b = counter;
+                counter += n;
+                b
+            });
+            let mut ru = crate::rule::apply_subst_rule(&sigma, ac);
+            // `rName i` (lib/theory/src/Rule.hs): FreshRule keeps its
+            // name; StandRule gains the 1-based `___VARIANT_<i>` suffix.
+            ru.info.name = crate::rule::rule_variant_name(ru.info.name, i + 1);
+            OpenProtoRule {
+                rule: ru,
+                variant_substs: vec![LNSubstVFresh::empty()],
+                abstracted_rule: None,
+                loop_breakers: o.loop_breakers.clone(),
+                // `toClosedProtoRule` keeps the ORIGINAL rule as every
+                // variant's `cprRuleE` (lib/theory/src/Rule.hs) — the
+                // half `getProtoRuleEs` dedups back to one copy.
+                rule_e: Some(Box::new(o.rule_e().clone())),
+                // This open rule holds one executable member; its original
+                // E rule is retained separately for family regrouping.
+                rule_ac: Vec::new(),
+            }
+        })
+        .collect()
+}
+
+/// Re-express one closed AC half as the split open representation consumed by
+/// [`unfold_closed_rule`]. This also covers source-declared
+/// `variants (modulo AC)` blocks, whose bodies do not live in
+/// `abstracted_rule`/`variant_substs` on their parent.
+pub(crate) fn closed_rule_as_open(
+    parent: &OpenProtoRule,
+    ac: &crate::rule::ProtoRuleAC,
+) -> OpenProtoRule {
+    let rule = crate::rule::Rule {
+        info: crate::rule::ProtoRuleEInfo {
+            name: ac.info.name,
+            attributes: ac.info.attributes.clone(),
+            restrictions: parent.rule.info.restrictions.clone(),
+        },
+        premises: ac.premises.clone(),
+        conclusions: ac.conclusions.clone(),
+        actions: ac.actions.clone(),
+        new_vars: ac.new_vars.clone(),
+    };
+    OpenProtoRule {
+        rule,
+        variant_substs: ac.info.variants.clone(),
+        abstracted_rule: None,
+        loop_breakers: ac.info.loop_breakers.clone(),
+        rule_e: Some(Box::new(parent.rule_e().clone())),
+        rule_ac: Vec::new(),
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum VariantsError {
     Maude(String),
+    MissingMaudeForExplicitVariants,
+    UnsupportedInput(crate::wellformedness::WfReport),
 }
 
 impl std::fmt::Display for VariantsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             VariantsError::Maude(s) => write!(f, "Maude error: {}", s),
+            VariantsError::MissingMaudeForExplicitVariants => write!(
+                f,
+                "Maude is required to validate explicit rule variants; refusing to load an unchecked family."
+            ),
+            VariantsError::UnsupportedInput(report) => write!(
+                f,
+                "{}\nUnsupported rule semantics - aborting before proof search.",
+                crate::pretty_theory::render_wf_error_report(report)
+            ),
         }
     }
 }
@@ -99,15 +218,8 @@ pub fn variants_proto_rule(
         return Ok(None);
     }
     let substs: Vec<LNSubstVFresh> = raw.into_iter().map(LNSubstVFresh::from_list).collect();
-    // HS-faithful `simpDisjunction hnd (const (const False)) (Disj substs)`
-    // (RuleVariants.hs).  Routes through `simp1`'s full pipeline
-    // including `simpSingleton` (EquationStore.hs, invoked from `simp1`) — that pass
-    // folds a singleton-variant disj into the free subst, which is
-    // what HS's `commonSubst` carries.  Without this, the SplitG
-    // residual retains entries that HS bakes into the rule body via
-    // `makeRule`'s `apply commonSubst` (RuleVariants.hs) —
-    // which is the root of the NAXOS_eCK_private Init_1-vs-Ltk_reveal
-    // divergence.
+    // `simpDisjunction` (RuleVariants.hs) includes `simpSingleton`, folding a
+    // singleton variant into the shared substitution applied to the rule body.
     let (common_subst, residual) =
         crate::tools::equation_store::EquationStore::simp_disjunction_with_maude(
             substs,
@@ -341,7 +453,11 @@ pub fn prepare_theory_rules(
     annotate_breakers: bool,
 ) -> Result<crate::wellformedness::WfReport, VariantsError> {
     populate_rule_variants(theory, maude, pool)?;
-    let report = crate::wellformedness::check_wellformedness(theory, Some(maude));
+    let report = crate::wellformedness::check_wellformedness(theory, Some(maude))?;
+    let fatal = crate::wellformedness::variants::fatal_wf_errors(&report);
+    if annotate_breakers && !fatal.is_empty() {
+        return Err(VariantsError::UnsupportedInput(fatal));
+    }
     finish_theory_rules(theory, maude, annotate_breakers);
     Ok(report)
 }
@@ -359,9 +475,43 @@ pub fn reprepare_theory_rules(
     Ok(())
 }
 
+/// Enforce the fatal rule checks at the public proving boundary as well as in
+/// the frontends. Ordinary wellformedness warnings do not prevent proving.
+/// Validation must not consume the session's fresh-variable counter.
+pub fn validate_theory_for_proving(
+    theory: &Theory,
+    maude: &MaudeHandle,
+) -> Result<(), VariantsError> {
+    let _plain = crate::pretty_hpj::HtmlDocGuard::disable();
+    let validation_maude = maude.with_fresh_counter_from(maude.fresh_counter_peek());
+    let mut report =
+        crate::wellformedness::variants::explicit_variants_report(theory, &validation_maude)?;
+    let macros: Vec<_> = theory.macros().cloned().collect();
+    for rule in theory.rules() {
+        // Closing may replace `rule` by an AC member with supported added
+        // products. Check the original E half, but expand its source macros.
+        let source = crate::rule::apply_macro_in_rule(&macros, rule.rule_e().clone());
+        report.extend(crate::wellformedness::mult::unsupported_products_report([
+            &source,
+        ]));
+    }
+    let fatal = crate::wellformedness::variants::fatal_wf_errors(&report);
+    if fatal.is_empty() {
+        Ok(())
+    } else {
+        Err(VariantsError::UnsupportedInput(fatal))
+    }
+}
+
 fn finish_theory_rules(theory: &mut Theory, maude: &MaudeHandle, annotate_breakers: bool) {
     retain_rules_with_variants(theory, maude);
     if annotate_breakers {
+        let macros: Vec<_> = theory.macros().cloned().collect();
+        for item in &mut theory.items {
+            if let TheoryItem::Rule(rule) = item {
+                rule.expand_variant_macros(&macros);
+            }
+        }
         crate::constraint::solver::context::annotate_theory_loop_breakers(theory, maude);
     }
 }
@@ -445,18 +595,9 @@ pub fn abstract_rule_and_variants(
             t.for_each_free(&mut visit);
         }
     }
-    // HS-faithful: `convertRule \`evalFreshTAvoiding\` ru`
-    // (RuleVariants.hs) runs the variant computation in a Fresh monad
-    // whose counter starts at `max(ru.idxs)+1` PER RULE.  Without this,
-    // RS's global Maude counter keeps climbing across rules, so the
-    // variant value vars (allocated via the Maude back-conversion's
-    // `evalFreshAvoiding`) end up at much higher idxs than HS's — that's
-    // the +12 offset between RS (~ltkS.19/20/21) and HS (~ltkS.7/8/9)
-    // for Tutorial.spthy's Serv_1.
-    //
-    // `with_fresh_counter_from` clones the handle keeping the underlying
-    // Maude PROCESS shared but with a fresh PER-CALL counter — exactly
-    // HS's evalFreshTAvoiding semantics.
+    // `convertRule` runs under `evalFreshTAvoiding ru` (RuleVariants.hs).
+    // Share the Maude process while giving each rule its own counter, seeded
+    // above all variables in that rule.
     let local_maude_owned = maude.with_fresh_counter_from(avoid_max);
     let maude: &MaudeHandle = &local_maude_owned;
 
@@ -529,33 +670,10 @@ pub fn abstract_rule_and_variants(
         Fact::fresh_annotated(f.tag, f.annotations.clone(), terms)
     }
 
-    // HS-faithful: import ALL leaf vars FIRST (RuleVariants.hs
-    // `mapM_ abstrTerm [varTerm v | v <- frees (prems0, concs0, acts0, nvs0)]`).
-    // This populates the bindings map so leaf vars get RENAMED to fresh
-    // idxs with name preserved (via getHint = lvarName for Var).  Without
-    // this, abstractionSubst lacks leaf-var entries and downstream
-    // composeVFresh leaves the original rule's free vars unrenamed, which
-    // makes Maude's variant-witness allocation collide across variants.
-    //
-    // HS's `frees` (LTerm.hs) returns `sortednub . freesList` —
-    // a SORT+DEDUP list, ordered by `Ord LVar = idx <> sort <> name`
-    // (LTerm.hs).  Document-order iteration would assign fresh
-    // idxs based on which fact mentions a variable first, which decides
-    // the FIRST KEY of every Maude variant subst and hence the variants'
-    // post-`S.fromList` sort order in HS's `simpDisjunction`.
-    //
-    // For wireguard's `Handshake_Init`, document order visits `pkR`
-    // (premise `!F_StateInvariants(..., pkR, ...)`) before `~ekI`
-    // (premise `Fr(~ekI)`), so `pkR` ends up at a smaller fresh idx
-    // than `~ekI`; the variants then sort with `pkR` first → the
-    // DH_neutral variant lands before the AC-decomposed one.  HS's
-    // sorted `frees` puts `~ekI` (Fresh, idx 0, name "ekI") before
-    // `pkR` (Msg, idx 0, name "pkR") via `Fresh < Msg` on the LSort
-    // partial order, so `~ekI` gets the smaller fresh idx and the
-    // AC-decomposed variant lands before DH_neutral — matching HS.
-    //
-    // HS-faithful `frees`: a BTreeSet sorts insertion by `Ord LVar`
-    // and dedupes — exactly `sortednub` semantics.
+    // `variantsProtoRule` (RuleVariants.hs) imports all leaf variables before
+    // abstracting compound terms. `frees` supplies them in sorted, deduplicated
+    // LVar order (index, sort, name); that order determines fresh indices and
+    // the subsequent ordering of variant substitutions.
     let mut leaf_set: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
     let mut visit = |v: &LVar| {
         leaf_set.insert(*v);
@@ -699,9 +817,7 @@ pub fn abstract_rule_and_variants(
     //
     // The `compose_vfresh` helper mirrors HS's full pipeline:
     // extendWithRenaming + freshToFreeAvoidingFast + compose + freeToFreshRaw.
-    // Without this, two variants whose Maude-back-conversion shapes
-    // happen to collide end up with structurally-identical range vars
-    // and collapse at perform_split (split_case ordering bug).
+    // Its freshening keeps independently scoped variant range variables apart.
     let abstr_frees: Vec<LVar> = {
         let mut s: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
         {
@@ -731,14 +847,6 @@ pub fn abstract_rule_and_variants(
     // non-Fresh premise after substitution.  These variants represent
     // physically impossible bindings — they require a Fresh nonce to
     // appear simultaneously in two unrelated message positions.
-    //
-    // Without this filter, RS keeps redundant variants that HS drops,
-    // causing the variant disj to retain heterogeneous outer ops across
-    // substs (identity variant with `convertpcs(...)` vs reducing variant
-    // with `sign(...)`). simp_abstract_fun can't lift heterogeneous ops,
-    // so same-image pairs never emerge, simp_identify never fires, no
-    // multi-key equivalence classes form, enforce_ku_action_uniqueness
-    // never merges. This is the root cause of resolved1's 26-line diff.
     let raw_substs: Vec<_> = {
         let freshly_introduced: Vec<LNTerm> = rule
             .premises
@@ -842,46 +950,20 @@ pub fn abstract_rule_and_variants(
             // restrictVFresh (frees abstrPsCsAs)
             cleaned.restrict(&abstr_frees)
         })
-        // HS-faithful: `variantsProtoRule` (RuleVariants.hs) builds the
-        // composed `substs` list with NO post-composition renaming filter — the
-        // only filter is `not $ isFreshRedundant vsubst` on the RAW Maude variant
-        // (applied above as the H20 pass).  Each composed entry is
-        //   `restrictVFresh (frees abstrPsCsAs) $ removeRenamings $
-        //      normSubstVFresh' $ composeVFresh vsubst abstractionSubst`
-        // and is kept verbatim.  Do NOT re-add a `.filter(|s| !s.is_renaming())`
-        // here: it drops composed substs that restrict-down to a pure renaming,
-        // which are EXACTLY HS's narrowing variants (breaks foo_eligibility `C_2`,
-        // soundness bug — the `exec` exists-trace lemma can no longer narrow).
+        // `variantsProtoRule` (RuleVariants.hs) retains every composed entry,
+        // including substitutions that restrict to pure renamings. Fresh
+        // redundancy is filtered on the raw Maude variants before composition.
         .collect();
 
     if composed_substs.is_empty() {
         return Ok(None);
     }
 
-    // Haskell `simpDisjunction hnd (const (const False)) (Disj substs)`
-    // splits into (commonSubst, freshSubsts).  commonSubst is the free
-    // substitution part that's common to all variants — applied to the
-    // abstracted rule.  freshSubsts is the residual SplitG disjunction.
-    //
-    // Without this split, action terms like `Verify(m)` get abstracted
-    // to `Verify(z)` AND every variant binds `z := m` — so the SplitG
-    // is just identity but the rule still carries `Verify(z)`, which
-    // matches against ANY Verify(_) action goal causing wrong cases.
-    //
-    // After splitting, `commonSubst` carries `{z := m}` and the rule's
-    // action becomes `Verify(m)` again; the SplitG only carries the
-    // RESIDUAL disjuncts that differ between variants.
-    // HS-faithful: variantsProtoRule (RuleVariants.hs) calls
-    // `simpDisjunction hnd ...` with a Maude handle, which routes through
-    // `simp1`'s FULL pipeline including `simpSingleton` (EquationStore.hs, invoked from `simp1`).
-    // That pass folds a single-variant disj into the free subst — so the
-    // residual returned to `makeRule` is `Nothing` and the variant subst
-    // content gets baked into the rule body via commonSubst.  RS's
-    // the plain (no-Maude-handle) simplification SKIPS simpSingleton; use the
-    // `_with_maude` variant here to match HS.  Without it, e.g.
-    // JKL_TS1_2004 Init_2 keeps `z.0 → 'g'^lkR; z.1 → 'g'^(lkI*lkR)` in
-    // the residual instead of baking them into the rule's `!Sessk(...)`
-    // conclusion — diverging Sessk_reveal source-case numbering downstream.
+    // `simpDisjunction` (RuleVariants.hs) separates the substitution shared
+    // by all variants from the residual SplitG disjunction. Apply the shared
+    // part to the rule body. The Maude-backed pipeline includes
+    // `simpSingleton`, which folds a singleton disjunction into that shared
+    // substitution (EquationStore.hs).
     let (common_subst, residual) =
         crate::tools::equation_store::EquationStore::simp_disjunction_with_maude(
             composed_substs,
@@ -909,32 +991,11 @@ pub fn abstract_rule_and_variants(
         crate::rule::Rule::new(rule.info.clone(), prems, concs, acts).with_new_vars(nvs)
     };
 
-    // HS-faithful `variantsProtoRule` disjunction selection
-    // (RuleVariants.hs):
-    //   (commonSubst, Nothing)        -> makeRule abstrPsCsAs commonSubst trueDisj
-    //   (commonSubst, Just freshSubsts) -> makeRule abstrPsCsAs commonSubst freshSubsts
-    // where `trueDisj = [emptySubstVFresh]` (RuleVariants.hs).
-    //
-    // When `simpDisjunction` collapses the variant disjunction to a single
-    // case (`residual == Nothing`), HS does NOT drop the variant disjunction
-    // — it keeps `[emptySubstVFresh]`, the trivial-but-present SplitG.  That
-    // disjunction is later added by `solveRuleConstraints`
-    // (Reduction.hs) via `addRuleVariants` → `addDisj`, which bumps
-    // `eqsNextSplitId` by 1 at EVERY `labelNodeId` for such a rule even though
-    // `simp`'s `simpSingleton` immediately folds the singleton and
-    // `removeSolvedSplitGoals` later deletes the orphaned SplitG (the
-    // split-id counter bump persists).  Dropping the trivial
-    // disjunction here would skip `add_disj`'s `eqsNextSplitId` bump
-    // that HS always performs for rules whose variants collapse to
-    // identity, shifting every later `splitEqs(N)` render label by -1
-    // (spdm121 `Attack_Responder_Requester_Mode_Switch`: HS
-    // `splitEqs(4)` vs RS `splitEqs(3)`).
-    //
-    // Mirror HS exactly: `Nothing -> trueDisj`, `Just fs -> fs` (the
-    // pre-simp `removeRenamings`/`isFreshRedundant` already ran on the
-    // composed substs at the `composed_substs` build site, matching
-    // RuleVariants.hs; no additional post-simp renaming/range filter,
-    // which HS does not have).
+    // `variantsProtoRule` (RuleVariants.hs) represents a collapsed residual
+    // by `trueDisj = [emptySubstVFresh]`. Keeping the trivial disjunction
+    // preserves `addRuleVariants`' split-ID allocation when labeling a node,
+    // even though simplification immediately solves that split. Residual
+    // substitutions need no further renaming or range filter.
     let final_substs: Vec<LNSubstVFresh> = match residual {
         // `simpDisjunction` returning `Just fs` with `fs` non-empty is HS's
         // `(commonSubst, Just freshSubsts)` arm.  A `Just []` cannot arise
@@ -945,28 +1006,10 @@ pub fn abstract_rule_and_variants(
         _ => vec![LNSubstVFresh::empty()],
     };
 
-    // HS `variantsProtoRule` returns the abstracted rule whenever the
-    // composed-substs list was non-empty (RuleVariants.hs only `mzero`s
-    // on an EMPTY composed list — handled earlier via `raw_substs.is_empty()`
-    // and the composed-substs build).  With `final_substs` now always
-    // non-empty (trueDisj at minimum), the abstracted form is always
-    // produced, matching HS's `makeRule` for the collapse case.
-
-    // HS-faithful `renamePrecise` wrap (RuleVariants.hs):
-    //   `(`Precise.evalFresh` Precise.nothingUsed) . renamePrecise $ ...`
-    //
-    // Re-numbers all rule + variant subst LVars using PreciseFresh
-    // (per-name counter starting from 0).  Without this, the rule's
-    // vars keep the unique idxs assigned by abstrRule (via Maude's
-    // global counter), which causes downstream `freshen_rule`'s
-    // uniform shift to keep them at DIFFERENT idxs — but HS's
-    // renamePrecise collapses ALL rule vars to PER-NAME idxs
-    // (typically 0 since each name is unique in the rule).
-    //
-    // This makes BTreeMap key ordering in apply_eq_store match HS's
-    // — all rule keys at idx 0 → sorted by name first → CHECKSIGN
-    // variant sort order matches HS for test4/test5.
-    //
+    // `renamePrecise` (RuleVariants.hs) renumbers rule variables and variant
+    // domains together using per-name counters starting at zero. Every
+    // nonempty composed variant list produces an abstracted rule, including
+    // the trivial-residual case.
     let (abstracted_rule, final_substs) =
         rename_precise_rule_with_variants(abstracted_rule, final_substs);
 
@@ -1061,10 +1104,8 @@ fn rule_renames_under_precise(rule: &ProtoRuleE) -> bool {
 ///
 /// `HasFrees (SubstVFresh n LVar)` (SubstVFresh.hs) sees the DOMAIN
 /// keys alone, in the fold and in the map, so a range term neither draws a
-/// per-name index nor gets rewritten.  Walking the range would feed extra
-/// names to the precise supply and rewrite variables HS leaves alone, moving
-/// downstream variable indices and the AC-sorted variant order (symptom on
-/// JKL_TS1_2004: `Sessk_reveal_case_3` against HS's `Sessk_reveal_case_4`).
+/// per-name index nor gets rewritten. These ranges retain their independent
+/// fresh-variable namespace.
 fn rename_precise_rule_with_variants(
     rule: ProtoRuleE,
     substs: Vec<LNSubstVFresh>,

@@ -168,13 +168,8 @@ pub fn gconj(items: Vec<Guarded>) -> Guarded {
             return gfalse();
         }
     }
-    // Port normal form: run `nub` BEFORE the `[gf] -> gf` singleton unwrap,
-    // so the result is a fixpoint of `gconj` itself. The pinned Haskell
-    // implementation unwraps based on the pre-`nub` length, but that can
-    // leave `GConj [a]` after `gconj [a, a]`; this representation instead
-    // normalizes it to `a` because `normalise_guarded_cow` relies on one-pass
-    // idempotence: `gconj [a, a]` must be `a`, not the non-normal singleton
-    // `Conj [a]` that only a second application would unwrap.
+    // Like HS, deduplicate before collapsing a singleton so construction
+    // is idempotent: gconj [a, a] becomes a in one pass.
     let mut deduped: Vec<Guarded> = Vec::with_capacity(out.len());
     for x in out {
         if !deduped.contains(&x) {
@@ -187,7 +182,7 @@ pub fn gconj(items: Vec<Guarded>) -> Guarded {
     Guarded::Conj(deduped.into())
 }
 
-/// Smart `Disj` — flatten one level, short-circuit on `gtrue`, drop
+/// Smart `Disj` — flatten recursively, short-circuit on `gtrue`, drop
 /// `gfalse` items.  Mirrors Haskell's `gdisj` which treats `Disj` as a
 /// set semantically: True absorbs, False is the unit.  Without dropping
 /// gfalse items, partial_atom_valuation can turn `Disj([Eq(j,i),
@@ -229,25 +224,15 @@ pub fn gdisj(items: Vec<Guarded>) -> Guarded {
             return gtrue();
         }
     }
-    // HS-faithful: the `[gf] -> gf` singleton unwrap matches the FLATTENED,
-    // non-nubbed list (Guarded.hs); `nub` is applied only in the
-    // otherwise branch (`GDisj $ Disj $ nub gfs`, Guarded.hs).  So a
-    // flattened list like `[a,a]` is not a singleton and yields
-    // `Disj (nub [a,a]) = Disj [a]`, NOT bare `a`.  (Note: this `out`
-    // already has `gfalse` items dropped — see flatten above — so the
-    // empty case below collapses an all-`gfalse` disjunction to `gfalse`.)
-    if out.len() == 1 {
-        return out.into_iter().next().unwrap();
-    }
-    // Mirror Haskell `gdisj`'s `nub gfs` (Guarded.hs).
+    // Deduplicate before collapsing a singleton so normalization is idempotent.
     let mut deduped: Vec<Guarded> = Vec::with_capacity(out.len());
     for x in out {
         if !deduped.contains(&x) {
             deduped.push(x);
         }
     }
-    if deduped.is_empty() {
-        gfalse()
+    if deduped.len() == 1 {
+        deduped.pop().unwrap()
     } else {
         Guarded::Disj(deduped.into())
     }
@@ -606,26 +591,30 @@ fn map_guarded_atoms<F: FnMut(u64, &Atom<BLNTerm>) -> Atom<BLNTerm>>(
 }
 
 /// Returns `true` if the formula is "safety": closed (no free vars)
-/// and contains no existential quantifier in its guarded form.  HS
+/// and contains neither an existential quantifier nor a last atom. HS
 /// `isSafetyFormula` (Guarded.hs).
 pub fn is_safety_formula(g: &Guarded) -> bool {
-    fn no_existential(g: &Guarded) -> bool {
+    fn has_safety_shape(g: &Guarded) -> bool {
         match g {
-            Guarded::Atom(_) => true,
+            Guarded::Atom(atom) => !matches!(atom, ProtoAtom::Last(_)),
             Guarded::GGuarded {
                 qua: Quantifier::Ex,
                 ..
             } => false,
             Guarded::GGuarded {
                 qua: Quantifier::All,
+                guards,
                 body,
                 ..
-            } => no_existential(body),
-            Guarded::Disj(inner) => inner.iter().all(no_existential),
-            Guarded::Conj(inner) => inner.iter().all(no_existential),
+            } => {
+                !guards.iter().any(|atom| matches!(atom, ProtoAtom::Last(_)))
+                    && has_safety_shape(body)
+            }
+            Guarded::Disj(inner) => inner.iter().all(has_safety_shape),
+            Guarded::Conj(inner) => inner.iter().all(has_safety_shape),
         }
     }
-    is_closed(g) && no_existential(g)
+    is_closed(g) && has_safety_shape(g)
 }
 
 /// Is `g` closed (no free variables)?  HS `null (frees [gf0])`
@@ -970,11 +959,10 @@ fn flatten_dedup_disj(children: &[Guarded]) -> Vec<Guarded> {
     out
 }
 
-/// Normalise a formula for storage in the constraint system: full
-/// smart-constructor normal form, except that a TOP-LEVEL disjunction
-/// keeps its `Disj` constructor (via the constructor-preserving
-/// `normalise_disj_list_cow`) so it stays in lockstep with its `Goal::Disj`
-/// twin.  Port of HS `normaliseStoredFormula` (150f5eba).
+/// Normalise a stored formula while preserving disjunction constructors at
+/// every level. The top-level wrapper stays in lockstep with its `Goal::Disj`
+/// twin; nested wrappers remain available for deduplication when inserted
+/// later (see [`normalise_guarded_cow`]). Port of HS `normaliseStoredFormula`.
 ///
 /// Copy-on-write: `None` when unchanged, `Some(rebuilt)` otherwise.
 pub fn normalise_stored_formula_cow(g: &Guarded) -> Option<Guarded> {
@@ -1041,15 +1029,16 @@ fn convert(
             let sub = vec![nag, cag];
             Ok(if polarity { gconj(sub) } else { gdisj(sub) })
         }
-        // p ↔ q is (p ⇒ q) ∧ (q ⇒ p), and HS conjoins the two arms at both
-        // polarities (Guarded.hs).
+        // p ↔ q is (p ⇒ q) ∧ (q ⇒ p). Under negation the two
+        // negated implications are disjoined (Guarded.hs).
         ProtoFormula::Conn(Connective::Iff, a, b) => {
             let lhs = ProtoFormula::Conn(Connective::Imp, a.clone(), b.clone());
             let rhs = ProtoFormula::Conn(Connective::Imp, b.clone(), a.clone());
-            Ok(gconj(vec![
+            let sub = vec![
                 convert(polarity, &lhs, fresh)?,
                 convert(polarity, &rhs, fresh)?,
-            ]))
+            ];
+            Ok(if polarity { gdisj(sub) } else { gconj(sub) })
         }
         // The quantifier decides whether the body must be a top-level
         // implication (`convAll`) or a conjunction (`convEx`); the polarity
@@ -1358,17 +1347,8 @@ pub fn gnot(g: &Guarded) -> Guarded {
         Guarded::Atom(a) => gnot_atom(a),
         Guarded::Disj(xs) => gconj(xs.iter().map(gnot).collect()),
         Guarded::Conj(xs) => gdisj(xs.iter().map(gnot).collect()),
-        // Use the smart constructors `gex`/`gall` (NOT direct
-        // GGuarded build) so that empty-quantifier collapses fire:
-        // - `gnot(GGuarded(All, [], [Less i j], gfalse))` (== ¬(i<j))
-        //   goes through `gex [] [Less i j] gtrue` → `gconj([Less i j, gtrue])`
-        //   → `Less i j` (the atom), not a stale `GGuarded(Ex, [], [Less i j], gtrue)`.
-        // Without this collapse, `to_induction_hypothesis` sees the body
-        // as nested GGuarded and produces extra `¬(Less)` disjuncts in
-        // the IH instead of collapsing them down — leading to a much
-        // larger Disj at goal-split time. Mirrors Haskell:
-        //   go (GGuarded All ss as gf) = gex  ss as (go gf)
-        //   go (GGuarded Ex  ss as gf) = gall ss as (go gf)
+        // `gnot` (Guarded.hs) uses `gex` / `gall` so empty binders collapse
+        // through the smart constructors while exchanging quantifiers.
         Guarded::GGuarded {
             qua: Quantifier::All,
             vars,
@@ -1390,7 +1370,8 @@ pub fn gnot(g: &Guarded) -> Guarded {
 
 /// `satisfiedByEmptyTrace`: does the formula hold under the empty
 /// trace (no actions)? Returns `Err` for atoms outside the scope of a
-/// quantifier (formula is not doubly guarded).
+/// quantifier (formula is not doubly guarded), or an equality-only guard
+/// whose truth on the empty trace has not been established (upstream #958).
 pub fn satisfied_by_empty_trace(g: &Guarded) -> Result<bool, String> {
     match g {
         Guarded::Atom(_) => Err("atom outside the scope of a quantifier".to_string()),
@@ -1417,7 +1398,16 @@ pub fn satisfied_by_empty_trace(g: &Guarded) -> Result<bool, String> {
             }
             Ok(all)
         }
-        Guarded::GGuarded { qua, .. } => Ok(matches!(qua, Quantifier::All)),
+        Guarded::GGuarded { qua, guards, .. } => {
+            if guards.iter().any(|atom| matches!(atom, Atom::Action(_, _))) {
+                Ok(matches!(qua, Quantifier::All))
+            } else {
+                Err(
+                    "formula has an equality-only guard whose value on the empty trace is unknown"
+                        .to_string(),
+                )
+            }
+        }
     }
 }
 
@@ -1488,13 +1478,10 @@ pub fn to_induction_hypothesis(g: &Guarded) -> Result<Guarded, String> {
                 }
             }
         }
-        Guarded::Atom(ProtoAtom::Less(i, j)) => Ok(Guarded::Disj(
-            vec![
-                Guarded::Atom(ProtoAtom::EqE(i.clone(), j.clone())),
-                Guarded::Atom(ProtoAtom::Less(j.clone(), i.clone())),
-            ]
-            .into(),
-        )),
+        Guarded::Atom(ProtoAtom::Less(i, j)) => Ok(gdisj(vec![
+            Guarded::Atom(ProtoAtom::EqE(i.clone(), j.clone())),
+            Guarded::Atom(ProtoAtom::Less(j.clone(), i.clone())),
+        ])),
         Guarded::Atom(ProtoAtom::Last(_)) => Err("formula not last-free".to_string()),
         Guarded::Atom(a) => Ok(gnot_atom(a)),
         Guarded::Disj(xs) => {

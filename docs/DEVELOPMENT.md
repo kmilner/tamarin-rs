@@ -80,7 +80,7 @@ Building the Haskell oracle is needed only for the parity gates, not for the
 Rust build itself:
 
 ```
-./setup.sh testing                   # patched oracle → tamarin-prover-testing/
+./setup.sh testing                   # branch's oracle → tamarin-prover-testing/
 ```
 
 This materialises a git worktree of the pinned commit at
@@ -98,13 +98,12 @@ crates/            the Rust port (crate breakdown below)
 scripts/           GUI build and browser tests, parity gates, benchmarks, and triage
 tests/             wellformedness fixture corpus
 patches/
-  series                       ordered list of one Haskell patch per
-                               not-yet-merged upstream PR
+  series                       ordered list of one Haskell patch per tracked PR
   tamarin-prover-pr-*.patch    patches applied to the testing oracle
 tamarin-prover/    upstream submodule, pinned to a known-good commit and kept
                    PRISTINE — holds the canonical Haskell sources, the
                    examples/ corpus, and the web data/ assets
-tamarin-prover-testing/   (untracked; created by ./setup.sh testing) patched
+tamarin-prover-testing/   (untracked; created by ./setup.sh testing) oracle
                    copy of the prover, built as the byte-parity oracle
 target/            Rust build output (release binary under target/release/)
                    Cargo also builds and embeds the frontend under its build/ output
@@ -135,7 +134,18 @@ suites, including the server's asset and graph route tests. CI also runs a
 Chromium test that copies only the binary to a temporary installation and
 checks page loading and graph rendering from an unrelated working directory.
 
-Parity against the Haskell prover is checked by `scripts/corpus_file_diff.sh`
-for batch mode and `scripts/web_parity.sh` for the interactive UI. See
-[TESTING.md](../TESTING.md) for the full verification ladder, the gate
-environment reference, and the divergence-debugging toolbox.
+
+The two headline parity tests compare against
+the branch's Haskell oracle and automatically fill/reuse its caches:
+
+```bash
+./setup.sh testing
+cargo build --release -p tamarin-prover
+scripts/test.sh proof
+scripts/test.sh web
+```
+
+Use `scripts/test.sh all` to run both sequentially. Start with the
+[corpus quick-start](../scripts/README.md) for cache generation, results and
+resource settings; [TESTING.md](../TESTING.md) covers prerequisites, certification
+and debugging.

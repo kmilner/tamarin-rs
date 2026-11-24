@@ -35,6 +35,7 @@ pub enum ProveError {
     InvalidHeuristic(String),
     Ranking(RankingError),
     Maude(String),
+    UnsupportedInput(String),
 }
 
 impl From<tamarin_utils::cancellation::Cancelled> for ProveError {
@@ -58,8 +59,10 @@ impl From<RankingError> for ProveError {
 
 impl From<crate::tools::rule_variants::VariantsError> for ProveError {
     fn from(error: crate::tools::rule_variants::VariantsError) -> Self {
-        let crate::tools::rule_variants::VariantsError::Maude(message) = error;
-        Self::Maude(message)
+        match error {
+            crate::tools::rule_variants::VariantsError::Maude(message) => Self::Maude(message),
+            other => Self::UnsupportedInput(other.to_string()),
+        }
     }
 }
 
@@ -95,6 +98,7 @@ impl std::fmt::Display for ProveError {
             ProveError::InvalidHeuristic(m) => f.write_str(m),
             ProveError::Ranking(m) => write!(f, "goal ranking: {m}"),
             ProveError::Maude(m) => write!(f, "Maude error: {m}"),
+            ProveError::UnsupportedInput(m) => write!(f, "{m}"),
         }
     }
 }
@@ -107,7 +111,8 @@ impl std::error::Error for ProveError {
             | ProveError::LemmaNotFound(_)
             | ProveError::Guarded(_)
             | ProveError::InvalidHeuristic(_)
-            | ProveError::Maude(_) => None,
+            | ProveError::Maude(_)
+            | ProveError::UnsupportedInput(_) => None,
         }
     }
 }
@@ -1042,20 +1047,7 @@ impl ProverSession {
     /// ClosedTheory.hs). Materialises the same session cache entries
     /// later proof requests use, avoiding a separate saturation/refinement.
     pub fn precomputation_stats(&self) -> Result<PrecomputationStats, ProveError> {
-        // HS `length (getClassifiedRules thy)._crProtocol`: the theory's
-        // rule items plus the intruder members of `crProtocol` —
-        // everything that is neither a construction rule (`isConstrRule`,
-        // Model/Rule.hs) nor a destruction rule (`isDestrRule`,
-        // Model/Rule.hs), i.e. ISend/IRecv/IRecvNC/Fresh.
-        let rules = self.theory.rules().count()
-            + self
-                .template_ctx
-                .intruder_rules
-                .iter()
-                .filter(|ir| {
-                    !crate::rule::is_constr_rule(&ir.info) && !crate::rule::is_destr_rule(&ir.info)
-                })
-                .count();
+        let rules = self.template_ctx.protocol_rule_count();
 
         let SourceStats { raw, refined } = self.source_stats();
         let raw = raw?;
@@ -1129,6 +1121,7 @@ impl ProverSession {
         maude: tamarin_term::maude_proc::MaudeHandle,
         options: ProverSessionOptions,
     ) -> Result<Self, ProveError> {
+        crate::tools::rule_variants::validate_theory_for_proving(&theory, &maude)?;
         let ProverSessionOptions {
             maude_pool,
             cli_heuristic,
@@ -1194,6 +1187,7 @@ impl ProverSession {
             rules,
             crate::constraint::solver::context::ProofContextOptions {
                 maude_pool,
+                macros: theory.macros().cloned().collect(),
                 restrictions,
                 forced_injective_facts,
                 intruder_rules: ndc_cache,

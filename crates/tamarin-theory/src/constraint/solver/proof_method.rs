@@ -36,8 +36,7 @@ pub enum Result {
     Solved,
     /// A contradiction could be derived.
     Contradictory(Option<Contradiction>),
-    /// The proof can't be finished — typically because of reducible
-    /// operators in subterms or a solution after weakening.
+    /// Unresolved constraints prevent a trace, or no proof method applies.
     Unfinishable,
 }
 
@@ -54,18 +53,21 @@ pub enum ProofMethod {
 
 /// `isFinished`: returns the appropriate `Result` if the system is in
 /// a terminal state — solved, contradictory, or unfinishable.
-pub fn is_finished(ctx: &ProofContext, sys: &System) -> Option<Result> {
+pub fn is_finished(
+    ctx: &ProofContext,
+    sys: &System,
+) -> std::result::Result<Option<Result>, crate::prove::ProveError> {
     if sys.is_initial() {
-        return None;
+        return Ok(None);
     }
     #[cfg(test)]
     super::cancellation_tests::checkpoint(ctx, super::cancellation_tests::Work::Terminal);
-    let cs = contradictions(ctx, sys);
+    let cs = contradictions(ctx, sys)?;
     if let Some(c) = cs.into_iter().next() {
         // Mirror Haskell `contradictorySystem`: any contradiction
         // closes the branch as `Contradictory`.  Haskell's `isFinished`
         // does not gate this on source-case diagnostics.
-        return Some(Result::Contradictory(Some(c)));
+        return Ok(Some(Result::Contradictory(Some(c))));
     }
     // Direct port of Haskell `isFinished` (ProofMethod.hs):
     //   | null ogs && stFinished     = Just Solved
@@ -78,60 +80,36 @@ pub fn is_finished(ctx: &ProofContext, sys: &System) -> Option<Result> {
     // (gfalse is caught as a FormulasFalse contradiction above, so we
     // don't need an explicit `no_false_formula` guard here.)
     use crate::constraint::solver::goals::open_goals;
-    let no_open_goals = open_goals(sys).is_empty();
-    let sub_finished = finished_subterms(ctx, sys);
-    if no_open_goals && sub_finished {
-        // Haskell's `isFinished` returns Solved directly here.
-        Some(Result::Solved)
-    } else if no_open_goals && !sub_finished {
-        Some(Result::Unfinishable)
-    } else {
-        None
+    if !open_goals(sys).is_empty() {
+        return Ok(None);
     }
+    // Haskell only forces the witness check once no open goals remain.
+    Ok(Some(
+        if super::subterm_witness::finished_subterms(&ctx.maude.maude_sig(), sys) {
+            Result::Solved
+        } else {
+            Result::Unfinishable
+        },
+    ))
 }
 
-/// Direct port of Haskell `finishedSubterms`
-/// (`Theory/Tools/SubtermStore.hs`):
-///   hasReducibleOperatorsOnTop reducible sst =
-///     all (topIsNotReducible . snd) allSubterms
-///     where allSubterms = posSubterms ∪ negSubterms ∪ solvedSubterms
-///           topIsNotReducible (FApp f _) = f ∉ reducible
-///           topIsNotReducible _          = True
-///
-/// True iff every subterm's RHS has a top-level function symbol that
-/// is NOT in the reducible set.  If any subterm's RHS has a reducible
-/// top symbol, the proof cannot finish (further rewriting could
-/// reduce it).
-pub fn finished_subterms(ctx: &ProofContext, sys: &System) -> bool {
-    use tamarin_term::term::Term;
-    let msig = ctx.maude.maude_sig();
-    let top_is_not_reducible = |t: &tamarin_term::lterm::LNTerm| -> bool {
-        match t {
-            // HS `topIsNotReducible (FApp f _) = f \`S.notMember\` reducible`
-            // (SubtermStore.hs).  `reducible_fun_syms` is a
-            // `FunSig = BTreeSet<FunSym>`, so `contains` does the exact
-            // structural `FunSym` equality test in O(log n).
-            Term::App(f, _) => !msig.reducible_fun_syms.contains(f),
-            // Variables and constants are never reducible at the top.
-            _ => true,
-        }
-    };
-    // HS `hasReducibleOperatorsOnTop` walks posSubterms ∪ negSubterms ∪
-    // solvedSubterms (SubtermStore.hs).
-    sys.subterm_store
-        .subterms
-        .iter()
-        .all(|s| top_is_not_reducible(&s.big))
-        && sys
-            .subterm_store
-            .solved_subterms
-            .iter()
-            .all(|s| top_is_not_reducible(&s.big))
-        && sys
-            .subterm_store
-            .neg_subterms
-            .iter()
-            .all(|(_, big)| top_is_not_reducible(big))
+/// Recognize exhausted states independently of heuristic ranking. Only use
+/// this when checking a saved UNFINISHABLE step or after method exhaustion.
+pub fn is_finished_or_stuck(
+    ctx: &ProofContext,
+    sys: &System,
+) -> std::result::Result<Option<Result>, crate::prove::ProveError> {
+    if let Some(result) = is_finished(ctx, sys)? {
+        return Ok(Some(result));
+    }
+    if !crate::constraint::solver::goals::open_goals(sys).is_empty()
+        || exec_proof_method(ctx, &ProofMethod::Simplify, sys)?.is_some()
+        || (sys.is_initial() && exec_proof_method(ctx, &ProofMethod::Induction, sys)?.is_some())
+    {
+        return Ok(None);
+    }
+    // A timed-out method has no cases but is not evidence of exhaustion.
+    Ok((!crate::constraint::solver::search::deadline_reached()).then_some(Result::Unfinishable))
 }
 
 /// Render/index applicability — the evaluation depth HS's
@@ -509,24 +487,10 @@ pub fn exec_proof_method(
             // here, or the proof tree loses siblings whose contradiction
             // reason Haskell renders.
             let keep = |sys: &System| -> bool { !sys.eq_store().is_false() };
-            // HS-faithful: `process` (ProofMethod.hs) treats
-            // EVERY `solveGoal` result UNIFORMLY — the solve yields ONE
-            // `CaseName`, then `runReduction (m <* simplifySystem)` fans the
-            // DisjT continuation out into N branches that ALL carry that same
-            // name, after which `removeRedundantCases` + `uniqueListBy ...
-            // distinguish` dedups and suffixes same-named survivors
-            // (`_case_1`/`_case_2`/...).  A `Linear`/`LinearNamed` outcome is
-            // therefore NOT special: it is simply a single-element case list
-            // whose post-`simplify` fan-out must run through the very same
-            // dedup+distinguish pipeline as `Cases`.  Normalise all three
-            // outcomes to a `Vec<(name, System)>` and share the
-            // dedup+distinguish pipeline.  Pushing each fanned-out system
-            // with a bare, un-`distinguish`ed name would drop the `_case_N`
-            // suffixes when a lone source-case fans out at simplify time —
-            // e.g. Yubikey's `eventInitStuff...` premise, where 4
-            // identically-named siblings would let the exists-trace DFS
-            // commit to `otc=('one'++'zero')` (14 steps) instead of HS's
-            // `_case_2` (`otc='zero'`, 10 steps).
+            // `process` (ProofMethod.hs) simplifies every goal-solve outcome,
+            // then deduplicates cases and distinguishes repeated names with
+            // `_case_N`. A linear outcome may split during simplification, so
+            // all outcomes share this pipeline.
             let cases: Vec<(String, System, u64)> = match outcome {
                 GoalCases::Linear => vec![("".to_string(), r.sys, adopted_counter)],
                 GoalCases::LinearNamed(name) => vec![(name, r.sys, adopted_counter)],
@@ -575,6 +539,14 @@ pub fn exec_proof_method(
             }
         }
         ProofMethod::Induction => {
+            // Search and replay must enforce the same applicability checks.
+            if !sys.nodes.is_empty()
+                || !sys.solved_formulas.is_empty()
+                || !sys.goals.is_empty()
+                || sys.formulas.len() != 1
+            {
+                return Ok(None);
+            }
             // Take the first formula and try `ginduct`.
             let Some(fm) = sys.formulas.first().cloned() else {
                 return Ok(None);
@@ -589,20 +561,9 @@ pub fn exec_proof_method(
             //         [("empty_trace", baseCase), ("non_empty_trace", stepCase)]
             //     L.setM sFormulas (S.singleton caseFormula)
             //     return caseName
-            // HS uses `setM` — direct field write into `sFormulas`, NOT
-            // `insertFormula`.  Calling `insertFormula` here would route
-            // through HS's GDisj insertion arm (`insertFormula`/`insert'`,
-            // Reduction.hs) which adds the
-            // empty DisjG goal to `sGoals`; HS's `reduceFormulas`
-            // (Simplify.hs) filters by `reducibleFormula`
-            // (Reduction.hs `reducibleFormula`) which returns False for `GDisj _`, so
-            // an `empty_trace` formula `Disj([])` (gfalse) stays in
-            // `sFormulas` untouched and never produces a DisjG goal —
-            // `FormulasFalse` contradiction picks it up directly.
-            // (Routing through insert_formula would insert the empty DisjG
-            // goal at gsNr=0, shifting every subsequent gsNr in every
-            // sibling branch and diverging from HS at the first insertGoal
-            // call.)
+            // Match HS's direct formula-store assignment. Inserting here
+            // would create disjunction goals before simplifySystem and alter
+            // their ordering; simplification handles the selected formula.
             // HS `process . induction` (ProofMethod.hs):
             // `runReduction (induction <* simplifySystem)` under the DisjT
             // monad.  `simplifySystem` CAN fan out at induction time — a
@@ -677,32 +638,11 @@ pub fn check_and_exec_proof_method(
 ) -> std::result::Result<Option<Vec<(CaseName, System)>>, crate::prove::ProveError> {
     match method {
         ProofMethod::Finished(r) => {
-            let Some(actual) = is_finished(ctx, sys) else {
-                return Ok(None);
-            };
-            if !same_kind(r, &actual) {
+            if !finished_step_is_valid(ctx, sys, r)? {
                 return Ok(None);
             }
         }
-        ProofMethod::Induction => {
-            // Direct port of Haskell `canApplyInduction` (ProofMethod.hs):
-            //   guard (M.null sNodes); guard (S.null sSolvedFormulas);
-            //   guard (M.null sGoals); (_, t) <- uncons sFormulas; guard (null t)
-            // i.e. no nodes, no solved formulas, no open goals, exactly one
-            // formula.  No gfalse check (do NOT call is_initial_system here).
-            if !sys.nodes.is_empty() {
-                return Ok(None);
-            }
-            if !sys.solved_formulas.is_empty() {
-                return Ok(None);
-            }
-            if !sys.goals.is_empty() {
-                return Ok(None);
-            }
-            if sys.formulas.len() != 1 {
-                return Ok(None);
-            }
-        }
+        ProofMethod::Induction => {}
         ProofMethod::SolveGoal(g) => {
             if !sys.goals.iter().any(|(existing, _)| existing == g) {
                 return Ok(None);
@@ -711,6 +651,21 @@ pub fn check_and_exec_proof_method(
         ProofMethod::Simplify | ProofMethod::Sorry(_) | ProofMethod::Invalidated => {}
     }
     exec_proof_method(ctx, method, sys)
+}
+
+/// Validate a stored terminal marker by result kind. Contradiction reasons
+/// are runtime details; an UNFINISHABLE marker additionally checks exhaustion.
+pub(crate) fn finished_step_is_valid(
+    ctx: &ProofContext,
+    sys: &System,
+    expected: &Result,
+) -> std::result::Result<bool, crate::prove::ProveError> {
+    let actual = if matches!(expected, Result::Unfinishable) {
+        is_finished_or_stuck(ctx, sys)?
+    } else {
+        is_finished(ctx, sys)?
+    };
+    Ok(actual.is_some_and(|actual| same_kind(expected, &actual)))
 }
 
 fn same_kind(a: &Result, b: &Result) -> bool {
@@ -754,7 +709,7 @@ mod tests {
         };
         let s = System::empty();
         assert!(
-            is_finished(&ctx, &s).is_none(),
+            is_finished(&ctx, &s).unwrap().is_none(),
             "initial system shouldn't be finished"
         );
     }
@@ -786,9 +741,27 @@ mod tests {
             });
         let rule: RuleACInst = Rule::new(info, Vec::new(), Vec::new(), Vec::new());
         s.add_node(nid, rule);
-        match is_finished(&ctx, &s) {
+        match is_finished(&ctx, &s).unwrap() {
             Some(Result::Solved) => {}
             r => panic!("expected Solved, got {:?}", r),
+        }
+    }
+
+    #[test]
+    fn residual_subterm_without_a_public_witness_is_unfinishable() {
+        use tamarin_term::lterm::{fresh_term, pub_term, LSort, LVar};
+        use tamarin_term::vterm::var_term;
+        let Some(ctx) = ctx() else { return };
+        for (small, expected) in [
+            (fresh_term("secret"), Result::Unfinishable),
+            (pub_term("public"), Result::Solved),
+        ] {
+            let mut sys = System::empty();
+            sys.solved_formulas_mut()
+                .push(std::sync::Arc::new(crate::guarded::gtrue()));
+            sys.subterm_store_mut()
+                .add(small, var_term(LVar::new("x", LSort::Msg, 0)));
+            assert_eq!(is_finished(&ctx, &sys).unwrap(), Some(expected));
         }
     }
 
@@ -812,7 +785,7 @@ mod tests {
         // `FormulasFalse` contradiction.
         s.formulas_mut()
             .push(std::sync::Arc::new(crate::guarded::gfalse()));
-        match is_finished(&ctx, &s) {
+        match is_finished(&ctx, &s).unwrap() {
             Some(Result::Contradictory(Some(Contradiction::FormulasFalse))) => {}
             r => panic!("expected Contradictory(FormulasFalse), got {:?}", r),
         }

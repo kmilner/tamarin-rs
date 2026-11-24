@@ -39,11 +39,8 @@ fn fixtures_dir() -> PathBuf {
 /// The pinned oracle, discovered the way every parity script discovers it:
 /// `HS_PATH` when set, else the `tamarin-prover-testing` stack-work build.
 ///
-/// A bare `tamarin-prover` on `PATH` is deliberately NOT accepted.  It is
-/// whatever the machine happens to have installed — on this box a packaged
-/// release 1.12.0, a different upstream release from the submodule pin — and
-/// a differential test that compares against the wrong release is comparing
-/// against the wrong specification.
+/// An arbitrary `tamarin-prover` on `PATH` may use a different upstream
+/// revision, so it is not accepted as the parity oracle.
 fn oracle_binary() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("HS_PATH") {
         let p = PathBuf::from(p);
@@ -101,17 +98,13 @@ fn oracle_command_within(secs: u32) -> Option<Command> {
 /// across the mirror — one copy's divergence resolving would be masked by
 /// the other's persisting.
 ///
-/// Counts proved untrustworthy here: the eligible set breathes with the
-/// per-file oracle timeout under machine load — a quiet run admits marginal
-/// files that carry disproportionate mismatches — so a count floor flakes in
-/// both directions while the mismatch *identities* stay put.
+/// Per-file oracle timeouts make the eligible set depend on machine load.
+/// Exact mismatch identities keep that variation separate from parity changes.
 type ProbeLedger = Option<&'static [&'static str]>;
 
 /// Expected structural mismatches for `corpus_proof_skeleton_match_probe`.
 ///
-/// Re-enumerated 2026-08-28 on `internal-repr` (60s oracle timeout, CI
-/// profile): 825/833 matched, leaving the eight identities below. Corpus
-/// mirror copies are listed individually.
+/// Corpus mirror copies are listed individually.
 const STRUCTURAL_MISMATCH_LEDGER: ProbeLedger = Some(&[
     "asiaccs20-POIDC/OIDC_Implicit.spthy::Intent_Consent_and_Correct_Browser",
     "asiaccs20-POIDC/proofs/PROOF_OIDC_Implicit.spthy::executable",
@@ -729,55 +722,28 @@ fn simplify_once(
     }
 }
 
-/// End-to-end: parse the disj_lemma fixture, build the initial
-/// system, simplify, and verify the formula structure stays intact.
-/// `reducible_formula(Disj) = false` matches Haskell — top-level Disj
-/// does NOT get decomposed by `reduce_formulas`. Decomposition happens
-/// later via `Induction` or via being nested inside a reducible parent.
+/// Initial disjunctions retain their formula and gain a matching case-split
+/// goal. Induction is unavailable once that goal exists.
 #[test]
-fn simplify_top_level_disj_lemma_left_intact() {
+fn simplify_top_level_disjunction_installs_its_goal() {
+    use tamarin_theory::constraint::constraints::Goal;
+    use tamarin_theory::constraint::solver::proof_method::{exec_proof_method, ProofMethod};
     let Some(ctx) = rule_free_context() else {
         return;
     };
     let sys = fixture_lemma_system("disj_lemma.spthy");
-    let n_formulas_before = sys.formulas.len();
+    let formulas = sys.formulas.clone();
     let simplified = simplify_once(&ctx, sys);
-    // The top-level Disj is non-reducible, so the formula count
-    // doesn't change.
-    assert_eq!(simplified.formulas.len(), n_formulas_before);
-    // No Goal::Disj created during simplify alone (induction or
-    // SolveGoal would trigger that).
-    assert!(!simplified
+    assert_eq!(simplified.formulas, formulas);
+    assert!(simplified
         .goals
         .iter()
-        .any(|(g, _)| matches!(g, tamarin_theory::constraint::constraints::Goal::Disj(_))));
-}
-
-/// End-to-end: drive `run_proof_search` on the disj_lemma fixture
-/// from start. The search should pick `Induction` first (matching
-/// tamarin), creating two cases: `empty_trace` and `non_empty_trace`.
-/// Tamarin's actual proof for this fixture: induction → case_1 → SOLVED.
-#[test]
-fn proof_search_disj_lemma_picks_induction_first() {
-    use tamarin_theory::constraint::solver::proof_method::ProofMethod;
-    use tamarin_theory::constraint::solver::search::run_proof_search;
-
-    let Some(ctx) = rule_free_context() else {
-        return;
-    };
-    let root = run_proof_search(&ctx, fixture_lemma_system("disj_lemma.spthy"), 5)
-        .expect("default ranking");
-    // First method should be Induction — matches tamarin's
-    // `induction` step at the start of the proof.
+        .any(|(goal, _)| matches!(goal, Goal::Disj(_))));
     assert!(
-        matches!(root.method, ProofMethod::Induction),
-        "expected Induction, got {:?}",
-        root.method
+        exec_proof_method(&ctx, &ProofMethod::Induction, &simplified)
+            .unwrap()
+            .is_none()
     );
-    // Two children: empty_trace and non_empty_trace.
-    assert_eq!(root.children.len(), 2);
-    assert!(root.children.contains_key("empty_trace"));
-    assert!(root.children.contains_key("non_empty_trace"));
 }
 
 /// **Verdict-match suite**: drive each fixture through `prove_lemma`
@@ -1161,7 +1127,6 @@ fn corpus_proof_skeleton_match_probe() {
             // cached `mk_dh`/`mk_bp_intruder_variants`, `xor_maude_sig`/
             // `bp_maude_sig`), so theories using them are deliberately NOT
             // filtered out here — this catches XOR/BP proof-shape regressions
-            // (e.g. NSLPK3xor: RS 36/38 vs HS 11/13 steps).
 
             let theory = tamarin_parser::parse_theory(&src, &[]).ok()?;
             let out_path = format!("/tmp/proof_skel_corpus_{}_{}.spthy", pid, idx);
@@ -1499,46 +1464,33 @@ fn prove_lemma_disj_lemma_terminates_and_tamarin_verifies() {
     );
 }
 
-/// Deep-search test: drive the disj_lemma all the way down. After
-/// `Induction`, the `non_empty_trace` case should decompose its Conj
-/// formula via `reduce_formulas`, yielding a `Goal::Disj` which the
-/// search then forks. Confirms the search doesn't infinite-loop on
-/// repeated Induction (which would happen without the
-/// `can_apply_induction` precondition).
+/// Search simplifies the initial disjunction, solves its split goal, and
+/// finishes both branches without trying induction again. This context has no
+/// rules, so neither disjunct's action can be produced.
 #[test]
 fn proof_search_disj_lemma_descends_into_disj_goal() {
+    use tamarin_theory::constraint::constraints::Goal;
     use tamarin_theory::constraint::solver::proof_method::ProofMethod;
     use tamarin_theory::constraint::solver::search::{run_proof_search, NodeStatus};
-
     let Some(ctx) = rule_free_context() else {
         return;
     };
-    // Generous budget — must terminate without infinite-looping.
     let root = run_proof_search(&ctx, fixture_lemma_system("disj_lemma.spthy"), 50)
         .expect("default ranking");
-    assert!(matches!(root.method, ProofMethod::Induction));
-    let non_empty = root
-        .children
-        .get("non_empty_trace")
-        .expect("non_empty branch");
-    // The non_empty case decomposes its Conj formula with simplify.  That
-    // yields the `Goal::Disj` that the search then picks.  If this assertion
-    // also accepted `Simplify` or `Finished`, it would pass for a run that
-    // never reached the disjunction.  Reaching the disjunction is what this
-    // case checks.
+    assert!(matches!(root.method, ProofMethod::Simplify));
+    assert_eq!(root.children.len(), 1);
+    let split = root.children.values().next().unwrap();
     assert!(
-        matches!(
-            &non_empty.method,
-            ProofMethod::SolveGoal(tamarin_theory::constraint::constraints::Goal::Disj(_))
-        ),
-        "expected SolveGoal(Disj) in non_empty_trace, got {:?}",
-        non_empty.method
+        matches!(split.method, ProofMethod::SolveGoal(Goal::Disj(_))),
+        "{:?}",
+        split.method
     );
-    // The context holds no rules.  Nothing can produce the `A` action or the
-    // `B` action that the disjuncts need, so both branches end at ⊥.
-    assert_eq!(non_empty.status, NodeStatus::Contradictory);
-    let empty = root.children.get("empty_trace").expect("empty branch");
-    assert_eq!(empty.status, NodeStatus::Contradictory);
+    assert_eq!(split.children.len(), 2);
+    assert!(split
+        .children
+        .values()
+        .all(|child| child.status == NodeStatus::Contradictory));
+    assert_eq!(root.status, NodeStatus::Contradictory);
 }
 
 /// End-to-end: parse a fixture, convert each lemma to guarded form,
@@ -1685,17 +1637,10 @@ end
     let _ = std::fs::remove_file(&tmp);
 }
 
-/// Regression: `insert_implied_formulas_pass` must derive a `[reuse]`
-/// lemma's implied consequence even when the triggering action's
-/// argument is a Nat-sorted `App` term (e.g. `tone()`, the internal
-/// form of `%1`) rather than a `Lit`. A prior bug in `structural_match`
-/// classified every `App` as sort `Msg`, so a Nat-sorted pattern
-/// variable never matched — silently dropping the reuse lemma's
-/// `HonestSignatureKey` consequence whenever no sibling action offered
-/// a free-variable fallback. The verdict alone doesn't catch this: the
-/// buggy port still finds `Solved` via a shorter path that skips
-/// `HonestSignatureKey` entirely. So this checks the proof tree
-/// explicitly contains a `HonestSignatureKey` step.
+/// A reuse lemma must derive its consequence when an action argument is a
+/// Nat-sorted application, such as `%1`, as well as when it is a literal.
+/// Check that the proof contains the implied `HonestSignatureKey` step:
+/// a solved verdict alone does not establish that the reuse lemma fired.
 #[test]
 fn fixture_nat_sort_reuse_lemma_derives_implied_fact() {
     use tamarin_theory::constraint::constraints::Goal;

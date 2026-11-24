@@ -111,3 +111,24 @@ fn sapic_generated_name_clash_aborts_translation() {
         "the clash fires after the `Theory translated` marker:\n{stderr}"
     );
 }
+
+#[test]
+fn parsed_identity_member_cannot_reuse_the_parent_name() {
+    if !maude_available() {
+        return;
+    }
+    let source = r#"theory IdentityParentName begin
+rule R: [] --[A('a')]-> []
+variants rule (modulo AC) R: [] --[A('a')]-> []
+lemma witness: exists-trace "Ex #i. A('a')@i"
+end"#;
+    let (code, output, error) = common::run_raw(
+        TMP_DIR,
+        "identity_parent",
+        source,
+        &["--prove", "--quit-on-warning"],
+    );
+    assert_eq!(code, 1, "{output}\n{error}");
+    common::assert_diagnostic(&error, &["error: Duplicate rule", "`R`"]);
+    assert!(!output.contains("verified"), "{output}");
+}

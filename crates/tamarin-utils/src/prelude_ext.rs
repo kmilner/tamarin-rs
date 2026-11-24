@@ -6,6 +6,17 @@
 
 use std::hash::Hash;
 
+/// Keep the first occurrence of each equal value, in input order.
+pub fn nub<T: PartialEq>(xs: impl IntoIterator<Item = T>) -> Vec<T> {
+    let mut unique = Vec::new();
+    for value in xs {
+        if !unique.contains(&value) {
+            unique.push(value);
+        }
+    }
+    unique
+}
+
 /// `nubOn proj xs`: keep the first occurrence of each projection value.
 /// Order-preserving. O(n) via a `HashSet` of seen projections, hence the
 /// `K: Eq + Hash` bound.

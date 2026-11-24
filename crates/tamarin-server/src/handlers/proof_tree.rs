@@ -30,7 +30,7 @@ use parking_lot::{Mutex, MutexGuard};
 use tamarin_theory::constraint::solver::context::ProofContext;
 use tamarin_theory::constraint::solver::goals::{ranking_at_depth, GoalRanking};
 use tamarin_theory::constraint::solver::proof_method::{
-    exec_proof_method, finished_subterms, is_finished, ProofMethod,
+    exec_proof_method, is_finished, is_finished_or_stuck, ProofMethod,
 };
 use tamarin_theory::constraint::solver::search::{
     candidate_methods_with_expl, rollup_status, NodeStatus, ProofNode, ProofStatus,
@@ -289,7 +289,9 @@ impl ProofState {
             let mut children = BTreeMap::new();
             for (name, sys) in cases {
                 // Eagerly classify each child as finished / open.
-                let (status, leaf_method) = match is_finished(&ctx, &sys) {
+                let (status, leaf_method) = match is_finished(&ctx, &sys)
+                    .map_err(|error| format!("proof context: {error}"))?
+                {
                     Some(r) => {
                         let s = match &r {
                             tamarin_theory::constraint::solver::proof_method::Result::Solved =>
@@ -664,11 +666,9 @@ impl ProofState {
     fn replay_interactive_root(&self, lemma: &str) -> Result<Option<ProofNode>, String> {
         self.replay_root(lemma).map(|replayed| {
             replayed.map(|(mut root, has_stored_proof)| {
-                // The interactive tree historically treats a lemma with no
-                // parsed skeleton as an open root (so its action links are
-                // enabled). Batch replay labels the equivalent bare leaf
-                // `Sorry`; retain the web status while leaving genuine
-                // stored-proof replay untouched.
+                // A lemma without a stored skeleton has an open web root
+                // with enabled action links. Stored proofs use their replayed
+                // status; batch replay labels a bare leaf `Sorry`.
                 prepare_interactive_root(&mut root, has_stored_proof);
                 root
             })
@@ -1043,20 +1043,14 @@ fn write_applicable_methods(
         }
     }
     if methods.is_empty() {
-        // Mirror Haskell `prettyApplicableProofMethods` (`Web/Theory.hs`):
-        //   [] | finishedSubterms ctxt sys -> "Constraint System is Solved"
-        //   []                             -> "Constraint System is Unfinishable"
-        // We only reach here when `is_finished` returned `None` (the
-        // `Some` case produced a non-empty `[Finished r]` above), so the
-        // Solved/Unfinishable choice MUST come from `finished_subterms`
-        // exactly as HS does — not from `is_finished` (which is `None`
-        // here and would always pick "Solved").
-        let solved = finished_subterms(ctx, sys);
-        if solved {
-            out.push("<h3>Constraint System is Solved</h3>".to_string());
-        } else {
-            out.push("<h3>Constraint System is Unfinishable</h3>".to_string());
-        }
+        use tamarin_theory::constraint::solver::proof_method::Result as Terminal;
+        let heading = match is_finished_or_stuck(ctx, sys).map_err(|error| error.to_string())? {
+            Some(Terminal::Solved) => "Constraint System is Solved",
+            Some(Terminal::Unfinishable) => "Constraint System is Unfinishable",
+            Some(Terminal::Contradictory(_)) => "Constraint System is Contradictory",
+            None => "No applicable proof methods",
+        };
+        out.push(format!("<h3>{heading}</h3>"));
         return Ok(());
     }
     // HS `subProofSnippet` (`Web/Theory.hs`):

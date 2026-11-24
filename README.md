@@ -61,13 +61,13 @@ Rust and rechecks the result with Haskell:
 ./prove_and_reverify.sh theory.spthy > proof.spthy
 ```
 
-Some theories need a patched Haskell build for proof replay; see
+Replay needs a Haskell build from upstream's `develop` branch; see
 [compatibility notes](docs/STATUS.md#proof-reverification).
 
 ## Status and performance
 
-- **Compatibility:** byte-identical batch output on a 432-file parity corpus,
-  with stored-proof replay checked in both directions. See
+- **Compatibility:** parity gates cover the proof and web corpora,
+  with stored-proof replay checked by focused regressions. See
   [coverage and remaining differences](docs/STATUS.md).
 - **Performance:** The eight-theory x86_64 Linux benchmark measured a
   6.1–141× speedup over Tamarin 1.12.0 (median 35×) at 1, 4, and 16 cores. On one core,

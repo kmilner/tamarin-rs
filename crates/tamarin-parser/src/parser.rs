@@ -1680,9 +1680,8 @@ impl<'a> Parser<'a> {
             self.skip_ws();
             let allowed = if self.is_diff { "sScC" } else { "sSpPcCiI" };
             if word.chars().count() != 1 || !allowed.contains(&word) {
-                // HS feeds this word to the partial `stringToGoalRanking` and
-                // aborts. Reject the same invalid declaration as a structured
-                // parse error instead of reproducing that runtime crash.
+                // Tactic presorts accept one of the rankings enabled for this
+                // theory mode. Report invalid declarations at the source span.
                 return Err(self.err(format!("unknown proof method ranking `{word}`")));
             }
             presort = word.chars().next().expect("validated presort");
@@ -2093,7 +2092,7 @@ impl<'a> Parser<'a> {
                 // check never runs, and nothing is registered.  Discarding the
                 // requested attributes is what keeps `functions: fst/1
                 // [destructor]` printing as `function: fst (Any) : Any` in the
-                // open theory's typing lines (TheoryObject.hs).
+                // open theory's typing lines (TheoryObject.hs#prettyTranslationElement).
                 return Ok(FunctionDecl {
                     name,
                     arg_types: self.materialize_function_args(args)?,
@@ -2633,6 +2632,22 @@ impl<'a> Parser<'a> {
                 ));
             }
         }
+        // OpenTheory.addOpenProtoRule requires names within one explicit
+        // family to be distinct, including the parent. Internal compiled
+        // identity families do not pass through this parsed-input guard.
+        let mut family_names = std::collections::BTreeSet::from([r.name.as_str()]);
+        if r.variants
+            .iter()
+            .any(|v| !family_names.insert(v.name.as_str()))
+        {
+            return Err(self.duplicate_declaration(
+                "rule",
+                r.name.clone(),
+                ParseContext::Rule,
+                name_start,
+                r.name.len(),
+            ));
+        }
         if let Some(first) = self.state.seen_rules.iter().find(|p| p.name == r.name) {
             let differs = first.attributes != r.attributes
                 || first.premises != r.premises
@@ -2863,7 +2878,11 @@ impl<'a> Parser<'a> {
         // `(modulo AC)` head is absent and parsing proceeds. (More lenient than
         // Haskell, but still accepts all valid Haskell input.)
         self.in_context(ParseContext::Rule, |parser| {
-            parser.rule_after_kw().map(|(rule, _)| rule)
+            let (rule, _) = parser.rule_after_kw()?;
+            if !rule.embedded_restrictions.is_empty() {
+                return Err(parser.err("Embedded restrictions in explicit AC variants are not supported; use named restrictions and action facts instead."));
+            }
+            Ok(rule)
         })
     }
 
@@ -3012,13 +3031,11 @@ impl<'a> Parser<'a> {
     /// are fine); anything else is `Nothing` and `parseColor` raises
     /// `fail ("Color code " ++ show hc ++ " could not be parsed to RGB")`.
     /// The accepted code is stored verbatim (quotes/`#` stripped); rendering
-    /// lowercases it, matching `rgbToHex` of the parsed `RGB` value
-    /// (Data/Color.hs round-trips every 6-digit code byte-for-byte).
+    /// lowercases it, matching `rgbToHex` of the parsed `RGB` value.
     ///
-    /// Kept from the previous lexer-side implementation: no whitespace is
-    /// skipped after the opening quote or the `#`, so `' #FF'` / `'# FF'` are
-    /// rejected here though HS's `symbol`-based parser accepts them — real
-    /// colour attributes are always tight (e.g. `'#111111'`).
+    /// Rust requires adjacent `#` and hexadecimal digits (e.g. `'#111111'`).
+    /// Known parser difference: Haskell's `symbol "#"` consumes whitespace,
+    /// so it also accepts `'# ff0000'` and unquoted `# ff0000`.
     fn color_attr_value(&mut self) -> Result<String, ParseError> {
         self.skip_ws();
         let quoted = self.lx.eat_str("'");
@@ -4574,8 +4591,8 @@ impl<'a> Parser<'a> {
     ///   * `userDefinedFunSyms` is built from the FULL `funSyms`
     ///     (Term/Maude/Signature.hs), so the enabled theories' `NoEq`
     ///     symbols ([`Self::enabled_theory_noeq_syms`]) participate;
-    ///   * macros come after the function symbols, and `em` is ALWAYS present
-    ///     at arity 2 (even without bilinear-pairing), appended last.
+    ///   * macros come after the function symbols; the special `em` operator
+    ///     is available at arity 2 only with bilinear-pairing enabled.
     ///
     /// `Some(NoEq)`'s applications are arity-checked
     /// (`Theory/Text/Parser/Term.hs`);
@@ -4608,7 +4625,7 @@ impl<'a> Parser<'a> {
         if let Some((_, o)) = self.state.macro_syms.iter().find(|(n, _)| n == op) {
             return Some(ArityRes::NoEq { opts: *o });
         }
-        if op == "em" {
+        if op == "em" && self.state.sig_enable_bp {
             // The appended `(emapSymString, (2,Public,Constructor,NotNDC))`
             // row: `naryOpApp` special-cases the NAME into `fAppC EMap`
             // (Theory/Text/Parser/Term.hs), which the readers resolve
@@ -4892,7 +4909,7 @@ impl<'a> Parser<'a> {
     /// (Theory/Text/Parser/Term.hs): an identifier that is an
     /// arity-0 symbol of `funSyms maudeSig ∪ macroNames maudeSig` is the
     /// application `fApp fs []`, whatever a same-named binder is in scope.
-    /// Current upstream reads a complete identifier before resolving a
+    /// The parser reads a complete identifier before resolving a
     /// nullary symbol, so a symbol named `c` cannot accidentally claim the
     /// prefix of `cx`. Dot indices and type/sort suffixes are not identifier
     /// characters, however: a declared `c/0` claims the `c` in `c.1` or

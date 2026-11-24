@@ -3,8 +3,8 @@
 
 //! The `System` sequent — the solver's working state.
 //!
-//! Port of `Theory.Constraint.System.System` (from the 1939-line
-//! `Theory/Constraint/System.hs`). The fields are live solver state:
+//! Port of `Theory.Constraint.System.System` (Theory/Constraint/System.hs).
+//! The fields are live solver state:
 //! the equation/subterm stores, source-kind/side annotations, the
 //! already-grafted source list and the goal/node/edge/formula
 //! collections are all read and mutated by the solver during proof search.
@@ -525,6 +525,24 @@ pub struct GoalStatus {
     /// position.  This is the canonical tie-break within a heuristic
     /// priority class.
     pub nr: u64,
+}
+
+impl GoalStatus {
+    /// Haskell's `combineGoalStatus`: retain either solved/looping flag and
+    /// the oldest goal number. Return whether the stored status changed.
+    pub(crate) fn merge_from(&mut self, other: &Self) -> bool {
+        let merged = Self {
+            solved: self.solved || other.solved,
+            looping: self.looping || other.looping,
+            nr: self.nr.min(other.nr),
+        };
+        if *self == merged {
+            false
+        } else {
+            *self = merged;
+            true
+        }
+    }
 }
 
 impl PartialOrd for GoalStatus {
@@ -1568,19 +1586,16 @@ impl System {
         // combineGoalStatus` keeps the existing — smaller — nr).
         let age = self.next_goal_nr;
         self.next_goal_nr = self.next_goal_nr.wrapping_add(1);
-        let slot_idx = self.goals.iter().position(|(existing, _)| *existing == g);
-        if let Some(idx) = slot_idx {
-            let slot = &mut self.goals_mut()[idx];
-            slot.1.looping = slot.1.looping || looping;
-            // combineGoalStatus keeps `min` of the two nrs; the
-            // existing one is always smaller, so leave it unchanged.
-            return;
-        }
         let st = GoalStatus {
             looping,
             nr: age,
             ..Default::default()
         };
+        let slot_idx = self.goals.iter().position(|(existing, _)| *existing == g);
+        if let Some(idx) = slot_idx {
+            self.goals_mut()[idx].1.merge_from(&st);
+            return;
+        }
         self.bump_cache_goal(&g);
         self.goals_mut().push((g, st));
     }
@@ -1706,9 +1721,7 @@ impl System {
     ///   `rawEdgeRel = sEdges ++ unsolvedChains` (`System.hs`).
     /// **Unsolved chain goals contribute (c.0, p.0) to the less-relation
     /// too** — HS treats an open chain as an implicit edge for purposes
-    /// of cycle detection and ordering inference. Without this, RS's
-    /// `cyclic` and `has_forbidden_chain` miss contradictions HS catches
-    /// (root cause of the StatVerif KU(pcs) over-saturation).
+    /// of cycle detection and ordering inference.
     ///
     /// Hoist this build out of loops via [`always_before_with`] so the
     /// relation is built once per pass and queried many times. The
@@ -1800,9 +1813,9 @@ impl System {
     /// where `bot = gfalse()`.  Two conditions: no solved formulas yet, and no
     /// gfalse in the formula set.  This is the gate the automatic-search path
     /// (`rankProofMethods`, ProofMethod.hs) uses to decide whether
-    /// `insertInduction` runs — NOT the stricter replay-only `canApplyInduction`
-    /// (ProofMethod.hs), which additionally checks node/goal emptiness
-    /// and omits the gfalse check.
+    /// `insertInduction` is considered. Execution in both search and replay
+    /// also requires `canApplyInduction` (ProofMethod.hs), which checks
+    /// node/goal emptiness and omits the gfalse check.
     pub fn is_initial(&self) -> bool {
         self.solved_formulas.is_empty()
             && !crate::guarded::stores_contains(&self.formulas, &crate::guarded::gfalse())

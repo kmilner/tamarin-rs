@@ -4,9 +4,8 @@
 //! Skeleton-replay prover — port of HS `replaceSorryProver`
 //! (lib/theory/src/Theory/Proof.hs).
 //!
-//! HS's `--prove` flag wires `replaceSorryProver $ runAutoProver`
-//! (TheoryLoader.hs) so the auto-prover runs **only at `by sorry`
-//! leaves of the user-written skeleton**, not from scratch.  This
+//! HS's `--prove` flag extends annotated `by sorry` leaves and extracts
+//! solutions from the resulting whole proof (TheoryLoader.hs). This
 //! preserves the case-decomposition structure the user wrote in the
 //! `.spthy` file even when the auto-prover would have picked a
 //! different (still-sound) decomposition.
@@ -37,38 +36,24 @@
 //!
 //! ## Replay strategy in this port
 //!
-//! The full HS `--prove` flow runs in two passes that this one-pass
-//! walker folds together:
-//!   1. close-time `checkAndExtendProver (sorryProver Nothing)`
-//!      (`proveTheory (const True) checkProofM`, CloseRule.hs) over
-//!      ALL lemmas — it re-execs each stored step, keeping the verbatim
-//!      structure and turning any step that no longer applies into an
-//!      annotated `sorry /* invalid proof step encountered */`;
-//!   2. prove-time `replaceSorryProver $ runAutoProver` (TheoryLoader.hs)
-//!      over the lemmas the `--prove` selector targets — it re-runs the
-//!      auto-prover at every annotated `sorry` leaf.
+//! First re-execute the finite saved skeleton with `check_and_extend`,
+//! including validation of every stored terminal claim. Then replace annotated
+//! sorries lazily and extract solutions from the combined tree. Search frontiers
+//! use whole-tree depth, while bounds and heuristic depth stay local to each
+//! replacement. This avoids searching an infinite unfinished sibling to
+//! completion before reaching a saved trace (upstream #955).
 //!
-//! We do both in one pass: at every non-Sorry node we exec the proof
-//! method, get the case list, and recurse into each; at Sorry leaves and
-//! at unmatched-case children we fall through to [`run_proof_search`]
-//! (target lemmas) or emit an annotated/unannotated `sorry` (non-target
-//! lemmas, via `auto_prove == false`).
-//!
-//! This matches HS's end result for any skeleton whose
-//! `exec_proof_method`-produced case names match the skeleton's
-//! child names — which is the normal case, since HS produced those
-//! names in the first place.  When names diverge (e.g. a case the
-//! user's skeleton has but our prover's `exec_proof_method` doesn't
-//! produce, or vice versa), we mirror `checkProof`'s `mergeMapsWith`
-//! handling: stored-only cases are kept verbatim and runtime-only cases
-//! are auto-proved (target) or annotated-sorry'd (non-target).
+//! `CutAfterSorry` is the exception: it remains local to each replacement so
+//! a bounded unfinished sibling cannot discard a later saved solution. The
+//! one-pass check-and-extend walker retains that path. Stored-only branches
+//! are preserved without system annotations and are never auto-proved.
 
 use std::collections::BTreeMap;
 
 use crate::constraint::constraints::Goal;
 use crate::constraint::solver::context::ProofContext;
 use crate::constraint::solver::proof_method::{
-    check_and_exec_proof_method, is_finished, ProofMethod, Result as MethodResult,
+    check_and_exec_proof_method, finished_step_is_valid, ProofMethod, Result as MethodResult,
 };
 use crate::constraint::solver::search::{
     node_status_of, run_proof_search_at_depth, NodeStatus, ProofNode,
@@ -77,23 +62,31 @@ use crate::constraint::system::System;
 use crate::prove::ProveError;
 use crate::theory::ProofTree;
 
-/// Drive a single lemma's skeleton.  Equivalent of HS
-/// `runProver (replaceSorryProver (runAutoProver autoProver)) ctxt 0
-///  initial sysOnTree` (Proof.hs).
+/// Check a lemma's saved skeleton, extend its unfinished leaves, and apply
+/// whole-proof solution extraction (HS `proveLemma`, TheoryLoader.hs).
 ///
 /// `proof_bound` (`--bound=N`; `usize::MAX` = unbounded) is plumbed
-/// through to `run_proof_search` for the fall-through auto-prover
-/// invocations.  HS applies `boundProofDepth` inside `runAutoProver`
+/// through to each unfinished replacement's search. Whole-tree extraction
+/// uses its own frontier across saved and newly searched steps.  HS applies `boundProofDepth` inside `runAutoProver`
 /// (Theory/Proof.hs#runAutoProver), i.e. per sorry-replacement — so each
-/// fall-through search here counts depth from its own subtree root,
-/// exactly as HS does.
+/// fall-through search here counts depth from its own subtree root.
+/// Each replacement also receives its own Rust time budget, charged across
+/// its depth rounds without counting time spent on other replacements.
 pub fn replace_sorry_prove(
     ctx: &ProofContext,
     initial: System,
     skeleton: &ProofTree,
     proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
-    replay_node(ctx, initial, skeleton, proof_bound, true)
+    // CutAfterSorry remains local to each replacement, so an unfinished
+    // sibling cannot erase a later saved solution. Other cuts select from
+    // the combined, checked tree (upstream #955), not each sorry separately.
+    if ctx.cut == crate::constraint::solver::context::CutStrategy::AfterSorry {
+        replay_node(ctx, initial, skeleton, proof_bound, true)
+    } else {
+        let checked = replay_node(ctx, initial, skeleton, proof_bound, false)?;
+        crate::constraint::solver::search::extend_saved_proof(ctx, checked, proof_bound)
+    }
 }
 
 /// Replay a stored skeleton WITHOUT auto-proving its open/sorry leaves —
@@ -235,9 +228,8 @@ fn finished_leaf(
     auto_prove: bool,
     proof_bound: usize,
 ) -> Result<ProofNode, ProveError> {
-    let same_kind = |r: &MethodResult| std::mem::discriminant(r) == std::mem::discriminant(stored);
-    match is_finished(ctx, &sys) {
-        Some(ref r) if same_kind(r) => Ok(ProofNode {
+    match finished_step_is_valid(ctx, &sys, stored)? {
+        true => Ok(ProofNode {
             method: ProofMethod::Finished(stored.clone()),
             sys,
             children: BTreeMap::new(),
@@ -261,7 +253,7 @@ fn replay_node(
 ) -> Result<ProofNode, ProveError> {
     tamarin_utils::cancellation::check()?;
     let result = replay_node_inner(ctx, sys, node, proof_bound, auto_prove);
-    // Terminal classification includes legacy boolean Maude queries. A
+    // Terminal classification includes boolean Maude queries. A
     // cancellation error there must never become a changed proof verdict.
     tamarin_utils::cancellation::check()?;
     result
@@ -338,20 +330,10 @@ fn replay_node_inner(
         }
     };
 
-    // Match the skeleton's child case-names against the cases
-    // exec_proof_method produced.  If BOTH the runtime case-map and the
-    // skeleton's child-map are empty (a genuine stored `by solve(...)`
-    // leaf whose re-execution also closes), this is a leaf-equivalent.
-    // If the runtime map is empty but the skeleton HAS children, do NOT
-    // short-circuit: HS `checkProof`'s `mergeMapsWith` runs with an
-    // empty LEFT map and every stored child lands in the rightOnly
-    // branch (`noSystemPrf`) — the whole stored subtree is kept
-    // VERBATIM and renders `/* unannotated */`.  Short-circuiting here
-    // dropped a 263-line stored subtree on
-    // csf18-alethea/alethea_votingphase_malS_Proof_functional.spthy
-    // (HS plain-load: 93 steps; RS: 22) — the merge loop below handles
-    // the empty `produced` map correctly (every skeleton child becomes
-    // a stored-only placeholder).
+    // Match stored child names against the cases produced by re-execution.
+    // Both maps empty is a closing leaf. When only the runtime map is empty,
+    // `checkProof` / `mergeMapsWith` (Theory/Proof.hs) retains every stored
+    // child as an unannotated subtree through the merge below.
     if cases.is_empty() && node.cases.is_empty() {
         // Empty case-map after exec means contradictory closure —
         // mirror search.rs's contradictory-closure handling.

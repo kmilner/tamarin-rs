@@ -177,7 +177,7 @@ fn guarded_negation_shortcut() {
 
 /// Build the parser Term `<'1', g1> ++ <'2', g2> ++ <'3', g3>` where the
 /// pair payloads are long enough that the flat AC chain exceeds the ribbon
-/// and HS `prettyTerm` (Term/Term.hs `FApp (AC o) -> ppTerms ...`) must
+/// and HS `prettyTerm` (Term/Term.hs#prettyTerm `FApp (AC o) -> ppTerms ...`) must
 /// wrap it with the `++` operator at line ends and each element `nest 1`'d.
 fn ac_chain_bterm() -> BLNTerm {
     let pair = |n: &str, payload: &str| {
@@ -220,8 +220,7 @@ fn ac_union_chain_wraps_in_guarded_formula() {
 /// `fcat` break points.  HS `prettyTerm` (Term/Term.hs) renders exp as
 /// `ppTerm t1 <> "^" <> ppTerm t2`, so the exponent `t2 = (~a*~b)` stays a
 /// breakable `fcat`: `hmac('g'^(~a*~b), ...)` must wrap the `*`-operands
-/// like HS rather than run past LINE_LENGTH=110.  Mirrors the spdm
-/// `hmac('g'^(~newPrivKey*~respPrivKey), ...)` proof-line divergence.
+/// within LINE_LENGTH=110.
 #[test]
 fn exp_with_ac_exponent_wraps_inside_fun() {
     use tamarin_term::function_symbols::{exp_sym, AcSym};

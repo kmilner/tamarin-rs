@@ -86,6 +86,7 @@ pub(crate) fn report_init(
         concs: vec![concl],
         restr: vec![report_pred],
         index: 0,
+        matches_destructor_equation: false,
     };
 
     // `reportrule : initrules` — prepend.

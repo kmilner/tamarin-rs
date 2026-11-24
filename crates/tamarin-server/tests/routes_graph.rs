@@ -15,8 +15,8 @@
 //!   - `/json` returns the aeson-pretty JSON graph, with and without
 //!     `abbrevInBackend`; after an autoprove its nodes and edges are the
 //!     searched node's own system (the `SysRetention::KeepAll` guard).
-//!   - On all three, a source/case index naming no case is the Not Found
-//!     page — the port's deliberate divergence from upstream's unchecked
+//!   - On all three, an invalid source/case index reproduces upstream's
+//!     500 page from its unchecked
 //!     `!!`, whose 500 pages leak the GHC CallStack.
 
 mod common;
@@ -142,30 +142,45 @@ async fn interactive_graph_def_renders_source_cases() {
     }
 }
 
-/// A case index naming no case is a plain `notFound` on the dot routes: the
-/// Not Found page, 404, whichever end of the list the index falls off.
-///
-/// Upstream feeds the index into `cases !! (i-1) !! (j-1)` unchecked
-/// (`src/Web/Theory.hs` for `/graph` and
-/// `/interactive-graph-def`), so these URLs answer 500 with the raw
-/// `Prelude.!!` text and its GHC CallStack; RS deliberately corrects that,
-/// which is why these are the only cases-route responses the port does not
-/// byte-compare against a capture.
+/// Match both failing (!!) sites, including negative-index precedence and
+/// wrapping Int subtraction, without crashing the server. Each callstack is
+/// captured from the pinned Haskell oracle, not assembled by the test.
 #[tokio::test]
-async fn dot_routes_out_of_range_case_is_not_found() {
+async fn graph_routes_invalid_case_indices_match_haskell() {
     let s = start_server_with_theory("issue193.spthy").await;
-    for path in [
-        "/thy/trace/1/graph/cases/refined/0/0",
-        "/thy/trace/1/graph/cases/refined/-1/1",
-        "/thy/trace/1/graph/cases/refined/1/9",
-        "/thy/trace/1/graph/cases/refined/-9223372036854775808/1",
-        "/thy/trace/1/interactive-graph-def/cases/refined/0/0",
-        "/thy/trace/1/interactive-graph-def/cases/refined/-1/1",
-        "/thy/trace/1/interactive-graph-def/cases/refined/-1/-1",
-        "/thy/trace/1/interactive-graph-def/cases/refined/9/9",
-    ] {
-        assert_not_found_page(&s, path).await;
+    for route in ["json", "graph", "interactive-graph-def"] {
+        for kind in ["raw", "refined"] {
+            for (indices, failure) in [
+                ("0/1", "source_negative"),
+                ("-1/1", "source_negative"),
+                ("9999/1", "source_large"),
+                ("9999/9999", "source_large"),
+                ("-9223372036854775808/1", "source_large"),
+                ("1/0", "case_negative"),
+                ("1/-1", "case_negative"),
+                ("0/0", "case_negative"),
+                ("-1/-1", "case_negative"),
+                ("9999/0", "case_negative"),
+                ("-9223372036854775808/-1", "case_negative"),
+                ("1/9999", "case_large"),
+                ("1/-9223372036854775808", "case_large"),
+            ] {
+                let path = format!("/thy/trace/1/{route}/cases/{kind}/{indices}");
+                let res = s.get(&path).await;
+                assert_eq!(res.status(), 500, "{path}");
+                assert_eq!(content_type(&res), "text/html; charset=utf-8", "{path}");
+                assert_eq!(
+                    res.text().await.expect("text"),
+                    haskell_capture(&format!("{route}_{failure}.html")),
+                    "{path}"
+                );
+            }
+        }
     }
+    assert_eq!(
+        s.get("/thy/trace/1/json/cases/refined/1/1").await.status(),
+        200
+    );
 }
 
 #[tokio::test]
@@ -276,38 +291,11 @@ async fn graph_json_unhandled_path_is_internal_error() {
 }
 
 #[tokio::test]
-async fn graph_json_out_of_range_source_index_is_not_found() {
-    // `parseCases` reads both indices with `safeRead` at `ReadS Int`
-    // (`src/Web/Types.hs`), so 0, a negative one and `Int` minBound all
-    // parse and reach the handler alongside a past-the-end one.  Upstream
-    // hands every one of them to `casesCode`'s unchecked
-    // `cases !! (i-1) !! (j-1)` (`src/Web/Theory.hs`), which raises: the
-    // response is a 500 whose body is `Prelude.!!: negative index` or
-    // `index too large` plus a CallStack naming the failing `!!` (minBound
-    // wraps `i-1` to maxBound, so even that one reports "too large").  RS
-    // deliberately corrects it — an index naming no case is a miss, and every
-    // one of these answers the ordinary Not Found page.
-    let s = start_server_with_theory("issue193.spthy").await;
-    for path in [
-        "/thy/trace/1/json/cases/refined/0/0",
-        "/thy/trace/1/json/cases/refined/-1/1",
-        "/thy/trace/1/json/cases/refined/-1/-1",
-        // The source index resolves; only the case index is out of range.
-        "/thy/trace/1/json/cases/refined/1/-1",
-        "/thy/trace/1/json/cases/refined/1/0",
-        "/thy/trace/1/json/cases/refined/9/9",
-        "/thy/trace/1/json/cases/refined/-9223372036854775808/1",
-    ] {
-        assert_not_found_page(&s, path).await;
-    }
-}
-
-#[tokio::test]
 async fn graph_json_source_case_returns_json_graph() {
     // `graphJsonThyPath`'s `TheorySource` branch (`src/Web/Theory.hs`)
     // serialises the `(i-1, j-1)` case system under the label
     // `Theory: <thy> Case: <i>:<j>` — the 1-based indices straight from the
-    // path.  Covers the branch the out-of-range 404 above cannot reach.
+    // path. Covers the successful branch alongside the bounds-error tests.
     let s = start_server_with_theory("issue193.spthy").await;
     let res = s.get("/thy/trace/1/json/cases/refined/1/1").await;
     assert_eq!(res.status(), 200);

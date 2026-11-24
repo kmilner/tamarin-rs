@@ -11,16 +11,19 @@
 #                         Node.js 22.12+ or 24+) in target/gui for frontend
 #                         development. Cargo builds its embedded GUI automatically.
 #
-#   ./setup.sh testing    additionally materialise a PATCHED copy of the
+#   ./setup.sh testing    additionally materialise an oracle copy of the
 #                         Haskell prover at tamarin-prover-testing/ and build
 #                         it with stack.  The parity/test scripts under
 #                         scripts/ use that binary as the byte-parity oracle.
 #                         The submodule itself is never modified, so it stays
 #                         trivially in sync with upstream.
 #
-# The files in patches/series mirror fixes that are still under upstream
-# review. Keeping one patch per PR makes each fix easy to drop after it lands.
-# Only the testing oracle needs them; the submodule stays pristine.
+#   ./setup.sh testing-sources
+#                         materialise that same oracle tree without building
+#                         Haskell (for the committed-reference CI gate).
+#
+# The oracle uses the pinned submodule plus any patches listed in patches/series.
+# An empty series builds pristine upstream. The submodule is never patched.
 set -eu
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 sub="$root/tamarin-prover"
@@ -30,6 +33,11 @@ series="$root/patches/series"
     echo "ERROR: missing scripts/gate_common.sh" >&2; exit 1; }
 . "$root/scripts/gate_common.sh"
 
+case "${1:-}" in
+    ''|gui|testing|testing-sources) ;;
+    *) echo "usage: $0 [gui|testing|testing-sources]" >&2; exit 2 ;;
+esac
+
 git -C "$root" submodule update --init tamarin-prover
 echo "submodule ready (pristine upstream @ $(git -C "$sub" rev-parse --short HEAD))"
 
@@ -37,7 +45,7 @@ if [ "${1:-}" = "gui" ]; then
     exec bash "$root/scripts/build_gui.sh"
 fi
 
-[ "${1:-}" = "testing" ] || exit 0
+[ -n "${1:-}" ] || exit 0
 
 # Materialise the patched testing tree as a git worktree of the submodule's
 # pinned commit: shares the object store (cheap) and keeps git metadata so
@@ -116,14 +124,15 @@ while IFS= read -r name || [ -n "$name" ]; do
 done < "$series"
 echo "testing tree patched ($applied patch(es))"
 
+[ "$1" = testing-sources ] && exit 0
+
 install_root="$(cd "$testdir" && stack path --local-install-root)"
 oracle="$install_root/bin/tamarin-prover"
 patch_fp=$(patch_series_fingerprint "$root") || {
     echo "ERROR: cannot fingerprint patches/series" >&2; exit 1; }
 
-# A no-op setup must not relink the timestamp-bearing executable and thereby
-# manufacture a new cache fingerprint. Reuse it only when both the generated
-# source tree and its complete setup attestation are current.
+# Avoid unnecessary relinking. Reuse the existing executable only when its
+# generated source tree and complete setup attestation are current.
 build_needed=1
 stamp="${oracle}.tamarin-rs-oracle"
 if [ "$tree_current" = 1 ] && [ -x "$oracle" ] && [ -r "$stamp" ]; then

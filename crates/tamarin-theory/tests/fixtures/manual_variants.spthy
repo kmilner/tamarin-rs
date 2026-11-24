@@ -1,0 +1,12 @@
+theory ManualVariants
+begin
+builtins: symmetric-encryption
+
+rule Dec:
+  [ In(x), !Key(k) ] --> [ Out(sdec(x,k)) ]
+  variants
+  rule (modulo AC) Dec___VARIANT_1:
+    [ In(x.2), !Key(k.1) ] --> [ Out(sdec(x.2,k.1)) ],
+  rule (modulo AC) Dec___VARIANT_2:
+    [ In(senc(z.2,k.1)), !Key(k.1) ] --> [ Out(z.2) ]
+end

@@ -553,15 +553,8 @@ fn build_app(sig: Option<&MaudeSig>, ident: &[u8], args: Vec<MTerm>) -> MTerm {
         // `parseFAppConst` (Maude/Parser.hs), which never classifies as AC.  RS
         // keeps that routing.
         //
-        // Upstream classifies the identifier by containment —
-        // `BC.isInfixOf "tamPDA" ident` and its three siblings
-        // (Maude/Parser.hs) — which also scans the user's own name, so an
-        // ordinary non-AC function whose NAME contains a marker (`functions:
-        // tamXCAbar/1` -> `tamXCFUtamXCAbar`) is rebuilt as AC: at arity 1
-        // `fAppAC _ [a] = a` deletes the application, at arity >= 2 it
-        // fabricates a flattened/sorted AC term.  RS classifies by decoding the
-        // attribute block instead and deliberately diverges from that upstream
-        // bug on exactly those names.
+        // Decode the attribute block before the user-defined name. Marker-like
+        // bytes inside the name do not affect the operator's class.
         if !args.is_empty() && is_ac_fct_ident(ident) {
             return crate::term::f_app_acfct(parse_fun_ac_sym(ident), args);
         }
@@ -627,10 +620,6 @@ fn build_app(sig: Option<&MaudeSig>, ident: &[u8], args: Vec<MTerm>) -> MTerm {
 /// decoding that block is an exact test: `tamXCFUtamXCAbar` (the free symbol
 /// `tamXCAbar`) carries `F` and falls through to the free-symbol decode below.
 ///
-/// Upstream instead tests the whole identifier for containment of `tamPDA`,
-/// `tamPCA`, `tamXDA` or `tamXCA` (Maude/Parser.hs), which also scans the
-/// name; RS decodes and deliberately diverges there (see the `build_app` AC
-/// branch).
 fn is_ac_fct_ident(ident: &[u8]) -> bool {
     let Some(rest) = ident.strip_prefix(FUN_SYM_PREFIX.as_bytes()) else {
         return false;
@@ -764,12 +753,8 @@ mod tests {
         }
     }
 
-    /// The same identifier applied to arguments: upstream reaches `appIdent`'s
-    /// containment guards (Maude/Parser.hs), classifies it as AC, and
-    /// `fAppAC _ [a] = a` (Raw.hs) deletes the application.  RS decodes
-    /// the attribute block instead — the AC slot holds `F` — so the free
-    /// symbol `tamXCAfoo/1` survives.  Deliberate divergence from that
-    /// upstream bug.
+    /// Marker-like bytes inside a free identifier do not change its symbol
+    /// class or collapse a unary application.
     #[test]
     fn parse_unary_ident_containing_ac_marker_does_not_collapse() {
         let t = parse_reduce_reply(b"result Msg: tamXCFUtamXCAfoo(x1:Msg)\n").unwrap();
@@ -790,11 +775,8 @@ mod tests {
         }
     }
 
-    /// At arity >= 2 the same identifier is where upstream's misclassification
-    /// fabricates a term: `fAppAC` flattens and SORTS the arguments
-    /// (Raw.hs), so `tamXCAfoo(c(2), c(1))` would come back as an AC
-    /// application over `[c(1), c(2)]`.  RS keeps the free symbol and Maude's
-    /// argument order.  Deliberate divergence from that upstream bug.
+    /// Free functions preserve argument order even when their names contain
+    /// bytes used by the AC encoding.
     #[test]
     fn parse_binary_ident_containing_ac_marker_keeps_arg_order() {
         let t = parse_reduce_reply(b"result Msg: tamXCFUtamXCAfoo(c(2), c(1))\n").unwrap();

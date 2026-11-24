@@ -70,17 +70,52 @@ pub enum RunError {
     Regular(String),
     /// An exception which escapes to Haskell's top-level runtime handler.
     GhcException(String),
+    /// A fatal wellformedness report, printed on stdout by Batch.handleError.
+    UnsupportedInput {
+        in_file: String,
+        report: tamarin_theory::wellformedness::WfReport,
+    },
 }
 
 impl std::fmt::Display for RunError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Regular(message) | Self::GhcException(message) => f.write_str(message),
+            Self::UnsupportedInput { in_file, report } => write!(
+                f,
+                "unsupported rule semantics in {in_file}:\n{}",
+                tamarin_theory::pretty_theory::render_console_wf_error_report(report)
+            ),
         }
     }
 }
 
 impl std::error::Error for RunError {}
+
+impl RunError {
+    fn variants(error: tamarin_theory::tools::rule_variants::VariantsError, in_file: &str) -> Self {
+        match error {
+            tamarin_theory::tools::rule_variants::VariantsError::UnsupportedInput(report) => {
+                Self::UnsupportedInput {
+                    in_file: in_file.to_owned(),
+                    report,
+                }
+            }
+            other => Self::Regular(other.to_string()),
+        }
+    }
+}
+
+/// Batch.hs `handleError (UnsupportedInputError report)`: the report goes to
+/// stdout; only the abort message goes to stderr. No theory or summary follows.
+pub fn print_unsupported_input(in_file: &str, report: &tamarin_theory::wellformedness::WfReport) {
+    let report = tamarin_theory::pretty_theory::render_console_wf_error_report(report);
+    println!(
+        "\nERROR: unsupported rule semantics in {in_file}:\n\n{}\n",
+        report.trim_end_matches('\n')
+    );
+    eprintln!("Unsupported rule semantics - aborting before proof search.");
+}
 
 impl From<tamarin_theory::prove::ProveError> for RunError {
     fn from(error: tamarin_theory::prove::ProveError) -> Self {
@@ -109,9 +144,9 @@ pub(crate) enum LemmaVerdict {
     Falsified,
     /// We exhausted the search budget or hit `Sorry`.
     Analyzed,
-    /// HS `UnfinishableProof`: no open goals but subterm store has reducible
-    /// operators.  HS `showProofStatus` (Theory/Proof.hs):
-    ///   "analysis cannot be finished (reducible operators in subterms)"
+    /// HS `UnfinishableProof`: unresolved constraints or exhausted proof methods.
+    /// `showProofStatus` (upstream ee96afd1, Theory/Proof.hs):
+    ///   "analysis cannot be finished"
     Unfinishable,
     /// HS `UndeterminedProof` (Theory/Proof.hs): proof tree folds to a
     /// status that could not be determined — renders "analysis undetermined".
@@ -131,7 +166,7 @@ pub(crate) enum LemmaVerdict {
 ///   `<lemma> (<quantifier>): falsified - found trace (<N> steps)`
 ///   `<lemma> (<quantifier>): verified (<N> steps)`
 ///   `<lemma> (<quantifier>): analysis incomplete (<N> steps)`
-///   `<lemma> (<quantifier>): analysis cannot be finished (reducible operators in subterms) (<N> steps)`
+///   `<lemma> (<quantifier>): analysis cannot be finished (<N> steps)`
 fn format_lemma_summary_line(r: &LemmaResult) -> String {
     let quantifier = if r.exists_trace {
         "exists-trace"
@@ -153,10 +188,9 @@ fn format_lemma_summary_line(r: &LemmaResult) -> String {
             format!("analysis incomplete ({} steps)", r.proof_steps)
         }
         // HS `showProofStatus _ UnfinishableProof` (Theory/Proof.hs).
-        LemmaVerdict::Unfinishable => format!(
-            "analysis cannot be finished (reducible operators in subterms) ({} steps)",
-            r.proof_steps
-        ),
+        LemmaVerdict::Unfinishable => {
+            format!("analysis cannot be finished ({} steps)", r.proof_steps)
+        }
         // HS `showProofStatus _ UndeterminedProof` (Theory/Proof.hs).
         LemmaVerdict::Undetermined => format!("analysis undetermined ({} steps)", r.proof_steps),
         // HS `showProofStatus _ InvalidatedProof` (Theory/Proof.hs).
@@ -1317,7 +1351,7 @@ struct TheoryPipeline<'a> {
     /// `close_translated_theory` to join into the signature — HS's
     /// `closeTheory` adopts `checkTranslatedTheory`'s `sign'` while
     /// `translateAndCheckTheory` binds `(postReport, _, _)` and discards it
-    /// (TheoryLoader.hs).
+    /// (TheoryLoader.hs#translateAndCheckTheory).
     ndc_funs: Vec<tamarin_term::function_symbols::FunSym>,
 }
 
@@ -1622,19 +1656,20 @@ impl TheoryPipeline<'_> {
         // persist breaker annotations on its open theory.
         let translate_mode = self.translate_module.is_some();
         if let Some(m) = self.file_maude.as_ref() {
-            self.wf_report
-                .extend(tamarin_theory::tools::rule_variants::prepare_theory_rules(
+            self.wf_report.extend(
+                tamarin_theory::tools::rule_variants::prepare_theory_rules(
                     std::sync::Arc::make_mut(&mut self.elaborated),
                     m,
                     self.file_maude_pool.as_deref(),
                     !translate_mode,
-                )?);
+                )
+                .map_err(|error| RunError::variants(error, &self.elaborated.in_file))?,
+            );
         } else {
-            self.wf_report
-                .extend(tamarin_theory::wellformedness::check_wellformedness(
-                    &self.elaborated,
-                    None,
-                ));
+            self.wf_report.extend(
+                tamarin_theory::wellformedness::check_wellformedness(&self.elaborated, None)
+                    .map_err(|error| RunError::variants(error, &self.elaborated.in_file))?,
+            );
         }
 
         // `showSaturation` is the last argument of `closeTheoryWithMaude`
@@ -1739,19 +1774,16 @@ impl TheoryPipeline<'_> {
         }
 
         // `--auto-sources` (HS `closeTheoryWithMaude` autosources branch,
-        // CloseRule.hs): when the raw sources contain
-        // partial deconstructions, unfold every rule into its AC-variant
-        // rules (`unfoldRuleVariants`), annotate them with AUTO_* actions and
+        // CloseRule.hs#closeTheoryWithMaude): prepare a preliminary cache of
+        // unfolded rules. If its refined sources contain partial
+        // deconstructions, annotate the rules from its raw sources with AUTO_* actions and
         // add the `AUTO_typing` sources lemma.  HS applies this on EVERY
         // theory close, and the FIRST close runs BEFORE partial evaluation
         // (`closeTheoryWithMaude sign t autoSources True` builds `closedThy`,
         // TheoryLoader.hs, and `applyPartialEvaluation` consumes it).
-        // PE itself reads only the untouched `cprRuleE` half of the closed
-        // rules (`getProtoRuleEs`, ClosedTheory.hs — kept as `rule_e`
-        // on annotated/unfolded rules), so its refined rules come out
-        // AUTO-free; the PE branch below then re-applies auto-sources,
-        // mirroring the re-close, and it is THAT pass which unfolds and
-        // annotates the refined rules.  Auto-sources
+        // Partial evaluation refines compiled members, retaining their AUTO
+        // actions and family ownership. The subsequent close recomputes
+        // auto-sources on those refinements. Auto-sources
         // needs Maude (HS runs it in the `WithMaude` reader), so a missing
         // handle is an error, same as the prove path's.
         if self.auto_sources {
@@ -1817,7 +1849,8 @@ impl TheoryPipeline<'_> {
                 std::sync::Arc::make_mut(&mut self.elaborated),
                 m,
                 self.file_maude_pool.as_deref(),
-            )?;
+            )
+            .map_err(|error| RunError::variants(error, &self.elaborated.in_file))?;
 
             // HS's re-close passes `autoSources` again
             // (`applyPartialEvaluation style autoSources`, TheoryLoader.hs;
@@ -2301,7 +2334,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 let results = skipped_results(&st.elaborated, &opts.lemma_names);
 
                 // Translate-only render (`prettyOpenTheoryByModule`,
-                // TheoryLoader.hs, followed by `withVersionAndReport`'s
+                // TheoryLoader.hs#prettyOpenTheoryByModule, followed by `withVersionAndReport`'s
                 // two trailing comment items, TheoryLoader.hs).  The doc
                 // is BUFFERED — Batch.hs processes every file before any
                 // doc is printed or written.

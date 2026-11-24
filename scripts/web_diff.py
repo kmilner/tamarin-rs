@@ -62,29 +62,12 @@ def main():
     if diffdir:
         os.makedirs(diffdir, exist_ok=True)
 
-    # Unpaired probe family: the three graph routes at case index 0/0.  The
-    # backends deliberately disagree there (upstream's unchecked `!!` answers
-    # a 500 exception page, the port answers Not Found — see the divergence
-    # notes in tamarin-server handlers/theory.rs), so the rows pair as
-    # neither MATCH nor a defect.  web_crawl.py does not probe them; cached
-    # HS manifests can still carry the rows, which are dropped here rather
-    # than surfacing as MISSING_RS.
-    unpaired_case_routes = ("/json/cases/", "/graph/cases/",
-                            "/interactive-graph-def/cases/")
-    urls = [u for u in sorted(set(hs) | set(rs))
-            if not (u.endswith("/0/0")
-                    and any(r in u for r in unpaired_case_routes))]
+    urls = sorted(set(hs) | set(rs))
     rows = []
     counts = {}
-    # Truncation gets rows of its own, kept apart from the comparison rows so
-    # they cannot pad the TOTAL.  web_crawl.py stamps `capped` when it dropped
-    # proof-node visits at --max-nodes; until now that flag reached nobody, and
-    # a theory crawled down to the cap produced a page of MATCHes for the part
-    # that was visited and silence for the part that was not.
-    # A manifest predating the flag carries no `capped` key: absent means
-    # unknown, and claiming "not truncated" for it is exactly what these rows
-    # exist to prevent — telling the two apart is the crawl-plan stamp's job
-    # (web_parity.sh re-crawls a manifest from an older plan).
+    # Report truncated crawls separately so CAPPED rows cannot pad TOTAL.
+    # A missing `capped` key does not establish completeness: web_parity.sh
+    # requires a current crawl-plan stamp and re-crawls older manifests.
     capped_rows = []
     for side, doc in (("HS", hs_doc), ("RS", rs_doc)):
         if doc.get("capped"):

@@ -5,10 +5,9 @@
 //! (`lib/sapic/src/Sapic.hs`) and `gen` (sapic/src/Sapic.hs).
 //!
 //! For a single top-level process, [`translate`]:
-//!   1. annotates it — `toAnProcess`, `propagateNames`,
-//!      `annotateSecretChannels`, then the `_stateChannelOpt`-gated
-//!      `annotatePureStates` and `_transReport`-gated `translateTermsReport`,
-//!      then `translateLetDestr` and `annotateLocks`;
+//!   1. annotates it — `toAnProcess`, `propagateNames`, the `_transReport`-gated
+//!      `translateTermsReport`, `translateLetDestr`, `annotateSecretChannels`,
+//!      the `_stateChannelOpt`-gated `annotatePureStates`, then `annotateLocks`;
 //!   2. chains the initial rules `baseInit` → `progressInit` →
 //!      `reliableChannelInit` → `reportInit`, each gated on its option;
 //!   3. walks the process with `gen`, whose per-node translation is
@@ -30,9 +29,7 @@ use tamarin_term::lterm::LVar;
 use tamarin_theory::formula::{LNFormula, SyntacticLNFormula};
 use tamarin_theory::restriction::Restriction;
 use tamarin_theory::rule::ProtoRuleE;
-use tamarin_theory::sapic::{
-    process_at, GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar,
-};
+use tamarin_theory::sapic::{GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar};
 use tamarin_utils::prelude_ext::nub_on;
 
 use tamarin_theory::sapic::ProcessCombinator;
@@ -112,10 +109,32 @@ fn map_to_annotated_rule(
     p: &ProcessPosition,
     bodies: Vec<RuleBody>,
 ) -> Vec<AnnotatedRule<ProcessAnnotation<LVar>>> {
+    let equation_patterns: BTreeSet<_> = proc
+        .annotation()
+        .let_plan
+        .iter()
+        .enumerate()
+        .flat_map(|(i, stage)| {
+            stage
+                .alternatives
+                .iter()
+                .filter_map(move |(pattern, reduct)| {
+                    reduct
+                        .as_ref()
+                        .map(|_| (crate::annotation::let_stage_position(p, i), pattern))
+                })
+        })
+        .collect();
     bodies
         .into_iter()
         .enumerate()
         .map(|(i, (prems, acts, concs, restr))| AnnotatedRule {
+            matches_destructor_equation: prems.iter().any(|premise| match premise {
+                TransFact::FLet(position, term, _) => {
+                    equation_patterns.contains(&(position.clone(), term))
+                }
+                _ => false,
+            }),
             process_name: None,
             process: proc.clone(),
             position: RulePosition::Pos(p.clone()),
@@ -128,29 +147,27 @@ fn map_to_annotated_rule(
         .collect()
 }
 
-/// `gen` (sapic/src/Sapic.hs).  Handles `Null`, `Action` (incl. the `Rep`
-/// replication action), and the `Comb` combinators in scope — `Parallel`,
-/// `NDC` (with the `substStatePos` shared-position rewrite), and `CondEq`.
-/// `Cond`-with-a-formula / `Lookup` / `Let` are rejected in `base_trans_comb`.
+/// `gen` (sapic/src/Sapic.hs): emit each node's rules before its continuations,
+/// carrying absolute positions and the variables available on each branch.
+/// NDC children share their parent's state position through `substStatePos`.
 fn generate_rules(
     ctx: &TransCtx,
-    an_proc: &Process<ProcessAnnotation<LVar>, SapicLVar>,
+    proc: &Process<ProcessAnnotation<LVar>, SapicLVar>,
     p: &ProcessPosition,
     tildex: &BTreeSet<LVar>,
 ) -> Result<Vec<AnnotatedRule<ProcessAnnotation<LVar>>>, String> {
-    let proc = process_at(an_proc, p).ok_or_else(|| format!("gen: invalid position {p:?}"))?;
     match proc {
         Process::Null(_) => {
             // `trans_null` is the identity wrapper for progress/reliable.
             let bodies = base_trans_null(p, tildex);
             Ok(map_to_annotated_rule(proc, p, bodies))
         }
-        Process::Action(ac, ann, _) => {
+        Process::Action(ac, ann, body) => {
             let (bodies, tildex2) = trans_action(ctx, ac, ann, p, tildex)?;
             let mut here = map_to_annotated_rule(proc, p, bodies);
             let mut child_pos = p.clone();
             child_pos.push(1);
-            let rest = generate_rules(ctx, an_proc, &child_pos, &tildex2)?;
+            let rest = generate_rules(ctx, body, &child_pos, &tildex2)?;
             here.extend(rest);
             Ok(here)
         }
@@ -160,13 +177,13 @@ fn generate_rules(
         // correct position suffix), then rewrite the State premise of EVERY
         // generated rule from the child position back to the parent `p`
         // (`substStatePos`).
-        Process::Comb(ProcessCombinator::Ndc, _, _, _) => {
+        Process::Comb(ProcessCombinator::Ndc, _, left, right) => {
             let mut pl = p.clone();
             pl.push(1);
             let mut pr = p.clone();
             pr.push(2);
-            let l = generate_rules(ctx, an_proc, &pl, tildex)?;
-            let r = generate_rules(ctx, an_proc, &pr, tildex)?;
+            let l = generate_rules(ctx, left, &pl, tildex)?;
+            let r = generate_rules(ctx, right, &pr, tildex)?;
             let mut out = subst_state_pos_rules(l, &pl, p);
             out.extend(subst_state_pos_rules(r, &pr, p));
             Ok(out)
@@ -174,17 +191,17 @@ fn generate_rules(
         // General combinator (sapic/src/Sapic.hs): emit this node's own rules,
         // then recurse into the left child with `tildex'1` and (if present) the
         // right child with `tildex'2`.
-        Process::Comb(c, ann, _, _) => {
+        Process::Comb(c, ann, left, right) => {
             let (bodies, tildex_l, tildex_r) = trans_comb(ctx, c, ann, p, tildex)?;
             let mut here = map_to_annotated_rule(proc, p, bodies);
             let mut pl = p.clone();
             pl.push(1);
-            let msrs_l = generate_rules(ctx, an_proc, &pl, &tildex_l)?;
+            let msrs_l = generate_rules(ctx, left, &pl, &tildex_l)?;
             here.extend(msrs_l);
             if let Some(tx_r) = tildex_r {
                 let mut pr = p.clone();
                 pr.push(2);
-                let msrs_r = generate_rules(ctx, an_proc, &pr, &tx_r)?;
+                let msrs_r = generate_rules(ctx, right, &pr, &tx_r)?;
                 here.extend(msrs_r);
             }
             Ok(here)
@@ -234,6 +251,17 @@ fn trans_comb(
     p: &ProcessPosition,
     tildex: &BTreeSet<LVar>,
 ) -> Result<(Vec<RuleBody>, BTreeSet<LVar>, Option<BTreeSet<LVar>>), String> {
+    // Under progress, an omitted else is still the terminating process 0.
+    // Its failure transition must be available instead of forcing the let
+    // to succeed merely to discharge the progress restriction.
+    let mut progress_ann;
+    let ann = if ctx.trans_progress && matches!(c, ProcessCombinator::Let { .. }) {
+        progress_ann = ann.clone();
+        progress_ann.else_branch = true;
+        &progress_ann
+    } else {
+        ann
+    };
     let (bodies, tx1, tx2) = base_trans_comb(c, ann, p, tildex)?;
     if ctx.trans_progress {
         let inv = ctx.inv_pf.as_ref().expect("inv_pf set when trans_progress");
@@ -360,37 +388,33 @@ pub(crate) fn translate(
     plain: &PlainProcess,
     needs_in_ev_res: bool,
     st_rules: &std::collections::BTreeSet<tamarin_term::subterm_rule::CtxtStRule>,
+    macros: &[tamarin_theory::theory::LNMacro],
     opts: TranslateOptions,
 ) -> Result<Translation, String> {
     // The annotation chain, innermost first (sapic/src/Sapic.hs): toAnProcess,
-    // propagateNames, annotateSecretChannels, annotatePureStates,
-    // translateTermsReport, translateLetDestr — then annotateLocks.
+    // propagateNames, translateTermsReport, translateLetDestr,
+    // annotateSecretChannels, annotatePureStates — then annotateLocks.
     let an_proc_pre: Process<ProcessAnnotation<LVar>, SapicLVar> =
         propagate_names(to_annotated::<LVar>(plain));
-    // annotateSecretChannels (sapic/src/Sapic.hs): attach
-    // `secret_channel` to every ChIn/ChOut whose channel is an always-secret
-    // fresh variable.
-    let an_proc_sec = crate::secret_channels::annotate_secret_channels(an_proc_pre);
-    // `checkOps' (._stateChannelOpt) annotatePureStates`
-    // (sapic/src/Sapic.hs): the
-    // pure-state / state-channel optimisation, off unless the theory declares
-    // `options: translation-state-optimisation`.
-    let an_proc_states = if opts.state_channel_opt {
-        crate::states::annotate_pure_states(an_proc_sec)
-    } else {
-        an_proc_sec
-    };
     // `checkOps' (._transReport) translateTermsReport`
     // (sapic/src/Sapic.hs): rewrite
     // `report(t)` terms to `rep(t, loc)` under the in-scope `@location`
     // annotation.
     let an_proc_rep = if opts.trans_report {
-        crate::report::translate_terms_report(an_proc_states)
+        crate::report::translate_terms_report(an_proc_pre)
     } else {
-        an_proc_states
+        an_proc_pre
     };
-    let an_proc_let = crate::let_destructors::translate_let_destr(st_rules, an_proc_rep);
-    let an_proc = crate::locks::annotate_locks(an_proc_let)?;
+    let an_proc_let = crate::let_destructors::translate_let_destr(macros, st_rules, an_proc_rep)?;
+    // Substituting a let can expose a channel name through an escaping alias.
+    let an_proc_sec = crate::secret_channels::annotate_secret_channels(an_proc_let);
+    // State identifiers and generated-plan binders are final after substitution.
+    let an_proc_states = if opts.state_channel_opt {
+        crate::states::annotate_pure_states(an_proc_sec)
+    } else {
+        an_proc_sec
+    };
+    let an_proc = crate::locks::annotate_locks(an_proc_states)?;
 
     // Build the translation context (gated progress/reliable/async wrappers).
     // The progress-function domain / inverse are computed once (HS recomputes
@@ -629,6 +653,96 @@ mod tests {
     use tamarin_theory::process_convert::convert_process;
     use tamarin_theory::sapic::ProcessParsedAnnotation;
 
+    #[test]
+    fn only_equation_matches_skip_derivation_checks_through_translation_wrappers() {
+        for progress in [false, true] {
+            for reliable in [false, true] {
+                let options = if progress {
+                    "options: translation-progress"
+                } else {
+                    ""
+                };
+                let (builtin, input, output) = if reliable {
+                    ("builtins: reliable-channel", "in('r',x)", "out('r',y)")
+                } else {
+                    ("", "in(x)", "out(y)")
+                };
+                let source = format!(
+                    "theory T begin {builtin} {options} \
+                     functions: d/1 [destructor], wrap/1 equations: d(wrap(x))=x \
+                     process: {input}; let y=d(d(x)) in {output} else event Failed() end"
+                );
+                let parsed = tamarin_parser::parse_theory(&source, &[]).unwrap();
+                let mut theory = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
+                crate::apply::apply_sapic(&mut theory, false).unwrap();
+                let exempt: Vec<_> = theory
+                    .rules()
+                    .filter(|rule| rule.rule_e().info.attributes.ignore_deriv_checks)
+                    .map(|rule| rule.name().to_string())
+                    .collect();
+                // Each reduction has its own equation match and subsequent user
+                // pattern. Neither user patterns nor any failure arm is exempt.
+                assert_eq!(
+                    exempt,
+                    ["letyddx_1_1", "letyddx_5_1"],
+                    "progress={progress}, reliable={reliable}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn identical_equation_and_failure_premises_share_derivation_attributes() {
+        for progress in [false, true] {
+            let options = if progress {
+                "options: translation-progress"
+            } else {
+                ""
+            };
+            let source = format!(
+                "theory T begin {options} functions: d/0 [destructor], ok/0 \
+                 equations: d()=ok() \
+                 process: let y=d() in event Seen(y) else event Wrong() end"
+            );
+            let mut theory = tamarin_theory::elaborate::elaborate(
+                &tamarin_parser::parse_theory(&source, &[]).unwrap(),
+            )
+            .unwrap();
+            crate::apply::apply_sapic(&mut theory, false).unwrap();
+            let exempt: Vec<_> = theory
+                .rules()
+                .filter(|rule| rule.rule_e().info.attributes.ignore_deriv_checks)
+                .map(|rule| rule.name().to_string())
+                .collect();
+            assert_eq!(exempt, ["letyd_1_", "letyd_2_"], "progress={progress}");
+        }
+    }
+
+    #[test]
+    fn progress_preserves_failure_of_let_with_omitted_else() {
+        for progress in [false, true] {
+            let option = if progress {
+                "options: translation-progress"
+            } else {
+                ""
+            };
+            let source = format!(
+                "theory T begin {option} process: in(x); let <a,b> = x in event A(a,b) end"
+            );
+            let mut theory = tamarin_theory::elaborate::elaborate(
+                &tamarin_parser::parse_theory(&source, &[]).unwrap(),
+            )
+            .unwrap();
+            crate::apply::apply_sapic(&mut theory, false).unwrap();
+            assert_eq!(
+                theory
+                    .restrictions()
+                    .any(|r| r.name.starts_with("Restr_let")),
+                progress
+            );
+        }
+    }
+
     fn typing2_process() -> p::Process {
         let xspec = p::VarSpec {
             name: "x".into(),
@@ -668,8 +782,7 @@ mod tests {
 
     #[test]
     fn propagate_names_preserves_location() {
-        // The first patch of upstream #922: setting propagated process names
-        // updates only that field of the parsed annotation.
+        // Propagated process names leave the other annotation fields intact.
         let location = tamarin_term::lterm::pub_term("site");
         let ann = ProcessParsedAnnotation {
             process_names: vec!["P".into()],
@@ -693,7 +806,7 @@ mod tests {
         let plain = convert_process(&typing2_process(), &sig).unwrap();
         let typed = type_and_rename_process(&sig, &[], &plain).unwrap();
         let st_rules = std::collections::BTreeSet::new();
-        let tr = translate(&typed, false, &st_rules, TranslateOptions::default()).unwrap();
+        let tr = translate(&typed, false, &st_rules, &[], TranslateOptions::default()).unwrap();
         // The rules are Init, new, event, out and null, in that order.  They
         // use the `<label>_<index>_<position>` naming that HS derives from
         // the pretty-printed head of each node (Facts.hs `toRule`).  The test
