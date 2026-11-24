@@ -1252,7 +1252,7 @@ first-match search of the bag matcher, the selection of basis solutions and
 the answers built from them, the frontier of the component search and the
 partition fallback). Nothing proves that every long loop asks: a call that
 is slow somewhere else still returns only when it is done. Matching
-(`total_match`, `total_match_exists`), table certification and the proposers
+(`theory_match`, `theory_match_exists`), table certification and the proposers
 other than the folding search are not interruptible. The variant checker and
 the folding search are: see "Variant check budget".
 The tests are `interruption::*` in `crates/tamarin-term/tests/native_backend`.
