@@ -827,12 +827,10 @@ fn fact_vars(f: &tamarin_theory::fact::LNFact) -> BTreeSet<LVar> {
         .collect()
 }
 
-/// `show (WFUnbound varset)` (Sapic/Exceptions.hs): `The variable(s)
-/// <vars> are not bound.`, the variables comma-joined in set order
-/// (`prettyVarSet`, Sapic/Exceptions.hs).
+/// `throw $ WFUnbound vars` (Basetranslation.hs).  A pure `throw`, so it
+/// is raised outside `gen`'s `catch` and the oracle prints it bare.
 fn wf_unbound(vars: impl Iterator<Item = LVar>) -> String {
-    let vars: Vec<String> = vars.map(|v| v.to_string()).collect();
-    format!("The variable(s) {} are not bound.", vars.join(", "))
+    crate::exceptions::WfError::Unbound(vars.collect()).to_string()
 }
 
 /// `baseInit` (Basetranslation.hs): the `Init` rule plus the empty

@@ -462,9 +462,9 @@ pub(crate) struct AnnotatedRule<Ann> {
     pub acts: Vec<TransAction>,
     pub concs: Vec<TransFact>,
     /// Embedded restrictions (HS `restr :: [SyntacticLNFormula]`, Facts.hs).
-    /// `apply_sapic` hands them to the `_restrict` expansion
-    /// (`rule_restriction::rule_restrictions`), which turns each into a
-    /// `Restr_<rule>_<i>` restriction plus an action on this rule.
+    /// [`to_rule`] stores them as the rule's `_preRestriction`, which the
+    /// `_restrict` expansion turns into `Restr_<rule>_<i>` restrictions plus
+    /// actions on the rule.
     pub restr: Vec<SyntacticLNFormula>,
     pub matches_destructor_equation: bool,
     pub index: usize,
@@ -499,14 +499,6 @@ fn strip_non_alphabetic(s: &str) -> String {
     s.chars().filter(|c| c.is_alphabetic()).collect()
 }
 
-/// The HS-faithful rule name (Facts.hs).
-pub(crate) fn rule_name<Ann: GoodAnnotation>(r: &AnnotatedRule<Ann>) -> String {
-    match &r.process_name {
-        Some(s) => s.clone(),
-        None => generated_rule_name(&to_parsed(&r.process), r.index, &r.position),
-    }
-}
-
 /// The `Nothing` arm of `toRule`'s `name` (Facts.hs):
 /// `unNull (stripNonAlphanumerical (prettySapicTopLevel process)) ++ "_" ++
 /// show index ++ "_" ++ prettyEitherPositionOrSpecial position`.
@@ -527,7 +519,7 @@ fn generated_rule_name(plain: &PlainProcess, index: usize, position: &RulePositi
 /// `ignoreDerivChecks = isLookup process` (Facts.hs): the lookup rules
 /// carry the `no_derivcheck` attribute so the message-derivation check skips
 /// them (the bound lookup variable is unconstrained at that point).
-pub(crate) fn to_rule(r: &AnnotatedRule<ProcessAnnotation<LVar>>) -> ProtoRuleE {
+pub(crate) fn to_rule(r: AnnotatedRule<ProcessAnnotation<LVar>>) -> ProtoRuleE {
     // Both the generated name and the `process=` attribute read the erased
     // process, so erase once.
     let plain = to_parsed(&r.process);
@@ -562,7 +554,7 @@ pub(crate) fn to_rule(r: &AnnotatedRule<ProcessAnnotation<LVar>>) -> ProtoRuleE 
     let info = ProtoRuleEInfo {
         name: ProtoRuleName::Stand(tamarin_term::intern::intern_str(&name)),
         attributes: attr,
-        restrictions: Vec::new(),
+        restrictions: r.restr,
     };
     let prems: Vec<LNFact> = r.prems.iter().map(fact_to_fact).collect();
     let acts: Vec<LNFact> = r.acts.iter().map(action_to_fact).collect();
@@ -669,7 +661,7 @@ mod tests {
             index: 0,
             matches_destructor_equation: false,
         };
-        let rule = to_rule(&r);
+        let rule = to_rule(r);
         assert_eq!(rule.new_vars, vec![var_term(z)]);
     }
 

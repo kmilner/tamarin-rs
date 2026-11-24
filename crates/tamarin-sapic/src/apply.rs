@@ -20,29 +20,27 @@
 
 use tamarin_theory::wellformedness::WfError;
 
-use tamarin_theory::elaborate::ElabError;
-use tamarin_theory::formula::LNFormula;
-use tamarin_theory::predicate::{expand_formula, Predicate};
-use tamarin_theory::restriction::{apply_macro_in_restriction, Restriction};
-use tamarin_theory::rule::{apply_macro_in_rule, ProtoRuleName};
-use tamarin_theory::rule_restriction::rule_restrictions;
-use tamarin_theory::theory::{LNMacro, OpenProtoRule, Theory, TheoryItem};
+use tamarin_theory::elaborate::{add_restriction, lifted_add_proto_rule, ElabError};
+use tamarin_theory::predicate::Predicate;
+use tamarin_theory::restriction::apply_macro_in_restriction;
+use tamarin_theory::theory::{LNMacro, Theory};
 
 use crate::translate::{needs_in_ev_res, translate, TranslateOptions};
 
-/// HS `Sapic.checkWellformedness` (Warnings.hs) on the top-level process
+/// HS `Sapic.checkWellformedness` (Warnings.hs) over every top-level process
 /// before typing, as `translateTheory` (TheoryLoader.hs) computes it for every
-/// output module.  Empty when the theory has no top-level process.
+/// output module.
 pub fn sapic_pre_report(thy: &Theory) -> Vec<WfError> {
-    match thy.processes().next() {
-        Some(top) => crate::warnings::check_wellformedness(top),
-        None => Vec::new(),
-    }
+    thy.processes()
+        .flat_map(crate::warnings::check_wellformedness)
+        .collect()
 }
 
 /// HS `Sapic.typeTheory >=> Sapic.translate` (TheoryLoader.hs
 /// `processOpenTheory`): type every process of the theory, then translate the
-/// single top-level process when there is exactly one.
+/// single top-level process.  `translate` (sapic/src/Sapic.hs) throws
+/// `MoreThanOneProcess` for several, and `ReliableTransmissionButNoProcess`
+/// for none under `builtins: reliable-channel`.
 ///
 /// `user_set_heuristic` is true when the source or CLI already set a heuristic,
 /// so `addHeuristic` adds no `p`.  Returns the [`sapic_pre_report`], which the
@@ -50,23 +48,36 @@ pub fn sapic_pre_report(thy: &Theory) -> Vec<WfError> {
 /// postReport`, TheoryLoader.hs).
 pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfError>, ElabError> {
     // The warnings read the untyped process; translation proceeds regardless.
-    let wf_report = if thy.is_sapic() {
-        sapic_pre_report(thy)
-    } else {
-        Vec::new()
-    };
+    let wf_report = sapic_pre_report(thy);
     crate::type_theory::type_theory(thy)?;
-    if !thy.is_sapic() {
-        return Ok(wf_report);
-    }
-    let typed = thy.processes().next().expect("is_sapic").clone();
+    let trans_reliable = thy.has_signature_builtin("reliable-channel");
+    let processes: Vec<_> = thy.processes().take(2).collect();
+    let typed = match processes[..] {
+        [p] => p,
+        [] if trans_reliable => {
+            return Err(ElabError {
+                message: "The builtin support for reliable channels currently only affects \
+                          the process calculus, but you have not specified a top-level \
+                          process. Please remove \"builtins: reliable-channel\" to proceed."
+                    .to_string(),
+            });
+        }
+        [] => return Ok(wf_report),
+        _ => {
+            return Err(ElabError {
+                message: "More than one top-level process is defined. This is not supported \
+                          by the translation."
+                    .to_string(),
+            });
+        }
+    };
     let maude_sig = &thy.signature;
 
     let needs_in_ev = needs_in_ev_res(thy);
     let st_rules = &maude_sig.st_rules;
     let opts = TranslateOptions {
         trans_progress: thy.options.trans_progress(),
-        trans_reliable: thy.has_signature_builtin("reliable-channel"),
+        trans_reliable,
         async_channels: thy.options.asynchronous_channels(),
         compress_events: thy.options.compress_events(),
         trans_report: thy.has_signature_builtin("locations-report"),
@@ -77,76 +88,24 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
     let macros: Vec<LNMacro> = thy.macros().cloned().collect();
     // A translation exception escapes to GHC's runtime, which prints its
     // `show` alone after `tamarin-prover: `.
-    let translation = translate(&typed, needs_in_ev, st_rules, &macros, opts)
+    let translation = translate(typed, needs_in_ev, st_rules, &macros, opts)
         .map_err(|message| ElabError { message })?;
 
-    // HS `liftedAddProtoRule` (Theory/Text/Parser.hs) per rule: expand each
-    // embedded restriction against `theoryPredicates`, add a `Restr_<rule>_<i>`
-    // restriction before the rule and the matching action to the rule.
+    // `foldM liftedAddProtoRule th` over the generated rules.  HS `addActions`
+    // rebuilds `rActs` alone (Theory/Text/Parser.hs), so each rule keeps the
+    // `_preRestriction` formulas `toRule` gave it (sapic/src/Sapic/Facts.hs)
+    // and the `rNewVars` the translation computed.  A user rule named like a
+    // generated one, e.g. `rule Init` beside a `process:`, is a
+    // `duplicate rule` unless the open rules are equal.
     let predicates: Vec<Predicate> = thy.predicates().cloned().collect();
-    for (rule, restr_formulas) in &translation.rules {
-        let rname = match rule.info.name {
-            ProtoRuleName::Stand(n) => n,
-            // HS `liftedAddProtoRule` throws `TryingToAddFreshRule` for the
-            // reserved name (Theory/Text/Parser.hs); the translation gives
-            // every generated rule a process position, so it never reaches
-            // this arm.
-            ProtoRuleName::Fresh => "Fresh",
-        };
-
-        // HS `addActions` rebuilds `rActs` alone (Theory/Text/Parser.hs), so
-        // the rule keeps the `_preRestriction` formulas (Theory/Model/Rule.hs)
-        // `toRule` gave it (sapic/src/Sapic/Facts.hs) and the `rNewVars`
-        // the translation computed.
-        let mut lifted = rule.clone();
-        lifted.info.restrictions = restr_formulas.clone();
-        let mut closed: Vec<LNFormula> = Vec::with_capacity(restr_formulas.len());
-        for phi in restr_formulas {
-            closed.push(expand_formula(&predicates, phi).map_err(|e| ElabError {
-                message: e.to_string(),
-            })?);
-        }
-        let mut generated: Vec<Restriction> = Vec::with_capacity(closed.len());
-        for (restr, action) in rule_restrictions(rname, &closed) {
-            generated.push(restr);
-            lifted.actions.push(action);
-        }
-
-        // `addOpenProtoRule`'s name guard (OpenTheory.hs): a user rule named
-        // like a generated one, e.g. `rule Init` beside a `process:`, fails
-        // with `duplicate rule: <name>` unless the open rules are equal.
-        if let Some(prev) = thy.items.iter().find_map(|i| match i {
-            TheoryItem::Rule(r) if r.name() == rname => Some(r),
-            _ => None,
-        }) && (prev.rule_e() != &lifted || !prev.rule_ac.is_empty())
-        {
-            return Err(ElabError {
-                message: format!("duplicate rule: {rname}"),
-            });
-        }
-
-        // The restrictions precede the rule (Theory/Text/Parser.hs).
-        for restr in generated {
-            thy.items
-                .push(TheoryItem::Restriction(apply_macro_in_restriction(
-                    &macros, restr,
-                )));
-        }
-        let mut opr = OpenProtoRule::new(apply_macro_in_rule(&macros, lifted.clone()));
-        if opr.rule != lifted {
-            opr.rule_e = Some(Box::new(lifted));
-        }
-        thy.items.push(TheoryItem::Rule(opr));
+    for rule in translation.rules {
+        lifted_add_proto_rule(thy, rule, Vec::new(), &predicates, &macros, true)?;
     }
 
-    // Inject the global restrictions (set_in/set_notin, predicate_eq/not_eq,
-    // single_session).
-    for restr in &translation.restrictions {
-        thy.items
-            .push(TheoryItem::Restriction(apply_macro_in_restriction(
-                &macros,
-                restr.clone(),
-            )));
+    // `foldM liftedAddRestriction th1 rest` over the global restrictions
+    // (set_in/set_notin, predicate_eq/not_eq, single_session, ...).
+    for restr in translation.restrictions {
+        add_restriction(thy, apply_macro_in_restriction(&macros, restr))?;
     }
 
     // `addHeuristic [SapicRanking]` unless a heuristic is already set
@@ -163,6 +122,8 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tamarin_theory::rule::ProtoRuleName;
+    use tamarin_theory::theory::TheoryItem;
 
     /// The `else` arm of a pattern `let` carries the restriction
     /// `∀ y w. (<y, w> = z) ⇒ ⊥` (Basetranslation.hs), so the
@@ -198,10 +159,10 @@ mod tests {
             TranslateOptions::default(),
         )
         .unwrap();
-        let (translated, restr_formulas) = translation
+        let translated = translation
             .rules
             .iter()
-            .find(|(_, r)| !r.is_empty())
+            .find(|r| !r.info.restrictions.is_empty())
             .expect("no generated rule carries a `_restrict` formula");
 
         apply_sapic(&mut thy, false).unwrap();
@@ -245,7 +206,33 @@ mod tests {
             tamarin_theory::fact::show_fact_tag(&injected.actions[translated.actions.len()].tag),
             "Restr_letywz_2_1_1"
         );
-        assert_eq!(&injected.info.restrictions, restr_formulas);
+        assert_eq!(injected.info.restrictions, translated.info.restrictions);
+    }
+
+    /// Under progress, path compression absorbs the `_restrict` step into
+    /// `Init`.  `mergeInfo` keeps the first name and concatenates the
+    /// `_preRestriction` lists (Compression.hs), so the oracle still emits
+    /// `Restr_Init_1` and the `Restr_Init_1( )` action on `Init`.
+    #[test]
+    fn compression_keeps_the_absorbed_rule_restriction() {
+        let src = "theory T begin\n\
+            options: translation-progress\n\
+            process:\n\
+              [] --[ _restrict(F) ]-> []; event E()\n\
+            end";
+        let parsed = tamarin_parser::parse_theory(src, &[]).unwrap();
+        let mut thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
+        apply_sapic(&mut thy, false).unwrap();
+        assert!(thy.lookup_restriction("Restr_Init_1").is_some());
+        let init = thy
+            .rules()
+            .find(|r| r.rule.info.name == ProtoRuleName::Stand("Init"))
+            .expect("rule missing");
+        assert!(init
+            .rule
+            .actions
+            .iter()
+            .any(|f| tamarin_theory::fact::show_fact_tag(&f.tag) == "Restr_Init_1"));
     }
 
     /// Haskell types the whole theory before translating (`typeTheory >=>
@@ -279,6 +266,30 @@ mod tests {
         let mut thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
         let err = apply_sapic(&mut thy, false).unwrap_err();
         assert_eq!(err.message, "undefined predicate Foo/1");
+    }
+
+    /// `liftedAddRestriction` and `liftedAddProtoRule` (Theory/Text/Parser.hs)
+    /// reject a generated restriction whose name the user already declared,
+    /// as the oracle does for both of these theories.
+    #[test]
+    fn generated_restrictions_reject_declared_names() {
+        for (body, name) in [
+            (
+                "restriction single_session: \"T\"\nprocess: 0",
+                "single_session",
+            ),
+            (
+                "restriction Restr_Init_1: \"T\"\noptions: translation-progress\n\
+                 process: [] --[ _restrict(F) ]-> []; event E()",
+                "Restr_Init_1",
+            ),
+        ] {
+            let src = format!("theory T begin\n{body}\nend");
+            let parsed = tamarin_parser::parse_theory(&src, &[]).unwrap();
+            let mut thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
+            let err = apply_sapic(&mut thy, false).unwrap_err();
+            assert_eq!(err.message, format!("duplicate restriction: {name}"));
+        }
     }
 
     /// A `macros:` declaration whose call sits in the process body, so the
@@ -330,5 +341,55 @@ mod tests {
             with_call > 0,
             "no generated rule kept the process's macro call"
         );
+    }
+
+    /// The `tamarin-prover: <show e>` texts of the exceptions SAPIC typing
+    /// and translation throw, as the pinned oracle (a75fec7f) prints them.
+    #[test]
+    fn translation_exceptions_print_as_haskell_shows_them() {
+        for (body, want) in [
+            (
+                "process:\nnew k; out(<k, x>)",
+                "Process not well-formed: The variable(s) x are not bound.\n  out(<k.1, x>)",
+            ),
+            (
+                "functions: f(lol):lol, g(foo):foo\nprocess:\nnew k:lol; out(g(f(k)))",
+                "Process not well-formed: Typing error: expected term f(k.1) to have \
+                 Just \"foo\" but actual type is Just \"lol\".\n  out(g(f(k.1)))",
+            ),
+            (
+                "process:\nlock 'a'; !(out('b'))",
+                "Process not well-formed: Process contains lock that extends over \
+                 replication which is not allowed.\n  !(out('b'))",
+            ),
+            (
+                "builtins: reliable-channel\nprocess:\nout('d', 'a')",
+                "If reliable channels are activated, processes should only contain \
+                 in('r',m), out('r',m), in('c',m) or out('c',m) for communication.",
+            ),
+            (
+                "builtins: reliable-channel\nrule A: [] --> []",
+                "The builtin support for reliable channels currently only affects the \
+                 process calculus, but you have not specified a top-level process. \
+                 Please remove \"builtins: reliable-channel\" to proceed.",
+            ),
+            (
+                "process:\nout('a')\nprocess:\nout('b')",
+                "More than one top-level process is defined. This is not supported by \
+                 the translation.",
+            ),
+            // `zip vars ts` drops the formal with no argument, which typing
+            // then finds unbound.
+            (
+                "let P(x, y) = out(<x, y>)\nprocess:\nnew k; P(k)",
+                "Process not well-formed: The variable(s) y are not bound.\n  out(<k.1, y>)",
+            ),
+        ] {
+            let src = format!("theory T begin\n{body}\nend");
+            let parsed = tamarin_parser::parse_theory(&src, &[]).unwrap();
+            let mut thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
+            let err = apply_sapic(&mut thy, false).unwrap_err();
+            assert_eq!(err.message, want, "{body}");
+        }
     }
 }

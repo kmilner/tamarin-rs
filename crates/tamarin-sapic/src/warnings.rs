@@ -47,9 +47,7 @@ pub(crate) fn warn_process<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<
     captured_variables(p)
         .iter()
         .map(|v| {
-            // `show (WFBoundTwice v) = "Variable bound twice: " ++ show v ++ "."`
-            // (Sapic/Exceptions.hs).
-            let body = format!("Variable bound twice: {v}.");
+            let body = crate::exceptions::WfError::BoundTwice(v.clone());
             // `toWfErrorReport` (Warnings.hs) pairs each error with the
             // topic; `prettyWfErrorReport` (Wellformedness.hs) renders
             // a topic GROUP as `text topic $-$ nest 2 (vcat (intersperse "")

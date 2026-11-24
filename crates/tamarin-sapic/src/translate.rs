@@ -26,7 +26,7 @@ use std::collections::BTreeSet;
 
 use tamarin_term::lterm::LVar;
 
-use tamarin_theory::formula::{LNFormula, SyntacticLNFormula};
+use tamarin_theory::formula::LNFormula;
 use tamarin_theory::restriction::Restriction;
 use tamarin_theory::rule::ProtoRuleE;
 use tamarin_theory::sapic::{GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar};
@@ -319,12 +319,9 @@ fn lock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>, unlock: bool)
 
 /// The result of translating a single top-level process.
 pub(crate) struct Translation {
-    /// The generated rules, each paired with its embedded `_restrict`
-    /// formulas.  HS attaches these as the rule's `_preRestriction`
-    /// (sapic/src/Sapic/Facts.hs); the port pairs them with the rule
-    /// here, and `apply_sapic` runs the `_restrict` expansion (HS
-    /// `liftedAddProtoRule`) over them.
-    pub rules: Vec<(ProtoRuleE, Vec<SyntacticLNFormula>)>,
+    /// The generated rules, their embedded `_restrict` formulas in
+    /// `info.restrictions` (HS `_preRestriction`, sapic/src/Sapic/Facts.hs).
+    pub rules: Vec<ProtoRuleE>,
     pub restrictions: Vec<Restriction>,
 }
 
@@ -420,42 +417,18 @@ pub(crate) fn translate(
     // protocol rules
     let proto_rules = generate_rules(&ctx, &an_proc, &Vec::new(), &init_tx)?;
 
-    // toRule over (initRules ++ protoRules); HS then applies pathCompression
-    // (gated on progress) over the ELABORATED rules, BEFORE pairing with the
-    // per-rule embedded restrictions.  Path compression operates on
-    // `Rule ProtoRuleEInfo` and never touches the embedded `_restrict` formulas
-    // (those rules — `Cond` / `let`-else arms — carry no `State_( )`-reachable
-    // silent shape that compresses; their `restr` is preserved per-rule below).
+    // `map toRule (initRules ++ protoRule)`, then `pathCompression` under
+    // progress (sapic/src/Sapic.hs).  Each rule carries its `_restrict`
+    // formulas in `_preRestriction`, which `mergeInfo` (Compression.hs)
+    // concatenates when it absorbs a rule.
     let mut all = init_rules;
     all.extend(proto_rules);
-    // The embedded restriction formulas, keyed by rule NAME (compression keeps
-    // the first rule's name and never merges `_restrict`-bearing arms — see the
-    // `isLetFact`/no-compress guards), so re-pairing by name is faithful.
-    // restriction-by-name re-pair map; keyed lookup only, never iterated;
-    // std kept (byte-inert) — iteration order never reaches output.
-    #[allow(clippy::disallowed_types)]
-    let restr_by_name: std::collections::HashMap<String, Vec<SyntacticLNFormula>> = all
-        .iter()
-        .filter(|r| !r.restr.is_empty())
-        .map(|r| (crate::facts::rule_name(r), r.restr.clone()))
-        .collect();
-    let elaborated: Vec<ProtoRuleE> = all.iter().map(to_rule).collect();
-    let elaborated = if opts.trans_progress {
-        crate::compression::path_compression(opts.compress_events, elaborated)
+    let rules: Vec<ProtoRuleE> = all.into_iter().map(to_rule).collect();
+    let rules = if opts.trans_progress {
+        crate::compression::path_compression(opts.compress_events, rules)
     } else {
-        elaborated
+        rules
     };
-    let rules: Vec<(ProtoRuleE, Vec<SyntacticLNFormula>)> = elaborated
-        .into_iter()
-        .map(|r| {
-            let name = match &r.info.name {
-                tamarin_theory::rule::ProtoRuleName::Stand(n) => n.to_string(),
-                tamarin_theory::rule::ProtoRuleName::Fresh => "Fresh".to_string(),
-            };
-            let restr = restr_by_name.get(&name).cloned().unwrap_or_default();
-            (r, restr)
-        })
-        .collect();
 
     // restrictions (baseRestr, Basetranslation.hs), in HS order:
     //   [setIn, setNotIn]   if the process `contains isLookup`
@@ -778,7 +751,7 @@ mod tests {
         let names: Vec<String> = tr
             .rules
             .iter()
-            .map(|r| match &r.0.info.name {
+            .map(|r| match &r.info.name {
                 tamarin_theory::rule::ProtoRuleName::Stand(n) => n.to_string(),
                 other => panic!("expected a standard rule name, got {other:?}"),
             })

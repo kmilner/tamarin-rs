@@ -686,9 +686,23 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
     Ok(())
 }
 
+/// HS `addRestriction` (TheoryObject.hs) as `liftedAddRestriction`
+/// (Theory/Text/Parser.hs) throws its failure: a restriction whose name the
+/// theory already declares is a `duplicate restriction`.
+pub fn add_restriction(thy: &mut Theory, restr: Restriction) -> Result<(), ElabError> {
+    if thy.lookup_restriction(&restr.name).is_some() {
+        return Err(ElabError {
+            message: format!("duplicate restriction: {}", restr.name),
+        });
+    }
+    thy.items.push(TheoryItem::Restriction(restr));
+    Ok(())
+}
+
 /// HS `liftedAddProtoRule` (Theory/Text/Parser.hs): add one restriction per
-/// `_restrict` formula BEFORE the rule, append the actions that reach them to
-/// the rule, then add the rule through `addOpenProtoRule`'s guard
+/// `_restrict` formula BEFORE the rule, each through [`add_restriction`],
+/// append the actions that reach them to the rule, then add the rule through
+/// `addOpenProtoRule`'s guard
 /// (OpenTheory.hs): a name already bound to a different open rule is a
 /// `duplicate rule`, while an identical one is appended again.  The SAPIC
 /// translation adds its generated rules through the same function.  A parse
@@ -707,7 +721,9 @@ pub fn lifted_add_proto_rule(
     macros: &[LNMacro],
     guard_duplicates: bool,
 ) -> Result<(), ElabError> {
-    let restrictions = crate::rule_restriction::lift_rule_restrictions(&mut rule, predicates)?;
+    for restr in crate::rule_restriction::lift_rule_restrictions(&mut rule, predicates)? {
+        add_restriction(thy, apply_macro_in_restriction(macros, restr))?;
+    }
     let mut opr = OpenProtoRule::new(crate::rule::apply_macro_in_rule(macros, rule.clone()));
     let name = opr.name();
     if guard_duplicates
@@ -719,12 +735,6 @@ pub fn lifted_add_proto_rule(
         return Err(ElabError {
             message: format!("duplicate rule: {name}"),
         });
-    }
-    for restr in restrictions {
-        thy.items
-            .push(TheoryItem::Restriction(apply_macro_in_restriction(
-                macros, restr,
-            )));
     }
     if opr.rule != rule {
         opr.rule_e = Some(Box::new(rule));

@@ -364,11 +364,7 @@ impl<'a> TheoryPipeline<'a> {
         // Sapic.translate >=> Acc.translate`.
         let sapic_wf = match module {
             Some(TranslateModule::Spthy | TranslateModule::SpthyTyped) => {
-                let wf = if self.theory.is_sapic() {
-                    tamarin_sapic::apply::sapic_pre_report(&self.theory)
-                } else {
-                    Vec::new()
-                };
+                let wf = tamarin_sapic::apply::sapic_pre_report(&self.theory);
                 if module == Some(TranslateModule::SpthyTyped) {
                     tamarin_sapic::type_theory::type_theory(self.theory_mut())
                         .map_err(|e| LoadError::Exception(e.message))?;

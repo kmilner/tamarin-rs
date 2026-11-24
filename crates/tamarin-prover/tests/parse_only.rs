@@ -264,6 +264,45 @@ end
     );
 }
 
+/// A located process prints as `(process)@term` with the term's Doc composed
+/// beside it (`ppLocated`, Theory/Sapic/Process.hs), so a wrapped location
+/// aligns under its own arguments.
+#[test]
+fn sapic_location_wraps_in_place() {
+    let a = "'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'";
+    assert_transcript(
+        "sapic_location_wraps_in_place",
+        &[(
+            "loc.spthy",
+            &format!(
+                "theory Loc begin\nfunctions: f/4\n\
+                 process: (out('hello_world_hello_world'))@f({a},{a},{a},{a})\nend\n"
+            ),
+        )],
+        &["loc.spthy"],
+        &format!(
+            r#"theory Loc
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: f/4, fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+process:
+  (out('hello_world_hello_world'))@f({a},
+                                     {a},
+                                     {a},
+                                     {a})
+
+end
+"#
+        ),
+        "[Theory Loc] Theory loaded\n",
+    );
+}
+
 /// `configuration:` before `begin`, `heuristic:` hoisted to the header,
 /// `predicate:` items, `section{* *}` formal comments, explicit `by sorry`.
 #[test]

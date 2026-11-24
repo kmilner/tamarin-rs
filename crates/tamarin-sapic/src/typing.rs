@@ -28,6 +28,7 @@ use tamarin_theory::sapic::{
 };
 
 use crate::bindings::{bindings_act, bindings_comb};
+use crate::exceptions::{process_not_wellformed, SapicFunType, WfError};
 
 // =============================================================================
 // renameUnique (Typing.hs)
@@ -136,15 +137,22 @@ fn smaller_type(t1: &SapicType, t2: &SapicType) -> bool {
     }
 }
 
-/// `sqcap` (Typing.hs): more specific of two types, error if they clash.
-fn sqcap(t1: &SapicType, t2: &SapicType) -> Result<SapicType, String> {
+/// `sqcap` (Typing.hs): more specific of two types, `None` (HS
+/// `CannotMerge`) if they clash.
+fn sqcap(t1: &SapicType, t2: &SapicType) -> Option<SapicType> {
     if smaller_type(t1, t2) {
-        Ok(t1.clone())
+        Some(t1.clone())
     } else if smaller_type(t2, t1) {
-        Ok(t2.clone())
+        Some(t2.clone())
     } else {
-        Err(format!("Cannot merge types {t1:?} and {t2:?}."))
+        None
     }
+}
+
+/// `catch (sqcap actual tt) (sqHandler t)` (Typing.hs): a clash is a
+/// `TypingError t actual tt`.
+fn sqcap_term(t: &SapicTerm, actual: &SapicType, tt: &SapicType) -> Result<SapicType, WfError> {
+    sqcap(actual, tt).ok_or_else(|| WfError::Typing(t.clone(), actual.clone(), tt.clone()))
 }
 
 /// `defaultFunctionType n = (replicate n Nothing, Nothing)` (Typing.hs).
@@ -180,7 +188,7 @@ fn type_with(
     env: &mut TypingEnvironment,
     t: &SapicTerm,
     tt: &SapicType,
-) -> Result<(SapicTerm, SapicType), String> {
+) -> Result<(SapicTerm, SapicType), WfError> {
     match t {
         VTerm::Lit(Lit::Var(v)) => {
             let lvar = &v.var;
@@ -189,11 +197,11 @@ fn type_with(
                 None
             } else {
                 match env.vars.get(lvar) {
-                    None => return Err(format!("unbound variable {lvar:?}")),
+                    None => return Err(WfError::Unbound(BTreeSet::from([*lvar]))),
                     Some(ty) => ty.clone(),
                 }
             };
-            let merged = sqcap(&stype, tt)?;
+            let merged = sqcap_term(t, &stype, tt)?;
             env.vars.insert(*lvar, merged.clone());
             Ok((var_term(SapicLVar::new(*lvar, merged.clone())), merged))
         }
@@ -218,7 +226,7 @@ fn type_with(
                     let key = UserDefinedSym::NoEqUser(*fs);
                     // First pass: refine output type from target.
                     let (intypes1, outtype1) = get_fun(env, n, &key);
-                    let mintype1 = sqcap(&outtype1, tt)?;
+                    let mintype1 = sqcap_term(t, &outtype1, tt)?;
                     insert_fun(env, &key, (intypes1.clone(), mintype1))?;
                     // Type args (discard results, just to learn input types).
                     let ts: Vec<SapicTerm> = args.to_vec();
@@ -229,7 +237,7 @@ fn type_with(
                     }
                     // Recompute output type, having learnt arg types.
                     let (intypes2, outtype2) = get_fun(env, n, &key);
-                    let mintype2 = sqcap(&outtype2, tt)?;
+                    let mintype2 = sqcap_term(t, &outtype2, tt)?;
                     insert_fun(env, &key, (ptypes, mintype2))?;
                     // Type args for real.
                     let mut ts_new: Vec<SapicTerm> = Vec::with_capacity(ts.len());
@@ -268,31 +276,24 @@ fn get_fun(env: &TypingEnvironment, n: usize, fs: &UserDefinedSym) -> (Vec<Sapic
 fn insert_fun(
     env: &mut TypingEnvironment,
     fs: &UserDefinedSym,
-    new_ty: (Vec<SapicType>, SapicType),
-) -> Result<(), String> {
-    match env.funs.get(fs).cloned() {
-        None => {
-            env.funs.insert(*fs, new_ty);
-            Ok(())
-        }
-        Some(old) => {
-            let merged = merge_fun_types(&new_ty, &old)?;
-            env.funs.insert(*fs, merged);
-            Ok(())
-        }
-    }
+    new_ty: SapicFunType,
+) -> Result<(), WfError> {
+    let merged = match env.funs.get(fs) {
+        None => new_ty,
+        Some(old) => merge_fun_types(&new_ty, old)
+            .ok_or_else(|| WfError::FunctionMerge(*fs, new_ty, old.clone()))?,
+    };
+    env.funs.insert(*fs, merged);
+    Ok(())
 }
 
-fn merge_fun_types(
-    a: &(Vec<SapicType>, SapicType),
-    b: &(Vec<SapicType>, SapicType),
-) -> Result<(Vec<SapicType>, SapicType), String> {
-    let mut ins = Vec::with_capacity(a.0.len());
-    for (x, y) in a.0.iter().zip(b.0.iter()) {
-        ins.push(sqcap(x, y)?);
-    }
-    let out = sqcap(&a.1, &b.1)?;
-    Ok((ins, out))
+fn merge_fun_types(a: &SapicFunType, b: &SapicFunType) -> Option<SapicFunType> {
+    let ins =
+        a.0.iter()
+            .zip(b.0.iter())
+            .map(|(x, y)| sqcap(x, y))
+            .collect::<Option<Vec<_>>>()?;
+    Some((ins, sqcap(&a.1, &b.1)?))
 }
 
 /// `typeProcess` (Typing.hs) via `traverseProcess`
@@ -308,24 +309,31 @@ fn merge_fun_types(
 /// `out(y); out(f(y))` learns `y:bitstring` from `out(f(y))` (deeper) into the
 /// shared `vars` env, and the earlier `out(y)` — reconstructed afterwards — then
 /// renders `out(y:bitstring)`.  A pre-order single pass would miss this.
+///
+/// A `WFerror` from step 3 is rethrown as `ProcessNotWellformed` with the
+/// node over its typed subprocess (`typeWith'`'s `handleEx`); the others
+/// escape bare.
 fn type_process(env: &mut TypingEnvironment, p: &PlainProcess) -> Result<PlainProcess, String> {
     match p {
         Process::Null(ann) => Ok(Process::Null(ann.clone())),
         Process::Action(ac, ann, body) => {
             // 1. fAct: insert bound vars (with their declared types).
             for v in bindings_act(ac) {
-                insert_var(env, &v)?;
+                insert_var(env, &v).map_err(|e| e.to_string())?;
             }
             // 2. recurse into the subtree FIRST (learns deeper types into `env`).
             let body1 = type_process(env, body)?;
             // 3. gAct: type the action's terms, with the now-complete `env`.
-            let ac1 = type_action(env, ac)?;
+            let ac1 = type_action(env, ac).map_err(|e| {
+                let node = Process::Action(ac.clone(), ann.clone(), Box::new(body1.clone()));
+                process_not_wellformed(&e, &node)
+            })?;
             // The `gAct ac@(Event ..)` case (Typing.hs) types the original
             // arguments a second time for the `events` map.  The map is not
             // kept, but that typing still updates `env` and can fail.
             if let SapicAction::Event(f) = ac {
                 for t in f.terms.iter() {
-                    type_with(env, t, &None)?;
+                    type_with(env, t, &None).map_err(|e| e.to_string())?;
                 }
             }
             Ok(Process::Action(ac1, ann.clone(), Box::new(body1)))
@@ -333,22 +341,30 @@ fn type_process(env: &mut TypingEnvironment, p: &PlainProcess) -> Result<PlainPr
         Process::Comb(c, ann, l, r) => {
             // 1. fComb: insert bound vars.
             for v in bindings_comb(c) {
-                insert_var(env, &v)?;
+                insert_var(env, &v).map_err(|e| e.to_string())?;
             }
             // 2. recurse into BOTH children first.
             let l1 = type_process(env, l)?;
             let r1 = type_process(env, r)?;
             // 3. gComb: type this node's terms with the completed `env`.
-            let c1 = type_comb(env, c)?;
+            let c1 = type_comb(env, c).map_err(|e| {
+                let node = Process::Comb(
+                    c.clone(),
+                    ann.clone(),
+                    Box::new(l1.clone()),
+                    Box::new(r1.clone()),
+                );
+                process_not_wellformed(&e, &node)
+            })?;
             Ok(Process::Comb(c1, ann.clone(), Box::new(l1), Box::new(r1)))
         }
     }
 }
 
 /// `insertVar` (Typing.hs).
-fn insert_var(env: &mut TypingEnvironment, v: &SapicLVar) -> Result<(), String> {
+fn insert_var(env: &mut TypingEnvironment, v: &SapicLVar) -> Result<(), WfError> {
     if env.vars.contains_key(&v.var) {
-        return Err(format!("variable bound twice: {:?}", v.var));
+        return Err(WfError::BoundTwice(v.clone()));
     }
     env.vars.insert(v.var, v.stype.clone());
     Ok(())
@@ -362,7 +378,7 @@ fn insert_var(env: &mut TypingEnvironment, v: &SapicLVar) -> Result<(), String> 
 fn type_action(
     env: &mut TypingEnvironment,
     a: &SapicAction<SapicLVar>,
-) -> Result<SapicAction<SapicLVar>, String> {
+) -> Result<SapicAction<SapicLVar>, WfError> {
     traverse_terms_action(
         |t| type_term(env, t),
         |f| Ok(f.clone()),
@@ -376,7 +392,7 @@ fn type_action(
 fn type_comb(
     env: &mut TypingEnvironment,
     c: &ProcessCombinator<SapicLVar>,
-) -> Result<ProcessCombinator<SapicLVar>, String> {
+) -> Result<ProcessCombinator<SapicLVar>, WfError> {
     traverse_terms_comb(
         |t| type_term(env, t),
         |f| Ok(f.clone()),
@@ -386,7 +402,7 @@ fn type_comb(
 }
 
 /// `typeWith' t = fst <$> typeWith t Nothing` (Typing.hs).
-fn type_term(env: &mut TypingEnvironment, t: &SapicTerm) -> Result<SapicTerm, String> {
+fn type_term(env: &mut TypingEnvironment, t: &SapicTerm) -> Result<SapicTerm, WfError> {
     let (t1, _) = type_with(env, t, &None)?;
     Ok(t1)
 }
@@ -414,7 +430,7 @@ pub(crate) fn to_sapic_term(t: &tamarin_term::lterm::LNTerm) -> SapicTerm {
 /// terms to `Nothing` (HS `Map.insert x Nothing` — an OVERWRITE, so a
 /// previously learnt var type is reset).  Updates `env.funs` with whatever the
 /// typing learns; term results are discarded.
-fn type_terms_with_env(env: &mut TypingEnvironment, terms: &[SapicTerm]) -> Result<(), String> {
+fn type_terms_with_env(env: &mut TypingEnvironment, terms: &[SapicTerm]) -> Result<(), WfError> {
     // `freeVars = foldl (\acc x -> acc `List.union` frees x) [] (map toLNTerm
     // terms)` — the terms' variables stripped to bare `LVar`s.
     for t in terms {
@@ -433,7 +449,7 @@ fn type_terms_with_env(env: &mut TypingEnvironment, terms: &[SapicTerm]) -> Resu
 fn type_rule(
     env: &mut TypingEnvironment,
     r: &tamarin_term::subterm_rule::CtxtStRule,
-) -> Result<(), String> {
+) -> Result<(), WfError> {
     let rr = r.to_rrule();
     type_terms_with_env(env, &[to_sapic_term(&rr.lhs), to_sapic_term(&rr.rhs)])
 }
@@ -496,7 +512,7 @@ pub(crate) fn init_te_from_sig(
     // `foldM typeRule initTE sigRules` — ascending `Set` order (the RS
     // `StRules` iterates its `BTreeSet` in the same structural order).
     for r in maude_sig.st_rules.iter() {
-        type_rule(&mut env, r)?;
+        type_rule(&mut env, r).map_err(|e| e.to_string())?;
     }
     Ok(env)
 }

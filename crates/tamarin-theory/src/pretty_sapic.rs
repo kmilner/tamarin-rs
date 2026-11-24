@@ -52,7 +52,8 @@ use tamarin_term::vterm::Lit;
 use crate::fact::pretty_fact;
 use crate::pretty_hpj::{self as hpj, Doc};
 use crate::sapic::{
-    PlainProcess, Process, ProcessCombinator, SapicAction, SapicLNFact, SapicLVar, SapicTerm,
+    PlainProcess, Process, ProcessCombinator, ProcessParsedAnnotation, SapicAction, SapicLNFact,
+    SapicLVar, SapicTerm,
 };
 
 /// HughesPJ DEFAULT `lineLength` (`Text.PrettyPrint.HughesPJ.style`,
@@ -69,7 +70,7 @@ const SAPIC_RIBBON: usize = 67;
 /// Continuation lines carry the `nest`-driven indent verbatim — matching
 /// HS, which then string-concatenates the result with the surrounding action
 /// literals.
-pub(crate) fn render_sapic(d: Doc) -> String {
+pub fn render_sapic(d: Doc) -> String {
     d.render_with(SAPIC_LINE_LENGTH, SAPIC_RIBBON)
 }
 
@@ -334,24 +335,22 @@ fn pretty_sapic_comb(c: &ProcessCombinator<SapicLVar>) -> String {
 /// a `Doc::text`, which is where `Document (HtmlDoc d)` (Html.hs)
 /// escapes it — once.
 fn pretty_sapic_top_level_with(p: &PlainProcess, printer: MsrPrinter) -> String {
-    let _plain = hpj::HtmlDocGuard::disable();
+    let text = node_text(p, printer);
     match p {
-        Process::Null(_) => "0".to_string(),
-        Process::Comb(c, _, _, _) => pretty_sapic_comb(c),
-        Process::Action(SapicAction::Rep, _, _) => pretty_sapic_action(&SapicAction::Rep, printer),
-        Process::Action(a, _, _) => format!("{};", pretty_sapic_action(a, printer)),
+        Process::Action(a, _, _) if !matches!(a, SapicAction::Rep) => format!("{text};"),
+        _ => text,
     }
 }
 
-/// The action/combinator text consumed by the reparsable open-process
-/// printer. Unlike [`pretty_sapic_top_level`], actions carry no sequencing
-/// semicolon because that printer decides whether a continuation needs one.
-pub(crate) fn pretty_sapic_open_node(p: &PlainProcess) -> String {
+/// The top node's action/combinator text without the sequencing semicolon,
+/// which [`pretty_sapic_top_level_with`] adds and [`open_process_doc`] adds
+/// only where a continuation follows.
+fn node_text<Ann>(p: &Process<Ann, SapicLVar>, printer: MsrPrinter) -> String {
     let _plain = hpj::HtmlDocGuard::disable();
     match p {
         Process::Null(_) => "0".to_string(),
         Process::Comb(c, _, _, _) => pretty_sapic_comb(c),
-        Process::Action(a, _, _) => pretty_sapic_action(a, MsrPrinter::Sapic),
+        Process::Action(a, _, _) => pretty_sapic_action(a, printer),
     }
 }
 
@@ -368,42 +367,54 @@ pub fn pretty_sapic_top_level_attr(p: &PlainProcess) -> String {
     pretty_sapic_top_level_with(p, MsrPrinter::Attribute)
 }
 
-/// HS `prettySapic'` (Theory/Sapic/Process.hs) as a Doc. Parentheses encode
-/// the parser's precedence and right extent, branch combinators regain their
-/// `then`/`in` keywords, and an annotated process prints as `(process)@term`.
-///
-/// The action/combinator text shares the byte-faithful top-level action
-/// renderer, without first appending and then stripping a semicolon.
+/// HS `prettySapic` (Theory/Sapic/Print.hs): `prettySapic'` with each
+/// annotation's parsed location.
 ///
 /// `prettyProcess = prettySapic = prettySapic' rulePrinter`
 /// (TheoryObject.hs, Print.hs), so an embedded MSR renders its
 /// premises through `unextractMatchingVariables mv` — every pattern-match
 /// variable keeps its `=` marker.  This is the printer that
-/// [`crate::pretty_sapic::pretty_sapic_top_level`] selects; the
+/// [`pretty_sapic_top_level`] selects; the
 /// `process="..."` rule attribute uses the other one.
-pub(crate) fn open_process_doc(pr: &crate::sapic::PlainProcess) -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj::{parens, Doc};
-    use crate::sapic::{Process, ProcessCombinator, SapicAction};
-    fn node_text(p: &crate::sapic::PlainProcess) -> String {
-        crate::pretty_sapic::pretty_sapic_open_node(p)
+pub(crate) fn open_process_doc(pr: &PlainProcess) -> Doc {
+    ProcessDoc::<ProcessParsedAnnotation> {
+        location: |a| a.location.as_ref(),
     }
-    fn annotation(pr: &crate::sapic::PlainProcess) -> &crate::sapic::ProcessParsedAnnotation {
-        match pr {
-            Process::Null(a) | Process::Comb(_, a, _, _) | Process::Action(_, a, _) => a,
-        }
+    .pp(pr)
+}
+
+/// HS `prettySapicNoLoc = prettySapic' rulePrinter (const Nothing)`
+/// (Theory/Sapic/Print.hs): [`open_process_doc`] at any annotation type, with
+/// no location annotation printed.
+pub fn pretty_sapic_no_loc<Ann>(p: &Process<Ann, SapicLVar>) -> Doc {
+    ProcessDoc { location: |_| None }.pp(p)
+}
+
+/// HS `prettySapic' rulePrinter ppLoc` (Theory/Sapic/Process.hs), with
+/// `location` as `ppLoc`. Parentheses encode the parser's precedence and right
+/// extent, branch combinators regain their `then`/`in` keywords, and a located
+/// process prints as `(process)@term`.
+///
+/// Each node's action/combinator text is [`node_text`], the same renderer
+/// [`pretty_sapic_top_level`] uses.
+struct ProcessDoc<Ann> {
+    location: fn(&Ann) -> Option<&SapicTerm>,
+}
+
+impl<Ann> ProcessDoc<Ann> {
+    fn location<'p>(&self, pr: &'p Process<Ann, SapicLVar>) -> Option<&'p SapicTerm> {
+        (self.location)(pr.annotation())
     }
-    fn is_chain(pr: &crate::sapic::PlainProcess) -> bool {
+
+    /// A `|` or `+` node without a location: only these print as a bare chain.
+    fn is_chain(&self, pr: &Process<Ann, SapicLVar>) -> bool {
         matches!(
             pr,
-            Process::Comb(
-                ProcessCombinator::Parallel | ProcessCombinator::Ndc,
-                a,
-                _,
-                _
-            ) if a.location.is_none()
-        )
+            Process::Comb(ProcessCombinator::Parallel | ProcessCombinator::Ndc, ..)
+        ) && self.location(pr).is_none()
     }
-    fn is_delimited(pr: &crate::sapic::PlainProcess) -> bool {
+
+    fn is_delimited(pr: &Process<Ann, SapicLVar>) -> bool {
         match pr {
             Process::Null(_) | Process::Action(SapicAction::ProcessCall(_, _), _, _) => true,
             Process::Action(action, _, body) if matches!(body.as_ref(), Process::Null(_)) => {
@@ -418,38 +429,43 @@ pub(crate) fn open_process_doc(pr: &crate::sapic::PlainProcess) -> crate::pretty
             _ => false,
         }
     }
-    fn located(pr: &crate::sapic::PlainProcess, loc: &crate::sapic::SapicTerm) -> Doc {
-        parens(form(pr))
+
+    fn located(&self, pr: &Process<Ann, SapicLVar>, loc: &SapicTerm) -> Doc {
+        hpj::parens(self.form(pr))
             .beside(Doc::text("@"))
-            .beside(Doc::text(crate::pretty_sapic::pretty_sapic_term(loc)))
+            .beside(pretty_nterm(loc))
     }
-    fn pp(pr: &crate::sapic::PlainProcess) -> Doc {
-        match annotation(pr).location.as_ref() {
-            Some(loc) => located(pr, loc),
-            None => form(pr),
+
+    fn pp(&self, pr: &Process<Ann, SapicLVar>) -> Doc {
+        match self.location(pr) {
+            Some(loc) => self.located(pr, loc),
+            None => self.form(pr),
         }
     }
-    fn delimited(pr: &crate::sapic::PlainProcess) -> Doc {
-        match annotation(pr).location.as_ref() {
-            Some(loc) => parens(located(pr, loc)),
-            None if is_delimited(pr) => form(pr),
-            None => parens(form(pr)),
+
+    fn delimited(&self, pr: &Process<Ann, SapicLVar>) -> Doc {
+        match self.location(pr) {
+            Some(loc) => hpj::parens(self.located(pr, loc)),
+            None if Self::is_delimited(pr) => self.form(pr),
+            None => hpj::parens(self.form(pr)),
         }
     }
-    fn left_op(pr: &crate::sapic::PlainProcess) -> Doc {
-        if is_chain(pr) {
-            form(pr)
+
+    fn left_op(&self, pr: &Process<Ann, SapicLVar>) -> Doc {
+        if self.is_chain(pr) {
+            self.form(pr)
         } else {
-            delimited(pr)
+            self.delimited(pr)
         }
     }
-    fn form(pr: &crate::sapic::PlainProcess) -> Doc {
+
+    fn form(&self, pr: &Process<Ann, SapicLVar>) -> Doc {
         match pr {
             Process::Null(_) => Doc::text("0"),
             Process::Comb(ProcessCombinator::Parallel | ProcessCombinator::Ndc, _, left, right) => {
-                left_op(left)
-                    .beside_sp(Doc::text(node_text(pr)))
-                    .beside_sp(delimited(right))
+                self.left_op(left)
+                    .beside_sp(Doc::text(node_text(pr, MsrPrinter::Sapic)))
+                    .beside_sp(self.delimited(right))
             }
             Process::Comb(comb, _, left, right) => {
                 let keyword = match comb {
@@ -457,39 +473,41 @@ pub(crate) fn open_process_doc(pr: &crate::sapic::PlainProcess) -> crate::pretty
                     ProcessCombinator::Lookup(_, _) | ProcessCombinator::Let { .. } => "in",
                     ProcessCombinator::Parallel | ProcessCombinator::Ndc => unreachable!(),
                 };
-                let header = Doc::text(node_text(pr)).beside_sp(Doc::text(keyword));
+                let header =
+                    Doc::text(node_text(pr, MsrPrinter::Sapic)).beside_sp(Doc::text(keyword));
                 if matches!(right.as_ref(), Process::Null(_)) {
-                    header.above_g(pp(left).nest(4))
+                    header.above_g(self.pp(left).nest(4))
                 } else {
                     header
-                        .above_g(delimited(left).nest(4))
+                        .above_g(self.delimited(left).nest(4))
                         .above_g(Doc::text("else"))
-                        .above_g(pp(right).nest(4))
+                        .above_g(self.pp(right).nest(4))
                 }
             }
-            Process::Action(SapicAction::Rep, _, body) => Doc::text("!").beside(parens(pp(body))),
-            Process::Action(SapicAction::ProcessCall(_, _), _, _) => Doc::text(node_text(pr)),
+            Process::Action(SapicAction::Rep, _, body) => {
+                Doc::text("!").beside(hpj::parens(self.pp(body)))
+            }
+            Process::Action(SapicAction::ProcessCall(_, _), _, _) => {
+                Doc::text(node_text(pr, MsrPrinter::Sapic))
+            }
             Process::Action(_, _, body) if matches!(body.as_ref(), Process::Null(_)) => {
-                Doc::text(node_text(pr))
+                Doc::text(node_text(pr, MsrPrinter::Sapic))
             }
             Process::Action(_, _, body) => {
-                let next = if is_chain(body) {
-                    parens(form(body)).nest(1)
+                let next = if self.is_chain(body) {
+                    hpj::parens(self.form(body)).nest(1)
                 } else {
-                    pp(body)
+                    self.pp(body)
                 };
-                Doc::text(format!("{};", node_text(pr))).above_g(next)
+                Doc::text(format!("{};", node_text(pr, MsrPrinter::Sapic))).above_g(next)
             }
         }
     }
-
-    pp(pr)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sapic::ProcessParsedAnnotation;
     use tamarin_term::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::f_app_no_eq;

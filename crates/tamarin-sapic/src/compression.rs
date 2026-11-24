@@ -292,17 +292,14 @@ fn cmp_rule(a: &ERule, b: &ERule) -> std::cmp::Ordering {
 }
 
 fn cmp_info(a: &ProtoRuleEInfo, b: &ProtoRuleEInfo) -> std::cmp::Ordering {
-    // `ProtoRuleEInfo` Ord = (name, attributes, restrictions).  The attributes
-    // compare through `Ord RuleAttributes`, which walks HS's own field chain
-    // (Theory/Model/Rule.hs) and reads the whole process.  The SAPIC
-    // rules reaching compression carry NO `info.restrictions` (the per-rule
-    // `_restrict` formulas live in `AnnotatedRule.restr`, lifted separately), so
-    // comparing by length is a faithful proxy — `SyntacticLNFormula` has no
-    // `Ord` and the non-empty case never arises here.
+    // Derived `Ord ProtoRuleEInfo` (Theory/Model/Rule.hs): name, attributes,
+    // then the `_restrict` formulas.  The attributes compare through
+    // `Ord RuleAttributes`, which walks HS's own field chain and reads the
+    // whole process.
     a.name
         .cmp(&b.name)
         .then_with(|| a.attributes.cmp(&b.attributes))
-        .then_with(|| a.restrictions.len().cmp(&b.restrictions.len()))
+        .then_with(|| a.restrictions.cmp(&b.restrictions))
 }
 
 #[cfg(test)]

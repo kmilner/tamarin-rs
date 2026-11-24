@@ -156,7 +156,7 @@ pub(crate) fn reliable_channel_trans_act(
         // (ReliableChannelTranslation.hs, four guards with one body): the
         // `'c'`/`'r'` arms above already consumed the well-formed cases.
         SapicAction::ChOut { .. } | SapicAction::ChIn { .. } => {
-            Err("process not well-formed: reliable channel".to_string())
+            Err(crate::exceptions::WfError::Reliable.to_string())
         }
         // Otherwise: fall through to the base translation.
         _ => Ok(None),

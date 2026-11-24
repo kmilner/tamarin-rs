@@ -26,89 +26,82 @@ use tamarin_term::lterm::{LSort, LVar};
 use tamarin_theory::sapic::{Process, ProcessCombinator, SapicAction, SapicLVar, SapicTerm};
 
 use crate::annotation::ProcessAnnotation;
+use crate::exceptions::{process_not_wellformed, WfError, WfLockTag};
 
 type AnnotatedProc = Process<ProcessAnnotation<LVar>, SapicLVar>;
 
-/// `LocalException` (Locks.hs): thrown when `annotateEachClosestUnlock`
-/// encounters a `Rep` (`WFRep`) or `Parallel` (`WFPar`) below a lock.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum LockWfError {
-    /// `WFRep` — replication below the lock.
-    Rep,
-    /// `WFPar` — parallel below the lock.
-    Par,
-}
-
 /// `annotateEachClosestUnlock t v p` (Locks.hs): annotate the closest
 /// occurrence of `unlock` (and `insert t _` / `lookup t _`) that has term `t`
-/// with the variable `v`.  Errors on `Rep`/`Parallel` below the lock.
+/// with the variable `v`.  Errors (HS `LocalException`) on `Rep`/`Parallel`
+/// below the lock.
+///
+/// Annotates `p` in place: on an error the caller reports `p`, which it
+/// renders without annotations, so a partial annotation does not show.
 fn annotate_each_closest_unlock(
     t: &SapicTerm,
     v: &LVar,
-    p: AnnotatedProc,
-) -> Result<AnnotatedProc, LockWfError> {
+    p: &mut AnnotatedProc,
+) -> Result<(), WfLockTag> {
+    let ann_unlock = |a: &mut ProcessAnnotation<LVar>| {
+        *a = std::mem::take(a).append(ProcessAnnotation::with_unlock(*v));
+    };
     match p {
         // ProcessNull a' -> return $ ProcessNull a'
-        Process::Null(a) => Ok(Process::Null(a)),
-        Process::Action(ac, a, body) => match &ac {
+        Process::Null(_) => Ok(()),
+        Process::Action(ac, a, body) => match ac {
             // (Unlock t') | t == t' -> annUnlock here, STOP (closest match).
             //              | otherwise -> recurse into body.
             SapicAction::Unlock(t_prime) if t == t_prime => {
-                let a2 = a.append(ProcessAnnotation::with_unlock(*v));
-                Ok(Process::Action(ac, a2, body))
+                ann_unlock(a);
+                Ok(())
             }
             // (Insert t1 t2) | t1 == t -> annUnlock here AND recurse into body.
             //  (otherwise falls through to the generic action case below.)
             SapicAction::Insert(t1, _t2) if t1 == t => {
-                let body2 = annotate_each_closest_unlock(t, v, *body)?;
-                let a2 = a.append(ProcessAnnotation::with_unlock(*v));
-                Ok(Process::Action(ac, a2, Box::new(body2)))
+                annotate_each_closest_unlock(t, v, body)?;
+                ann_unlock(a);
+                Ok(())
             }
             // (Rep) -> Left WFRep
-            SapicAction::Rep => Err(LockWfError::Rep),
+            SapicAction::Rep => Err(WfLockTag::Rep),
             // generic action: recurse into body.
-            _ => {
-                let body2 = annotate_each_closest_unlock(t, v, *body)?;
-                Ok(Process::Action(ac, a, Box::new(body2)))
-            }
+            _ => annotate_each_closest_unlock(t, v, body),
         },
         // (ProcessComb Parallel _ _ _) -> Left WFPar
-        Process::Comb(ProcessCombinator::Parallel, _, _, _) => Err(LockWfError::Par),
-        Process::Comb(c, a, pl, pr) => match &c {
-            // (Lookup st vt) | st == t -> annUnlock here AND recurse into BOTH children.
-            ProcessCombinator::Lookup(st, _vt) if st == t => {
-                let pl2 = annotate_each_closest_unlock(t, v, *pl)?;
-                let pr2 = annotate_each_closest_unlock(t, v, *pr)?;
-                let a2 = a.append(ProcessAnnotation::with_unlock(*v));
-                Ok(Process::Comb(c, a2, Box::new(pl2), Box::new(pr2)))
+        Process::Comb(ProcessCombinator::Parallel, _, _, _) => Err(WfLockTag::Par),
+        Process::Comb(c, a, pl, pr) => {
+            annotate_each_closest_unlock(t, v, pl)?;
+            annotate_each_closest_unlock(t, v, pr)?;
+            // (Lookup st vt) | st == t -> annUnlock here AND recurse into
+            // BOTH children; a generic combinator only recurses.
+            if matches!(c, ProcessCombinator::Lookup(st, _) if st == t) {
+                ann_unlock(a);
             }
-            // generic combinator: recurse into both children (no annotation).
-            _ => {
-                let pl2 = annotate_each_closest_unlock(t, v, *pl)?;
-                let pr2 = annotate_each_closest_unlock(t, v, *pr)?;
-                Ok(Process::Comb(c, a, Box::new(pl2), Box::new(pr2)))
-            }
-        },
+            Ok(())
+        }
     }
 }
 
 /// `annotateLocks'` (Locks.hs): at each `Lock t`, mint a fresh lock
 /// variable, annotate the closest matching unlocks under it, then recurse.
+/// A `LocalException` becomes `ProcessNotWellformed (WFLock tag) (Just p)`
+/// over the lock's body (`annotateEachClosestUnlock'`).
 fn annotate_locks_go(
     fresh: &mut FastFreshState,
     p: AnnotatedProc,
-) -> Result<AnnotatedProc, LockWfError> {
+) -> Result<AnnotatedProc, String> {
     match p {
         // (Lock t) -> fresh v; annotateEachClosestUnlock t v body; recurse; annLock here.
-        Process::Action(SapicAction::Lock(t), a, body) => {
+        Process::Action(SapicAction::Lock(t), a, mut body) => {
             // freshLVar "lock" LSortMsg — fast counter, name ignored.
             let v = LVar {
                 name: "lock",
                 sort: LSort::Msg,
                 idx: fresh.fresh_ident(""),
             };
-            let p1 = annotate_each_closest_unlock(&t, &v, *body)?;
-            let p2 = annotate_locks_go(fresh, p1)?;
+            annotate_each_closest_unlock(&t, &v, &mut body)
+                .map_err(|tag| process_not_wellformed(&WfError::Lock(tag), &body))?;
+            let p2 = annotate_locks_go(fresh, *body)?;
             let a2 = a.append(ProcessAnnotation::with_lock(v));
             Ok(Process::Action(SapicAction::Lock(t), a2, Box::new(p2)))
         }
@@ -137,15 +130,7 @@ pub(crate) fn annotate_locks(p: AnnotatedProc) -> Result<AnnotatedProc, String> 
         .filter(|v| v.name == "lock")
         .collect();
     let mut fresh = tamarin_term::lterm::avoid(&reserved);
-    annotate_locks_go(&mut fresh, p).map_err(|e| match e {
-        LockWfError::Rep => {
-            "process not well-formed: replication below a lock without a matching unlock"
-                .to_string()
-        }
-        LockWfError::Par => {
-            "process not well-formed: parallel below a lock without a matching unlock".to_string()
-        }
-    })
+    annotate_locks_go(&mut fresh, p)
 }
 
 #[cfg(test)]
@@ -269,11 +254,20 @@ mod tests {
             ProcessAnnotation::empty(),
             Box::new(null()),
         );
-        for (body, want) in [(par, LockWfError::Par), (rep, LockWfError::Rep)] {
+        for (body, want) in [
+            (
+                par,
+                "Process not well-formed: Process contains lock that extends over \
+                 a parallel which is not allowed.\n  0 | 0",
+            ),
+            (
+                rep,
+                "Process not well-formed: Process contains lock that extends over \
+                 replication which is not allowed.\n  !(0)",
+            ),
+        ] {
             let p = lock(pub_const("s"), body);
-            let mut fresh = FastFreshState::nothing_used();
-            assert_eq!(annotate_locks_go(&mut fresh, p.clone()).unwrap_err(), want);
-            assert!(annotate_locks(p).is_err());
+            assert_eq!(annotate_locks(p).unwrap_err(), want);
         }
     }
 

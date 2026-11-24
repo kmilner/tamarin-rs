@@ -89,14 +89,6 @@ fn inline_call(
     // Convert the formal parameters (HS `fromMaybe [] (get pVars p)`).
     let params: Vec<SapicLVar> = def.vars.clone().unwrap_or_default();
 
-    if params.len() != sapic_args.len() {
-        return Err(ConvertError::new(format!(
-            "process call {name}: expected {} argument(s), got {}",
-            params.len(),
-            sapic_args.len()
-        )));
-    }
-
     // The body was converted when its definition was read. Any calls it
     // contains were therefore resolved against precisely the earlier
     // definitions visible there; clone that resolved body rather than
@@ -106,6 +98,8 @@ fn inline_call(
     // Build the parameter substitution with HS's `extend_sup` type-erasure
     // doubling (Theory/Text/Parser/Sapic.hs): a typed formal
     // contributes both its typed and untyped keys mapping to the argument.
+    // `zip vars ts` pairs as many as both lists have: a call with the wrong
+    // number of arguments is not an error.
     let mut pairs: Vec<(SapicLVar, SapicTerm)> = Vec::new();
     for (param, arg) in params.iter().zip(sapic_args.iter()) {
         pairs.push((param.clone(), arg.clone()));
@@ -334,19 +328,35 @@ mod tests {
         assert!(err.message.contains("process not defined"));
     }
 
+    /// HS `zip vars ts` truncates: a missing argument leaves its formal free
+    /// in the body and a surplus one is only kept on the `ProcessCall`.
     #[test]
-    fn arity_mismatch_errors() {
+    fn arity_mismatch_truncates_like_zip() {
         let def = out_x_def("P", "x");
         let sig = pair_maude_sig();
         let mut defs: ProcessDefMap = BTreeMap::new();
         defs.insert("P".to_string(), resolved_def(&def, &sig));
-        // P expects 1 arg, give 0.
-        let call = p::Process::Call {
-            name: "P".into(),
-            args: vec![],
+        let body_msg = |args: Vec<p::Term>| {
+            let call = p::Process::Call {
+                name: "P".into(),
+                args,
+            };
+            let Process::Action(_, _, body) =
+                convert_process_with_defs(&call, &defs, &sig).unwrap()
+            else {
+                panic!("expected the ProcessCall marker");
+            };
+            let Process::Action(SapicAction::ChOut { msg, .. }, _, _) = *body else {
+                panic!("expected out(..)");
+            };
+            msg
         };
-        let err = convert_process_with_defs(&call, &defs, &sig).unwrap_err();
-        assert!(err.message.contains("expected 1 argument"));
+        let x = SapicLVar::untyped(tamarin_term::lterm::LVar::new("x", LSort::Msg, 0));
+        assert_eq!(body_msg(vec![]), tamarin_term::vterm::var_term(x));
+        assert_eq!(
+            body_msg(vec![pub_lit("a"), pub_lit("b")]),
+            convert_term(&pub_lit("a"), &sig).unwrap()
+        );
     }
 
     #[test]

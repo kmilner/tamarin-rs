@@ -15,9 +15,8 @@
 //! (Theory/Text/Parser.hs), so the predicates are the ones declared
 //! before the rule (`theoryPredicates thy`, Theory/Text/Parser.hs) and
 //! the rule keeps its `_restrict` formulas, since `addActions` rebuilds `rActs`
-//! alone (Theory/Text/Parser.hs).  `elaborate_items` is where the port
-//! builds the theory rule by rule and calls this; `tamarin_sapic::apply` runs
-//! the same lift over the rules the SAPIC translation generates.
+//! alone (Theory/Text/Parser.hs).  `elaborate::lifted_add_proto_rule` calls
+//! this for each parsed rule and each rule the SAPIC translation generates.
 
 use crate::elaborate::ElabError;
 use crate::fact::LNFact;
