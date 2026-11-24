@@ -127,70 +127,15 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
             {
                 return true;
             }
-            // 3. Subterm-rule LHS match → reducible.  Both of HS's st-rule
-            //    arms are guarded on the top symbol's KIND — `FAppNoEq _ _`
-            //    and `FAppACfct _ _` (Norm.hs) — so only NoEq- and
-            //    user-`[AC]`-headed terms are ever offered to
-            //    `struleApplicable`.  Builtin-AC- and C-headed terms have
-            //    their own dedicated reducibility patterns (sections 5-6
-            //    below) and fall straight past this loop.  The gate wraps the
-            //    whole loop rather than either matcher arm, exactly as it sits
-            //    above the two arms in HS: an st rule whose LHS is a bare
-            //    variable is Ac/C-free and matches ANY subject term, so it
-            //    reaches the pure arm on both entry points and would otherwise
-            //    make every `Mult`/`Xor`/`Union`/`NatPlus`/`em`-headed term
-            //    reducible where HS reports normal form.  (No `.spthy` yields
-            //    such a rule — `rrule_to_ctxt_st_rule` rejects a bare-variable
-            //    LHS on both of its branches, see subterm_rule.rs — so the gate
-            //    is a structural guarantee, not a filter that fires in
-            //    practice.)
-            //    HS uses `solveMatchLNTerm (t `matchWith` lhs)`
-            //    (Norm.hs).
-            //    All builtin subterm rules (pair / senc / sdec / aenc /
-            //    adec / sign / verify / ...) have AC-free LHS, so the
-            //    no-AC matcher is complete for them; a rule whose LHS
-            //    contains an Ac-/C-headed subterm (user `[AC]` equations,
-            //    e.g. `xorr(x, x) = zeroo`) needs AC matching, which is
-            //    only available when the caller supplied a `MaudeHandle`
-            //    (`nf_via_haskell_maude`).  See subterm_rule.rs and
-            //    builtin.rs.
-            //    The Ac/C-freeness of each rule LHS is a full walk of that LHS,
-            //    so each rule carries it (`MaudeSig::st_rules`, a `StRules`)
-            //    rather than having it recomputed here — this loop runs at
-            //    every `App` node of every NF check.
-            if matches!(sym, FunSym::NoEq(_) | FunSym::Ac(AcSym::AcFct(_))) {
-                for (rule, lhs_ac_c_free) in msig.st_rules.iter_with_lhs_ac_c_free() {
-                    if lhs_ac_c_free {
-                        // Head-symbol + arity precheck reproducing match_raw's
-                        // first step for concrete-headed patterns
-                        // (unification.rs `match_raw`, NoEq arm: `tf == pf &&
-                        // targs.len() == pargs.len()`).  When the LHS is an
-                        // `App`, a mismatched head or arity means `match_raw`
-                        // yields `NoUnifier` (for NoEq/List patterns) — a
-                        // definitive no-match — so skip the full
-                        // `rule_applies` call.  A non-`App` LHS (bare Var/Lit)
-                        // is not pre-skipped — the `if let` simply falls
-                        // through to `rule_applies`.  An Ac-/C-free pattern
-                        // never raises `NeedsAC` in `match_raw`, so this pure
-                        // path is exactly HS's `solveMatchLNTerm` (no Maude
-                        // involved).
-                        if let Term::App(lhs_head, lhs_args) = &rule.lhs
-                            && (lhs_head != sym || lhs_args.len() != args.len())
-                        {
-                            continue;
-                        }
-                        if rule_applies(t, &rule.lhs, &rule.rhs) {
-                            return false;
-                        }
-                    } else if let Some(hnd) = maude
-                        && rule_applies_ac(hnd, t, &rule.lhs, &rule.rhs)
-                    {
-                        return false;
-                    }
-                    // Ac-/C-containing LHS with no handle (pure
-                    // `nf_via_haskell`): the no-AC matcher could never match
-                    // this rule, so it is skipped.
-                }
+            // 3. Subterm-rule LHS match → reducible.  HS guards both st-rule
+            //    arms on a `FAppNoEq` / `FAppACfct` top symbol (Norm.hs).
+            if matches!(sym, FunSym::NoEq(_) | FunSym::Ac(AcSym::AcFct(_)))
+                && msig
+                    .st_rules
+                    .iter()
+                    .any(|rule| strule_applicable(maude, t, rule))
+            {
+                return false;
             }
             // 4. Reducible exponent / inverse / mult / xor patterns.
             if let FunSym::NoEq(s) = sym {
@@ -376,17 +321,6 @@ fn invalid_xor(ts: &[LNTerm]) -> bool {
             .any(|(i, term)| ts[i + 1..].contains(term))
 }
 
-/// `struleApplicable` — HS `Norm.hs`.  Returns true iff the
-/// rule's LHS matches `t` AND the rule actually rewrites `t` to
-/// something different.
-fn rule_applies(t: &LNTerm, lhs: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> bool {
-    use crate::rewriting::Match;
-    let problem = Match::match_with(t.clone(), lhs.clone());
-    let matched =
-        crate::unification::solve_match_lterm_no_ac(&|n| crate::lterm::sort_of_name(n), problem);
-    matched.is_some() && strule_rewrites(t, rhs)
-}
-
 /// The `StRhs` disambiguation both `struleApplicable` ports apply once the
 /// rule's LHS has matched `t`.
 fn strule_rewrites(t: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> bool {
@@ -406,54 +340,35 @@ fn strule_rewrites(t: &LNTerm, rhs: &crate::subterm_rule::StRhs) -> bool {
     }
 }
 
-/// `struleApplicable` for a rule whose LHS contains Ac-/C-headed subterms:
-/// the same HS `solveMatchLNTerm (t `matchWith` lhs)` semantics, with the
-/// 3-way native matcher first and a Maude `match` only on `NeedsAc`
-/// (mirroring HS `matchViaMaude` on `Left ACProblem`,
-/// Term/Unification.hs), minus the `NeedsAc` pairs the module's
-/// axioms already answer (see the root-symbol note below).  Subject vars
-/// are rigid in the Maude `match` command on both sides of the port, so the
-/// outcomes agree.
-/// A Maude transport error is folded to "no match" — the conservative
-/// answer (term stays NF), matching the port's other best-effort Maude
-/// fallbacks (e.g. simplify.rs `match_atom_via_maude`).
-fn rule_applies_ac(
-    maude: &MaudeHandle,
+/// `struleApplicable` (Norm.hs): `solveMatchLNTerm (t `matchWith` lhs)`,
+/// i.e. the native matcher first and a Maude `match` only on `NeedsAc`
+/// (Term/Unification.hs).  Without a handle an AC problem counts as no
+/// match.  A Maude error is also folded to "no match" (the term stays NF).
+fn strule_applicable(
+    maude: Option<&MaudeHandle>,
     t: &LNTerm,
-    lhs: &LNTerm,
-    rhs: &crate::subterm_rule::StRhs,
+    rule: &crate::subterm_rule::CtxtStRule,
 ) -> bool {
     use crate::rewriting::Match;
     use crate::unification::MatchOutcome;
+    let lhs = &rule.lhs;
     let problem = Match::match_with(t.clone(), lhs.clone());
     let matched = match crate::unification::solve_match_lterm(&crate::lterm::sort_of_name, problem)
     {
         MatchOutcome::NoMatcher => false,
         MatchOutcome::Matched(_) => true,
-        MatchOutcome::NeedsAc => match (t, lhs) {
-            // Two distinct AC root symbols have no matcher, so the pair is
-            // answered here instead of over IPC.  `match P <=? S` solves
-            // modulo the MSG module's AXIOMS, never its
-            // `eq _ = _ [variant]` equations, and the only axioms any
-            // operator carries there are `[comm assoc]` / `[comm]` — no
-            // identity element is ever declared
-            // (`maude_print.rs::op_ac`/`op_c` plus the user-AC `op` loop,
-            // mirroring HS `theoryOpAC`/`theoryOpACUser`,
-            // Term/Maude/Parser.hs).  Commutativity and associativity each
-            // carry the same symbol at the root of both sides, so the root
-            // symbol is invariant across a term's axiom class, and no
-            // instance of an `f`-rooted pattern is axiom-equal to a
-            // `g`-rooted subject for `f /= g`.  `match_raw` reports
-            // `NeedsAc` for *any* two AC-headed sides — it deliberately
-            // does not compare the symbols, mirroring HS `matchRaw`
-            // (Unification.hs) — so the comparison
-            // belongs here.
-            (Term::App(FunSym::Ac(t_sym), _), Term::App(FunSym::Ac(lhs_sym), _))
+        MatchOutcome::NeedsAc => match (maude, t, lhs) {
+            (None, _, _) => false,
+            // `match_raw` reports `NeedsAc` for any two AC-headed sides, as
+            // HS `matchRaw` does.  The MSG module declares only `[comm
+            // assoc]` / `[comm]` axioms, which keep the root symbol, so two
+            // distinct AC roots never match and need no Maude call.
+            (_, Term::App(FunSym::Ac(t_sym), _), Term::App(FunSym::Ac(lhs_sym), _))
                 if t_sym != lhs_sym =>
             {
                 false
             }
-            _ => maude
+            (Some(maude), _, _) => maude
                 .match_eqs(&[crate::rewriting::Equal {
                     lhs: t.clone(),
                     rhs: lhs.clone(),
@@ -461,7 +376,7 @@ fn rule_applies_ac(
                 .is_ok_and(|ms| !ms.is_empty()),
         },
     };
-    matched && strule_rewrites(t, rhs)
+    matched && strule_rewrites(t, &rule.rhs)
 }
 
 // NOTE: `maybeNotNfSubterms` (HS `Term/Rewriting/Norm.hs`) lives

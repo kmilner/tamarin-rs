@@ -1594,3 +1594,58 @@ fn a_cancelled_job_gets_no_cached_reply() {
     assert!(matches!(handle.reduce(&term), Err(MaudeError::Cancelled)));
     assert!(matches!(handle.variants(&term), Err(MaudeError::Cancelled)));
 }
+
+/// HS `unskolemizeBTerm` is an `fmapTerm`: restoring the variables re-sorts
+/// the AC argument list under the restored literals.
+#[test]
+fn unskolemize_resorts_ac_arguments() {
+    use crate::function_symbols::AcSym;
+    use crate::term::{f_app_ac, lit, Term};
+    let a = LVar::new("a", LSort::Msg, 5);
+    let b = LVar::new("b", LSort::Msg, 1);
+    let (skolem_map, reverse) = build_skolem_maps(&[a].into_iter().collect());
+    let skolemized: LNTerm = f_app_ac(
+        AcSym::Mult,
+        vec![lit(Lit::Con(skolem_map[&a])), lit(Lit::Var(b))],
+    );
+    let expected: LNTerm = f_app_ac(AcSym::Mult, vec![lit(Lit::Var(a)), lit(Lit::Var(b))]);
+    let Term::App(_, args) = &expected else {
+        unreachable!()
+    };
+    assert_eq!(args[0], lit(Lit::Var(b)));
+    assert_eq!(unskolemize(&skolemized, &reverse), expected);
+    assert_eq!(rewrite_skolem(&expected, &skolem_map), skolemized);
+}
+
+/// HS `variantsViaMaude` converts each variant with `msubstToLSubstVFresh`
+/// (Maude/Types.hs): witnesses are numbered from `avoid (M.elems
+/// bindings)`, and `removeRenamings` turns the identity variant into the
+/// empty substitution.
+#[test]
+fn variants_use_the_hs_back_conversion() {
+    use crate::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+    let fst = NoEqSym::new(
+        b"fst".to_vec(),
+        1,
+        Privacy::Public,
+        Constructability::Constructor,
+    );
+    let x = LVar::new("x", LSort::Msg, 5);
+    let t: LNTerm = crate::term::Term::App(
+        FunSym::NoEq(fst),
+        vec![crate::term::lit(Lit::Var(x))].into(),
+    );
+    let variants = h.variants(&t).unwrap();
+    assert_eq!(variants.len(), 2, "{variants:?}");
+    assert!(variants.contains(&Vec::new()), "{variants:?}");
+    for (_, image) in variants.iter().flatten() {
+        assert!(
+            crate::vterm::vars_vterm(image).iter().all(|w| w.idx > 5),
+            "{variants:?}"
+        );
+    }
+}

@@ -176,7 +176,7 @@ fn nf_via_haskell_maude_matches_user_ac_strule() {
 // A term rooted at one user-`[AC]` symbol is never reducible by an st
 // rule rooted at a different one, however similarly shaped: `match`
 // solves modulo the MSG module's `[comm assoc]` axioms, which preserve
-// the root symbol.  `rule_applies_ac` answers that pair itself; this
+// the root symbol.  `strule_applicable` answers that pair itself; this
 // pins both halves — the answer, and Maude's agreement with it.
 #[test]
 fn cross_ac_symbol_strule_never_applies() {
@@ -338,55 +338,4 @@ fn bare_variable_strule_lhs_never_reduces_builtin_ac_or_c_terms() {
         !nf_via_haskell_maude_with_sig(&sig, &h, &fst_k),
         "a NoEq-headed term must still reach the st-rule loop"
     );
-}
-
-/// `go_nf`'s st-rule arm reads the Ac/C-free flag each `st_rules` entry
-/// carries, so the flag it sees always belongs to the rule it is matching.
-/// An insert that never reaches `refresh` cannot shift a flag onto its
-/// neighbour: the Ac-headed rule added here sorts among the pairing rules,
-/// and both verdicts (`fst(pair(x1, x2))` reducible, `pair(x1, x2)` normal)
-/// survive it.  No Maude handle needed — the pairing rule LHSes are
-/// Ac/C-free, and the pure entry point skips the Ac-headed one.
-#[test]
-fn go_nf_reads_each_rule_s_own_lhs_flag() {
-    use crate::builtin::{fst, msg_var, pair};
-    use crate::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
-    use crate::rewriting::RRule;
-    let mut sig = pair_maude_sig();
-    let reducible = fst(pair(msg_var("x", 1), msg_var("x", 2)));
-    let normal = pair(msg_var("x", 1), msg_var("x", 2));
-    assert!(!nf_via_haskell(&sig, &reducible));
-    assert!(nf_via_haskell(&sig, &normal));
-
-    // `xorr(x, x) = zeroo`, whose LHS is Ac-headed (flag `false`).
-    let xorr = AcFctSym::new(
-        b"xorr".to_vec(),
-        Privacy::Public,
-        Constructability::Constructor,
-        NdcState::IsNdc,
-    );
-    let zeroo_sym = NoEqSym::new(
-        b"zeroo".to_vec(),
-        0,
-        Privacy::Public,
-        Constructability::Constructor,
-    );
-    let x = crate::builtin::msg_var("x", 0);
-    let ac_rule = crate::subterm_rule::rrule_to_ctxt_st_rule(&RRule::new(
-        crate::term::f_app_acfct(xorr, vec![x.clone(), x]),
-        crate::term::f_app_no_eq(zeroo_sym, vec![]),
-    ))
-    .expect("ground-RHS st rule");
-    sig.st_rules.insert(ac_rule);
-    assert_eq!(
-        sig.st_rules
-            .iter_with_lhs_ac_c_free()
-            .map(|(r, f)| (crate::maude_proc::term_ac_c_free(&r.lhs), f))
-            .filter(|(want, got)| want != got)
-            .count(),
-        0,
-        "every flag must describe the rule it is paired with"
-    );
-    assert!(!nf_via_haskell(&sig, &reducible));
-    assert!(nf_via_haskell(&sig, &normal));
 }

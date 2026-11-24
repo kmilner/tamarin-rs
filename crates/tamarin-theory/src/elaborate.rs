@@ -1264,30 +1264,14 @@ where
             Some(Term::Lit(Lit::Con(n)))
         }
         p::Term::App(name, args) => {
-            // Multi-arg unary builtins: `h(a, b, c)` is parsed as
-            // `App("h", [a, b, c])` but Haskell Tamarin folds the
-            // surplus args into a right-associative pair so the
-            // function stays arity-1: `h(<a, b, c>)`.  Without this,
-            // KU source-cases (precomputed using the canonical
-            // arity-1 signature) never match the runtime arity-3
-            // term, leaving e.g. `c_h` out of the case list.
-            // Arity-1 symbols whose surplus comma-separated args fold into
-            // a single tuple, mirroring HS's signature-driven `naryOpApp`
-            // (`k == 1`, Theory/Text/Parser/Term.hs).  The listed
-            // names cover the builtin unary symbols the signature query
-            // does not reach here — `h` / `fst` / `snd` / `inv` / `pk`,
-            // plus `getMessage` (revealing-signing) and `get_rep` /
-            // `report` (locations-report), Term/Builtin/Signature.hs.
-            // Widening the list to the whole signature regresses the
-            // corpus, so it stays written out.
-            let unary_builtin = matches!(
-                name.as_str(),
-                "h" | "fst" | "snd" | "inv" | "pk" | "getMessage" | "get_rep" | "report"
-            ) || is_arity1_no_eq(sig, name);
+            // HS `naryOpApp` (Theory/Text/Parser/Term.hs) parses the
+            // arguments of an arity-1 symbol as one tuple, so `h(a, b, c)`
+            // is `h(<a, b, c>)`.
+            let unary = is_arity1_no_eq(sig, name);
             let new_args: Option<Vec<_>> =
                 args.iter().map(|a| term_to_vterm(a, sig, mk_var)).collect();
             let mut new_args = new_args?;
-            if unary_builtin && new_args.len() > 1 {
+            if unary && new_args.len() > 1 {
                 // Wrap the surplus args into one right-associative pair so the
                 // call stays arity-1.
                 new_args = vec![right_nest_pair(new_args)?];

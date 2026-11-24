@@ -162,23 +162,20 @@ fn em_is_the_emap_symbol_only_under_bilinear_pairing() {
     }
 }
 
-/// The arity-1 fold in `term_to_vterm` names the builtin unary symbols in a
-/// written-out list, because widening it to the whole signature regresses the
-/// corpus.  The fold is therefore only as good as the membership of that
-/// list.  Every name on it must fold surplus comma-separated arguments into
-/// one right-associative pair, mirroring the `k == 1` branch of HS
-/// `naryOpApp` (Theory/Text/Parser/Term.hs).  A builtin that genuinely
-/// takes several arguments must not fold.  The corpus exercises `h` alone.
-/// The other names (`inv`/`pk` and the revealing-signing and
-/// locations-report symbols) are reachable only from theories that the fast
-/// corpus does not carry.
+/// HS `naryOpApp` (Theory/Text/Parser/Term.hs) folds surplus
+/// comma-separated arguments into one right-associative pair exactly when
+/// `lookupArity` gives the symbol arity 1, as the builtins below have.  A
+/// user-declared `h/2`, or `senc`, takes its arguments as written.
 #[test]
-fn hardcoded_unary_builtins_fold_surplus_arguments() {
+fn arity1_symbols_fold_surplus_arguments() {
     use tamarin_term::function_symbols::FunSym;
 
     let a = parser_var("a", 0, LSort::Msg);
     let b = parser_var("b", 0, LSort::Msg);
-    let msig = pair_maude_sig();
+    let msig = theory_msig(
+        "theory T begin\nbuiltins: hashing, asymmetric-encryption, \
+         revealing-signing, diffie-hellman, locations-report\nend",
+    );
     let a_b_pair = tamarin_term::builtin::pair(
         term_to_lnterm(&a, &msig).unwrap(),
         term_to_lnterm(&b, &msig).unwrap(),
@@ -206,6 +203,15 @@ fn hardcoded_unary_builtins_fold_surplus_arguments() {
             }
             other => panic!("{name}: expected a NoEq application, got {other:?}"),
         }
+    }
+    let h2 = p::Term::App("h".into(), vec![a.clone(), b.clone()]);
+    let declared = theory_msig("theory T begin\nfunctions: h/2\nend");
+    match term_to_lnterm(&h2, &declared).unwrap() {
+        Term::App(FunSym::NoEq(sym), args) => {
+            assert_eq!(sym.arity, 2, "a declared h/2 keeps its arity");
+            assert_eq!(args.len(), 2);
+        }
+        other => panic!("expected a NoEq application, got {other:?}"),
     }
     // `senc` genuinely takes 2 arguments, so the fold must not change it.
     let senc = p::Term::App("senc".into(), vec![a, b]);

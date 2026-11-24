@@ -1070,7 +1070,7 @@ fn dh_intruder_rules_emits_five_constructors_and_some_destructors() {
     // (Maude/Types.hs) collapses to the empty subst, so the
     // `ruvariant /= ru` guard (IntruderRules.hs) discards them.
     // A regression here (53 rules: +1 d_exp, +1 d_inv) means the
-    // `remove_renamings` step in `variants_intruder` was lost.
+    // `removeRenamings` in `MaudeHandle::variants` was lost.
     let (n_exp, n_inv) = destrs.iter().fold((0usize, 0usize), |(e, i), d| {
         let n = rule_name(&d.info).unwrap();
         let s = String::from_utf8_lossy(n);
@@ -1087,7 +1087,7 @@ fn dh_intruder_rules_emits_five_constructors_and_some_destructors() {
         51,
         "dhIntruderRules must yield exactly 51 rules (5 constr + 45 d_exp \
              + 1 d_inv) byte-identically to HS; got {} (n_exp={}, n_inv={}). \
-             53 indicates the dropped-identity-variant `remove_renamings` \
+             53 indicates the dropped-identity-variant `removeRenamings` \
              step regressed.",
         rules.len(),
         n_exp,

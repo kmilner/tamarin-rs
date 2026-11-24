@@ -787,29 +787,6 @@ pub fn abstract_rule_and_variants(
         return Ok(None);
     }
 
-    // HS-faithful `msubstToLSubstVFresh` (Maude/Types.hs) returns
-    // `removeRenamings $ substFromListVFresh slist` — i.e. EVERY raw Maude
-    // variant has its pure-rename entries dropped as part of the
-    // back-conversion (Maude/Process.hs `map (msubstToLSubstVFresh bindings)
-    // <$> parseVariantsReply`).  So by the time HS's `variantSubsts`
-    // (RuleVariants.hs) reach BOTH `isFreshRedundant vsubst`
-    // (RuleVariants.hs) AND `composeVFresh vsubst
-    // abstractionSubst`
-    // (RuleVariants.hs), each `vsubst` is already
-    // removeRenamings'd.
-    //
-    // RS's `MaudeHandle::variants` (maude_proc.rs) does NOT apply
-    // `remove_renamings` (unlike `MaudeHandle::unify`, which does), so
-    // we clean each variant HERE — once, up front — to match HS.  This puts
-    // the H20/`isFreshRedundant` filter (below) and the compose loop on the
-    // SAME cleaned form HS uses.  `remove_renamings` filters entries WITHIN
-    // each subst (never the list), preserving the Maude-determined variant
-    // ordering that the per-variant Ord sort relies on.
-    let raw_substs: Vec<Vec<(LVar, LNTerm)>> = raw_substs
-        .into_iter()
-        .map(|pairs| LNSubstVFresh::from_list(pairs).remove_renamings().to_list())
-        .collect();
-
     // HS pipeline per variant (RuleVariants.hs):
     //   restrictVFresh (frees abstrPsCsAs) $
     //     removeRenamings $ normSubstVFresh' $

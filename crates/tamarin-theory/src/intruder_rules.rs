@@ -1462,39 +1462,12 @@ fn variants_intruder_with(
         Err(_) => return vec![ru.clone()],
     };
 
-    // Clean each raw variant subst exactly as HS's `computeVariants`
-    // returns them (removeRenamings inside variantsViaMaude), then
-    // restrict to the packed free vars.  This is the
-    // `computeVariants (fAppList ruleTerms)` list that `minimizeVariants`
-    // is applied to.
-    // `restrict` key-set is loop-invariant (`packed_frees` never mutates), so
-    // materialise the `Vec<LVar>` once rather than per variant subst.
+    // `restrictVFresh (frees packed)`: the key-set is loop-invariant, so
+    // materialise it once.
     let packed_frees_vec: Vec<LVar> = packed_frees.iter().copied().collect();
     let cleaned: Vec<LNSubstVFresh> = raw_substs
         .into_iter()
-        .map(|pairs| {
-            // HS-faithful `removeRenamings` (Maude/Types.hs): HS's
-            // `msubstToLSubstVFresh bindings substMaude` — applied to EVERY
-            // variant subst inside `variantsViaMaude` (Term/Maude/Process.hs,
-            // `map (msubstToLSubstVFresh bindings) <$> parseVariantsReply`) —
-            // ends with `removeRenamings $ substFromListVFresh slist`, dropping
-            // each entry whose image is a bare fresh Var with no other role in
-            // the substitution's range (`isRenamedVar`, SubstVFresh.hs).
-            // RS's `maude.variants()` does NOT clean (the proving caller
-            // `abstract_rule_and_variants` cleans it itself,
-            // tools/rule_variants.rs), so we clean here to match HS.  The IDENTITY
-            // variant Maude returns for the `inv`/`exp` destructors is
-            // `x0 --> #1` (a fresh witness); `removeRenamings` collapses it to
-            // the EMPTY subst, so `freshToFreeAvoiding {}` is the identity and
-            // the variant rule equals the base rule — which the `ruvariant /= ru`
-            // guard (IntruderRules.hs) then drops.  Without this step the
-            // identity variants leak through as `{x0 -> x.N}`, yielding the two
-            // extra base-case rules (+1 `d_inv` `KD(x)->KD(inv(x))` and
-            // +1 `d_exp`) that over-produce 53 rules instead of HS's 51.
-            LNSubstVFresh::from_list(pairs)
-                .remove_renamings()
-                .restrict(&packed_frees_vec)
-        })
+        .map(|pairs| LNSubstVFresh::from_list(pairs).restrict(&packed_frees_vec))
         .collect();
 
     // `fsigma <- minimizeVariants $ computeVariants ...` — apply the

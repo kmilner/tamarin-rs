@@ -526,7 +526,7 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     // HS `Main.Mode.Intruder.run` (Intruder.hs) generates BOTH the DH
     // and the bilinear-pairing variants and emits `dhS ++ bpS`:
     //   - DH: `dhIntruderRules False` (runtime, via Maude).  RS's runtime
-    //     generator is byte-faithful (exactly 51 rules); `variants_intruder`
+    //     generator is byte-faithful (exactly 51 rules); `MaudeHandle::variants`
     //     applies `remove_renamings` to drop redundant identity-variants.
     //   - BP: `bpIntruderRules False` (runtime).  Like HS
     //     (Intruder.hs), we start a SECOND Maude handle on

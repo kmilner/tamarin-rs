@@ -9,7 +9,7 @@ use crate::lterm::LNTerm;
 fn unify_two_distinct_variables() {
     let x: LNTerm = msg_var("x", 0);
     let y: LNTerm = msg_var("y", 0);
-    let s = unify_lnterm_no_ac(vec![Equal::new(x.clone(), y)]).unwrap();
+    let (s, _) = unify_lnterm_factored(vec![Equal::new(x.clone(), y)]).unwrap();
     // HS `unifyRaw` orients a var-var pair of the same sort by `Ord LVar`
     // (Unification.hs).  The index and the sort are equal here, so the
     // comparison falls to the name.  `unifyRaw` therefore eliminates the later
@@ -25,7 +25,7 @@ fn unify_two_distinct_variables() {
 fn unify_var_with_term() {
     let x: LNTerm = msg_var("x", 0);
     let p: LNTerm = pair(msg_var("a", 0), msg_var("b", 0));
-    let s = unify_lnterm_no_ac(vec![Equal::new(x.clone(), p.clone())]).unwrap();
+    let (s, _) = unify_lnterm_factored(vec![Equal::new(x.clone(), p.clone())]).unwrap();
     assert_eq!(apply_vterm(&s, x), p);
 }
 
@@ -34,7 +34,7 @@ fn unify_fails_on_constructor_mismatch() {
     // pair(x,y) vs pk(x): can't unify, different constructors.
     let lhs: LNTerm = pair(msg_var("x", 0), msg_var("y", 0));
     let rhs: LNTerm = pk(msg_var("z", 0));
-    assert!(unify_lnterm_no_ac(vec![Equal::new(lhs, rhs)]).is_err());
+    assert!(unify_lnterm_factored(vec![Equal::new(lhs, rhs)]).is_none());
 }
 
 #[test]
@@ -42,7 +42,7 @@ fn unify_occurs_check() {
     // x = pair(x, y) — should fail (x occurs in RHS).
     let x: LNTerm = msg_var("x", 0);
     let rhs: LNTerm = pair(x.clone(), msg_var("y", 0));
-    assert!(unify_lnterm_no_ac(vec![Equal::new(x, rhs)]).is_err());
+    assert!(unify_lnterm_factored(vec![Equal::new(x, rhs)]).is_none());
 }
 
 #[test]
@@ -51,7 +51,9 @@ fn match_pattern_variable_against_constant_term() {
     let t: LNTerm = pair(msg_var("a", 0), msg_var("b", 0));
     let p: LNTerm = pair(msg_var("x", 0), msg_var("y", 0));
     let problem = Match::match_with(t, p);
-    let s = solve_match_lterm_no_ac(&|n| crate::lterm::sort_of_name(n), problem).unwrap();
+    let MatchOutcome::Matched(s) = solve_match_lterm(&crate::lterm::sort_of_name, problem) else {
+        panic!("expected a native matcher");
+    };
     // Each pattern variable is the key.  Each key maps to the subject term at
     // its own argument position.  A count of the bindings alone does not see a
     // swap of the two.
@@ -69,14 +71,17 @@ fn match_fails_on_different_arity() {
     let t: LNTerm = pk(msg_var("a", 0));
     let p: LNTerm = pair(msg_var("x", 0), msg_var("y", 0));
     let problem = Match::match_with(t, p);
-    assert!(solve_match_lterm_no_ac(&|n| crate::lterm::sort_of_name(n), problem).is_none());
+    assert!(matches!(
+        solve_match_lterm(&crate::lterm::sort_of_name, problem),
+        MatchOutcome::NoMatcher
+    ));
 }
 
 // -------------------------------------------------------------------
 // HS `unifyRaw` AC/C arms (Unification.hs): the AC arm fires
 // only when BOTH sides are AC apps with the SAME symbol; otherwise the
 // pair falls through to `_ -> mzero` (no unifier).  These pin that the AC
-// arm delays/NeedsAC only for same-symbol AC apps on both sides.
+// arm delays only for same-symbol AC apps on both sides.
 // -------------------------------------------------------------------
 use crate::builtin::{mult, union};
 
@@ -117,39 +122,6 @@ fn factored_unify_same_ac_symbol_delays_residual() {
         1,
         "exactly one AC equation delayed for Maude"
     );
-}
-
-#[test]
-fn no_ac_distinct_ac_symbols_is_no_unifier_not_needs_ac() {
-    // HS no-AC path: a guard failure → Nothing → [] (no unifier).
-    let lhs: LNTerm = mult(msg_var("a", 0), msg_var("b", 0));
-    let rhs: LNTerm = union(msg_var("c", 0), msg_var("d", 0));
-    match unify_lnterm_no_ac(vec![Equal::new(lhs, rhs)]) {
-        Err(UnifyError::NoUnifier) => {}
-        other => panic!("expected NoUnifier (HS mzero), got {:?}", other),
-    }
-}
-
-#[test]
-fn no_ac_ac_vs_non_ac_is_no_unifier_not_needs_ac() {
-    let lhs: LNTerm = mult(msg_var("a", 0), msg_var("b", 0));
-    let rhs: LNTerm = pk(msg_var("x", 0));
-    match unify_lnterm_no_ac(vec![Equal::new(lhs, rhs)]) {
-        Err(UnifyError::NoUnifier) => {}
-        other => panic!("expected NoUnifier (HS mzero), got {:?}", other),
-    }
-}
-
-#[test]
-fn no_ac_same_ac_symbol_is_needs_ac() {
-    // Same AC symbol → HS `tell` → no-AC `solve (Just _)` "AC symbol
-    // found" error, surfaced here as NeedsAC.
-    let lhs: LNTerm = mult(msg_var("a", 0), msg_var("b", 0));
-    let rhs: LNTerm = mult(msg_var("c", 0), msg_var("d", 0));
-    match unify_lnterm_no_ac(vec![Equal::new(lhs, rhs)]) {
-        Err(UnifyError::NeedsAC) => {}
-        other => panic!("expected NeedsAC (HS AC symbol found), got {:?}", other),
-    }
 }
 
 // -------------------------------------------------------------------
