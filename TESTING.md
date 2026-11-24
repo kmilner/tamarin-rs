@@ -1147,7 +1147,7 @@ The checker runs under two bounds, and it can be cancelled.
   fifteen. The contract limits this reply exactly: status 3 with a nonzero
   work bound implies that the bound is below the charge or that a term the
   check has to normalize has a rewrite path as long as the depth
-  (`exportedSessionVariantCheck_decides`, clause `exhausts`).
+  (`theoryVariantCheck_decides`, clause `exhausts`).
 - **Search bound** (`TAM_RS_VARIANT_CHECK_SEARCH`, default 67108864 = 2^26,
   `0` for none): the checker asks before every member, before every
   narrowing successor and inside every unification, matching and reduction
@@ -1263,8 +1263,12 @@ On the native-only backend the answer to a unification request is computed and
 named in Lean. Rust walks trees in both directions and decides nothing:
 
 - **The request** (`Packet::encode_total`) lists the rows of the term graph,
-  with variables, constants and operators numbered by first occurrence.
-- **The reply** of `tamarin_lean_total_unify` is not read on its own. Its
+  with variables and constants numbered by first occurrence and operators by
+  the fixed ids of the session's theory description (`Theory`, see
+  `lean/Tamarin/Theory.lean` in tamarin-algebra): the builtin flags, the
+  arities of the other free symbols and the number of user AC symbols. Lean
+  builds the declarations from that description.
+- **The reply** of `tamarin_lean_theory_unify` is not read on its own. Its
   words go to no decision except "does the family have a member"
   (`family_has_member`, the one place that reads a stored family for the
   existence question).
@@ -1292,7 +1296,7 @@ fuzzer knows (the file is included as a module, so the two cannot drift):
 | --- | --- |
 | `a_request_reads_back_as_the_terms_it_was_built_from` | the rows of a request, read with its own tables, are the terms that were encoded |
 | `a_term_sent_through_the_matcher_comes_back_as_itself` | request encoder, Lean reader and writer, and Rust reader compose to the identity on a term |
-| `requests_that_differ_have_different_words`, `a_changed_variable_changes_the_words_and_a_renaming_does_not` | two requests have the same words only if they differ in the choice of names: constants, sorts, free against AC operators, argument order, one variable against two |
+| `requests_that_differ_have_different_words`, `a_changed_variable_changes_the_words_and_a_renaming_does_not` | two requests have the same words only if they differ in the choice of names of variables and constants: constants, sorts, free against AC operators, one operator against another, argument order, one variable against two, one theory against another |
 | `the_reader_of_a_named_family_agrees_with_the_library` | `read_named` returns what Lean's own `apply` returns for the same reply and tables, also for tables that were damaged, and fails where it has no reading |
 | `a_family_has_a_member_exactly_when_a_row_follows_its_status_row` | the empty family, a family of answers without bindings, and words that are no family |
 | `a_reply_is_read_only_through_tables_that_name_all_of_it` | default names, a proposed name, a request variable's own name, proposals that are not taken, and the memo of tables |

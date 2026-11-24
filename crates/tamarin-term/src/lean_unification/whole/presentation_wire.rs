@@ -1,6 +1,8 @@
-//! Keep the numeric input of the Lean presentation theorems tied to the
-//! production encoder. Rows are read back in the same order as Packet::rows().
-use super::Packet;
+//! Keep the packets of the variant proposers, which carry every rule of the
+//! module, tied to the Lean presentation data, and check the certifier's
+//! verdict on the session tables of mixed theories. Rows are read back in the
+//! same order as Packet::rows().
+use super::{Packet, ReductionTable};
 use crate::builtin::{dh_neutral, exp, inv, msg_var, mult, one_const, xor, zero_const};
 use crate::lterm::LNTerm;
 use crate::maude_sig::{
@@ -103,6 +105,12 @@ fn physical_bilinear_and_xor_table_matches_the_lean_presentation() {
     );
 }
 
+/// The session table of `sig`: its theory description and user rules.
+fn session_table(sig: &MaudeSig) -> ReductionTable {
+    let theory = std::sync::Arc::new(super::Theory::new(sig).unwrap());
+    ReductionTable::new(&theory, sig).unwrap().unwrap()
+}
+
 fn check_packet(sig: MaudeSig, observations: &[LNTerm], namespace: &str, fixture: &str) {
     let packet = Packet::full_table(&sig, observations).unwrap().unwrap();
     let mut rows = vec![&[][..]; packet.nodes.len()];
@@ -117,7 +125,10 @@ fn check_packet(sig: MaudeSig, observations: &[LNTerm], namespace: &str, fixture
     let (roots, rules) = packet.equations.split_at(observations.len());
     let arrays = format!(
         "def declarations : Array UInt64 := {:?}\ndef nodes : Array (Array UInt64) := {:?}\ndef ruleRoots : Array UInt64 := {:?}\ndef observationRoots : Array UInt64 := {:?}",
-        packet.declarations, rows, rules, roots
+        packet.declarations().unwrap(),
+        rows,
+        rules,
+        roots
     ).replace('[', "#[");
     let compact = |text: &str| text.split_whitespace().collect::<String>();
     let (_, fixture) = fixture
@@ -229,13 +240,7 @@ fn native_oracle_declared_ac_group_composes_with_builtin_groups() {
         emap(pmult(one_const(), a.clone()), a),
         xor(base.clone(), zero_const()),
     );
-    let packet = Packet::full_table(&sig, std::slice::from_ref(&input))
-        .unwrap()
-        .unwrap();
-    super::initialize().unwrap();
-    assert!(super::LEAN_THREAD
-        .with(|_| packet.certifies_table(&packet.equations[1..], 0))
-        .unwrap());
+    assert!(session_table(&sig).certifies(0).unwrap());
     let h = MaudeHandle::start_with_backend(
         "/nonexistent/maude",
         sig.clone(),
@@ -293,11 +298,7 @@ fn native_oracle_ac_unit_reduces_only_with_a_message_partner() {
             .merge(xor_maude_sig())
             .refresh(),
     ] {
-        let packet = Packet::full_table(&sig, &[]).unwrap().unwrap();
-        super::initialize().unwrap();
-        assert!(super::LEAN_THREAD
-            .with(|_| packet.certifies_table(&packet.equations, 0))
-            .unwrap());
+        assert!(session_table(&sig).certifies(0).unwrap());
         let native = MaudeHandle::start_with_backend(
             "/nonexistent/maude",
             sig.clone(),
@@ -388,13 +389,7 @@ fn native_oracle_constructor_results_rebuild_the_open_capture() {
         }
         assert!(open && specialized);
     };
-    let admitted = |sig: &MaudeSig| {
-        let packet = Packet::full_table(sig, &[]).unwrap().unwrap();
-        super::initialize().unwrap();
-        super::LEAN_THREAD
-            .with(|_| packet.certifies_table(&packet.equations, 0))
-            .unwrap()
-    };
+    let admitted = |sig: &MaudeSig| session_table(sig).certifies(0).unwrap();
     for mut sig in [
         theory.clone().refresh(),
         theory.merge(xor_maude_sig()).refresh(),
@@ -510,13 +505,7 @@ fn native_oracle_defined_patterns_and_results_join_on_specialization() {
     check_rows(&h);
     assert_eq!((h.stats().var_count, h.stats().norm_count), (0, 0));
 
-    let admitted = |sig: &MaudeSig| {
-        let packet = Packet::full_table(sig, &[]).unwrap().unwrap();
-        super::initialize().unwrap();
-        super::LEAN_THREAD
-            .with(|_| packet.certifies_table(&packet.equations, 4))
-            .unwrap()
-    };
+    let admitted = |sig: &MaudeSig| session_table(sig).certifies(4).unwrap();
     assert!(admitted(&sig));
 
     // Add a user-declared AC unit to the same table. Its unit is the

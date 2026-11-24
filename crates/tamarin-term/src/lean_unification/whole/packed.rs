@@ -2,12 +2,14 @@
 //! The Lean kernel returns the coordinates of one shared conjunction or a clash.
 use super::{total, Packet};
 use crate::function_symbols::FunSym;
-use crate::lean_unification::{initialize, Error, MatchRows, Outcome, WordSlice, LEAN_THREAD};
+use crate::lean_unification::{
+    initialize, Error, MatchRows, Outcome, Theory, WordSlice, LEAN_THREAD,
+};
 use crate::lterm::LNTerm;
-use crate::maude_sig::MaudeSig;
 use crate::rewriting::Equal;
 use crate::term::Term;
 use std::borrow::Cow;
+use std::sync::Arc;
 use tamarin_utils::cancellation;
 
 use tamarin_algebra_sys::tamarin_lean_unpack_conjunction;
@@ -81,7 +83,7 @@ impl<'a> Graph<'a> {
 }
 
 pub(crate) fn unpack_conjunction<'a>(
-    sig: &MaudeSig,
+    theory: &Arc<Theory>,
     equations: &'a [Equal<LNTerm>],
 ) -> Result<Conjunction<'a>, Error> {
     if !equations.iter().any(|e| {
@@ -114,7 +116,7 @@ pub(crate) fn unpack_conjunction<'a>(
             2 if reply.rows(0) == 1 => {
                 // A shape conflict cannot certify a malformed command. Check every
                 // algebraic leaf, even in a different conjunct or an unmatched tail.
-                if Packet::encode_total(sig, graph.leaves)?.is_some() {
+                if Packet::encode_total(theory, graph.leaves)?.is_some() {
                     Ok(Conjunction::Clash)
                 } else {
                     Ok(Conjunction::Unsupported)

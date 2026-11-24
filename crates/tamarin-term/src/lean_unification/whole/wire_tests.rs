@@ -5,12 +5,13 @@
 //! The encoder of a request and the readers of a reply decide nothing. These
 //! tests hold them to that: a request is read back as the terms it was built
 //! from, a term sent through the library comes back as itself, requests that
-//! differ in more than the choice of names have different words, and the
-//! reader of a named family agrees with the reading the library specifies.
+//! differ in more than the names of their variables and constants have
+//! different words, and the reader of a named family agrees with the reading
+//! the library specifies.
 use super::*;
-use crate::function_symbols::NoEqSym;
+use crate::function_symbols::{FunSym, NoEqSym};
 use crate::lterm::{fresh_term, pub_term, HasFrees};
-use crate::maude_sig::{dh_maude_sig, minimal_maude_sig, pair_maude_sig, xor_maude_sig};
+use crate::maude_sig::{dh_maude_sig, minimal_maude_sig, pair_maude_sig, xor_maude_sig, MaudeSig};
 use tamarin_algebra_sys::tamarin_lean_apply_names;
 
 #[path = "../../../examples/audit_fuzz.rs"]
@@ -20,6 +21,11 @@ type Queries = Vec<(&'static str, MaudeSig, Vec<Vec<Equal<LNTerm>>>)>;
 
 fn samples() -> Queries {
     audit_fuzz::imp::wire_samples(0x5eed, 120)
+}
+
+/// The theory description of `sig`.
+fn theory(sig: &MaudeSig) -> Arc<Theory> {
+    Arc::new(Theory::new(sig).expect("a signature the description expresses"))
 }
 
 fn var(name: &str, sort: LSort, idx: u64) -> LNTerm {
@@ -56,9 +62,9 @@ fn request_term(packet: &Packet, rows: &[&[u64]], node: u64) -> LNTerm {
             Term::Lit(Lit::Con(name))
         }
         [kind, id, children @ ..] => {
-            let f = packet
+            let (f, _, _) = packet
                 .symbols
-                .get(*id)
+                .decode(*kind, *id, false)
                 .expect("an application row names an operator");
             assert!(matches!(
                 (kind, f),
@@ -90,7 +96,7 @@ fn a_request_reads_back_as_the_terms_it_was_built_from() {
     for (name, sig, queries) in samples() {
         for eqs in &queries {
             let terms: Vec<&LNTerm> = eqs.iter().flat_map(|e| [&e.lhs, &e.rhs]).collect();
-            let packet = Packet::encode_total(&sig, terms.iter().copied())
+            let packet = Packet::encode_total(&theory(&sig), terms.iter().copied())
                 .unwrap()
                 .unwrap_or_else(|| panic!("{name}: a query outside the module"));
             let rows = request_rows(&packet);
@@ -135,10 +141,11 @@ fn a_term_sent_through_the_matcher_comes_back_as_itself() {
 }
 
 fn words(sig: &MaudeSig, eqs: &[Equal<LNTerm>]) -> Box<[u64]> {
-    Packet::encode_total(sig, eqs.iter().flat_map(|e| [&e.lhs, &e.rhs]))
+    Packet::encode_total(&theory(sig), eqs.iter().flat_map(|e| [&e.lhs, &e.rhs]))
         .unwrap()
         .expect("a query of the module")
         .request_words()
+        .unwrap()
 }
 
 #[test]
@@ -209,6 +216,14 @@ fn requests_that_differ_have_different_words() {
             eq(unary("wf", x.clone()), unary("wf", a.clone())),
             eq(unary("wf", x.clone()), unary("wg", a.clone())),
         ],
+        // One request over two free operators of one arity, or over two
+        // associative-commutative operators: operators have the ids of the
+        // theory.
+        vec![
+            eq(unary("wf", x.clone()), unary("wf", a.clone())),
+            eq(unary("wg", x.clone()), unary("wg", a.clone())),
+        ],
+        vec![eq(mult(&x, &y), a.clone()), eq(xor(&x, &y), a.clone())],
         // The sides of the equations.
         vec![
             vec![
@@ -239,8 +254,8 @@ fn requests_that_differ_have_different_words() {
             }
         }
     }
-    // The words do not depend on how a request names its variables, constants
-    // and operators: these requests say one thing.
+    // The words do not depend on how a request names its variables and
+    // constants: these requests say one thing.
     let same = [
         eq(pair(&x, &a), pair(&y, &x)),
         eq(pair(&y, &b), pair(&x, &y)),
@@ -252,14 +267,10 @@ fn requests_that_differ_have_different_words() {
     assert!(same
         .iter()
         .all(|eqs| words(&sig, eqs) == words(&sig, &same[0])));
-    assert_eq!(
-        words(&sig, &eq(unary("wf", x.clone()), unary("wf", a.clone()))),
-        words(&sig, &eq(unary("wg", x.clone()), unary("wg", a.clone())))
-    );
-    assert_eq!(
-        words(&sig, &eq(mult(&x, &y), a.clone())),
-        words(&sig, &eq(xor(&x, &y), a.clone()))
-    );
+    // Requests over two theories have different words.
+    let pairing = minimal_maude_sig(false).merge(pair_maude_sig());
+    let request = eq(pair(&x, &a), pair(&y, &x));
+    assert_ne!(words(&sig, &request), words(&pairing, &request));
     assert_eq!(
         words(
             &sig,
@@ -370,12 +381,15 @@ fn a_changed_variable_changes_the_words_and_a_renaming_does_not() {
                     )
                 })
                 .collect();
-            if let Some(packet) =
-                Packet::encode_total(&sig, resorted.iter().flat_map(|e| [&e.lhs, &e.rhs])).unwrap()
+            if let Some(packet) = Packet::encode_total(
+                &theory(&sig),
+                resorted.iter().flat_map(|e| [&e.lhs, &e.rhs]),
+            )
+            .unwrap()
             {
                 assert_ne!(
                     before,
-                    packet.request_words(),
+                    packet.request_words().unwrap(),
                     "{name}: {eqs:?} sort of {old:?}"
                 );
                 changed += 1;
@@ -472,7 +486,7 @@ fn the_reader_of_a_named_family_agrees_with_the_library() {
     for (theory, sig, queries) in samples() {
         for eqs in queries.iter().take(60) {
             // A query whose family is large says nothing more about the reader.
-            let Ok((Some(family), _)) = unify(&sig, eqs, None, 200_000) else {
+            let Ok((Some(family), _)) = unify(&self::theory(&sig), eqs, None, 200_000) else {
                 continue;
             };
             let Some((heads, ranges)) = shape(&family.reply) else {
@@ -608,15 +622,19 @@ fn a_family_has_a_member_exactly_when_a_row_follows_its_status_row() {
         (vec![Equal::new(pub_term("b"), pub_term("a"))], false),
         (vec![Equal::new(pub_term("a"), pub_term("a"))], true),
     ] {
-        let family = unify(&sig, &eqs, None, 0).unwrap().0.unwrap();
+        let theory = theory(&sig);
+        let family = unify(&theory, &eqs, None, 0).unwrap().0.unwrap();
         assert_eq!(family_has_member(&family.reply), Some(member));
         assert_eq!(!family.named(None, None).unwrap().is_empty(), member);
-        assert_eq!(unify_exists(&sig, &eqs, None, 0).unwrap().0, Some(member));
+        assert_eq!(
+            unify_exists(&theory, &eqs, None, 0).unwrap().0,
+            Some(member)
+        );
         // A stored family answers the existence question the same way.
         let memo = UnifyReplies::default();
-        unify(&sig, &eqs, Some(&memo), 0).unwrap();
+        unify(&theory, &eqs, Some(&memo), 0).unwrap();
         assert_eq!(
-            unify_exists(&sig, &eqs, Some(&memo), 0).unwrap(),
+            unify_exists(&theory, &eqs, Some(&memo), 0).unwrap(),
             (Some(member), true)
         );
     }
@@ -636,7 +654,7 @@ fn a_reply_is_read_only_through_tables_that_name_all_of_it() {
         Equal::new(term(x), crate::builtin::pair(term(y), term(y))),
         Equal::new(term(z), term(z)),
     ];
-    let family = unify(&sig, &eqs, None, 0).unwrap().0.unwrap();
+    let family = unify(&theory(&sig), &eqs, None, 0).unwrap().0.unwrap();
     let labels = Labels::of(&family.packet).unwrap();
     let (heads, ranges) = shape(&family.reply).unwrap();
     assert_eq!(heads, [0, 2, 1, 2, 2, 2]);

@@ -2,14 +2,12 @@
 //! Matches retain literal input variables. Unifier and variant witnesses share
 //! a fresh namespace within each returned substitution.
 use super::Packet;
-use crate::function_symbols::FunSym;
 use crate::lean_identity::IdentityTable;
 use crate::lean_unification::{
-    declaration, initialize, sort_word, subsort, Error, MatchRows, Outcome, Substitutions, Watch,
+    initialize, sort_word, subsort, Error, MatchRows, Outcome, Substitutions, Theory, Watch,
     WordSlice, LEAN_THREAD,
 };
 use crate::lterm::{LNTerm, LSort, LVar};
-use crate::maude_sig::MaudeSig;
 use crate::maude_types::sort_of_name;
 use crate::rewriting::Equal;
 use crate::term::{f_app, Term};
@@ -18,16 +16,18 @@ use crate::vterm::Lit;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tamarin_utils::cancellation;
 
+use std::sync::Arc;
 use tamarin_algebra_sys::{
-    tamarin_lean_name_unifiers, tamarin_lean_total_match, tamarin_lean_total_match_exists,
-    tamarin_lean_total_unify, tamarin_lean_total_unify_exists,
+    tamarin_lean_name_unifiers, tamarin_lean_theory_match, tamarin_lean_theory_match_exists,
+    tamarin_lean_theory_unify, tamarin_lean_theory_unify_exists,
 };
 
 /// The replies of the total unifier, of its existence export and of the
 /// naming export, keyed by the words of the request.
 ///
-/// A request packet names variables, constants and operators by the order of
-/// their first occurrence, so two requests that differ only in those names
+/// A request packet names variables and constants by the order of their
+/// first occurrence, and operators by the fixed ids of the session's theory,
+/// so two requests that differ only in the names of variables and constants
 /// are the same words, and each export, a function of the words alone, gives
 /// them the same reply. A stored reply is therefore the reply the export
 /// would give again, and it is stored as the words the export returned: each
@@ -525,7 +525,7 @@ fn name(
 
 /// The complete family of unifiers of `eqs`, and whether its reply came from
 /// `replies` instead of the export, or `None` when the request is outside the
-/// module's declarations. The export stops, with [`Error::Cancelled`] or
+/// theory's operators. The export stops, with [`Error::Cancelled`] or
 /// [`Error::SearchBudget`], when the request is cancelled or its search takes
 /// more than `work` steps (zero for no bound).
 ///
@@ -533,22 +533,26 @@ fn name(
 /// naming export ([`Unifiers::named`]), whose reply holds the family with
 /// every range variable named.
 pub(crate) fn unify(
-    sig: &MaudeSig,
+    theory: &Arc<Theory>,
     eqs: &[Equal<LNTerm>],
     replies: Option<&UnifyReplies>,
     work: u64,
 ) -> Result<(Option<Unifiers>, bool), Error> {
-    let Some(packet) = Packet::encode_total(sig, eqs.iter().flat_map(|e| [&e.lhs, &e.rhs]))? else {
+    let Some(packet) = Packet::encode_total(theory, eqs.iter().flat_map(|e| [&e.lhs, &e.rhs]))?
+    else {
         return Ok((None, false));
     };
-    let request = replies.map(|memo| (memo, packet.request_words()));
+    let request = match replies {
+        Some(memo) => Some((memo, packet.request_words()?)),
+        None => None,
+    };
     if let Some((memo, words)) = &request {
         let stored = memo.families.lock().unwrap().get(words).cloned();
         if let Some(reply) = stored {
             let family = Unifiers {
                 packet,
                 reply,
-                nat: sig.enable_nat,
+                nat: theory.nat(),
             };
             return Ok((Some(family), true));
         }
@@ -562,8 +566,10 @@ pub(crate) fn unify(
             // the watch, which outlives the call. MatchRows owns the single
             // output reference and releases it on every exit.
             let raw = unsafe {
-                tamarin_lean_total_unify(
-                    WordSlice::new(&packet.declarations),
+                tamarin_lean_theory_unify(
+                    theory.flags(),
+                    WordSlice::new(theory.free()),
+                    theory.ac(),
                     rows.as_ptr(),
                     rows.len(),
                     WordSlice::new(&packet.equations),
@@ -586,14 +592,14 @@ pub(crate) fn unify(
     let family = Unifiers {
         packet,
         reply,
-        nat: sig.enable_nat,
+        nat: theory.nat(),
     };
     Ok((Some(family), false))
 }
 
 /// Decide whether [`unify`] would return a unifier, without listing the
 /// family, and whether the decision came from `replies` instead of the
-/// export. `None` when the request is outside the module's declarations.
+/// export. `None` when the request is outside the theory's operators.
 ///
 /// A stored family answers by whether it has a row: the existence export is
 /// proved to say "exists" exactly when a unifier exists, and the family
@@ -601,15 +607,19 @@ pub(crate) fn unify(
 ///
 /// The export stops like that of [`unify`], and then decides nothing.
 pub(crate) fn unify_exists(
-    sig: &MaudeSig,
+    theory: &Arc<Theory>,
     eqs: &[Equal<LNTerm>],
     replies: Option<&UnifyReplies>,
     work: u64,
 ) -> Result<(Option<bool>, bool), Error> {
-    let Some(packet) = Packet::encode_total(sig, eqs.iter().flat_map(|e| [&e.lhs, &e.rhs]))? else {
+    let Some(packet) = Packet::encode_total(theory, eqs.iter().flat_map(|e| [&e.lhs, &e.rhs]))?
+    else {
         return Ok((None, false));
     };
-    let request = replies.map(|memo| (memo, packet.request_words()));
+    let request = match replies {
+        Some(memo) => Some((memo, packet.request_words()?)),
+        None => None,
+    };
     if let Some((memo, words)) = &request {
         let listed = memo.families.lock().unwrap().get(words).cloned();
         let listed = match listed {
@@ -628,8 +638,10 @@ pub(crate) fn unify_exists(
         // SAFETY: the shim takes owned copies of all slices, writes the
         // watch, which outlives the call, and returns a scalar.
         let status = unsafe {
-            tamarin_lean_total_unify_exists(
-                WordSlice::new(&packet.declarations),
+            tamarin_lean_theory_unify_exists(
+                theory.flags(),
+                WordSlice::new(theory.free()),
+                theory.ac(),
                 rows.as_ptr(),
                 rows.len(),
                 WordSlice::new(&packet.equations),
@@ -691,11 +703,12 @@ fn rows_of(mut words: &[u64]) -> impl Iterator<Item = Option<&[u64]>> {
 
 /// The packet of a match request and the pattern variables it may bind.
 fn match_request(
-    sig: &MaudeSig,
+    theory: &Arc<Theory>,
     eqs: &[Equal<LNTerm>],
     bindable: impl Fn(&LVar) -> bool,
 ) -> Result<Option<(Packet, FxHashSet<LVar>, Vec<u64>)>, Error> {
-    let Some(packet) = Packet::encode_total(sig, eqs.iter().flat_map(|e| [&e.lhs, &e.rhs]))? else {
+    let Some(packet) = Packet::encode_total(theory, eqs.iter().flat_map(|e| [&e.lhs, &e.rhs]))?
+    else {
         return Ok(None);
     };
     let keys: FxHashSet<_> = eqs
@@ -712,11 +725,11 @@ fn match_request(
 
 /// Equations have (pattern, subject) orientation. Subject variables keep their caller identities.
 pub(crate) fn matches(
-    sig: &MaudeSig,
+    theory: &Arc<Theory>,
     eqs: &[Equal<LNTerm>],
     bindable: impl Fn(&LVar) -> bool,
 ) -> Result<Outcome, Error> {
-    let Some((packet, keys, ids)) = match_request(sig, eqs, bindable)? else {
+    let Some((packet, keys, ids)) = match_request(theory, eqs, bindable)? else {
         return Ok(Outcome::Unsupported);
     };
     initialize()?;
@@ -724,8 +737,10 @@ pub(crate) fn matches(
     LEAN_THREAD.with(|_| {
         // SAFETY: the shim takes owned copies and transfers its output to MatchRows.
         let reply = MatchRows::new(unsafe {
-            tamarin_lean_total_match(
-                WordSlice::new(&packet.declarations),
+            tamarin_lean_theory_match(
+                theory.flags(),
+                WordSlice::new(theory.free()),
+                theory.ac(),
                 rows.as_ptr(),
                 rows.len(),
                 WordSlice::new(&packet.equations),
@@ -735,7 +750,7 @@ pub(crate) fn matches(
         decode(
             &packet,
             &reply_words(&reply)?,
-            sig.enable_nat,
+            theory.nat(),
             DecodeMode::Match(&keys),
         )
         .map(Outcome::Complete)
@@ -743,13 +758,13 @@ pub(crate) fn matches(
 }
 
 /// Decide whether the request of [`matches`] has an answer, without listing
-/// the answers. `None` when the request is outside the module's declarations.
+/// the answers. `None` when the request is outside the theory's operators.
 pub(crate) fn has_match(
-    sig: &MaudeSig,
+    theory: &Arc<Theory>,
     eqs: &[Equal<LNTerm>],
     bindable: impl Fn(&LVar) -> bool,
 ) -> Result<Option<bool>, Error> {
-    let Some((packet, _, ids)) = match_request(sig, eqs, bindable)? else {
+    let Some((packet, _, ids)) = match_request(theory, eqs, bindable)? else {
         return Ok(None);
     };
     initialize()?;
@@ -757,8 +772,10 @@ pub(crate) fn has_match(
     LEAN_THREAD.with(|_| {
         // SAFETY: the shim takes owned copies of all slices and returns a scalar.
         match unsafe {
-            tamarin_lean_total_match_exists(
-                WordSlice::new(&packet.declarations),
+            tamarin_lean_theory_match_exists(
+                theory.flags(),
+                WordSlice::new(theory.free()),
+                theory.ac(),
                 rows.as_ptr(),
                 rows.len(),
                 WordSlice::new(&packet.equations),
@@ -774,8 +791,27 @@ pub(crate) fn has_match(
 }
 
 impl Packet {
+    /// The packet of `terms` over the operators of `theory`, with a root for
+    /// each term in order. `None` when a term is outside the theory.
     pub(super) fn encode_total<'a>(
-        sig: &MaudeSig,
+        theory: &Arc<Theory>,
+        terms: impl IntoIterator<Item = &'a LNTerm>,
+    ) -> Result<Option<Self>, Error> {
+        let mut packet = Self::over(theory);
+        for t in terms {
+            cancellation::check().map_err(|_| Error::Cancelled)?;
+            let Some(id) = packet.encode_theory(t) else {
+                return Ok(None);
+            };
+            packet.equations.push(id);
+        }
+        Ok(Some(packet))
+    }
+
+    /// The packet of `terms` over the module's declared operators, with
+    /// local operator ids and their declarations.
+    pub(super) fn encode_local<'a>(
+        sig: &crate::maude_sig::MaudeSig,
         terms: impl IntoIterator<Item = &'a LNTerm>,
     ) -> Result<Option<Self>, Error> {
         let mut packet = Self::default();
@@ -790,7 +826,8 @@ impl Packet {
         Ok(Some(packet))
     }
 
-    /// Append one term over the module's declared operators and return its root.
+    /// Append one term over the module's declared operators, with local
+    /// operator ids, and return its root.
     pub(super) fn encode_declared(
         &mut self,
         nat: bool,
@@ -801,7 +838,12 @@ impl Packet {
             term,
             false,
             |s| nat || s != LSort::Nat,
-            |f| symbols.contains(&f).then(|| declaration(f, nat)).flatten(),
+            |f| {
+                symbols
+                    .contains(&f)
+                    .then(|| crate::lean_unification::declaration(f, nat))
+                    .flatten()
+            },
         )
     }
 
@@ -834,14 +876,11 @@ impl Packet {
                     (Term::Lit(Lit::Con(name)), Some(s))
                 }
                 _ => {
-                    let f = self.symbols.get(id).ok_or(Error::InvalidStatus(255))?;
-                    let (arity, s) = declaration(f, nat).ok_or(Error::InvalidStatus(255))?;
-                    if aux != arity as u64
-                        || !matches!(
-                            (k, f),
-                            (2, FunSym::NoEq(_)) | (3, FunSym::C(_)) | (4, FunSym::Ac(_))
-                        )
-                    {
+                    let (f, arity, s) = self
+                        .symbols
+                        .decode(k, id, nat)
+                        .ok_or(Error::InvalidStatus(255))?;
+                    if aux != arity as u64 {
                         return Err(Error::InvalidStatus(255));
                     }
                     let start = stack
@@ -1084,29 +1123,31 @@ mod tests {
 
     #[test]
     fn binding_rows_preserve_sharing_and_reject_invalid_terms_and_domains() {
-        let mut packet = Packet::default();
+        use crate::function_symbols::{AcSym, FunSym};
+        // Multisets alone: union is the AC symbol with id 2.
+        let theory = Arc::new(Theory::new(&crate::maude_sig::mset_maude_sig()).unwrap());
+        let mut packet = Packet::over(&theory);
         let x = LVar::new("a", LSort::Msg, 0);
         let y = LVar::new("b", LSort::Msg, 0);
         packet.variables.intern(x).unwrap();
         packet.variables.intern(y).unwrap();
-        packet
-            .symbols
-            .intern(FunSym::Ac(crate::function_symbols::AcSym::Union))
-            .unwrap();
         let reserved = [0].into_iter().collect();
         let mut arm = Arm::new(2, &reserved, DecodeMode::Variants(2));
         for malformed in [
-            vec![0, 2, 1, 9, 0],          // unknown atom
-            vec![0, 2, 4, 0, 2],          // missing children
-            vec![0, 2, 0, 8, 3],          // Node in a Msg range
-            vec![0, 2, 0, 8, 2, 0, 9, 2], // two roots
-            vec![1, 0, 0, 8, 2],          // wrong key sort
-            vec![2, 2, 0, 8, 2],          // unknown key
+            vec![0, 2, 1, 9, 0],                            // unknown atom
+            vec![0, 2, 4, 2, 2],                            // missing children
+            vec![0, 2, 0, 8, 3],                            // Node in a Msg range
+            vec![0, 2, 0, 8, 2, 0, 9, 2],                   // two roots
+            vec![1, 0, 0, 8, 2],                            // wrong key sort
+            vec![2, 2, 0, 8, 2],                            // unknown key
+            vec![0, 2, 0, 8, 2, 0, 8, 2, 4, 0, 2],          // mult, not in the theory
+            vec![0, 2, 0, 8, 2, 0, 8, 2, 2, 2, 2],          // id 2 of another kind
+            vec![0, 2, 0, 8, 2, 0, 8, 2, 0, 8, 2, 4, 2, 3], // wrong arity
         ] {
             assert!(arm.binding(&packet, &malformed, false).is_err());
         }
         arm.binding(&packet, &[1, 2, 0, 8, 2], false).unwrap();
-        arm.binding(&packet, &[0, 2, 0, 8, 2, 0, 8, 2, 4, 0, 2], false)
+        arm.binding(&packet, &[0, 2, 0, 8, 2, 0, 8, 2, 4, 2, 2], false)
             .unwrap();
         let mut answers = Vec::new();
         arm.finish(&packet, false, &mut answers).unwrap();
@@ -1114,10 +1155,7 @@ mod tests {
         assert!(matches!(w, Term::Lit(Lit::Var(v)) if v.idx != 0));
         assert_eq!(
             answers[0][0].1,
-            f_app(
-                FunSym::Ac(crate::function_symbols::AcSym::Union),
-                vec![w.clone(), w]
-            )
+            f_app(FunSym::Ac(AcSym::Union), vec![w.clone(), w])
         );
         let mut incomplete = Arm::new(2, &reserved, DecodeMode::Variants(2));
         incomplete

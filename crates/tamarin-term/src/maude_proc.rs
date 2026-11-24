@@ -296,6 +296,12 @@ pub struct SharedMaudeCaches {
     /// that the module's rules cannot be encoded.
     #[cfg(feature = "lean-unification")]
     reduction_table: Mutex<Option<Option<Arc<crate::lean_unification::ReductionTable>>>>,
+    /// The theory description of the signature that the proved exports take,
+    /// with the fixed id of every operator, built on first use. Every call
+    /// of the session uses it. `None` records that the description cannot
+    /// express the signature.
+    #[cfg(feature = "lean-unification")]
+    native_theory: std::sync::OnceLock<Option<Arc<crate::lean_unification::Theory>>>,
     /// Memo for the families of variants the certificate checker accepted,
     /// keyed by the query and the very family that was submitted, with the
     /// origin the answer counts under. Any other verdict fails the session.
@@ -1427,6 +1433,17 @@ impl MaudeHandle {
             .as_ref()
     }
 
+    /// The session's theory description, built once for all the handles
+    /// that share the session's caches, which all have this signature.
+    /// `None` when it cannot express the signature.
+    #[cfg(feature = "lean-unification")]
+    fn native_theory(&self) -> Option<&Arc<crate::lean_unification::Theory>> {
+        self.caches
+            .native_theory
+            .get_or_init(|| crate::lean_unification::Theory::new(&self.sig).map(Arc::new))
+            .as_ref()
+    }
+
     /// Narrow one free application on distinct message variables and retain
     /// its normal result. Unsupported inputs use the caller's ordinary path.
     ///
@@ -2257,9 +2274,12 @@ impl MaudeHandle {
             Some(table) => Ok(table.clone()),
             None => {
                 // A cancelled or failed build is not stored.
-                let built = crate::lean_unification::ReductionTable::new(&self.sig)
-                    .map_err(|error| self.lean_error(error))?
-                    .map(Arc::new);
+                let built = match self.native_theory() {
+                    Some(theory) => crate::lean_unification::ReductionTable::new(theory, &self.sig)
+                        .map_err(|error| self.lean_error(error))?
+                        .map(Arc::new),
+                    None => None,
+                };
                 if self.intact() {
                     *slot = Some(built.clone());
                 }
@@ -2287,7 +2307,7 @@ impl MaudeHandle {
         };
         let follow_path = self.theory_fallback || self.reference.reduce;
         match table
-            .reduce(&self.sig, t, follow_path, self.reference.search_work)
+            .reduce(t, follow_path, self.reference.search_work)
             .map_err(|error| self.lean_error(error))?
         {
             Reduced::Certified(result) => Ok((result, Origin::Proved)),
@@ -2303,7 +2323,7 @@ impl MaudeHandle {
     /// session memo.
     ///
     /// An accepted family is a complete set of variants of the query on a
-    /// canonical table (`exportedSessionVariantCheck_certified`). The
+    /// canonical table (`theoryVariantCheck_certified`). The
     /// certifier establishes that premise for a table it accepted, and the
     /// answer is then proved; for any other table the premise is the theory
     /// author's, and the answer is assumed. No other family is used: the
@@ -2329,7 +2349,7 @@ impl MaudeHandle {
         if trace {
             // What the check would spend without a bound.
             let charge = table
-                .variant_check_charge(&self.sig, query, family)
+                .variant_check_charge(query, family)
                 .map_err(|error| self.lean_error(error))?;
             eprintln!(
                 "[variant check] {} members, charge {}, work bound {work}, query {query}",
@@ -2340,7 +2360,6 @@ impl MaudeHandle {
         let start = std::time::Instant::now();
         let verdict = table
             .check_variants(
-                &self.sig,
                 query,
                 family,
                 VARIANT_CHECK_DEPTH,
@@ -2553,13 +2572,16 @@ impl MaudeHandle {
             Origin::NativeRust
         };
         let unsupported = || self.unsupported_native_operation("AC/C unification");
+        let Some(theory) = self.native_theory() else {
+            return Err(unsupported());
+        };
         let mut stored = false;
-        let answers = match unpack_conjunction(&self.sig, eqs).map_err(|e| self.lean_error(e))? {
+        let answers = match unpack_conjunction(theory, eqs).map_err(|e| self.lean_error(e))? {
             Conjunction::Clash => Vec::new(),
             Conjunction::Unsupported => return Err(unsupported()),
             Conjunction::Rows(rows) => {
                 let (family, reused) = crate::lean_unification::total_unify(
-                    &self.sig,
+                    theory,
                     &rows,
                     self.shared_replies(),
                     self.reference.search_work,
@@ -2663,13 +2685,16 @@ impl MaudeHandle {
             return Ok(found);
         }
         let unsupported = || self.unsupported_native_operation("AC/C unification");
+        let Some(theory) = self.native_theory() else {
+            return Err(unsupported());
+        };
         let (found, reused) =
-            match unpack_conjunction(&self.sig, eqs).map_err(|e| self.lean_error(e))? {
+            match unpack_conjunction(theory, eqs).map_err(|e| self.lean_error(e))? {
                 Conjunction::Clash => (false, false),
                 Conjunction::Unsupported => return Err(unsupported()),
                 Conjunction::Rows(rows) => {
                     let (found, reused) = crate::lean_unification::total_unify_exists(
-                        &self.sig,
+                        theory,
                         &rows,
                         self.shared_replies(),
                         self.reference.search_work,
@@ -2845,7 +2870,10 @@ impl MaudeHandle {
             self.caches.provenance.record_cached(Asked::Match, origin);
             return Ok(Some(answers));
         }
-        match crate::lean_unification::match_modulo_attributes(&self.sig, oriented, bindable)
+        let Some(theory) = self.native_theory() else {
+            return Ok(None);
+        };
+        match crate::lean_unification::match_in(theory, oriented, bindable)
             .map_err(|e| self.lean_error(e))?
         {
             crate::lean_unification::Outcome::Complete(mut answers) => {
@@ -2914,10 +2942,12 @@ impl MaudeHandle {
             self.caches.provenance.record_cached(Asked::Match, origin);
             return Ok(found);
         }
-        let found =
-            crate::lean_unification::has_match_modulo_attributes(&self.sig, oriented, bindable)
-                .map_err(|e| self.lean_error(e))?
-                .ok_or_else(|| self.unsupported_native_operation(operation))?;
+        let found = match self.native_theory() {
+            Some(theory) => crate::lean_unification::has_match_in(theory, oriented, bindable)
+                .map_err(|e| self.lean_error(e))?,
+            None => None,
+        }
+        .ok_or_else(|| self.unsupported_native_operation(operation))?;
         if self.intact() {
             self.caches.has_match.lock().unwrap().insert(key, found);
         }
@@ -3250,7 +3280,7 @@ impl MaudeHandle {
         &self,
         sig: &MaudeSig,
         query: &LNTerm,
-        finite_variants: impl FnOnce() -> bool,
+        finite_variants: impl Fn() -> bool,
     ) -> Result<(crate::lean_unification::Outcome, VariantRoute), crate::lean_unification::Error>
     {
         use crate::lean_unification::{pairing_variants, Outcome};
@@ -3304,7 +3334,7 @@ impl MaudeHandle {
                         eprintln!("[variants] solver checked_export");
                     }
                     theory
-                        .checked_variants(sig, query)
+                        .checked_variants(sig, query, &finite_variants)
                         .map(|outcome| (outcome, VariantRoute::CheckedExport))
                 }
                 // The join solver lists a family in the order of its own

@@ -12,6 +12,8 @@
 mod common_children;
 mod commutative;
 mod components;
+mod theory;
+pub(crate) use theory::Theory;
 mod whole;
 pub(crate) use whole::{
     kind_level, total_unify, total_unify_exists, unpack_conjunction, Conjunction, FamilyCheck,
@@ -29,7 +31,7 @@ mod operands;
 mod residual;
 
 use std::fmt;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 use tamarin_algebra_sys::{
     tamarin_lean_flat_ac_equal, tamarin_lean_initialize, tamarin_lean_thread_finalize,
     tamarin_lean_thread_initialize, InterruptWatch,
@@ -50,8 +52,12 @@ pub fn unify_modulo_attributes(
     sig: &crate::maude_sig::MaudeSig,
     equations: &[Equal<LNTerm>],
 ) -> Result<Outcome, Error> {
-    unpack_conjunction(sig, equations)?.solve(|rows| {
-        match whole::total_unify(sig, rows, None, 0)?.0 {
+    let Some(theory) = Theory::new(sig) else {
+        return Ok(Outcome::Unsupported);
+    };
+    let theory = Arc::new(theory);
+    unpack_conjunction(&theory, equations)?.solve(|rows| {
+        match whole::total_unify(&theory, rows, None, 0)?.0 {
             Some(family) => family.named(None, None).map(Outcome::Complete),
             None => Ok(Outcome::Unsupported),
         }
@@ -70,8 +76,20 @@ pub fn match_modulo_attributes(
     patterns_and_subjects: &[Equal<LNTerm>],
     bindable: impl Fn(&LVar) -> bool,
 ) -> Result<Outcome, Error> {
-    unpack_conjunction(sig, patterns_and_subjects)?
-        .solve(|rows| whole::total_match(sig, rows, bindable))
+    match Theory::new(sig) {
+        Some(theory) => match_in(&Arc::new(theory), patterns_and_subjects, bindable),
+        None => Ok(Outcome::Unsupported),
+    }
+}
+
+/// [`match_modulo_attributes`] over the description of the signature.
+pub(crate) fn match_in(
+    theory: &Arc<Theory>,
+    patterns_and_subjects: &[Equal<LNTerm>],
+    bindable: impl Fn(&LVar) -> bool,
+) -> Result<Outcome, Error> {
+    unpack_conjunction(theory, patterns_and_subjects)?
+        .solve(|rows| whole::total_match(theory, rows, bindable))
 }
 
 /// Decide whether [`match_modulo_attributes`] would return an answer, without
@@ -81,8 +99,20 @@ pub fn has_match_modulo_attributes(
     patterns_and_subjects: &[Equal<LNTerm>],
     bindable: impl Fn(&LVar) -> bool,
 ) -> Result<Option<bool>, Error> {
-    match unpack_conjunction(sig, patterns_and_subjects)? {
-        Conjunction::Rows(rows) => whole::total_has_match(sig, &rows, bindable),
+    match Theory::new(sig) {
+        Some(theory) => has_match_in(&Arc::new(theory), patterns_and_subjects, bindable),
+        None => Ok(None),
+    }
+}
+
+/// [`has_match_modulo_attributes`] over the description of the signature.
+pub(crate) fn has_match_in(
+    theory: &Arc<Theory>,
+    patterns_and_subjects: &[Equal<LNTerm>],
+    bindable: impl Fn(&LVar) -> bool,
+) -> Result<Option<bool>, Error> {
+    match unpack_conjunction(theory, patterns_and_subjects)? {
+        Conjunction::Rows(rows) => whole::total_has_match(theory, &rows, bindable),
         Conjunction::Clash => Ok(Some(false)),
         Conjunction::Unsupported => Ok(None),
     }

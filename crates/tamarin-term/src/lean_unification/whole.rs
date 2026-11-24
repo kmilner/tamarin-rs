@@ -17,34 +17,143 @@ pub(crate) use total::{
     unify_exists as total_unify_exists,
 };
 
-use super::{initialize, sort_word, Error, RuleTable, WordSlice, LEAN_THREAD};
+use super::{initialize, sort_word, Error, RuleTable, Theory, WordSlice, LEAN_THREAD};
 use crate::function_symbols::FunSym;
 use crate::lean_identity::IdentityTable;
-use crate::lterm::{LNTerm, LVar, Name};
+use crate::lterm::{LNTerm, LSort, LVar, Name};
 use crate::maude_types::sort_of_name;
 use crate::rewriting::Equal;
 use crate::subst::Subst;
 use crate::term::Term;
 use crate::vterm::Lit;
 use rustc_hash::FxHashMap;
+use std::sync::Arc;
 
 // Canonicalization expands each equation's two roots, even when their numeric
 // rows are shared. Charge the fully expanded size across the whole request.
 const MAX_NODES: usize = 4096;
 const MAX_DEPTH: usize = 128;
 
+/// How the rows of a packet name operators.
+#[derive(Clone)]
+enum Symbols {
+    /// By the fixed ids of the theory, which the `tamarin_theory_*` exports
+    /// declare themselves.
+    Theory(Arc<Theory>),
+    /// By the order of first occurrence, with a declaration for each, for the
+    /// exports that take declaration words.
+    Local {
+        table: IdentityTable<FunSym>,
+        declarations: Vec<u64>,
+    },
+}
+
+impl Default for Symbols {
+    fn default() -> Self {
+        Self::Local {
+            table: IdentityTable::default(),
+            declarations: Vec::new(),
+        }
+    }
+}
+
+impl Symbols {
+    /// The id of `f`, declared on first use by `declaration` (arity and sort)
+    /// in a local table.
+    fn encode(
+        &mut self,
+        f: FunSym,
+        width: usize,
+        declaration: impl Fn(FunSym) -> Option<(usize, LSort)>,
+    ) -> Option<(u64, u64)> {
+        let (table, declarations) = match self {
+            Self::Theory(theory) => return theory.encode(f, width),
+            Self::Local {
+                table,
+                declarations,
+            } => (table, declarations),
+        };
+        let (arity, output) = declaration(f)?;
+        let kind = match f {
+            FunSym::NoEq(_) if width == arity => 2,
+            FunSym::C(_) if width == 2 => 3,
+            FunSym::Ac(_) if width >= 2 => 4,
+            _ => return None,
+        };
+        if let Some(id) = table.id(f) {
+            return Some((kind, id));
+        }
+        let id = table.intern(f)?;
+        let sort = sort_word(output);
+        declarations.extend([kind, id, arity as u64, sort]);
+        declarations.extend(std::iter::repeat_n(sort, arity));
+        Some((kind, id))
+    }
+
+    /// The operator a reply names by `kind` and `id`, its declared arity and
+    /// its sort.
+    fn decode(&self, kind: u64, id: u64, nat: bool) -> Option<(FunSym, usize, LSort)> {
+        match self {
+            Self::Theory(theory) => theory.decode(kind, id),
+            Self::Local { table, .. } => {
+                let f = table.get(id)?;
+                let (arity, sort) = super::declaration(f, nat)?;
+                matches!(
+                    (kind, f),
+                    (2, FunSym::NoEq(_)) | (3, FunSym::C(_)) | (4, FunSym::Ac(_))
+                )
+                .then_some((f, arity, sort))
+            }
+        }
+    }
+}
+
 #[derive(Default, Clone)]
 pub(crate) struct Packet {
     variables: IdentityTable<LVar>,
     names: IdentityTable<Name>,
-    symbols: IdentityTable<FunSym>,
-    declarations: Vec<u64>,
+    symbols: Symbols,
     nodes: FxHashMap<Box<[u64]>, u64>,
     equations: Vec<u64>,
     expanded: usize,
 }
 
 impl Packet {
+    /// An empty packet whose rows name operators by the ids of `theory`.
+    fn over(theory: &Arc<Theory>) -> Self {
+        Self {
+            symbols: Symbols::Theory(Arc::clone(theory)),
+            ..Self::default()
+        }
+    }
+
+    /// An empty block of rows that follows this packet: the same operators,
+    /// variables and names, and node rows numbered from 0.
+    fn further(&self) -> Self {
+        Self {
+            variables: self.variables.clone(),
+            names: self.names.clone(),
+            symbols: self.symbols.clone(),
+            ..Self::default()
+        }
+    }
+
+    /// The theory whose ids the rows use.
+    fn theory(&self) -> Result<&Theory, Error> {
+        match &self.symbols {
+            Symbols::Theory(theory) => Ok(theory),
+            Symbols::Local { .. } => Err(Error::InvalidStatus(255)),
+        }
+    }
+
+    /// The declarations of a packet with local operator ids.
+    fn declarations(&self) -> Result<&[u64], Error> {
+        match &self.symbols {
+            Symbols::Local { declarations, .. } => Ok(declarations),
+            Symbols::Theory(_) => Err(Error::InvalidStatus(255)),
+        }
+    }
+
     fn node(&mut self, row: &[u64]) -> u64 {
         if let Some(&id) = self.nodes.get(row) {
             return id;
@@ -63,21 +172,14 @@ impl Packet {
         )
     }
 
-    fn symbol(
-        &mut self,
-        f: FunSym,
-        kind: u64,
-        arity: usize,
-        output: crate::lterm::LSort,
-    ) -> Option<u64> {
-        if let Some(id) = self.symbols.id(f) {
-            return Some(id);
-        }
-        let id = self.symbols.intern(f)?;
-        let sort = sort_word(output);
-        self.declarations.extend([kind, id, arity as u64, sort]);
-        self.declarations.extend(std::iter::repeat_n(sort, arity));
-        Some(id)
+    /// Append one term over the operators of the packet's theory and return
+    /// its root.
+    fn encode_theory(&mut self, term: &LNTerm) -> Option<u64> {
+        let Symbols::Theory(theory) = &self.symbols else {
+            return None;
+        };
+        let theory = Arc::clone(theory);
+        self.encode_term(term, false, |s| theory.declares_sort(s), |_| None)
     }
 
     // Children precede their parents in the graph. The bounded kernels charge
@@ -86,8 +188,8 @@ impl Packet {
         &mut self,
         term: &LNTerm,
         bounded: bool,
-        declares: impl Fn(crate::lterm::LSort) -> bool,
-        declaration: impl Fn(FunSym) -> Option<(usize, crate::lterm::LSort)>,
+        declares: impl Fn(LSort) -> bool,
+        declaration: impl Fn(FunSym) -> Option<(usize, LSort)>,
     ) -> Option<u64> {
         enum Visit<'a> {
             Term(&'a LNTerm, usize),
@@ -121,17 +223,11 @@ impl Packet {
                             values.push(self.node(&[kind, id, sort_word(sort)]));
                         }
                         Term::App(f, children) => {
-                            let (arity, output) = declaration(*f)?;
-                            let kind = match f {
-                                FunSym::NoEq(_) if children.len() == arity => 2,
-                                FunSym::C(_) if children.len() == 2 => 3,
-                                FunSym::Ac(_) if children.len() >= 2 => 4,
-                                _ => return None,
-                            };
-                            if bounded && children.len() > MAX_NODES - self.expanded {
+                            let width = children.len();
+                            if bounded && width > MAX_NODES - self.expanded {
                                 return None;
                             }
-                            let id = self.symbol(*f, kind, arity, output)?;
+                            let (kind, id) = self.symbols.encode(*f, width, &declaration)?;
                             work.push(Visit::Finish(kind, id, children.len()));
                             work.extend(children.iter().rev().map(|t| Visit::Term(t, depth + 1)));
                         }
@@ -168,41 +264,21 @@ impl Packet {
         Ok(Some(packet))
     }
 
-    // The caller has initialized Lean and holds the current thread registration.
-    fn certifies_table(&self, rules: &[u64], fuel: u64) -> Result<bool, Error> {
-        use tamarin_algebra_sys::tamarin_lean_certify_table;
-        let nodes = self.rows();
-        // SAFETY: the shim copies all words while the borrowed slices are live.
-        match unsafe {
-            tamarin_lean_certify_table(
-                WordSlice::new(&self.declarations),
-                nodes.as_ptr(),
-                nodes.len(),
-                WordSlice::new(rules),
-                fuel,
-            )
-        } {
-            0 => Ok(false),
-            1 => Ok(true),
-            status => Err(Error::InvalidStatus(status)),
-        }
-    }
-
     /// Everything the total exports read of a request, as one key: the
-    /// declarations, the node rows in order and the equation roots, each
-    /// behind its length.
-    fn request_words(&self) -> Box<[u64]> {
+    /// theory, the node rows in order and the equation roots, each behind its
+    /// length.
+    fn request_words(&self) -> Result<Box<[u64]>, Error> {
+        let theory = self.theory()?;
         let mut rows = vec![&[][..]; self.nodes.len()];
         for (row, &id) in &self.nodes {
             rows[id as usize] = row;
         }
         let mut words = Vec::with_capacity(
-            3 + self.declarations.len()
+            6 + theory.free().len()
                 + rows.iter().map(|r| r.len() + 1).sum::<usize>()
                 + self.equations.len(),
         );
-        words.push(self.declarations.len() as u64);
-        words.extend(&self.declarations);
+        words.extend(theory.words());
         words.push(rows.len() as u64);
         for row in rows {
             words.push(row.len() as u64);
@@ -210,7 +286,7 @@ impl Packet {
         }
         words.push(self.equations.len() as u64);
         words.extend(&self.equations);
-        words.into_boxed_slice()
+        Ok(words.into_boxed_slice())
     }
 
     fn rows(&self) -> Vec<WordSlice> {
@@ -297,10 +373,11 @@ impl RuleTable {
         };
         initialize()?;
         let rows = packet.rows();
+        let declarations = packet.declarations()?;
         // SAFETY: the shim copies the declarations, node rows and root IDs during the call.
         let verdict = LEAN_THREAD.with(|_| unsafe {
             tamarin_lean_variant_overlap_agrees(
-                WordSlice::new(&packet.declarations),
+                WordSlice::new(declarations),
                 rows.as_ptr(),
                 rows.len(),
                 WordSlice::new(&roots),
@@ -321,10 +398,11 @@ impl RuleTable {
         };
         initialize()?;
         let rows = packet.rows();
+        let declarations = packet.declarations()?;
         // SAFETY: the shim copies the graph and its roots from these live slices.
         match LEAN_THREAD.with(|_| unsafe {
             tamarin_lean_factor_refutes(
-                WordSlice::new(&packet.declarations),
+                WordSlice::new(declarations),
                 rows.as_ptr(),
                 rows.len(),
                 WordSlice::new(&packet.equations),
@@ -384,10 +462,11 @@ impl RuleTable {
         }
         initialize()?;
         let rows = packet.rows();
+        let declarations = packet.declarations()?;
         // SAFETY: all three sets of roots refer to the same live node table.
         let accepted = LEAN_THREAD.with(|_| unsafe {
             tamarin_lean_check_factors(
-                WordSlice::new(&packet.declarations),
+                WordSlice::new(declarations),
                 rows.as_ptr(),
                 rows.len(),
                 WordSlice::new(&original_roots),

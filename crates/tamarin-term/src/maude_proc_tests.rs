@@ -1826,10 +1826,7 @@ mod variant_check {
     /// The charge of a family, as the checker's work bound counts it.
     fn charge(h: &MaudeHandle, query: &LNTerm, family: &Substitutions) -> u64 {
         let table = h.reduction_table().unwrap().unwrap();
-        table
-            .variant_check_charge(&h.sig, query, family)
-            .unwrap()
-            .unwrap()
+        table.variant_check_charge(query, family).unwrap().unwrap()
     }
 
     #[test]

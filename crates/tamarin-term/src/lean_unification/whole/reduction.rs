@@ -1,18 +1,23 @@
-//! Checked reduction and the variant certificate check over the whole active
-//! table and the original input graph.
+//! Checked reduction and the variant certificate check on the table of the
+//! theory: the rules of its enabled builtins, which the exports add, and its
+//! user rules.
 use super::{total, Packet};
 use crate::lean_unification::{
-    initialize, Error, MatchRows, RuleTable, Watch, WordSlice, LEAN_THREAD,
+    initialize, Error, MatchRows, RuleTable, Theory, Watch, WordSlice, LEAN_THREAD,
 };
 use crate::lterm::{LNTerm, LVar};
 use crate::maude_sig::MaudeSig;
+use crate::rewriting::RRule;
 use crate::term::Term;
 use crate::vterm::Lit;
 use rustc_hash::{FxHashMap, FxHashSet};
+use std::collections::BTreeSet;
+use std::sync::Arc;
 use tamarin_utils::cancellation;
 
 use tamarin_algebra_sys::{
-    tamarin_lean_path_reduce, tamarin_lean_session_reduce, tamarin_lean_session_variant_check,
+    tamarin_lean_theory_certify, tamarin_lean_theory_path_reduce, tamarin_lean_theory_reduce,
+    tamarin_lean_theory_variant_check,
 };
 
 impl RuleTable {
@@ -46,26 +51,71 @@ pub(crate) enum Reduced {
 
 /// The session's rewrite table in wire form, with the certifier's verdict.
 ///
-/// The rules are encoded first and every operator of the module is declared
-/// before any query term, so each request packet is this packet followed by
-/// the rows of its terms: the declarations, the table rows and the rule roots
-/// are word for word those of the packet that was certified. A certified
-/// reduce and every variant check pass them to the session exports unchanged
-/// and the rows of the terms separately. Lean's
-/// `exportedSessionReduce_certified` and
-/// `exportedSessionVariantCheck_certified` take `certifyTable = true` on
-/// exactly those table words as their hypothesis, so the verdict cached here
-/// is the premise of every such call.
+/// The table is the theory description and the user rules: their node rows,
+/// numbered from 0, and their (lhs, rhs) roots. The rules of the enabled
+/// builtins are not among them; the exports add those. Every request passes
+/// these words unchanged, and the rows of its terms separately, numbered
+/// from 0, over the same variables and names. Lean's
+/// `theoryReduce_certified` and `theoryVariantCheck_certified` take
+/// `theoryCertify = true` on exactly those table words as their hypothesis,
+/// so the verdict cached here is the premise of every such call.
 pub(crate) struct ReductionTable {
     packet: Packet,
-    symbols: crate::function_symbols::FunSig,
     certified: bool,
+}
+
+/// The rules of `sig` that are not rules of an enabled builtin theory
+/// (Diffie-Hellman, bilinear pairing, exclusive or): the equations of the
+/// file and those of the rule-carrying builtins such as pairing. A rule that
+/// is also a builtin rule is left to the exports, which add every builtin
+/// rule, so no rule is sent twice.
+pub(crate) fn user_rules(sig: &MaudeSig) -> Vec<RRule<LNTerm>> {
+    let mut builtin = BTreeSet::new();
+    if sig.enable_dh {
+        builtin.extend(crate::builtin::dh_rules());
+    }
+    if sig.enable_bp {
+        builtin.extend(crate::builtin::bp_rules());
+    }
+    if sig.enable_xor {
+        builtin.extend(crate::builtin::xor_rules());
+    }
+    sig.rrules()
+        .into_iter()
+        .filter(|rule| !builtin.contains(rule))
+        .collect()
 }
 
 /// Rewrite depth requested from the certifier.
 const CERTIFIER_DEPTH: u64 = 4;
 /// Initial rewrite depth of the single-path exports, doubled on request.
 const PATH_DEPTH: u64 = 1 << 16;
+
+/// Whether the certifier accepts the table of `packet` at rewrite depth
+/// `fuel`: the rules of the theory's builtins and the user rules the packet
+/// holds.
+fn certify(packet: &Packet, fuel: u64) -> Result<bool, Error> {
+    let theory = packet.theory()?;
+    initialize()?;
+    let rows = packet.rows();
+    // SAFETY: the shim copies all words while the borrowed slices are live.
+    let verdict = LEAN_THREAD.with(|_| unsafe {
+        tamarin_lean_theory_certify(
+            theory.flags(),
+            WordSlice::new(theory.free()),
+            theory.ac(),
+            rows.as_ptr(),
+            rows.len(),
+            WordSlice::new(&packet.equations),
+            fuel,
+        )
+    });
+    match verdict {
+        0 => Ok(false),
+        1 => Ok(true),
+        status => Err(Error::InvalidStatus(status)),
+    }
+}
 
 /// The export that answers one normalization request.
 #[derive(Clone, Copy)]
@@ -95,19 +145,28 @@ pub(crate) enum FamilyCheck {
 }
 
 impl ReductionTable {
-    /// `None` when a rule mentions an operator the module does not declare.
-    pub(crate) fn new(sig: &MaudeSig) -> Result<Option<Self>, Error> {
-        let Some(packet) = Packet::full_table(sig, &[])? else {
-            return Ok(None);
-        };
-        initialize()?;
-        let certified =
-            LEAN_THREAD.with(|_| packet.certifies_table(&packet.equations, CERTIFIER_DEPTH))?;
-        Ok(Some(Self {
-            packet,
-            symbols: sig.declared_fun_syms(),
-            certified,
-        }))
+    /// The table of `sig` over `theory`, the description of `sig`. `None`
+    /// when a rule mentions an operator outside the theory.
+    pub(crate) fn new(theory: &Arc<Theory>, sig: &MaudeSig) -> Result<Option<Self>, Error> {
+        let mut packet = Packet::over(theory);
+        for rule in user_rules(sig) {
+            cancellation::check().map_err(|_| Error::Cancelled)?;
+            let (Some(lhs), Some(rhs)) = (
+                packet.encode_theory(&rule.lhs),
+                packet.encode_theory(&rule.rhs),
+            ) else {
+                return Ok(None);
+            };
+            packet.equations.extend([lhs, rhs]);
+        }
+        let certified = certify(&packet, CERTIFIER_DEPTH)?;
+        Ok(Some(Self { packet, certified }))
+    }
+
+    /// The certifier's verdict on this table at rewrite depth `fuel`.
+    #[cfg(test)]
+    pub(super) fn certifies(&self, fuel: u64) -> Result<bool, Error> {
+        certify(&self.packet, fuel)
     }
 
     pub(crate) fn certified(&self) -> bool {
@@ -126,24 +185,20 @@ impl ReductionTable {
     /// steps (zero for no bound).
     pub(crate) fn reduce(
         &self,
-        sig: &MaudeSig,
         input: &LNTerm,
         follow_path: bool,
         work: u64,
     ) -> Result<Reduced, Error> {
-        let mut packet = self.packet.clone();
-        let Some(root) = packet.encode_declared(sig.enable_nat, &self.symbols, input) else {
+        let mut term = self.packet.further();
+        let Some(root) = term.encode_theory(input) else {
             return Ok(Reduced::Unsupported);
         };
-        // The table declared every operator, so a term can add rows only.
-        if packet.declarations != self.packet.declarations {
-            return Err(Error::InvalidStatus(255));
-        }
         initialize()?;
-        let rows = packet.rows();
-        // The first `table` rows are word for word the rows the certifier
-        // saw; the rows of the term follow them.
-        let table = self.packet.nodes.len();
+        let theory = self.packet.theory()?;
+        // The table rows are word for word the rows the certifier saw; the
+        // rows of the term are numbered from 0.
+        let table = self.packet.rows();
+        let extra = term.rows();
         let rules = &self.packet.equations;
         let kernel = if self.certified {
             Kernel::Certified
@@ -160,30 +215,23 @@ impl ReductionTable {
             // MatchRows owns the returned array. `table` is at most the
             // number of rows.
             let raw = unsafe {
-                let declarations = WordSlice::new(&packet.declarations);
-                let rules = WordSlice::new(rules);
-                match kernel {
-                    Kernel::Certified => tamarin_lean_session_reduce(
-                        declarations,
-                        rows.as_ptr(),
-                        table,
-                        rules,
-                        rows.as_ptr().add(table),
-                        rows.len() - table,
-                        root,
-                        fuel,
-                        watch.raw(),
-                    ),
-                    Kernel::Path => tamarin_lean_path_reduce(
-                        declarations,
-                        rows.as_ptr(),
-                        rows.len(),
-                        rules,
-                        root,
-                        fuel,
-                        watch.raw(),
-                    ),
-                }
+                let reduce = match kernel {
+                    Kernel::Certified => tamarin_lean_theory_reduce,
+                    Kernel::Path => tamarin_lean_theory_path_reduce,
+                };
+                reduce(
+                    theory.flags(),
+                    WordSlice::new(theory.free()),
+                    theory.ac(),
+                    table.as_ptr(),
+                    table.len(),
+                    WordSlice::new(rules),
+                    extra.as_ptr(),
+                    extra.len(),
+                    root,
+                    fuel,
+                    watch.raw(),
+                )
             };
             // A stopped call returned no reply.
             watch.finish()?;
@@ -198,7 +246,7 @@ impl ReductionTable {
                 // The table is not range restricted, or the reduct lost a sort.
                 (2, 1, Kernel::Path) => return Ok(Reduced::Unsupported),
                 (1, 2, _) => {
-                    let result = read_normal_form(&packet, &reply, sig, input)?;
+                    let result = read_normal_form(&term, &reply, input)?;
                     return Ok(match kernel {
                         Kernel::Certified => Reduced::Certified(result),
                         Kernel::Path => Reduced::Path(result),
@@ -229,25 +277,24 @@ impl ReductionTable {
     ///
     /// The request is the table packet, word for word as the certifier saw
     /// it, with the rows of the query and of the images passed separately.
-    /// `exportedSessionVariantCheck_certified` then makes an accepted family
+    /// `theoryVariantCheck_certified` then makes an accepted family
     /// a complete set of variants whenever [`Self::certified`] holds; on any
     /// other table that conclusion needs the premise that the table is
     /// canonical.
     pub(crate) fn check_variants(
         &self,
-        sig: &MaudeSig,
         query: &LNTerm,
         family: &[Vec<(LVar, LNTerm)>],
         fuel: u64,
         work: u64,
         search: u64,
     ) -> Result<FamilyCheck, Error> {
-        let Some(request) = self.variant_request(sig, query, family)? else {
+        let Some(request) = self.variant_request(query, family)? else {
             return Ok(FamilyCheck::Undecided);
         };
         initialize()?;
         cancellation::check().map_err(|_| Error::Cancelled)?;
-        match request.check(&self.packet.equations, fuel, work, search)?[..] {
+        match request.check(&self.packet, fuel, work, search)?[..] {
             [1] => Ok(FamilyCheck::Accepted),
             [2, reason @ 1..=3, member] => Ok(FamilyCheck::Rejected {
                 reason: reason as u8,
@@ -273,7 +320,6 @@ impl ReductionTable {
     /// This is a diagnostic for choosing a bound, and no part of the check.
     pub(crate) fn variant_check_charge(
         &self,
-        sig: &MaudeSig,
         query: &LNTerm,
         family: &[Vec<(LVar, LNTerm)>],
     ) -> Result<Option<u64>, Error> {
@@ -301,7 +347,7 @@ impl ReductionTable {
                 let instance = crate::subst::apply_vterm(&bindings, observation.clone());
                 // The charge is an estimate: its reductions stop on
                 // cancellation only.
-                match self.reduce(sig, &instance, true, 0)? {
+                match self.reduce(&instance, true, 0)? {
                     Reduced::Certified(value) | Reduced::Path(value) => {
                         charge += sites(&value);
                     }
@@ -312,19 +358,16 @@ impl ReductionTable {
         Ok(Some(charge))
     }
 
-    /// The table packet extended by the query and the family. `None` when a
-    /// term is outside the module's declarations.
+    /// The rows of the query and the family that follow the table. `None`
+    /// when a term is outside the theory.
     fn variant_request(
         &self,
-        sig: &MaudeSig,
         query: &LNTerm,
         family: &[Vec<(LVar, LNTerm)>],
     ) -> Result<Option<VariantRequest>, Error> {
         use crate::lterm::HasFrees;
-        let mut packet = self.packet.clone();
-        let encode = |packet: &mut Packet, term: &LNTerm| {
-            packet.encode_declared(sig.enable_nat, &self.symbols, term)
-        };
+        let mut packet = self.packet.further();
+        let encode = |packet: &mut Packet, term: &LNTerm| packet.encode_theory(term);
         let mut roots = Vec::new();
         for observation in super::checked_variants::observations(query) {
             let Some(root) = encode(&mut packet, observation) else {
@@ -369,12 +412,7 @@ impl ReductionTable {
             }
             members.push(row);
         }
-        // The table declared every operator, so the terms added rows only.
-        if packet.declarations != self.packet.declarations {
-            return Err(Error::InvalidStatus(255));
-        }
         Ok(Some(VariantRequest {
-            table: self.packet.nodes.len(),
             packet,
             roots,
             members,
@@ -382,34 +420,37 @@ impl ReductionTable {
     }
 }
 
-/// One request to the certificate checker: the graph, whose first `table`
-/// rows are the session table, the roots of the observed terms, and one row
-/// of (variable, image) node pairs per member.
+/// One request to the certificate checker: the rows of the observed terms
+/// and of the images, numbered from 0, the roots of the observed terms, and
+/// one row of (variable, image) node pairs per member.
 struct VariantRequest {
-    table: usize,
     packet: Packet,
     roots: Vec<u64>,
     members: Vec<Vec<u64>>,
 }
 
 impl VariantRequest {
-    /// The single status row of the checker's reply.
-    fn check(&self, rules: &[u64], fuel: u64, work: u64, search: u64) -> Result<Vec<u64>, Error> {
+    /// The single status row of the checker's reply on `table`.
+    fn check(&self, table: &Packet, fuel: u64, work: u64, search: u64) -> Result<Vec<u64>, Error> {
+        let theory = table.theory()?;
+        let rules = &table.equations;
+        let table = table.rows();
         let rows = self.packet.rows();
         let members: Vec<WordSlice> = self.members.iter().map(|row| WordSlice::new(row)).collect();
         LEAN_THREAD.with(|_| {
             let mut watch = Watch::new("variant check", search);
             // SAFETY: all slices and the watch live through the call.
-            // MatchRows owns the returned array. `table` is at most the
-            // number of rows.
+            // MatchRows owns the returned array.
             let raw = unsafe {
-                tamarin_lean_session_variant_check(
-                    WordSlice::new(&self.packet.declarations),
-                    rows.as_ptr(),
-                    self.table,
+                tamarin_lean_theory_variant_check(
+                    theory.flags(),
+                    WordSlice::new(theory.free()),
+                    theory.ac(),
+                    table.as_ptr(),
+                    table.len(),
                     WordSlice::new(rules),
-                    rows.as_ptr().add(self.table),
-                    rows.len() - self.table,
+                    rows.as_ptr(),
+                    rows.len(),
                     WordSlice::new(&self.roots),
                     members.as_ptr(),
                     members.len(),
@@ -433,17 +474,12 @@ impl VariantRequest {
     }
 }
 
-fn read_normal_form(
-    packet: &Packet,
-    reply: &MatchRows,
-    sig: &MaudeSig,
-    input: &LNTerm,
-) -> Result<LNTerm, Error> {
+fn read_normal_form(packet: &Packet, reply: &MatchRows, input: &LNTerm) -> Result<LNTerm, Error> {
     let mut words = vec![0; reply.row_size(0, 1)?];
     if reply.copy_row(0, 1, &mut words)? != words.len() {
         return Err(Error::InvalidStatus(255));
     }
-    let result = packet.read_term(&words, sig.enable_nat)?;
+    let result = packet.read_term(&words, packet.theory()?.nat())?;
     let scope = crate::lterm::frees(input);
     if crate::lterm::frees(&result)
         .iter()
@@ -460,26 +496,32 @@ fn read_normal_form(
 /// On any other table it is an irreducible reduct along one rewrite path
 /// that keeps the sorts of the term, which is the normal form under the
 /// caller's premise. `None` when the table is not range restricted, a reduct
-/// lost a sort or the request is outside the module's declarations.
+/// lost a sort or the request is outside the theory's operators.
 pub fn reduction_for_convergent_theory(
     sig: &MaudeSig,
     input: &LNTerm,
 ) -> Result<Option<LNTerm>, Error> {
-    let Some(table) = ReductionTable::new(sig)? else {
+    let Some(theory) = Theory::new(sig) else {
         return Ok(None);
     };
-    Ok(match table.reduce(sig, input, true, 0)? {
+    let Some(table) = ReductionTable::new(&Arc::new(theory), sig)? else {
+        return Ok(None);
+    };
+    Ok(match table.reduce(input, true, 0)? {
         Reduced::Certified(result) | Reduced::Path(result) => Some(result),
         Reduced::Undecided | Reduced::Unsupported => None,
     })
 }
 
 impl Packet {
+    /// The packet of the variant proposers: the observations, then every
+    /// rule of `sig`, builtin rules included, with local operator ids and the
+    /// declaration of every operator of the module.
     pub(super) fn full_table(
         sig: &MaudeSig,
         observations: &[LNTerm],
     ) -> Result<Option<Self>, Error> {
-        // The algebra consumes expanded terms. encode_total checks every rule and
+        // The algebra consumes expanded terms. encode_local checks every rule and
         // observation against the actual module declarations, including in theories
         // that also carry parser-only macro names.
         Self::with_rules(sig, observations, sig.rrules().iter())
@@ -490,7 +532,7 @@ impl Packet {
         observations: &[LNTerm],
         rules: impl Iterator<Item = &'a crate::rewriting::RRule<LNTerm>>,
     ) -> Result<Option<Self>, Error> {
-        let Some(mut packet) = Packet::encode_total(
+        let Some(mut packet) = Packet::encode_local(
             sig,
             observations
                 .iter()
@@ -510,8 +552,13 @@ impl Packet {
             };
             let (arity, sort) = crate::lean_unification::declaration(f, sig.enable_nat)
                 .ok_or(Error::InvalidStatus(255))?;
+            let width = match kind {
+                2 => arity,
+                _ => 2,
+            };
             packet
-                .symbol(f, kind, arity, sort)
+                .symbols
+                .encode(f, width, |_| Some((arity, sort)))
                 .ok_or(Error::InvalidStatus(255))?;
         }
         Ok(Some(packet))
@@ -527,24 +574,29 @@ mod tests {
     use crate::term::f_app_ac;
     use std::time::{Duration, Instant};
 
+    fn session_table(sig: &MaudeSig) -> ReductionTable {
+        let theory = Arc::new(Theory::new(sig).unwrap());
+        ReductionTable::new(&theory, sig).unwrap().unwrap()
+    }
+
     /// The identity family for a multiset of `factors` distinct public names
     /// and one variable of sort Node, which makes the product kind-level.
     fn kind_level_identity(factors: u64) -> (FamilyCheck, Duration) {
         let sig = pair_maude_sig().merge(mset_maude_sig());
-        let table = ReductionTable::new(&sig).unwrap().unwrap();
+        let table = session_table(&sig);
         assert!(table.certified());
         let mut terms: Vec<LNTerm> = (0..factors).map(|i| pub_term(format!("p{i}"))).collect();
         terms.push(Term::Lit(Lit::Var(LVar::new("outside", LSort::Node, 0))));
         let query = f_app_ac(AcSym::Union, terms);
         let start = Instant::now();
         let verdict = table
-            .check_variants(&sig, &query, &[Vec::new()], 1 << 16, 0, 0)
+            .check_variants(&query, &[Vec::new()], 1 << 16, 0, 0)
             .unwrap();
         (verdict, start.elapsed())
     }
 
     /// The class the certifier is proved to accept
-    /// (`exportedCertifyTable_subterm`): constructor-pattern rules whose
+    /// (`theoryCertify_subterm`): constructor-pattern rules whose
     /// results are subterms or constants. The builtin tables without an AC
     /// operator are of that shape, `verify` returning `true` included.
     #[test]
@@ -558,7 +610,48 @@ mod tests {
             .merge(signature_maude_sig())
             .merge(hash_maude_sig());
         assert!(!sig.rrules().is_empty());
-        assert!(ReductionTable::new(&sig).unwrap().unwrap().certified());
+        assert!(session_table(&sig).certified());
+    }
+
+    /// The table sends the rules of the file and of the rule-carrying
+    /// builtins, and none of the rules of Diffie-Hellman, bilinear pairing
+    /// and exclusive or, which the exports add, even where the file repeats
+    /// one of them.
+    #[test]
+    fn the_session_table_holds_the_user_rules_alone() {
+        use crate::builtin::{bp_rules, dh_rules, xor_rules};
+        use crate::maude_sig::{bp_maude_sig, minimal_maude_sig, sym_enc_maude_sig, xor_maude_sig};
+        let base = minimal_maude_sig(false).merge(sym_enc_maude_sig());
+        let mut sig = base
+            .clone()
+            .merge(bp_maude_sig())
+            .merge(xor_maude_sig())
+            .refresh();
+        assert!(sig.enable_dh);
+        let users = user_rules(&sig);
+        assert_eq!(users, base.rrules().into_iter().collect::<Vec<_>>());
+        let builtin: BTreeSet<_> = dh_rules()
+            .into_iter()
+            .chain(bp_rules())
+            .chain(xor_rules())
+            .collect();
+        assert!(users.iter().all(|rule| !builtin.contains(rule)));
+        // A file equation that is a builtin rule is the builtin's.
+        let (repeated, subterm) = xor_rules()
+            .into_iter()
+            .find_map(|rule| {
+                let subterm = crate::subterm_rule::rrule_to_ctxt_st_rule(&rule)?;
+                Some((rule, subterm))
+            })
+            .unwrap();
+        sig.st_rules.insert(subterm);
+        let sig = sig.refresh();
+        assert!(sig.st_rules.iter().any(|r| r.to_rrule() == repeated));
+        assert_eq!(user_rules(&sig), users);
+        // The rows of the table are those of the user rules.
+        let table = session_table(&sig);
+        assert_eq!(table.packet.equations.len(), 2 * users.len());
+        assert!(table.certified());
     }
 
     /// The closure test is not exponential in the width of a kind-level AC

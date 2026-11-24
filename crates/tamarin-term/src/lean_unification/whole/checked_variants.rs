@@ -30,16 +30,20 @@ use tamarin_algebra_sys::{
 };
 
 impl RuleTable {
+    /// The bounded narrowing search as a proposal. When it does not finish
+    /// within its frontier and `certified` says that the certifier accepted
+    /// the session's table, unbounded folding continues it.
     pub(crate) fn checked_variants(
         &self,
         sig: &MaudeSig,
         query: &LNTerm,
+        certified: impl FnOnce() -> bool,
     ) -> Result<Outcome, Error> {
         let observations = observations(query);
         let Some(packet) = self.table_packet(sig, observations)? else {
             return Ok(Outcome::Unsupported);
         };
-        evaluate(&packet, sig, observations, Search::Checked, 0)
+        evaluate(&packet, sig, observations, Search::Checked, 0, certified)
     }
 
     /// Folding variant narrowing in Maude's order, as a proposal: the family
@@ -59,7 +63,7 @@ impl RuleTable {
         let Some(packet) = self.table_packet(sig, observations)? else {
             return Ok(Outcome::Unsupported);
         };
-        evaluate(&packet, sig, observations, Search::Fold, search)
+        evaluate(&packet, sig, observations, Search::Fold, search, || false)
     }
 }
 
@@ -105,7 +109,7 @@ pub fn variants_for_convergent_theory(
     let Some(packet) = Packet::full_table(sig, observations)? else {
         return Ok(None);
     };
-    match evaluate(&packet, sig, observations, Search::General, 0)? {
+    match evaluate(&packet, sig, observations, Search::General, 0, || false)? {
         Outcome::Unsupported => Ok(None),
         Outcome::Complete(rows) => Ok(Some(rows)),
     }
@@ -123,6 +127,7 @@ fn evaluate(
     observations: &[LNTerm],
     mut search: Search,
     steps: u64,
+    certified: impl FnOnce() -> bool,
 ) -> Result<Outcome, Error> {
     let width = observations
         .iter()
@@ -132,6 +137,8 @@ fn evaluate(
     let (roots, rules) = packet.equations.split_at(observations.len());
     initialize()?;
     let nodes = packet.rows();
+    let declarations = packet.declarations()?;
+    let mut certified = Some(certified);
     let mut fuel = FRONTIER_DEPTH;
     let mut work = FOLD_WORK;
     LEAN_THREAD.with(|_| loop {
@@ -141,7 +148,7 @@ fn evaluate(
         // SAFETY: all slices and the watch remain live through the call, and
         // the unique result reference is released by MatchRows.
         let raw = unsafe {
-            let decls = WordSlice::new(&packet.declarations);
+            let decls = WordSlice::new(declarations);
             let rules = WordSlice::new(rules);
             let roots = WordSlice::new(roots);
             match search {
@@ -200,7 +207,7 @@ fn evaluate(
         if matches!(search, Search::Checked)
             && total::header(&reply)? == 2
             && reply.rows(0) == 1
-            && packet.certifies_table(rules, fuel)?
+            && certified.take().is_some_and(|certified| certified())
         {
             search = Search::General;
             continue;
