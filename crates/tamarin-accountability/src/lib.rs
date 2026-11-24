@@ -18,17 +18,16 @@
 mod formula;
 mod generation;
 
-use tamarin_term::lterm::{is_pub_const, is_pub_var, BVar, LNTerm, LVar};
+use tamarin_term::lterm::{is_pub_const, is_pub_var, BVar, LNTerm};
 use tamarin_term::term::Term;
 use tamarin_term::vterm::Lit;
 use tamarin_theory::pretty_hpj::{self as hpj, Doc};
 use tamarin_theory::wellformedness::WfError;
 
-use tamarin_theory::fact::{fact_tag_arity, fact_tag_name, Fact, LNFact};
-use tamarin_theory::formula::{
-    formula_facts, formula_frees, to_lnformula, BLNTerm, SyntacticLNFormula,
-};
-use tamarin_theory::predicate::Predicate;
+use tamarin_theory::fact::{Fact, LNFact};
+use tamarin_theory::formula::{formula_facts, formula_frees, to_lnformula, BLNTerm, LNFormula};
+use tamarin_theory::predicate::{builtin_predicates, expand_formula, ExpandError, Predicate};
+use tamarin_theory::pretty_theory::render_predicate_fact;
 use tamarin_theory::rule::ProtoRuleE;
 use tamarin_theory::theory::{
     self as t, AccLemma, CaseTest, LNMacro, Theory, TheoryItem, TranslationElement,
@@ -48,16 +47,20 @@ pub enum AccError {
     CaseTestsUndefined(Vec<(String, Vec<String>)>),
     /// HS `UndefinedPredicate` (thrown by `liftedAddLemma`'s `expandLemma`,
     /// Text/Parser.hs, when a generated lemma's formula references an
-    /// undefined predicate).  Carries HS's `showFactTagArity` rendering,
-    /// `name/arity`.
-    UndefinedPredicate(String),
+    /// undefined predicate).
+    UndefinedPredicate(ExpandError),
     /// HS `DuplicateItem (LemmaItem _)` (thrown by `liftedAddLemma` when a
     /// generated lemma's name collides with an existing lemma).
     DuplicateLemma(String),
     /// HS `DuplicateItem (PredicateItem _)` (thrown by `liftedAddPredicate`,
     /// Parser/Signature.hs, when a case-test predicate's fact tag
-    /// collides with an existing predicate).  Carries the rendered fact.
+    /// collides with an existing predicate).  Carries the fact as HS
+    /// `render (prettyFact prettyLVar fact)` prints it (Exceptions.hs).
     DuplicatePredicate(String),
+    /// GHC's `errorEmptyList` from one of `Accountability.Generation`'s
+    /// partial folds (`foldr1`/`foldl1`), which a case test without free
+    /// variables reaches: HS dies with `Prelude.<fold>: empty list`.
+    EmptyList(&'static str),
 }
 
 impl std::fmt::Display for AccError {
@@ -81,9 +84,10 @@ impl std::fmt::Display for AccError {
                         .join("\n")
                 )
             }
-            AccError::UndefinedPredicate(tag) => write!(f, "undefined predicate {}", tag),
+            AccError::UndefinedPredicate(e) => write!(f, "{e}"),
             AccError::DuplicateLemma(name) => write!(f, "duplicate lemma: {}", name),
             AccError::DuplicatePredicate(fact) => write!(f, "duplicate predicate: {}", fact),
+            AccError::EmptyList(fold) => write!(f, "Prelude.{fold}: empty list"),
         }
     }
 }
@@ -121,34 +125,18 @@ fn collect_acc_items(thy: &Theory) -> (Vec<CaseTest>, Vec<(AccLemma, usize)>) {
     (case_tests, acc_lemmas)
 }
 
-/// HS list difference `xs \\ ys`: remove, for each element of `ys`, its first
-/// occurrence in `xs`.
-fn list_diff(xs: &[String], ys: &[String]) -> Vec<String> {
-    let mut result = xs.to_vec();
-    for y in ys {
-        if let Some(pos) = result.iter().position(|r| r == y) {
-            result.remove(pos);
-        }
-    }
-    result
-}
-
 /// HS `undefinedCaseTests` (lib/accountability/src/Accountability.hs):
-/// the ident list `required` vs the resolved-case-test names `defined` (idents
-/// that name a defined case test, in order).  Returns the missing idents when
-/// the two lists differ.
-fn undefined_case_tests(acc: &AccLemma, defined_names: &[String]) -> Option<Vec<String>> {
-    let required = &acc.case_test_idents;
-    let defined: Vec<String> = required
+/// `required \\ defined`, where `defined` keeps the required idents that name
+/// a case test declared before the lemma. That difference is just the
+/// required idents naming no such case test, in order and with repeats.
+fn undefined_case_tests(acc: &AccLemma, declared: &[CaseTest]) -> Option<Vec<String>> {
+    let missing: Vec<String> = acc
+        .case_test_idents
         .iter()
-        .filter(|id| defined_names.contains(id))
+        .filter(|id| !declared.iter().any(|c| &c.name == *id))
         .cloned()
         .collect();
-    if *required != defined {
-        Some(list_diff(required, &defined))
-    } else {
-        None
-    }
+    (!missing.is_empty()).then_some(missing)
 }
 
 // =============================================================================
@@ -173,26 +161,12 @@ pub fn translate(thy: &mut Theory) -> Result<(), AccError> {
     let undef: Vec<(String, Vec<String>)> = acc_lemmas
         .iter()
         .filter_map(|(a, n_before)| {
-            let defined_names: Vec<String> = case_tests[..*n_before]
-                .iter()
-                .map(|c| c.name.clone())
-                .collect();
-            undefined_case_tests(a, &defined_names).map(|m| (a.name.clone(), m))
+            undefined_case_tests(a, &case_tests[..*n_before]).map(|m| (a.name.clone(), m))
         })
         .collect();
     if !undef.is_empty() {
         return Err(AccError::CaseTestsUndefined(undef));
     }
-
-    // Predicate fact tags `(name, arity, persistent)` defined for this theory:
-    // every `predicates:` item (HS `theoryPredicates` — position-insensitive at
-    // translate time) plus the builtin `Smaller/2` (HS `lookupPredicate`
-    // appends `builtinPredicates`, Predicate.hs).  Backs the
-    // `UndefinedPredicate` / `DuplicateItem (PredicateItem _)` error paths;
-    // grows as case-test predicates are added (HS folds `thy'` through
-    // `liftedAddPredicate`).
-    let mut defined_preds: Vec<(String, usize, bool)> = thy.predicates().map(pred_tag).collect();
-    defined_preds.push(("Smaller".to_string(), 2, false));
 
     // The predicate DEFINITIONS `expandLemma` substitutes into each generated
     // lemma, in declaration order.  The case-test predicates are appended
@@ -228,39 +202,45 @@ pub fn translate(thy: &mut Theory) -> Result<(), AccError> {
                 })
                 .collect(),
         };
-        for generated in generate_accountability_lemmas(&acc_data) {
+        for generated in generate_accountability_lemmas(&acc_data)? {
             // HS `liftedAddLemma` first predicate-expands the lemma
             // (`expandLemma`, throws `UndefinedPredicate`), then rejects
             // duplicate names (`DuplicateItem`).
-            if let Some(tag) = undefined_predicate(&generated.formula, &defined_preds) {
-                return Err(AccError::UndefinedPredicate(tag));
-            }
+            let original = expand_formula(&declared_preds, &generated.formula)
+                .map_err(AccError::UndefinedPredicate)?;
             if lemma_names.iter().any(|n| n == &generated.name) {
                 return Err(AccError::DuplicateLemma(generated.name));
             }
             lemma_names.push(generated.name.clone());
             inject_lemma(
                 thy,
-                &declared_preds,
                 &declared_macros,
                 &acc.attributes,
                 acc.heuristic_in_file.as_deref(),
                 &generated.name,
                 generated.quantifier,
-                &generated.formula,
+                original,
             );
         }
     }
 
     // Case-test predicates (HS `mapMaybe caseTestToPredicate (theoryCaseTests thy)`
     // then `foldM liftedAddPredicate`), appended AFTER all generated lemmas.
+    // `addPredicate` rejects a fact tag `lookupPredicate` already finds: a
+    // declared predicate, the builtin `Smaller` or an earlier case test,
+    // comparing the whole fact tag (Predicate.hs).
+    let mut defined_preds: std::collections::BTreeSet<_> = thy
+        .predicates()
+        .chain(&builtin_predicates())
+        .map(|pr| pr.fact.tag)
+        .collect();
     for c in &case_tests {
         if let Some(pred) = case_test_to_predicate(c) {
-            let tag = pred_tag(&pred);
-            if defined_preds.contains(&tag) {
-                return Err(AccError::DuplicatePredicate(render_fact(&pred.fact)));
+            if !defined_preds.insert(pred.fact.tag) {
+                return Err(AccError::DuplicatePredicate(render_predicate_fact(
+                    &pred.fact,
+                )));
             }
-            defined_preds.push(tag);
             thy.items.push(TheoryItem::Predicate(pred));
         }
     }
@@ -268,87 +248,22 @@ pub fn translate(thy: &mut Theory) -> Result<(), AccError> {
     Ok(())
 }
 
-/// The `(name, arity, persistent)` key a predicate is looked up by — HS
-/// `lookupPredicate` compares the whole fact tag (Predicate.hs).
-fn pred_tag(pr: &Predicate) -> (String, usize, bool) {
-    (
-        fact_tag_name(&pr.fact.tag),
-        fact_tag_arity(&pr.fact.tag),
-        pr.fact.is_persistent(),
-    )
-}
-
-/// Fact tags of the `Pred` atoms in `fm` that match no defined predicate
-/// (first offender, rendered as HS `showFactTagArity`: `name/arity`).
-fn undefined_predicate(
-    fm: &SyntacticLNFormula,
-    defined: &[(String, usize, bool)],
-) -> Option<String> {
-    formula::formula_pred_facts(fm).into_iter().find_map(|f| {
-        let name = fact_tag_name(&f.tag);
-        let arity = fact_tag_arity(&f.tag);
-        let persistent = f.is_persistent();
-        let known = defined
-            .iter()
-            .any(|(n, a, p_)| *n == name && *a == arity && *p_ == persistent);
-        if known {
-            None
-        } else {
-            Some(format!(
-                "{}{}/{}",
-                if persistent { "!" } else { "" },
-                name,
-                arity
-            ))
-        }
-    })
-}
-
-/// Render a predicate fact for the `duplicate predicate:` message (HS
-/// `prettyFact prettyLVar`, e.g. `Foo( x, y )`).
-fn render_fact(f: &Fact<LVar>) -> String {
-    let args = f
-        .terms
-        .iter()
-        .map(|v| {
-            if v.idx == 0 {
-                v.name.to_string()
-            } else {
-                format!("{}.{}", v.name, v.idx)
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        "{}{}( {} )",
-        if f.is_persistent() { "!" } else { "" },
-        fact_tag_name(&f.tag),
-        args
-    )
-}
-
 /// Append one generated lemma to the theory (HS `addLemma`, which appends at
 /// the end of the item list, TheoryObject.hs).  The lemma carries the
-/// two formulas a closed theory's lemma holds: `_lOriginalFormula` is the one
-/// `expandLemma` builds, predicate-expanded against `predicates`
-/// (Theory/Text/Parser.hs), and `_lFormula` is that formula with the
-/// theory's macros applied, which `closeTheory` maps over every lemma
-/// including the ones this translation added (`applyMacroInLemma`,
-/// CloseRule.hs, lib/theory/src/Lemma.hs).  A formula the expansion
-/// rejects is not added.
+/// two formulas a closed theory's lemma holds: `_lOriginalFormula` is the
+/// predicate-expanded one `expandLemma` builds (Theory/Text/Parser.hs), and
+/// `_lFormula` is that formula with the theory's macros applied, which
+/// `closeTheory` maps over every lemma including the ones this translation
+/// added (`applyMacroInLemma`, CloseRule.hs, lib/theory/src/Lemma.hs).
 fn inject_lemma(
     thy: &mut Theory,
-    predicates: &[Predicate],
     macros: &[LNMacro],
     attributes: &[t::LemmaAttr],
     heuristic_in_file: Option<&str>,
     name: &str,
     quantifier: t::TraceQuantifier,
-    formula: &SyntacticLNFormula,
+    original: LNFormula,
 ) {
-    let Ok(original) = tamarin_theory::predicate::expand_formula(predicates, formula) else {
-        return;
-    };
     let expanded = tamarin_theory::formula::apply_macro_in_formula(macros, original.clone());
     let lemma = t::Lemma {
         heuristic_in_file: heuristic_in_file.map(str::to_owned),
@@ -630,6 +545,50 @@ end\n";
         assert!(
             shown.iter().any(|s| s.contains("a = 'bad'")),
             "the predicate body is inlined: {shown:?}"
+        );
+    }
+
+    /// A case test whose predicate fact tag is already declared is HS's
+    /// `DuplicateItem (PredicateItem pr)`, shown as `render (prettyFact
+    /// prettyLVar fact)` (Exceptions.hs): each argument keeps its sort sigil.
+    #[test]
+    fn duplicate_case_test_predicate_renders_the_fact_like_hs() {
+        const DUP_SRC: &str = "theory AccDupPred\n\
+begin\n\
+predicates:\n  PubLog(y) <=> y = y\n\
+rule L:\n  [ ] --[ Log( $p ) ]-> [ ]\n\
+test PubLog:\n  \"Ex #i. Log($p)@i\"\n\
+end\n";
+        let parsed = tamarin_parser::parse_theory(DUP_SRC, &[]).expect("theory parses");
+        let mut elaborated =
+            tamarin_theory::elaborate::elaborate(&parsed).expect("theory elaborates");
+        let err = translate(&mut elaborated).expect_err("the predicate is declared twice");
+        assert_eq!(err.to_string(), "duplicate predicate: PubLog( $p )");
+    }
+
+    /// HS `required \\ defined`: missing idents keep their order and
+    /// repeats, and a case test declared after the lemma is undefined for it.
+    #[test]
+    fn undefined_case_tests_lists_each_missing_ident() {
+        const SRC: &str = "theory AccUndefined\n\
+begin\n\
+rule L:\n  [ ] --[ Log( $p ) ]-> [ ]\n\
+test a:\n  \"Ex #i. Log($p)@i\"\n\
+lemma acc: a, b, a, c, c account for \"All #i p. Log(p)@i ==> F\"\n\
+test c:\n  \"Ex #i. Log($p)@i\"\n\
+end\n";
+        let parsed = tamarin_parser::parse_theory(SRC, &[]).expect("theory parses");
+        let mut elaborated =
+            tamarin_theory::elaborate::elaborate(&parsed).expect("theory elaborates");
+        let Err(AccError::CaseTestsUndefined(undef)) = translate(&mut elaborated) else {
+            panic!("expected undefined case tests");
+        };
+        assert_eq!(
+            undef,
+            [(
+                "acc".to_string(),
+                vec!["b".to_string(), "c".to_string(), "c".to_string()]
+            )]
         );
     }
 

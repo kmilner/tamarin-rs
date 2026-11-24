@@ -1555,15 +1555,21 @@ fn pretty_restriction_view(
 /// rendered INDEPENDENTLY at that style from column 0, then concatenated as
 /// plain text.
 fn pretty_predicate(pr: &crate::predicate::Predicate) -> String {
-    use crate::pretty_hpj::{self as hpj, Doc};
-    // HS `prettyLVar = text . show` over the formal args, so each carries its
-    // sort sigil (`#i` for a temporal arg).
-    let pp_var = |v: &tamarin_term::lterm::LVar| Doc::text(v.to_string());
-    let factstr = crate::fact::pretty_fact(&pp_var, &pr.fact)
-        .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
+    use crate::pretty_hpj as hpj;
+    let factstr = render_predicate_fact(&pr.fact);
     let formulastr =
         pf::lnformula_doc(&pr.formula).render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
     format!("predicate: {}<=>{}", factstr, formulastr)
+}
+
+/// HS `render (prettyFact prettyLVar fact)` for a predicate's fact, at
+/// HughesPJ's default style.  `prettyLVar = text . show` (LTerm.hs), so
+/// each formal argument carries its sort sigil (`#i` for a temporal arg).
+pub fn render_predicate_fact(fact: &crate::fact::Fact<tamarin_term::lterm::LVar>) -> String {
+    use crate::pretty_hpj::{self as hpj, Doc};
+    let pp_var = |v: &tamarin_term::lterm::LVar| Doc::text(v.to_string());
+    crate::fact::pretty_fact(&pp_var, fact)
+        .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON)
 }
 
 /// HS `prettyMacros` / `prettyMacro` (TheoryObject.hs).

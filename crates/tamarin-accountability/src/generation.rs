@@ -23,6 +23,7 @@ use crate::formula::{
     corrupt_subset_frees, fold_conn, fold_l1, fold_r1, free_term, proto_fact_formula,
     quantify_frees, quantify_vars, rename, strict_subset_of, temp_var, vars_eq, Conn, Quant,
 };
+use crate::AccError;
 
 /// A resolved case test (HS `CaseTest`, Items/CaseTestItem.hs).
 pub(crate) struct CaseTestData {
@@ -77,29 +78,25 @@ fn case_test_formulas_except(acc: &AccData, ct: &CaseTestData) -> Vec<SyntacticL
 fn and_if(
     p_: bool,
     a: SyntacticLNFormula,
-    b: impl FnOnce() -> SyntacticLNFormula,
-) -> SyntacticLNFormula {
-    if p_ {
-        a.and(b())
-    } else {
-        a
-    }
+    b: impl FnOnce() -> Result<SyntacticLNFormula, AccError>,
+) -> Result<SyntacticLNFormula, AccError> {
+    Ok(if p_ { a.and(b()?) } else { a })
 }
 
 /// HS `singleMatch t` (Generation.hs):
 /// `rename t; rename t; t1 .&&. ∀ frees(t2). (t2 ⇒ varsEq (frees t2) (frees t1))`.
-fn single_match(t: &SyntacticLNFormula, counter: &mut u64) -> SyntacticLNFormula {
+fn single_match(t: &SyntacticLNFormula, counter: &mut u64) -> Result<SyntacticLNFormula, AccError> {
     let t1 = rename(t, counter);
     let t2 = rename(t, counter);
     let f2 = formula_frees(&t2);
     let f1 = formula_frees(&t1);
-    let body = t2.implies(vars_eq(&f2, &f1));
-    t1.and(quantify_vars(Quant::All, &f2, body))
+    let body = t2.implies(vars_eq(&f2, &f1)?);
+    Ok(t1.and(quantify_vars(Quant::All, &f2, body)))
 }
 
 /// HS `noOther fms = foldr1 (.&&.) (map (Not . quantifyFrees exists) fms)`
 /// (Generation.hs).
-fn no_other(taus: &[SyntacticLNFormula]) -> SyntacticLNFormula {
+fn no_other(taus: &[SyntacticLNFormula]) -> Result<SyntacticLNFormula, AccError> {
     fold_r1(
         Conn::And,
         taus.iter()
@@ -110,7 +107,7 @@ fn no_other(taus: &[SyntacticLNFormula]) -> SyntacticLNFormula {
 
 /// HS `freesSubsetCorrupt vars` (Generation.hs):
 /// `foldl1 (.&&.) [ ∃ i. Corrupted(var)@i | var <- vars ]`.
-fn frees_subset_corrupt(vars: &[LVar]) -> SyntacticLNFormula {
+fn frees_subset_corrupt(vars: &[LVar]) -> Result<SyntacticLNFormula, AccError> {
     fold_l1(
         Conn::And,
         vars.iter()
@@ -126,21 +123,27 @@ fn frees_subset_corrupt(vars: &[LVar]) -> SyntacticLNFormula {
 }
 
 /// HS `sufficiency` (Generation.hs).
-fn sufficiency(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemma {
+fn sufficiency(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> Result<GenLemma, AccError> {
     let name = format!("{}_{}_suff", acc.name, ct.name);
     let taus = case_test_formulas_except(acc, ct);
-    let t1 = single_match(&ct.formula, counter);
+    let t1 = single_match(&ct.formula, counter)?;
     let f1 = formula_frees(&t1);
-    let inner = t1.and(and_if(!taus.is_empty(), corrupt_subset_frees(&f1), || {
-        no_other(&taus)
-    }));
+    let inner = t1.and(and_if(
+        !taus.is_empty(),
+        corrupt_subset_frees(&f1)?,
+        || no_other(&taus),
+    )?);
     let formula = quantify_frees(Quant::Ex, inner);
-    to_lemma(TraceQuantifier::ExistsTrace, name, to_intermediate(formula))
+    Ok(to_lemma(
+        TraceQuantifier::ExistsTrace,
+        name,
+        to_intermediate(formula),
+    ))
 }
 
 /// HS `verifiabilityEmpty` (Generation.hs).  NOTE: the only family
 /// that does NOT apply `toIntermediate` — the formula is returned raw.
-fn verifiability_empty(acc: &AccData) -> GenLemma {
+fn verifiability_empty(acc: &AccData) -> Result<GenLemma, AccError> {
     let name = format!("{}_verif_empty", acc.name);
     let taus: Vec<SyntacticLNFormula> = acc.case_tests.iter().map(|c| c.formula.clone()).collect();
     let lhs = fold_conn(
@@ -148,11 +151,11 @@ fn verifiability_empty(acc: &AccData) -> GenLemma {
         taus.into_iter()
             .map(|t| quantify_frees(Quant::Ex, t))
             .collect(),
-    )
+    )?
     .not();
     let phi = acc.formula.clone();
     let formula = quantify_frees(Quant::All, lhs.implies(phi));
-    to_lemma(TraceQuantifier::AllTraces, name, formula)
+    Ok(to_lemma(TraceQuantifier::AllTraces, name, formula))
 }
 
 /// HS `verifiabilityNonEmpty` (Generation.hs).
@@ -165,7 +168,7 @@ fn verifiability_nonempty(acc: &AccData, ct: &CaseTestData) -> GenLemma {
 }
 
 /// HS `minimality` (Generation.hs).
-fn minimality(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemma {
+fn minimality(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> Result<GenLemma, AccError> {
     let name = format!("{}_{}_min", acc.name, ct.name);
     let taus: Vec<SyntacticLNFormula> = acc.case_tests.iter().map(|c| c.formula.clone()).collect();
     let t1 = rename(&ct.formula, counter);
@@ -175,25 +178,34 @@ fn minimality(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemma {
         .iter()
         .map(|t| {
             let ft = formula_frees(t);
-            quantify_vars(Quant::Ex, &ft, t.clone().and(strict_subset_of(&ft, &f1))).not()
+            let strict = strict_subset_of(&ft, &f1)?;
+            Ok(quantify_vars(Quant::Ex, &ft, t.clone().and(strict)).not())
         })
-        .collect();
-    let formula = quantify_frees(Quant::All, t1.implies(fold_conn(Conn::And, rhs)));
-    to_lemma(TraceQuantifier::AllTraces, name, to_intermediate(formula))
+        .collect::<Result<_, AccError>>()?;
+    let formula = quantify_frees(Quant::All, t1.implies(fold_conn(Conn::And, rhs)?));
+    Ok(to_lemma(
+        TraceQuantifier::AllTraces,
+        name,
+        to_intermediate(formula),
+    ))
 }
 
 /// HS `uniqueness` (Generation.hs).
-fn uniqueness(acc: &AccData, ct: &CaseTestData) -> GenLemma {
+fn uniqueness(acc: &AccData, ct: &CaseTestData) -> Result<GenLemma, AccError> {
     let name = format!("{}_{}_uniq", acc.name, ct.name);
     let tau = ct.formula.clone();
     let ftau = formula_frees(&tau);
-    let formula = quantify_frees(Quant::All, tau.implies(frees_subset_corrupt(&ftau)));
-    to_lemma(TraceQuantifier::AllTraces, name, to_intermediate(formula))
+    let formula = quantify_frees(Quant::All, tau.implies(frees_subset_corrupt(&ftau)?));
+    Ok(to_lemma(
+        TraceQuantifier::AllTraces,
+        name,
+        to_intermediate(formula),
+    ))
 }
 
 /// HS `injective` (Generation.hs):
 /// `∀ frees(tau). tau ⇒ foldl (.&&.) ⊤ [ ¬(x = y) | x, y <- frees tau, x ≠ y ]`.
-fn injective(acc: &AccData, ct: &CaseTestData) -> GenLemma {
+fn injective(acc: &AccData, ct: &CaseTestData) -> Result<GenLemma, AccError> {
     let name = format!("{}_{}_inj", acc.name, ct.name);
     let tau = ct.formula.clone();
     let ftau = formula_frees(&tau);
@@ -202,55 +214,67 @@ fn injective(acc: &AccData, ct: &CaseTestData) -> GenLemma {
         for y in &ftau {
             if x != y {
                 acc_fm =
-                    acc_fm.and(vars_eq(std::slice::from_ref(x), std::slice::from_ref(y)).not());
+                    acc_fm.and(vars_eq(std::slice::from_ref(x), std::slice::from_ref(y))?.not());
             }
         }
     }
     let formula = quantify_frees(Quant::All, tau.implies(acc_fm));
-    to_lemma(TraceQuantifier::AllTraces, name, to_intermediate(formula))
+    Ok(to_lemma(
+        TraceQuantifier::AllTraces,
+        name,
+        to_intermediate(formula),
+    ))
 }
 
 /// HS `singlematched` (Generation.hs).
-fn singlematched(acc: &AccData, ct: &CaseTestData, counter: &mut u64) -> GenLemma {
+fn singlematched(
+    acc: &AccData,
+    ct: &CaseTestData,
+    counter: &mut u64,
+) -> Result<GenLemma, AccError> {
     let name = format!("{}_{}_single", acc.name, ct.name);
     let taus = case_test_formulas_except(acc, ct);
-    let t1 = single_match(&ct.formula, counter);
-    let inner = and_if(!taus.is_empty(), t1, || no_other(&taus));
+    let t1 = single_match(&ct.formula, counter)?;
+    let inner = and_if(!taus.is_empty(), t1, || no_other(&taus))?;
     let formula = quantify_frees(Quant::Ex, inner);
-    to_lemma(TraceQuantifier::ExistsTrace, name, to_intermediate(formula))
+    Ok(to_lemma(
+        TraceQuantifier::ExistsTrace,
+        name,
+        to_intermediate(formula),
+    ))
 }
 
 /// HS `casesLemmas` (Generation.hs): builds the seven families in the
 /// fixed order, threading `counter` through the `rename`-using families
 /// (`suff`, `min`, `single`) in visitation order.
-fn cases_lemmas(acc: &AccData, counter: &mut u64) -> Vec<GenLemma> {
+fn cases_lemmas(acc: &AccData, counter: &mut u64) -> Result<Vec<GenLemma>, AccError> {
     let mut out = Vec::new();
     for ct in &acc.case_tests {
-        out.push(sufficiency(acc, ct, counter));
+        out.push(sufficiency(acc, ct, counter)?);
     }
-    out.push(verifiability_empty(acc));
+    out.push(verifiability_empty(acc)?);
     for ct in &acc.case_tests {
         out.push(verifiability_nonempty(acc, ct));
     }
     for ct in &acc.case_tests {
-        out.push(minimality(acc, ct, counter));
+        out.push(minimality(acc, ct, counter)?);
     }
     for ct in &acc.case_tests {
-        out.push(uniqueness(acc, ct));
+        out.push(uniqueness(acc, ct)?);
     }
     for ct in &acc.case_tests {
-        out.push(injective(acc, ct));
+        out.push(injective(acc, ct)?);
     }
     for ct in &acc.case_tests {
-        out.push(singlematched(acc, ct, counter));
+        out.push(singlematched(acc, ct, counter)?);
     }
-    out
+    Ok(out)
 }
 
 /// HS `generateAccountabilityLemmas accLemma = evalFreshT (casesLemmas accLemma) 0`
 /// (Generation.hs): the fresh counter resets to 0 per accountability
 /// lemma.
-pub(crate) fn generate_accountability_lemmas(acc: &AccData) -> Vec<GenLemma> {
+pub(crate) fn generate_accountability_lemmas(acc: &AccData) -> Result<Vec<GenLemma>, AccError> {
     let mut counter: u64 = 0;
     cases_lemmas(acc, &mut counter)
 }

@@ -74,3 +74,4 @@ dual_typed_ac_symbol	theory	match	--derivcheck-timeout=0
 annotated_ku_goals	theory	match	--prove --derivcheck-timeout=0
 saturation_kd_loop_breaker	theory	match	--prove --derivcheck-timeout=0
 formal_comment_end	theory	match	--derivcheck-timeout=0
+err_acc_closed_case_test	error	match	--derivcheck-timeout=0
