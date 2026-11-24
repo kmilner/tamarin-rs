@@ -714,7 +714,7 @@ mod tests {
                     assert_eq!(verdict, table.certified());
                 }
                 times.sort();
-                println!(
+                eprintln!(
                     "{label},{},{:.2},{:.2}",
                     table.certified(),
                     times[0].as_secs_f64() * 1e3,

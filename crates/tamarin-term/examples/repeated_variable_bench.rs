@@ -40,7 +40,7 @@ fn factor(text: &str) -> LNTerm {
 }
 
 fn product(sym: &AcSym, text: &str) -> LNTerm {
-    f_app_ac(sym.clone(), text.split('*').map(factor).collect())
+    f_app_ac(*sym, text.split('*').map(factor).collect())
 }
 
 fn main() {
