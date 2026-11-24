@@ -19,8 +19,8 @@ use crate::FastMap;
 /// Control/Monad/Fresh/Class.hs).
 ///
 /// `scopeFreshness` (Control/Monad/Fresh/Class.hs) is not a trait
-/// method: each supply keeps its own inherent `scope_freshness`, which takes
-/// the scoped work as a closure.
+/// method: `PreciseFreshState::scope_freshness` takes the scoped work as a
+/// closure.
 pub trait MonadFresh {
     /// `freshIdent name` (Control/Monad/Fresh/Class.hs): the next fresh
     /// identifier for this name.
@@ -60,14 +60,6 @@ impl FastFreshState {
         let i = self.next;
         self.next += k;
         i
-    }
-
-    /// Run `f` against this state but discard any allocations it made.
-    pub fn scope_freshness<R, F: FnOnce(&mut Self) -> R>(&mut self, f: F) -> R {
-        let saved = self.next;
-        let r = f(self);
-        self.next = saved;
-        r
     }
 }
 
@@ -161,11 +153,6 @@ impl PreciseFreshState {
         self.map = saved;
         r
     }
-
-    /// Read-only view of the underlying counters.
-    pub fn as_map(&self) -> &FastMap<String, u64> {
-        &self.map
-    }
 }
 
 /// `instance MonadFresh (Precise.FreshT m)`
@@ -220,16 +207,6 @@ mod tests {
     }
 
     #[test]
-    fn fast_scope_rolls_back() {
-        let mut s = FastFreshState::nothing_used();
-        s.fresh_ident("");
-        s.scope_freshness(|s| {
-            s.fresh_idents(10);
-        });
-        assert_eq!(s.fresh_ident(""), 1);
-    }
-
-    #[test]
     fn precise_per_name_counters() {
         let mut s = PreciseFreshState::nothing_used();
         assert_eq!(s.fresh_ident("x"), 0);
@@ -264,8 +241,8 @@ mod tests {
         s.fresh_ident("x"); // x counter = 2
         assert_eq!(s.fresh_idents(5), 2);
         // After fresh_idents, every counter is at 2 + 5 = 7.
-        assert_eq!(s.as_map().get("x"), Some(&7));
-        assert_eq!(s.as_map().get(""), Some(&7));
+        assert_eq!(s.fresh_ident("x"), 7);
+        assert_eq!(s.fresh_ident(""), 7);
     }
 
     #[test]

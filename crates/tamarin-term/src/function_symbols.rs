@@ -597,17 +597,6 @@ pub fn xor_reducible_fun_sig() -> FunSig {
     [FunSym::Ac(AcSym::Xor)].into_iter().collect()
 }
 
-pub fn implicit_fun_sig() -> FunSig {
-    [
-        FunSym::NoEq(inv_sym()),
-        FunSym::NoEq(pair_sym()),
-        FunSym::Ac(AcSym::Mult),
-        FunSym::Ac(AcSym::Union),
-    ]
-    .into_iter()
-    .collect()
-}
-
 pub fn nat_fun_sig() -> FunSig {
     [FunSym::NoEq(nat_one_sym()), FunSym::Ac(AcSym::NatPlus)]
         .into_iter()

@@ -94,24 +94,6 @@ pub struct MaudeStats {
     pub var_count: u64,
 }
 
-/// Hit/miss tallies, per Maude subprocess, against the session's shared
-/// memo caches (`SharedMaudeCaches`: `reduce`, `unifiable`, `reply`).  A
-/// hit is counted when the cache `get` succeeds; a miss when this process
-/// computed the value and inserted it.  The `u64` bumps are always
-/// maintained (negligible cost); only the one-line-per-process summary is
-/// gated, printed to STDERR (never stdout) from `MaudeProcessInner`'s
-/// `Drop` when `TAM_MAUDE_CACHE_STATS` is set.  Diagnostic only — reaches
-/// no `--prove` output path.
-#[derive(Default)]
-struct MaudeCacheStats {
-    reduce_hits: AtomicU64,
-    reduce_misses: AtomicU64,
-    unifiable_hits: AtomicU64,
-    unifiable_misses: AtomicU64,
-    reply_hits: AtomicU64,
-    reply_misses: AtomicU64,
-}
-
 /// The three memo caches for one theory session, shared (`Arc`) by the
 /// session's sequential `file_maude` handle AND every `MaudePool` member
 /// (run.rs wires one instance into both).  Under `--processors=N`,
@@ -189,27 +171,6 @@ pub struct SharedMaudeCaches {
     /// DUPLICATION of those few), so peak residency stays bounded even
     /// though — like `reduce` — no per-entry eviction is performed.
     reply: Mutex<tamarin_utils::FastMap<Vec<u8>, Vec<u8>>>,
-    stats: MaudeCacheStats,
-}
-
-impl Drop for SharedMaudeCaches {
-    /// When `TAM_MAUDE_CACHE_STATS` is set, emit one summary line for the
-    /// session to STDERR. Nothing reaches stdout.
-    fn drop(&mut self) {
-        if tamarin_utils::env_gate!("TAM_MAUDE_CACHE_STATS") {
-            let count = |n: &AtomicU64| n.load(Ordering::Relaxed);
-            let s = &self.stats;
-            eprintln!(
-                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{}",
-                count(&s.reduce_hits),
-                count(&s.reduce_misses),
-                count(&s.unifiable_hits),
-                count(&s.unifiable_misses),
-                count(&s.reply_hits),
-                count(&s.reply_misses),
-            );
-        }
-    }
 }
 
 struct MaudeProcessInner {
@@ -1027,15 +988,7 @@ impl MaudeHandle {
     /// each call's conversion context; the shared process serializes queries
     /// and registers wire names in a consistent order before executing them.
     pub fn with_fresh_counter_from(&self, avoid_max: u64) -> MaudeHandle {
-        MaudeHandle {
-            inner: self.inner.clone(),
-            child: self.child.clone(),
-            turn: self.turn.clone(),
-            caches: self.caches.clone(),
-            fresh_counter: Arc::new(AtomicU64::new(avoid_max.saturating_add(1))),
-            st_lhs_ac_free: self.st_lhs_ac_free,
-            sig: Arc::clone(&self.sig),
-        }
+        self.with_fresh_counter_next(avoid_max.saturating_add(1))
     }
 
     /// Like [`with_fresh_counter_from`] but takes the NEXT-draw value
@@ -1200,10 +1153,6 @@ impl MaudeHandle {
                         bump(&mut inner.stats);
                         drop(inner);
                         self.caches
-                            .stats
-                            .reply_misses
-                            .fetch_add(1, Ordering::Relaxed);
-                        self.caches
                             .reply
                             .lock()
                             .unwrap()
@@ -1213,7 +1162,6 @@ impl MaudeHandle {
                 }
             }
         };
-        self.caches.stats.reply_hits.fetch_add(1, Ordering::Relaxed);
         Ok(hit.expect("a cached reply"))
     }
 
@@ -1234,10 +1182,6 @@ impl MaudeHandle {
         let mut ctx = ConvCtx::new();
         let hit = self.caches.reduce.lock().unwrap().get(t).cloned();
         if let Some(cached) = hit {
-            self.caches
-                .stats
-                .reduce_hits
-                .fetch_add(1, Ordering::Relaxed);
             return Ok(cached);
         }
         let reply = {
@@ -1273,31 +1217,8 @@ impl MaudeHandle {
             // `f_app`), so for a rewrite fixpoint the reparsed reply can
             // only be `t` itself — Maude's transient AC print order cannot
             // reach the result.  Mirrors the cheap fast path's
-            // conventions: no reduce-cache insert, no `norm_count` /
-            // cache-stat bump.
+            // conventions: no reduce-cache insert and no `norm_count` bump.
             if self.st_lhs_ac_free && crate::norm::nf_via_haskell(&self.sig, t) {
-                // `TAM_RS_VERIFY_REDUCE_NF` oracle: ALSO run the real
-                // Maude round-trip this fast path elides and panic if
-                // Maude's answer differs from `t`.  Dead-cheap when
-                // unset; nothing reaches stdout.
-                if tamarin_utils::env_gate!("TAM_RS_VERIFY_REDUCE_NF") {
-                    let mt = lterm_to_mterm_global(t, &mut ctx);
-                    let mut cmd = b"reduce ".to_vec();
-                    pp_mterm_into(&mt, &mut cmd);
-                    cmd.extend_from_slice(b" .\n");
-                    let reply = self.lock_inner()?.execute(&cmd, ctx.variable_bound())?;
-                    let mt_back = maude_parse::parse_reduce_reply_with_sig(&reply, &self.sig)?;
-                    let mut next = 0;
-                    let maude_result = mterm_to_lnterm(&mt_back, &mut ctx, "z", &mut next);
-                    if maude_result != *t {
-                        panic!(
-                            "TAM_RS_VERIFY_REDUCE_NF: nf_via_haskell certified \
-                             a non-fixpoint as normal form — input {:?} but \
-                             Maude reduced it to {:?}",
-                            t, maude_result,
-                        );
-                    }
-                }
                 return Ok(t.clone());
             }
             let mt = lterm_to_mterm_global(t, &mut ctx);
@@ -1309,13 +1230,9 @@ impl MaudeHandle {
             inner.stats.norm_count += 1;
             reply
         };
-        let mt_back = maude_parse::parse_reduce_reply_with_sig(&reply, &self.sig)?;
+        let mt_back = maude_parse::parse_reduce_reply(&reply, &self.sig)?;
         let mut next = 0;
         let result = mterm_to_lnterm(&mt_back, &mut ctx, "z", &mut next);
-        self.caches
-            .stats
-            .reduce_misses
-            .fetch_add(1, Ordering::Relaxed);
         self.caches
             .reduce
             .lock()
@@ -1355,18 +1272,10 @@ impl MaudeHandle {
         cancellation::check()?;
         let hit = self.caches.unifiable.lock().unwrap().get(&key).copied();
         if let Some(hit) = hit {
-            self.caches
-                .stats
-                .unifiable_hits
-                .fetch_add(1, Ordering::Relaxed);
             return Ok(hit);
         }
         let res = self.unify(eqs)?;
         let answer = !res.is_empty();
-        self.caches
-            .stats
-            .unifiable_misses
-            .fetch_add(1, Ordering::Relaxed);
         self.caches.unifiable.lock().unwrap().insert(key, answer);
         Ok(answer)
     }
@@ -1433,7 +1342,7 @@ impl MaudeHandle {
         let mut ctx = ConvCtx::new();
         let cmd = build_conj_eqs_cmd(b"unify in MSG : ", &residual_eqs, &mut ctx);
         let reply = self.execute_memo(&cmd, ctx.variable_bound(), |s| s.unify_count += 1)?;
-        let msubsts = maude_parse::parse_unify_reply_with_sig(&reply, &self.sig)?;
+        let msubsts = maude_parse::parse_unify_reply(&reply, &self.sig)?;
         // `flattenUnif (subst, substs) = map (`composeVFresh` subst) substs`.
         Ok(convert_reply(&msubsts, &ctx, BackConv::VFresh)?
             .into_iter()
@@ -1512,7 +1421,7 @@ impl MaudeHandle {
         // round-trip.
         let cmd = pp_match_cmd(&pats, &subjs);
         let reply = self.execute_memo(&cmd, ctx.variable_bound(), |s| s.match_count += 1)?;
-        let msubsts = maude_parse::parse_match_reply_with_sig(&reply, &self.sig)?;
+        let msubsts = maude_parse::parse_match_reply(&reply, &self.sig)?;
         convert_reply(&msubsts, &ctx, BackConv::VFree)
     }
 
@@ -1615,7 +1524,7 @@ impl MaudeHandle {
         // which is what Maude requires (vars bind in the left operand).
         let cmd = pp_match_cmd(&pats, &subjs);
         let reply = self.execute_memo(&cmd, ctx.variable_bound(), |s| s.match_count += 1)?;
-        let msubsts = maude_parse::parse_match_reply_with_sig(&reply, &self.sig)?;
+        let msubsts = maude_parse::parse_match_reply(&reply, &self.sig)?;
         Ok(convert_reply(&msubsts, &ctx, BackConv::VFree)?
             .into_iter()
             .map(|sub| unskolemize_subst(sub, &reverse))
@@ -1640,7 +1549,7 @@ impl MaudeHandle {
         // theories (Joux re-issues the same expensive `get variants` twice —
         // once in the derivcheck phase, once at main close).
         let reply = self.execute_memo(&cmd, ctx.variable_bound(), |s| s.var_count += 1)?;
-        let msubsts = maude_parse::parse_variants_reply_with_sig(&reply, &self.sig)?;
+        let msubsts = maude_parse::parse_variants_reply(&reply, &self.sig)?;
         convert_reply(&msubsts, &ctx, BackConv::VFresh)
     }
 }

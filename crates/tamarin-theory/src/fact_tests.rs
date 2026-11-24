@@ -163,14 +163,13 @@ fn proto_fact_tag_compare_by_multiplicity_then_name_then_arity() {
     assert!(lp < lp2);
 }
 
-/// `ku` and `kd` predicates are mutually exclusive.
+/// `is_ku` holds for a KU fact and not for a KD fact.
 /// Used in `enforce_kd_fact_uniqueness` to skip KU facts.
 #[test]
 fn ku_and_kd_are_mutually_exclusive() {
     let ku = ku_fact(msg_var("x", 0));
     let kd = kd_fact(msg_var("x", 0));
-    assert!(ku.is_ku() && !ku.is_kd());
-    assert!(kd.is_kd() && !kd.is_ku());
+    assert!(ku.is_ku() && !kd.is_ku());
 }
 
 // =========================================================================

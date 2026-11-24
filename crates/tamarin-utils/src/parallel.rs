@@ -555,28 +555,7 @@ where
     T: Send + 'static,
     E: From<Cancelled> + Send + 'static,
 {
-    map_fail_fast(items, no_helper, move |_, item| work(item))
-}
-
-/// Like [`try_map`], with a primary worker and optional helpers.
-/// The caller's lane takes item zero and then further items, and calls
-/// `work(None, item)`. Before claiming each item a helper lane calls
-/// `acquire`: with a resource of its own it calls `work(Some(resource), item)`
-/// and returns the resource afterwards, with [`Helper::Shared`] it works as
-/// the caller's lane does, and with `None` it leaves. Acquisition may start
-/// a resource under the installed cancellation token.
-pub fn try_map_with_helpers<I, W, T, E>(
-    items: Vec<I>,
-    acquire: impl Fn() -> Option<Helper<W>> + Sync + Send + 'static,
-    work: impl Fn(Option<W>, I) -> Result<T, E> + Sync + Send + 'static,
-) -> Result<Vec<T>, E>
-where
-    I: Send + 'static,
-    W: Send + 'static,
-    T: Send + 'static,
-    E: From<Cancelled> + Send + 'static,
-{
-    map_fail_fast(items, acquire, work)
+    try_map_with_helpers(items, no_helper, move |_, item| work(item))
 }
 
 /// Map independent CPU computations in input order, including inside a nested group.
@@ -599,7 +578,14 @@ fn no_helper() -> Option<Helper<()>> {
     Some(Helper::Shared)
 }
 
-fn map_fail_fast<I, W, T, E>(
+/// Like [`try_map`], with a primary worker and optional helpers.
+/// The caller's lane takes item zero and then further items, and calls
+/// `work(None, item)`. Before claiming each item a helper lane calls
+/// `acquire`: with a resource of its own it calls `work(Some(resource), item)`
+/// and returns the resource afterwards, with [`Helper::Shared`] it works as
+/// the caller's lane does, and with `None` it leaves. Acquisition may start
+/// a resource under the installed cancellation token.
+pub fn try_map_with_helpers<I, W, T, E>(
     items: Vec<I>,
     acquire: impl Fn() -> Option<Helper<W>> + Sync + Send + 'static,
     work: impl Fn(Option<W>, I) -> Result<T, E> + Sync + Send + 'static,
@@ -690,29 +676,7 @@ where
     T: Send + 'static,
     E: From<Cancelled> + Send + 'static,
 {
-    ordered_map(items, no_helper, move |_, item| work(item), stop)
-}
-
-/// Evaluate an ordered prefix with a primary worker and optional helpers.
-/// The caller's lane takes item zero and then further items, and calls
-/// `work(None, item)`. Before claiming each item a helper lane calls
-/// `acquire`: with a resource of its own it calls `work(Some(resource), item)`
-/// and returns the resource afterwards, with [`Helper::Shared`] it works as
-/// the caller's lane does, and with `None` it leaves. Acquisition may start
-/// a resource under the installed cancellation token.
-pub fn try_map_until_with_helpers<I, W, T, E>(
-    items: Vec<I>,
-    acquire: impl Fn() -> Option<Helper<W>> + Sync + Send + 'static,
-    work: impl Fn(Option<W>, I) -> Result<T, E> + Sync + Send + 'static,
-    stop: impl Fn(&T) -> bool + Sync + Send + 'static,
-) -> Result<Vec<T>, E>
-where
-    I: Send + 'static,
-    W: Send + 'static,
-    T: Send + 'static,
-    E: From<Cancelled> + Send + 'static,
-{
-    ordered_map(items, acquire, work, stop)
+    try_map_until_with_helpers(items, no_helper, move |_, item| work(item), stop)
 }
 
 // One map in progress. Its lanes claim the items in order. Only the primary
@@ -867,7 +831,14 @@ where
     Ok(std::mem::take(&mut *map.results.lock().unwrap()))
 }
 
-fn ordered_map<I, W, T, E>(
+/// Evaluate an ordered prefix with a primary worker and optional helpers.
+/// The caller's lane takes item zero and then further items, and calls
+/// `work(None, item)`. Before claiming each item a helper lane calls
+/// `acquire`: with a resource of its own it calls `work(Some(resource), item)`
+/// and returns the resource afterwards, with [`Helper::Shared`] it works as
+/// the caller's lane does, and with `None` it leaves. Acquisition may start
+/// a resource under the installed cancellation token.
+pub fn try_map_until_with_helpers<I, W, T, E>(
     items: Vec<I>,
     acquire: impl Fn() -> Option<Helper<W>> + Send + Sync + 'static,
     work: impl Fn(Option<W>, I) -> Result<T, E> + Sync + Send + 'static,

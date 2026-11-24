@@ -59,64 +59,6 @@ fn group_node_rules(mut nodes: Vec<(NodeId, RuleACInst)>) -> GroupedNodes {
     grouped
 }
 
-/// The complete set of per-pass change signals raised by
-/// [`Reduction::subst_system_once`].  Built exactly ONCE, at the pass's
-/// aggregation point, from the section-local flags.  A struct LITERAL forces
-/// every field to be named, so a future section that computes a new signal but
-/// forgets to fold it in cannot construct this value (missing field → compile
-/// error); and [`PassSignals::raised`] EXHAUSTIVELY destructures `self`, so
-/// dropping a field from the OR is a compile error too.  Together these make
-/// "a section raised a change but the pass reported a no-op" — a silent
-/// skip-marker soundness bug — unrepresentable, at zero runtime cost (the
-/// value is a stack aggregate the OR consumes immediately).
-struct PassSignals {
-    /// Node IDs, collision equalities, or rule contents changed.
-    nodes_value_changed: bool,
-    /// An edge endpoint was rewritten.
-    edges_value_changed: bool,
-    /// The `last(i)` atom's node id was rewritten.
-    last_atom_changed: bool,
-    /// A `less` atom endpoint was rewritten.
-    less_value_changed: bool,
-    /// A goal's terms changed value under the subst.
-    goals_value_changed: bool,
-    /// A formula changed value under the subst.
-    formulas_value_changed: bool,
-    /// A subterm-store entry changed value.
-    changed_sst: bool,
-    /// Changed KU actions were re-inserted while rebuilding the goal map.
-    had_insert_action: bool,
-}
-
-impl PassSignals {
-    /// `true` iff ANY signal fired — i.e. the pass was NOT a total no-op.
-    /// Exhaustively destructures `self` (no `..`) so dropping a field from the
-    /// OR is a compile error.  `#[must_use]`: this verdict is the pass's whole
-    /// output (it gates the verified-identity skip marker), so discarding it
-    /// would silently drop the change signal.
-    #[must_use]
-    fn raised(self) -> bool {
-        let PassSignals {
-            nodes_value_changed,
-            edges_value_changed,
-            last_atom_changed,
-            less_value_changed,
-            goals_value_changed,
-            formulas_value_changed,
-            changed_sst,
-            had_insert_action,
-        } = self;
-        nodes_value_changed
-            || edges_value_changed
-            || last_atom_changed
-            || less_value_changed
-            || goals_value_changed
-            || formulas_value_changed
-            || changed_sst
-            || had_insert_action
-    }
-}
-
 /// A reduction step takes a `System` and produces zero or more new
 /// systems. We keep it simple: explicit input/output rather than a
 /// monad transformer stack.
@@ -426,91 +368,13 @@ impl<'ctx> Reduction<'ctx> {
         // Only the node-ID phase runs to a fixed point. Applying the rest
         // of the system between its rounds can merge goals prematurely,
         // before a colliding rule contributes its message equalities.
-        // Verified-identity skip: if the live
-        // (content_stamp, subst_stamp) still equals the marker a prior
-        // zero-signal pass set, that pass is an observed proof this pass is a
-        // total no-op at this exact (System, σ) — and nothing has mutated
-        // either input since (else a stamp would differ) — so skip the pass.
-        // A plain early return touches nothing, which is exactly what a
-        // genuine zero-signal pass does (no `self.changed`, no cache
-        // invalidation, no eq_store growth, no goal-nr bump, no Maude).
-        let stats = subst_skip_stats_enabled();
-        if stats {
-            use std::sync::atomic::Ordering::Relaxed;
-            let calls = SUBST_SYSTEM_CALLS.fetch_add(1, Relaxed) + 1;
-            if calls.is_multiple_of(50_000) {
-                eprintln!(
-                    "[SUBST_SKIP_STATS] calls={} skips={}",
-                    calls,
-                    SUBST_SYSTEM_SKIPS.load(Relaxed)
-                );
-            }
-        }
-        if fp_stats_enabled() {
-            use std::sync::atomic::Ordering::Relaxed;
-            let calls = FP_STATS_CALLS.fetch_add(1, Relaxed) + 1;
-            if calls.is_multiple_of(5_000) {
-                let d = crate::apply::FP_FACT_DESCENTS.load(Relaxed);
-                let s = crate::apply::FP_FACT_SKIPS.load(Relaxed);
-                eprintln!(
-                    "[FP_STATS] fact_descents={} fact_skips={} ({:.1}%)",
-                    d,
-                    s,
-                    if d == 0 {
-                        0.0
-                    } else {
-                        100.0 * s as f64 / d as f64
-                    }
-                );
-            }
-        }
+        // A pass that raised no signal is a no-op at its (content, subst)
+        // stamps; while both stamps are unchanged, skip the pass entirely.
         if self.sys.subst_marker_matches() {
-            if stats {
-                SUBST_SYSTEM_SKIPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
-            if verify_subst_skip_enabled() {
-                self.verify_subst_skip_is_noop()?;
-            }
             return Ok(());
         }
-        let last_raised = self.subst_system_once()?;
-        // Set the marker iff the complete pass raised NO signal: that
-        // pass is an observed proof that (content_stamp, subst_stamp) is a
-        // no-op point.  Any later content/subst mutation bumps a stamp, so the
-        // stored pair stops matching — no explicit clear needed.
-        if !last_raised {
+        if !self.subst_system_once()? {
             self.sys.record_subst_marker();
-        }
-        Ok(())
-    }
-
-    /// Debug harness for the verified-identity skip: when the skip WOULD fire
-    /// and `TAM_RS_VERIFY_SUBST_SKIP=1`, run the full pass anyway and
-    /// `panic!` if it is not, in fact, a total no-op (any pass raised a signal,
-    /// or the resulting `System` differs by content/ORDER from the pre-pass
-    /// snapshot).  `System::eq` excludes the stamp Cells and compares every
-    /// `Vec`/`Option` field positionally, so this catches value, reorder AND
-    /// dedup bugs.  Certifies skip-CORRECTNESS (necessary, not a completeness
-    /// proof).
-    fn verify_subst_skip_is_noop(&mut self) -> Result<(), crate::prove::ProveError> {
-        // Force the cached-bloom fact skip OFF for this verification re-run:
-        // otherwise a wrong bloom skip reproduces in both the live pass and
-        // this re-run, so `self.sys == snapshot` would hold and mask the bug.
-        // With the full descent forced, this oracle independently certifies
-        // BOTH the stamp machinery and the bloom.
-        let _fp_off = FpSkipDisableGuard::new();
-        let snapshot = self.sys.clone();
-        if self.subst_system_once()? {
-            panic!(
-                "TAM_RS_VERIFY_SUBST_SKIP: skipped subst_system pass \
-                    raised a change signal — under-bumped stamp"
-            );
-        }
-        if self.sys != snapshot {
-            panic!(
-                "TAM_RS_VERIFY_SUBST_SKIP: skipped subst_system changed the \
-                    System (value / order / dedup) — under-bumped stamp"
-            );
         }
         Ok(())
     }
@@ -661,14 +525,9 @@ impl<'ctx> Reduction<'ctx> {
                 None => mapped,
             }
         };
-        // The pass: one hashed leaf view over `subst` probed at every
-        // `Lit::Var` leaf below, plus the domain bloom the cached fact
-        // fingerprints are tested against.  `FP_SKIP_ENABLED` is the per-pass
-        // master enable for that fact fast path (thread-local; the verify
-        // oracle force-disables it).  `subst` is non-empty here (early-returned
-        // above), so the domain bloom is non-zero, which is why the `u64::MAX`
-        // default fact bloom always descends.
-        let pass = crate::apply::SystemSubst::new(&subst, FP_SKIP_ENABLED.with(|c| c.get()), &disj);
+        // `subst` is non-empty here, so the domain bloom is non-zero and the
+        // `u64::MAX` default fact bloom always descends.
+        let pass = crate::apply::SystemSubst::new(&subst, true, &disj);
         // Node IDs and their collision equalities have already converged.
         let mut nodes_value_changed = node_ids_changed;
         let mut new_nodes = std::sync::Arc::unwrap_or_clone(std::mem::take(
@@ -972,29 +831,16 @@ impl<'ctx> Reduction<'ctx> {
             self.sys.invalidate_max_var_idx_cache();
             self.changed = ChangeIndicator::Changed;
         }
-        // Include the node-ID fixed point as well as every remaining field
-        // and KU re-insertion when deciding whether this pass was a no-op.
-        // `self.changed` alone is INSUFFICIENT (node/edge/less/goal/collision/
-        // last-atom rewrites do not set it), so OR the full list.  A `false`
-        // result certifies a total no-op (value AND order).  The section-local
-        // flags aggregate through the `PassSignals` literal (every field must
-        // be named) + `raised()` (exhaustive OR), so a section whose signal is
-        // not wired into the aggregate is a compile error, not a silent
-        // marker bug.
-        let raised = PassSignals {
-            nodes_value_changed,
-            edges_value_changed,
-            last_atom_changed,
-            less_value_changed,
-            goals_value_changed,
-            formulas_value_changed,
-            changed_sst,
-            had_insert_action,
-        }
-        .raised();
-        // Safe over-bump: a raised pass
-        // already bumped `content_stamp` via a cache helper / subterm_store_mut,
-        // but bump again for clarity so no stale marker can survive it.
+        // `self.changed` alone does not cover node/edge/less/goal/last-atom
+        // rewrites, so OR every section's signal.
+        let raised = nodes_value_changed
+            || edges_value_changed
+            || last_atom_changed
+            || less_value_changed
+            || goals_value_changed
+            || formulas_value_changed
+            || changed_sst
+            || had_insert_action;
         if raised {
             self.sys.bump_content_stamp();
         }
@@ -1958,10 +1804,6 @@ impl<'ctx> Reduction<'ctx> {
         // Take eq_store out of self, mutate it, put it back, then
         // borrow Maude — this avoids overlapping borrows of self.
         let maude = self.maude.clone();
-        // Set op label so apply_eq_store's [rs-aes-tick] trace
-        // attributes calls to solveTermEqs (matches HS's
-        // `addEqsLabeled "solveTermEqs"` site naming).
-        let _op_guard = crate::constraint::solver::trace::OpLabelGuard::new("solveTermEqs");
         let split = self.sys.eq_store_mut().add_eqs(&maude, &pending)?;
         // Run simp with substCreatesNonNormalTerms as the is_contr
         // predicate.  Without it, SplitG variants that would
@@ -2807,23 +2649,6 @@ pub(crate) fn bm_fact(fa: &crate::fact::LNFact, max: &mut u64) {
     // (the no-`HasFrees` `Fact::new`/`map` constructors) falls back to the walk.
     match fa.max_var_cached() {
         Some(m) => {
-            if tamarin_utils::env_gate!("TAM_RS_VERIFY_FACT_MAX") {
-                // Opt-in independent oracle for the `Fact::max_var` cache
-                // (`TAM_RS_VERIFY_FACT_MAX=1`): recompute the fact's own max
-                // via the real per-term walk and panic on any mismatch with
-                // the cached value.
-                let mut walked = 0u64;
-                for t in fa.terms.iter() {
-                    bm_term(t, &mut walked);
-                }
-                if walked != m {
-                    panic!(
-                        "TAM_RS_VERIFY_FACT_MAX: cached max_var {} != walked max {} \
-                         — stale/wrong per-fact max cache",
-                        m, walked,
-                    );
-                }
-            }
             if m > *max {
                 *max = m;
             }
@@ -2892,221 +2717,19 @@ pub(crate) fn bm_goal(g: &Goal, max: &mut u64) {
 /// mutations and invalidated on substitution / eq-store simp / node
 /// removal.  Cache hit = O(1); miss = full walk.
 pub fn bounds_max(sys: &System) -> u64 {
-    // Fast path — full cache hit returns the exact max unchanged.
     if let Some(v) = sys.max_var_idx_cache.get() {
-        if bounds_max_verify_enabled() {
-            let actual = bounds_max_uncached(sys);
-            if v != actual {
-                bounds_max_dump_fields(sys);
-                panic!(
-                    "bounds_max cache mismatch: cache={}, actual={} (nodes={}, rest={})",
-                    v,
-                    actual,
-                    bounds_max_nodes(sys),
-                    bounds_max_rest(sys),
-                );
-            }
-        }
         return v;
     }
-    // Full-cache miss.  The node component is the dominant cost and
-    // survives the ~82 non-node mutation sites (they clear only the full
-    // cache), so consult `node_max_cache` first; the `rest` component is
-    // always cheap enough to re-walk fresh.  `max(node, rest)` reproduces
-    // the full walk exactly.
-    let node_component = if let Some(nc) = sys.node_max_cache.get() {
-        if bounds_max_verify_enabled() {
-            let actual_nc = bounds_max_nodes(sys);
-            if nc != actual_nc {
-                panic!(
-                    "node_max cache mismatch: cache={}, actual={}",
-                    nc, actual_nc,
-                );
-            }
-        }
-        nc
-    } else {
+    // The node component is the dominant cost and survives the non-node
+    // mutation sites (they clear only the full cache).
+    let node_component = sys.node_max_cache.get().unwrap_or_else(|| {
         let nc = bounds_max_nodes(sys);
-        if !bounds_max_disable_enabled() {
-            sys.node_max_cache.set(Some(nc));
-        }
+        sys.node_max_cache.set(Some(nc));
         nc
-    };
+    });
     let v = node_component.max(bounds_max_rest(sys));
-    if !bounds_max_disable_enabled() {
-        sys.max_var_idx_cache.set(Some(v));
-    }
+    sys.max_var_idx_cache.set(Some(v));
     v
-}
-
-/// Verify-failure diagnostic: print the per-field max breakdown so a
-/// cache mismatch identifies WHICH field the stale cache missed.  Only
-/// called from the `TAM_RS_VERIFY_BOUNDS_CACHE` panic paths.
-fn bounds_max_dump_fields(sys: &System) {
-    let mut m_edges = 0u64;
-    for e in &sys.edges {
-        bm_lvar(&e.src.0, &mut m_edges);
-        bm_lvar(&e.tgt.0, &mut m_edges);
-    }
-    let mut m_less = 0u64;
-    for l in &sys.less_atoms {
-        bm_lvar(&l.smaller, &mut m_less);
-        bm_lvar(&l.larger, &mut m_less);
-    }
-    let mut m_last = 0u64;
-    if let Some(la) = &sys.last_atom {
-        bm_lvar(la, &mut m_last);
-    }
-    let mut m_st = 0u64;
-    for c in sys
-        .subterm_store
-        .subterms
-        .iter()
-        .chain(sys.subterm_store.solved_subterms.iter())
-    {
-        bm_term(&c.small, &mut m_st);
-        bm_term(&c.big, &mut m_st);
-    }
-    for (s, t) in &sys.subterm_store.neg_subterms {
-        bm_term(s, &mut m_st);
-        bm_term(t, &mut m_st);
-    }
-    let mut m_goals = 0u64;
-    for (g, _) in sys.goals.iter() {
-        use crate::constraint::constraints::Goal;
-        match g {
-            Goal::Action(i, fa) => {
-                bm_lvar(i, &mut m_goals);
-                bm_fact(fa, &mut m_goals);
-            }
-            Goal::Premise(p, fa) => {
-                bm_lvar(&p.0, &mut m_goals);
-                bm_fact(fa, &mut m_goals);
-            }
-            Goal::Chain(c, p) => {
-                bm_lvar(&c.0, &mut m_goals);
-                bm_lvar(&p.0, &mut m_goals);
-            }
-            Goal::Subterm((s, t)) => {
-                bm_term(s, &mut m_goals);
-                bm_term(t, &mut m_goals);
-            }
-            Goal::Disj(_) | Goal::Split(_) => {}
-        }
-    }
-    let mut m_formulas = 0u64;
-    for f in sys
-        .formulas
-        .iter()
-        .chain(sys.solved_formulas.iter())
-        .chain(sys.lemmas.iter())
-    {
-        let n = crate::guarded::max_var_idx(f);
-        if n > m_formulas {
-            m_formulas = n;
-        }
-    }
-    let mut m_eq = 0u64;
-    for v in sys.eq_store().subst.dom() {
-        if v.idx > m_eq {
-            m_eq = v.idx;
-        }
-    }
-    for t in sys.eq_store().subst.range() {
-        bm_term(t, &mut m_eq);
-    }
-    let mut m_conj = 0u64;
-    for d in &sys.eq_store().conj {
-        for s in &d.substs {
-            for v in s.dom() {
-                if v.idx > m_conj {
-                    m_conj = v.idx;
-                }
-            }
-        }
-    }
-    eprintln!(
-        "[BOUNDS_VERIFY] nodes={} edges={} less={} last={} subterm={} goals={} formulas={} eq_subst={} eq_conj_dom={}",
-        bounds_max_nodes(sys),
-        m_edges,
-        m_less,
-        m_last,
-        m_st,
-        m_goals,
-        m_formulas,
-        m_eq,
-        m_conj,
-    );
-}
-
-#[inline]
-fn bounds_max_verify_enabled() -> bool {
-    tamarin_utils::env_gate!("TAM_RS_VERIFY_BOUNDS_CACHE")
-}
-
-/// Opt-in verifier for the verified-identity `subst_system` skip: when
-/// set, every would-skip runs the full pass on a clone and panics if
-/// it was not a total no-op.
-#[inline]
-fn verify_subst_skip_enabled() -> bool {
-    tamarin_utils::env_gate!("TAM_RS_VERIFY_SUBST_SKIP")
-}
-
-/// Opt-in skip-effectiveness counters (`TAM_RS_SUBST_SKIP_STATS=1`).  Gated so
-/// there is ZERO hot-path cost (one `OnceLock` bool load) when disabled.
-#[inline]
-fn subst_skip_stats_enabled() -> bool {
-    tamarin_utils::env_gate!("TAM_RS_SUBST_SKIP_STATS")
-}
-pub(crate) static SUBST_SYSTEM_CALLS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
-pub(crate) static SUBST_SYSTEM_SKIPS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
-
-thread_local! {
-    /// Master enable for the cached-bloom fact skip in `subst_system_once`.
-    /// Default `true`.  The verify oracle
-    /// `verify_subst_skip_is_noop` force-DISABLES it for its re-run so the
-    /// full per-term descent runs during verification — otherwise a wrong
-    /// bloom skip would reproduce identically in both the live pass and the
-    /// verify pass, masking itself.  With it disabled in verification, the
-    /// round-4 marker verifier is a TRUE independent oracle for the bloom.
-    static FP_SKIP_ENABLED: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
-}
-
-/// RAII guard: force the bloom skip off for the current thread, restoring the
-/// previous value on drop.  Used by [`verify_subst_skip_is_noop`].
-#[must_use = "dropping this guard immediately ends the scope it protects"]
-struct FpSkipDisableGuard(bool);
-impl FpSkipDisableGuard {
-    fn new() -> Self {
-        let prev = FP_SKIP_ENABLED.with(|c| {
-            let p = c.get();
-            c.set(false);
-            p
-        });
-        FpSkipDisableGuard(prev)
-    }
-}
-impl Drop for FpSkipDisableGuard {
-    fn drop(&mut self) {
-        FP_SKIP_ENABLED.with(|c| c.set(self.0));
-    }
-}
-
-/// Opt-in descent-skip counters for the cached-bloom fact skip
-/// (`TAM_RS_FP_STATS=1`).  Zero hot-path cost when unset.
-#[inline]
-fn fp_stats_enabled() -> bool {
-    tamarin_utils::env_gate!("TAM_RS_FP_STATS")
-}
-/// `subst_system` call counter for the FP-stats print cadence.
-pub(crate) static FP_STATS_CALLS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
-
-#[inline]
-fn bounds_max_disable_enabled() -> bool {
-    tamarin_utils::env_gate!("TAM_RS_DISABLE_BOUNDS_CACHE")
 }
 
 /// HS `avoid` (LTerm.hs): `avoid = maybe 0 (succ . snd) . boundsVarIdx`
@@ -3914,15 +3537,6 @@ impl<'ctx> Reduction<'ctx> {
         i: &crate::constraint::constraints::NodeId,
         fa: &crate::fact::LNFact,
     ) -> Result<GoalCases, crate::prove::ProveError> {
-        // Tag apply_eq_store calls during KU action solving
-        // with `ENU.kuActions` for KU facts, matching HS's site
-        // naming (ENU = enforceUniqueKuFact).
-        let label = if matches!(fa.tag, crate::fact::FactTag::Ku) {
-            "ENU.kuActions"
-        } else {
-            "solveActionGoal"
-        };
-        let _op_guard = crate::constraint::solver::trace::OpLabelGuard::new(label);
         let g = Goal::Action(*i, fa.clone());
         let existing = self
             .sys
@@ -4198,11 +3812,6 @@ impl<'ctx> Reduction<'ctx> {
         p: &crate::constraint::constraints::NodePrem,
         fa_prem: &crate::fact::LNFact,
     ) -> Result<GoalCases, crate::prove::ProveError> {
-        // Tag apply_eq_store calls during premise-goal solving
-        // with `insertEdges:solvePremise` label, matching HS's site
-        // naming.
-        let _op_guard =
-            crate::constraint::solver::trace::OpLabelGuard::new("insertEdges:solvePremise");
         // KD premises route through the chain machinery — direct port
         // of Haskell's `solvePremise rules p faPrem | isKDFact faPrem`:
         //   1. Allocate fresh node `iLearn`
@@ -4480,11 +4089,6 @@ impl<'ctx> Reduction<'ctx> {
         c: &crate::constraint::constraints::NodeConc,
         p: &crate::constraint::constraints::NodePrem,
     ) -> Result<GoalCases, crate::prove::ProveError> {
-        // Set op label so any apply_eq_store calls during chain
-        // processing get attributed correctly (mirrors HS's
-        // `insertEdges:chain_extend` / `insertEdges:chain_direct` labels).
-        let _op_guard =
-            crate::constraint::solver::trace::OpLabelGuard::new("insertEdges:solveChain");
         let g = Goal::Chain(*c, *p);
         let c_rule = match self.sys.node_rule_safe(&c.0) {
             Some(r) => r.clone(),

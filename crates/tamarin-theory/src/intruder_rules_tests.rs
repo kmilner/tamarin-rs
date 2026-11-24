@@ -2,7 +2,7 @@
 // Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
-use crate::rule::{equal_rule_up_to_renaming_ignoring_names, is_subset_of};
+use crate::rule::is_subset_of;
 
 /// Pins every `show_fun_sym_name` arm to the display name HS
 /// `showFunSymName` (Term/Term.hs) produces.  The arms read
@@ -99,70 +99,18 @@ fn minimize_drops_set_subsumed_rule() {
         vec![kd_fact(x.clone())],
         vec![],
     );
-    let out = minimize_intruder_rules(false, &maude, vec![r_j.clone(), r_i.clone()]);
+    let out = minimize_intruder_rules(&maude, vec![r_j.clone(), r_i.clone()]);
     // Set-subset: r_i is dropped; only r_j survives.  (Multiset bookkeeping
     // would have kept both, since r_j has two KU(y) but r_i only one.)
     assert_eq!(out.len(), 1);
     assert_eq!(out[0].premises, r_j.premises);
 }
 
-// The structural early-reject in `equal_duplicate_rule_up_to_renaming`
-// (zipped fact-tag mismatch) is a pure filter: on every pair — ones that
-// trip it and ones that pass it — the result must equal the unfiltered
-// HS pipeline `equalRuleUpToRenamingIgnoringNames r1 (r2 `renameAvoiding`
-// r1)` run directly.
+// `equal_subset_rule_up_to_renaming` answers false when the head
+// conclusions' tags differ (`unifyLNFactEqs` = []), and when an `r2` premise
+// has no `r1` premise to map onto even though the conclusions unify.
 #[test]
-fn equal_duplicate_early_reject_agrees_with_unfiltered_check() {
-    use tamarin_term::vterm::var_term;
-    let Some(maude) = maude_handle() else { return };
-    let constr = ku_pair_rule_with_var("a", 0);
-    let x = var_term(LVar::new("x", LSort::Msg, 0));
-    let y = var_term(LVar::new("y", LSort::Msg, 0));
-    // Destructor layout: premises [KU(y), KU(y)], conclusion [KD(x)].
-    // Zipped against `constr`'s [KU] ++ [KU] ++ [KU] layout, the third
-    // pair is (KU, KD) resp. (KD, KU) — the filter trips both ways.
-    let destr = Rule::new(
-        IntrRuleACInfo::DestrRule {
-            name: b"_dup_test".to_vec(),
-            remaining_applications: -1,
-            rhs_is_proper_subterm: true,
-            rhs_is_constant: false,
-            funs: vec![],
-        },
-        vec![ku_fact(y.clone()), ku_fact(y.clone())],
-        vec![kd_fact(x.clone())],
-        vec![],
-    );
-    for (r1, r2) in [(&constr, &destr), (&destr, &constr), (&constr, &constr)] {
-        let unfiltered = equal_rule_up_to_renaming_ignoring_names(
-            &maude,
-            r1,
-            &tamarin_term::lterm::rename_avoiding(r2.clone(), r1),
-        );
-        assert_eq!(
-            equal_duplicate_rule_up_to_renaming(&maude, r1, r2),
-            unfiltered
-        );
-    }
-    // Sanity on the pair choices: the filter-tripping pairs are negatives,
-    // the filter-passing self-pair is a positive.
-    assert!(!equal_duplicate_rule_up_to_renaming(
-        &maude, &constr, &destr
-    ));
-    assert!(equal_duplicate_rule_up_to_renaming(
-        &maude, &constr, &constr
-    ));
-}
-
-// The early rejects in `equal_subset_rule_up_to_renaming` only fire on
-// pairs whose unfiltered verdict is already false: (a) head-conclusion
-// tag mismatch ⇒ `unifyLNFactEqs` = [] ⇒ HS `[] -> False`; (b) an `r2`
-// premise with no tag/term-count-matching `r1` premise ⇒ `srpr2
-// `subsetOf` spr1` impossible (substitution preserves both).  Pin the
-// false verdicts on shapes that trip each filter; the true path through
-// both filters is pinned by `minimize_drops_set_subsumed_rule`.
-#[test]
-fn equal_subset_early_rejects_are_necessary() {
+fn equal_subset_rejects_unmatched_conclusions_and_premises() {
     use tamarin_term::vterm::var_term;
     let Some(maude) = maude_handle() else { return };
     let x = var_term(LVar::new("x", LSort::Msg, 0));
@@ -193,9 +141,7 @@ fn equal_subset_early_rejects_are_necessary() {
     assert!(!equal_subset_rule_up_to_renaming(&maude, &r1, &r2));
 }
 
-/// A `[ KU(v) ] --[ KU(t) ]-> [ KU(t) ]` rule over the single variable
-/// `v`, used to give `minimize_intruder_rules` peers whose fingerprints
-/// differ, collide, and coincide.
+/// A `[ KU(v) ] --[ KU(t) ]-> [ KU(t) ]` rule over the single variable `v`.
 fn ku_rule_over_var(v: &str, t: impl Fn(LNTerm) -> LNTerm) -> IntrRuleAC {
     use tamarin_term::function_symbols::pair_sym;
     let a = var_term(LVar::new(v, LSort::Msg, 0));
@@ -211,78 +157,18 @@ fn ku_rule_over_var(v: &str, t: impl Fn(LNTerm) -> LNTerm) -> IntrRuleAC {
     )
 }
 
-// `RuleFingerprint`'s rejects rest on shape facts that hold with no
-// Maude present: HS `unifyRaw` (Term/Unification.hs) fails on a
-// top-symbol mismatch, and any substitution accepted by `isRenaming`
-// (SubstVFresh.hs) maps variables to variables and hence
-// preserves every top-level shape.
+// `minimize_intruder_rules` keeps the HS `go` survivors in order, on rules
+// whose conclusions differ in top symbol, share it without being
+// duplicates, and are alpha-variants.
 #[test]
-fn fingerprint_rejects_are_shape_clashes_only() {
-    use tamarin_term::builtin::pair;
-    use tamarin_term::function_symbols::{fst_dest_sym, AcSym};
-    use tamarin_term::term::{f_app_no_eq, unsafe_f_app};
-    let fst = |t: LNTerm| f_app_no_eq(fst_dest_sym(), vec![t]);
-    let fp = RuleFingerprint::of;
-
-    let pair_rule = ku_rule_over_var("a", |a| pair(a.clone(), a));
-    let fst_rule = ku_rule_over_var("a", fst);
-    let var_rule = ku_rule_over_var("a", |a| a);
-    let nested_rule = ku_rule_over_var("a", |a| pair(a.clone(), pair(a.clone(), a)));
-
-    // Differing top symbol (and arity): `unifyRaw`'s NoEq arm needs
-    // `lfsym == rfsym`, so the zipped conclusion equation has no unifier.
-    assert!(!fp(&pair_rule).may_be_duplicate(&fp(&fst_rule)));
-    assert!(!fp(&pair_rule).may_be_subset(&fp(&fst_rule)));
-    // `Var` against `FApp`: any unifier binds the variable to a
-    // non-variable, which `isRenaming` rejects.
-    assert!(!fp(&pair_rule).may_be_duplicate(&fp(&var_rule)));
-    assert!(!fp(&pair_rule).may_be_subset(&fp(&var_rule)));
-    // Colliding fingerprints (same tags, same top symbols) pass both
-    // prechecks even though the rules are not duplicates.
-    assert!(fp(&pair_rule).may_be_duplicate(&fp(&nested_rule)));
-    assert!(fp(&pair_rule).may_be_subset(&fp(&nested_rule)));
-    // Identical rules pass, as they must: they ARE duplicates.
-    assert!(fp(&pair_rule).may_be_duplicate(&fp(&pair_rule)));
-
-    // A rule with no conclusion can never be `equalSubsetRuleUpToRenaming`
-    // (`head co2`/`head co1` have nothing to unify).
-    let no_conc = Rule::new(
-        IntrRuleACInfo::DestrRule {
-            name: b"_no_conc".to_vec(),
-            remaining_applications: -1,
-            rhs_is_proper_subterm: true,
-            rhs_is_constant: false,
-            funs: vec![],
-        },
-        vec![ku_fact(var_term(LVar::new("a", LSort::Msg, 0)))],
-        vec![],
-        vec![],
-    );
-    assert!(!fp(&no_conc).may_be_subset(&fp(&pair_rule)));
-    assert!(!fp(&pair_rule).may_be_subset(&fp(&no_conc)));
-
-    // A one-argument AC application is `Opaque`: HS assumes such terms
-    // never occur (Term/Unification.hs), so it licenses no reject.
-    let ac_singleton = ku_rule_over_var("a", |a| unsafe_f_app(FunSym::Ac(AcSym::Mult), vec![a]));
-    assert!(fp(&ac_singleton).may_be_duplicate(&fp(&var_rule)));
-    assert!(fp(&ac_singleton).may_be_duplicate(&fp(&pair_rule)));
-}
-
-// `minimize_intruder_rules`' fingerprint prechecks are pure filters: on a
-// rule list whose fingerprints differ, collide, and coincide, the
-// survivors and their order must be the HS `go` result, and no rejected
-// pair may have a `True` verdict under the unguarded checks.
-#[test]
-fn minimize_keeps_order_across_differing_and_colliding_fingerprints() {
+fn minimize_keeps_the_hs_survivors_in_order() {
     use tamarin_term::builtin::pair;
     use tamarin_term::function_symbols::fst_dest_sym;
     use tamarin_term::term::f_app_no_eq;
     let Some(maude) = maude_handle() else { return };
-    // Fingerprint differs from the pair-shaped rules (top symbol `fst`).
     let fst_rule = ku_rule_over_var("d", |a| f_app_no_eq(fst_dest_sym(), vec![a]));
-    // Fingerprint COLLIDES with the pair-shaped rules (conclusion is a
-    // 2-ary `pair` application too) but the rules are not duplicates:
-    // `pair(c, pair(c,c))` and `pair(b,b)` fail the occurs check.
+    // Pair-shaped like the duplicates, but `pair(c, pair(c,c))` and
+    // `pair(b,b)` fail the occurs check.
     let collide_rule = ku_rule_over_var("c", |a| pair(a.clone(), pair(a.clone(), a)));
     // True duplicates: alpha-variants of one another.
     let dup_a = ku_pair_rule_with_var("a", 0);
@@ -297,54 +183,25 @@ fn minimize_keeps_order_across_differing_and_colliding_fingerprints() {
     // HS `go` drops a rule as soon as a peer in `checked ++ unchecked`
     // matches, so of the two duplicates the EARLIER one goes: `dup_a`
     // sees `dup_b` in `unchecked`, while `dup_b` sees no kept duplicate.
-    let out = minimize_intruder_rules(false, &maude, rules.clone());
+    let out = minimize_intruder_rules(&maude, rules);
     assert_eq!(out, vec![fst_rule, collide_rule, dup_b]);
-
-    // Soundness of every reject: a fingerprint may only reject a pair
-    // whose unguarded verdict is already false.
-    let fps: Vec<RuleFingerprint> = rules.iter().map(RuleFingerprint::of).collect();
-    let mut rejected = 0;
-    let mut passed_but_false = 0;
-    for (i, fp_i) in fps.iter().enumerate() {
-        for (j, fp_j) in fps.iter().enumerate() {
-            if i == j {
-                continue;
-            }
-            let dup = equal_duplicate_rule_up_to_renaming(&maude, &rules[i], &rules[j]);
-            let sub = equal_subset_rule_up_to_renaming(&maude, &rules[i], &rules[j]);
-            if !fp_i.may_be_duplicate(fp_j) {
-                assert!(!dup);
-                rejected += 1;
-            } else if !dup {
-                passed_but_false += 1;
-            }
-            if !fp_i.may_be_subset(fp_j) {
-                assert!(!sub);
-                rejected += 1;
-            }
-        }
-    }
-    // The corpus exercises both arms: some pairs are rejected on their
-    // fingerprints, and some pass the precheck yet fail the real check.
-    assert!(rejected > 0);
-    assert!(passed_but_false > 0);
 }
 
 // This test covers `specialIntruderRules` (IntruderRules.hs) in full.
-// It checks the five non-diff rules in HS's list order.  For each rule it
+// It checks the five rules in HS's list order.  For each rule it
 // compares the premises, the conclusions, the actions and the new variables.
 // The sort of each rule's variable carries meaning, and a check on the fact
 // tags alone does not see it.  The `x:pub` of `PubConstr` is what makes
 // `!KU($x)` derivable for public names only.  The `x:fresh` of `FreshConstr`
 // is what ties the rule to an `Fr` premise.
 #[test]
-fn special_rules_excluding_diff_have_the_hs_shapes() {
+fn special_rules_have_the_hs_shapes() {
     use crate::fact::{fresh_fact, in_fact, k_log_fact, kd_fact, ku_fact, out_fact};
     let x = var_term(LVar::new("x", LSort::Msg, 0));
     let x_pub = var_term(LVar::new("x", LSort::Pub, 0));
     let x_fresh = var_term(LVar::new("x", LSort::Fresh, 0));
 
-    let r = special_intruder_rules(false);
+    let r = special_intruder_rules();
     assert_eq!(r.len(), 5);
     assert!(matches!(r[0].info, IntrRuleACInfo::Coerce));
     assert!(matches!(r[1].info, IntrRuleACInfo::PubConstr));
@@ -396,22 +253,6 @@ fn special_rules_excluding_diff_have_the_hs_shapes() {
         assert_eq!(rule.actions, acts, "{label}: actions");
         assert_eq!(rule.new_vars, nvs, "{label}: new_vars");
     }
-}
-
-// The 6th rule appears only under `diff`.  It is the one special rule that
-// has no conclusion: `IEquality: [KU(x), KD(x)] --[]-> []`.
-#[test]
-fn special_rules_with_diff_append_i_equality() {
-    use crate::fact::{kd_fact, ku_fact};
-    let x = var_term(LVar::new("x", LSort::Msg, 0));
-    let r = special_intruder_rules(true);
-    assert_eq!(r.len(), 6);
-    assert_eq!(r[..5], special_intruder_rules(false)[..]);
-    assert!(matches!(r[5].info, IntrRuleACInfo::IEquality));
-    assert_eq!(r[5].premises, vec![ku_fact(x.clone()), kd_fact(x)]);
-    assert!(r[5].conclusions.is_empty());
-    assert!(r[5].actions.is_empty());
-    assert!(r[5].new_vars.is_empty());
 }
 
 // =========================================================================
@@ -489,7 +330,7 @@ fn subterm_constructor_rules_emits_only_constructors() {
     let Some(maude) = maude_handle_for(sig.clone()) else {
         return;
     };
-    let rules = subterm_constructor_rules(false, &maude, &sig);
+    let rules = subterm_constructor_rules(&maude, &sig);
     assert!(
         rules
             .iter()
@@ -548,7 +389,7 @@ fn destruction_rules_sym_enc_emits_exactly_one_destructor() {
     let rules: Vec<IntrRuleAC> = sig
         .st_rules
         .iter()
-        .flat_map(|r| destruction_rules(false, r))
+        .flat_map(|r| destruction_rules(r))
         .collect();
     assert_eq!(
         rules.len(),
@@ -581,7 +422,7 @@ fn destruction_rules_asym_enc_emits_exactly_one_destructor() {
     let rules: Vec<IntrRuleAC> = sig
         .st_rules
         .iter()
-        .flat_map(|r| destruction_rules(false, r))
+        .flat_map(|r| destruction_rules(r))
         .collect();
     assert_eq!(
         rules.len(),
@@ -608,7 +449,7 @@ fn destruction_rules_pair_emits_exactly_two_destructors() {
     let rules: Vec<IntrRuleAC> = sig
         .st_rules
         .iter()
-        .flat_map(|r| destruction_rules(false, r))
+        .flat_map(|r| destruction_rules(r))
         .collect();
     assert_eq!(
         rules.len(),
@@ -755,65 +596,14 @@ fn equal_rule_up_to_renaming_structurally_different_rules_diverge() {
 
 // =========================================================================
 // `variants_intruder` (IntruderRules.hs).
-//
-// Pin: a `DestrRule subterm=False` rule whose argument terms have
-// Maude variants under the AC theory produces MORE than one variant.
 // =========================================================================
 
-/// `variants_intruder` on a constructor rule whose argument is a
-/// pair (i.e. has multiple Maude variants under AC) produces at
-/// least two variants — the identity variant plus at least one
-/// substitution that reorders / splits the pair structure.
-///
-/// We don't assert an exact count because it is Maude-version
-/// dependent (and minor signature differences affect the variant
-/// enumeration), but `len() >= 1` is invariant.
+/// HS's `guard` (IntruderRules.hs) drops the identity variant of a rule
+/// whose conclusion is also a premise: `ruvariant /= ru` and
+/// `rConcs \\ rPrems /= []` both fail.  A broken Maude round trip would
+/// fall back to `vec![ru]` before the filters, so this also checks it.
 #[test]
-fn variants_intruder_emits_at_least_the_identity_variant() {
-    let Some(maude) = maude_handle() else { return };
-    // The pair-construction rule from the basic sig.  Apply
-    // `variants_intruder` to it; Maude should produce at least the
-    // identity variant.  More may appear depending on the
-    // signature loaded.
-    let sig = tamarin_term::maude_sig::pair_maude_sig();
-    let cs = construction_rules(&sig.user_defined_st_fun_syms());
-    let pair_rule = cs
-        .iter()
-        .find(|r| match &r.info {
-            IntrRuleACInfo::ConstrRule { name, .. } => name == b"_pair",
-            _ => false,
-        })
-        .expect("expected pair constructor rule");
-    let variants = variants_intruder(&maude, false, false, pair_rule);
-    assert!(
-        !variants.is_empty(),
-        "variants_intruder must emit at least one rule (the identity \
-             variant if no Maude variants exist).  HS \
-             `variantsIntruder` (IntruderRules.hs) wraps the \
-             rule in a list-monad enumeration that includes the original \
-             via the identity Maude variant."
-    );
-}
-
-/// Pins the `apply_filters = false` path, and with it the PLACEMENT of
-/// HS's `(rConcs ruvariant) \\ (rPrems ruvariant) /= []` conjunct.
-///
-/// The `guard` (IntruderRules.hs) reads
-/// `not applyFilters || (X && Y && Z)`, because `&&` is `infixr 3` and
-/// `||` is `infixr 2`.  With `applyFilters = False` the guard is
-/// vacuously true and NONE of the three conjuncts applies — `Z`, the
-/// conclusions-minus-premises test, included.
-///
-/// The rule below discriminates that reading from the one where `Z` is
-/// applied unconditionally: its single conclusion is also its single
-/// premise, so `Z` is False for the identity variant.  Unconditional `Z`
-/// empties the output; `Z`-inside-the-conjunction returns the rule.
-///
-/// Every production call site passes `apply_filters = true` (as do all
-/// four upstream `variantsIntruder` / `variantsIntruderAux` calls), so
-/// this is the `false` path's only behavioural coverage.
-#[test]
-fn variants_intruder_without_filters_keeps_a_premise_covered_conclusion() {
+fn variants_intruder_drops_a_premise_covered_identity_variant() {
     let Some(maude) = maude_handle() else { return };
     let x = var_term(LVar::new("x", LSort::Msg, 0));
     // `[ KD(x) ] --> [ KD(x) ]`: `rConcs \\ rPrems == []`, and the
@@ -831,22 +621,10 @@ fn variants_intruder_without_filters_keeps_a_premise_covered_conclusion() {
         vec![],
     );
 
-    assert_eq!(
-        variants_intruder(&maude, false, false, &ru),
-        vec![ru.clone()],
-        "apply_filters = false must let the identity variant through: the \
-             guard is `not applyFilters`, so neither `ruvariant /= ru` nor \
-             `(rConcs \\\\ rPrems) /= []` may drop it"
-    );
-    // The same rule under apply_filters = true: `ruvariant /= ru` and
-    // `(rConcs \\ rPrems) /= []` both fail, so nothing survives.  This
-    // half also rules out a vacuous pass above — the `maude.variants`
-    // error fallback returns `vec![ru]` BEFORE the filters, so a broken
-    // Maude round trip would show up here as a non-empty result.
     assert!(
-        variants_intruder(&maude, true, false, &ru).is_empty(),
-        "apply_filters = true must drop the identity variant of a rule \
-             whose conclusion is also a premise"
+        variants_intruder(&maude, &ru).is_empty(),
+        "the identity variant of a rule whose conclusion is also a premise \
+         must be dropped"
     );
 }
 
@@ -888,20 +666,13 @@ fn destruction_rules_returns_empty_for_closed_rhs_in_non_diff_mode() {
 
     // diff=false, rhs has no free vars, rhs has no private symbol →
     // outer guard returns [].
-    let out = destruction_rules(false, &rule);
+    let out = destruction_rules(&rule);
     assert!(
         out.is_empty(),
         "diff=false + closed rhs (no frees, no private) must short-\
              circuit to empty.  Mirrors IntruderRules.hs outer guard. \
              Got {} rules.",
         out.len()
-    );
-
-    // BUT in diff mode, the guard is bypassed and we DO descend.
-    let out_diff = destruction_rules(true, &rule);
-    assert!(
-        !out_diff.is_empty(),
-        "diff=true must bypass the closed-rhs guard and emit destructors"
     );
 }
 
@@ -952,7 +723,7 @@ fn bp_intruder_rules_yields_74() {
     let Some(maude) = bp_maude_handle() else {
         return;
     };
-    let rules = bp_intruder_rules(false, &maude);
+    let rules = bp_intruder_rules(&maude);
     assert_eq!(
         rules.len(),
         74,
@@ -996,7 +767,7 @@ fn dh_intruder_rules_emits_five_constructors_and_some_destructors() {
     let Some(maude) = dh_maude_handle() else {
         return;
     };
-    let rules = dh_intruder_rules(false, &maude);
+    let rules = dh_intruder_rules(&maude);
 
     // 5 ConstrRules with the known names.
     let names: Vec<&[u8]> = rules
@@ -1122,7 +893,7 @@ fn dh_intruder_rules_constructors_have_expected_shape() {
     let Some(maude) = dh_maude_handle() else {
         return;
     };
-    let rules = dh_intruder_rules(false, &maude);
+    let rules = dh_intruder_rules(&maude);
     let find = |name: &[u8]| -> &IntrRuleAC {
         rules
             .iter()
@@ -1198,43 +969,6 @@ fn dh_intruder_rules_constructors_have_expected_shape() {
     assert_eq!(find(b"_mult").premises.len(), 2, "_mult: 2 KU premises");
 }
 
-/// `dh_intruder_rules(true)` (diff mode) skips the SUBSET check of
-/// `minimizeIntruderRules` (`(not diff) && equalSubsetRuleUpToRenaming`)
-/// while still dropping duplicates and double-premise rules.
-///
-/// Concretely: diff=true should produce AT LEAST as many rules as
-/// diff=false (the diff filter is weaker).
-#[test]
-fn dh_intruder_rules_diff_mode_is_at_least_as_large() {
-    let Some(maude) = dh_maude_handle() else {
-        return;
-    };
-    let rules_no_diff = dh_intruder_rules(false, &maude);
-    let rules_diff = dh_intruder_rules(true, &maude);
-    assert!(
-        rules_diff.len() >= rules_no_diff.len(),
-        "diff=true skips the subsumption filter (HS IntruderRules.hs) \
-             — must produce >= rules.  Got diff={}, no-diff={}",
-        rules_diff.len(),
-        rules_no_diff.len()
-    );
-    // The 5 constructor rules must still be present in diff mode.
-    let constr_names: Vec<&[u8]> = rules_diff
-        .iter()
-        .filter_map(|r| match &r.info {
-            IntrRuleACInfo::ConstrRule { name, .. } => Some(name.as_slice()),
-            _ => None,
-        })
-        .collect();
-    for expected in &[&b"_exp"[..], b"_inv", b"_DH_neutral", b"_one", b"_mult"] {
-        assert!(
-            constr_names.contains(expected),
-            "diff-mode dh_intruder_rules missing constructor named {}",
-            String::from_utf8_lossy(expected)
-        );
-    }
-}
-
 /// Destructor rules in `dh_intruder_rules` are KD-rules: their
 /// first premise (the term-being-deconstructed) has KD tag, the
 /// conclusion is KD, and actions are empty (HS `mkAction = const []`
@@ -1244,7 +978,7 @@ fn dh_intruder_rules_destructors_have_kd_shape() {
     let Some(maude) = dh_maude_handle() else {
         return;
     };
-    let rules = dh_intruder_rules(false, &maude);
+    let rules = dh_intruder_rules(&maude);
     let destrs: Vec<&IntrRuleAC> = rules
         .iter()
         .filter(|r| matches!(r.info, IntrRuleACInfo::DestrRule { .. }))

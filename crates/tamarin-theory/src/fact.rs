@@ -472,9 +472,6 @@ impl<T> Fact<T> {
     pub fn is_ku(&self) -> bool {
         self.tag == FactTag::Ku
     }
-    pub fn is_kd(&self) -> bool {
-        self.tag == FactTag::Kd
-    }
     /// Mirrors Haskell `Theory.Model.Fact.isNoSourcesFact`
     /// (Theory/Model/Fact.hs): returns true iff this fact has the
     /// `NoSources` annotation (set via `[no_sources]` on a fact).

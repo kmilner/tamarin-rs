@@ -392,14 +392,6 @@ pub struct ProtoRuleEInfo {
 }
 
 impl ProtoRuleEInfo {
-    pub fn fresh() -> Self {
-        ProtoRuleEInfo {
-            name: ProtoRuleName::Fresh,
-            attributes: RuleAttributes::empty(),
-            restrictions: Vec::new(),
-        }
-    }
-
     pub fn standard(name: impl Into<String>) -> Self {
         ProtoRuleEInfo {
             name: ProtoRuleName::Stand(tamarin_term::intern::intern_str(&name.into())),
@@ -980,18 +972,6 @@ pub fn equal_duplicate_rule_up_to_renaming(
     r1: &IntrRuleAC,
     r2: &IntrRuleAC,
 ) -> bool {
-    // Early reject, pure filter: `rename_avoiding` preserves fact tags and
-    // section lengths, so the `matchFacts` tag test that
-    // `equal_rule_up_to_renaming_ignoring_names` applies to the zipped
-    // `(prems++concs++acts)` pairs evaluates identically on the un-renamed
-    // rules — any tag mismatch forces that check to `false`.  This skips
-    // the rule clone/rename and the Maude round trip for such pairs.
-    let tags_match = rule_facts(r1)
-        .zip(rule_facts(r2))
-        .all(|(f1, f2)| f1.tag == f2.tag);
-    if !tags_match {
-        return false;
-    }
     let r2_apart = tamarin_term::lterm::rename_avoiding(r2.clone(), r1);
     equal_rule_up_to_renaming_ignoring_names(maude, r1, &r2_apart)
 }
@@ -1026,36 +1006,11 @@ pub fn equal_subset_rule_up_to_renaming(
     use tamarin_term::rewriting::Equal;
     use tamarin_term::subst_vfresh::LNSubstVFresh;
 
-    // `unifyLNFactEqs [Equal (head co2) (head co1)]`.  HS's `head` `error`s on
-    // a conclusion-free rule; the `false` arm here reads as "not subsumed" and
-    // keeps it instead.  `minimize_intruder_rules`, the only non-test caller,
-    // states the exactly-one-conclusion precondition in its contract and
-    // `debug_assert!`s it, so the arm is unreachable from the production pass.
+    // HS's `head` errors on a conclusion-free rule; that answers false here.
     let (co1, co2) = match (r1.conclusions.first(), r2.conclusions.first()) {
         (Some(a), Some(b)) => (a, b),
         _ => return false,
     };
-    // Early rejects, pure filters:
-    //  (a) mirrors the tag/term-count guards `unify_ln_fact_eqs` itself
-    //      applies before calling Maude — on a mismatch it yields zero
-    //      unifiers, i.e. HS `[] -> False` — evaluated here before the
-    //      fact clones are built;
-    //  (b) `premSubst` needs `srpr2 `subsetOf` spr1`, and substitution
-    //      preserves each fact's tag and term count while fact equality
-    //      implies both — so every `r2` premise must have an `r1` premise
-    //      with equal tag and term count, checkable before the Maude
-    //      round trip.
-    if co1.tag != co2.tag || co1.terms.len() != co2.terms.len() {
-        return false;
-    }
-    let prems_coverable = r2.premises.iter().all(|p2| {
-        r1.premises
-            .iter()
-            .any(|p1| p1.tag == p2.tag && p1.terms.len() == p2.terms.len())
-    });
-    if !prems_coverable {
-        return false;
-    }
     let unifs = match unify_ln_fact_eqs(
         maude,
         &[Equal {

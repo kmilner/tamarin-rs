@@ -71,52 +71,6 @@ impl std::fmt::Display for ElabError {
 }
 impl std::error::Error for ElabError {}
 
-/// One diagnostic from `elaborate_with_diagnostics`, mirroring a
-/// wellformedness "Formula guardedness" warning.
-#[derive(Debug, Clone)]
-pub struct GuardDiagnostic {
-    pub topic: String,
-    pub item: String,
-    pub message: String,
-}
-
-/// Run elaboration and additionally check that every lemma /
-/// restriction formula converts to a guarded formula. Returns the
-/// elaborated theory along with any guardedness diagnostics. Mirrors
-/// Haskell's `formulaReports.checkGuarded`.
-///
-/// NOTE: this is an example-only convenience (used by
-/// `examples/elaborate_all.rs`), NOT part of the prove pipeline, which
-/// produces the byte-exact WF report via
-/// [`crate::wellformedness::formulas::formula_reports`].  The two perform the same
-/// guardedness scan but format their output differently; keep them in sync
-/// if the check itself changes.
-pub fn elaborate_with_diagnostics(
-    parser_thy: &p::Theory,
-) -> Result<(Theory, Vec<GuardDiagnostic>), ElabError> {
-    let thy = elaborate(parser_thy)?;
-    let mut diags = Vec::new();
-    for l in thy.lemmas() {
-        if let Err(e) = formula_to_guarded(&l.formula) {
-            diags.push(GuardDiagnostic {
-                topic: "Formula guardedness".into(),
-                item: format!("Lemma `{}'", l.name),
-                message: format!("cannot be converted to a guarded formula: {}", e.message),
-            });
-        }
-    }
-    for r in thy.restrictions() {
-        if let Err(e) = formula_to_guarded(&r.formula) {
-            diags.push(GuardDiagnostic {
-                topic: "Formula guardedness".into(),
-                item: format!("Restriction `{}'", r.name),
-                message: format!("cannot be converted to a guarded formula: {}", e.message),
-            });
-        }
-    }
-    Ok((thy, diags))
-}
-
 /// Collect every `Name` constant of a term in traversal order — HS
 /// `universeBi t` at `[Name]`, which both name reports filter by
 /// `sortOfName` (Wellformedness.hs).  Generic over the variable

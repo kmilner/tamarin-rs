@@ -685,40 +685,6 @@ mod tests {
         assert_eq!(count_subterms(&y, &outer), 1);
     }
 
-    /// [`replace_subterm`] applies `f` to the complete term first.  It then
-    /// descends into the result of `f`.  So it also visits the new subterms
-    /// that a rewrite introduces.  It never visits the original children of a
-    /// node that `f` replaced.
-    ///
-    /// A bottom-up traversal visits the children first and applies `f` last.
-    /// That order gives the same result for an `f` that changes only leaves.
-    /// So the `f` here maps an `exp` node onto a `pair` of two new leaves.
-    /// The top-down order rewrites the top node.  It then increments the two
-    /// leaves it has just introduced.  It never sees the original `1` and
-    /// `2`.  [`replace_proper_subterm`] runs the same descent, but it does
-    /// not apply `f` at the root.
-    #[test]
-    fn replace_subterm_is_top_down() {
-        let t = f_app_no_eq(exp_sym(), vec![nat(1), nat(2)]);
-        let mut f = |t: Term<u64>| match t {
-            Term::Lit(n) => Term::Lit(n + 10),
-            Term::App(s, _) if s == FunSym::NoEq(exp_sym()) => {
-                f_app_no_eq(pair_sym(), vec![nat(7), nat(8)])
-            }
-            other => other,
-        };
-        assert_eq!(
-            replace_subterm(&mut f, t.clone()),
-            f_app_no_eq(pair_sym(), vec![nat(17), nat(18)])
-        );
-        // `replace_proper_subterm` skips the root.  The `exp` node stays.
-        // Each child goes to the full top-down `replace_subterm`.
-        assert_eq!(
-            replace_proper_subterm(&mut f, t),
-            f_app_no_eq(exp_sym(), vec![nat(11), nat(12)])
-        );
-    }
-
     /// The hand-written `PartialEq`/`Ord`/`PartialOrd`/`Hash` on [`Term`]
     /// contain an `Arc::ptr_eq` fast path.  So they must still give exactly
     /// the answers of the derived, purely structural implementations.  That

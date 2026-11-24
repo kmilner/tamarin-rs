@@ -14,8 +14,6 @@
 //! [`crate::rule`], [`crate::constraint::constraints`] and
 //! [`crate::tools::subterm_store`].
 
-use std::sync::atomic::Ordering::Relaxed;
-
 use tamarin_term::apply::LeafSubst;
 use tamarin_term::lterm::{LVar, Name};
 use tamarin_term::subst::SubstView;
@@ -24,14 +22,6 @@ use tamarin_term::vterm::VTerm;
 use crate::fact::LNFact;
 use crate::guarded::Guarded;
 use crate::tools::equation_store::LNSubst;
-
-/// Fact descents the [`Apply`] instance reaches, under `TAM_RS_FP_STATS`;
-/// `constraint::solver::reduction` prints them.
-pub(crate) static FP_FACT_DESCENTS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
-/// Descents the bloom fast path skipped (`bloom & dom_bloom == 0`).
-pub(crate) static FP_FACT_SKIPS: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(0);
 
 /// One whole-system substitution pass.
 ///
@@ -49,11 +39,6 @@ pub struct SystemSubst<'a> {
     /// Whether a fact whose bloom shares no bit with `dom_bloom` may be
     /// returned unchanged without descending into its terms.
     fact_skip: bool,
-    /// `TAM_RS_VERIFY_FP`: run the real descent behind every bloom skip and
-    /// panic if it finds a change.
-    verify_fact_skip: bool,
-    /// `TAM_RS_FP_STATS`: count fact descents and bloom skips.
-    count_fact_descents: bool,
     /// The rewrite of a `Disj` goal's alternatives, `None` when it leaves the
     /// list unchanged.
     disj: &'a dyn Fn(&[Guarded]) -> Option<Vec<Guarded>>,
@@ -71,8 +56,6 @@ impl<'a> SystemSubst<'a> {
             view: SubstView::new(subst),
             dom_bloom: subst.dom().fold(0u64, |b, v| b | crate::fact::var_bit(v)),
             fact_skip,
-            verify_fact_skip: tamarin_utils::env_gate!("TAM_RS_VERIFY_FP"),
-            count_fact_descents: tamarin_utils::env_gate!("TAM_RS_FP_STATS"),
             disj,
         }
     }
@@ -82,42 +65,12 @@ impl<'a> SystemSubst<'a> {
     /// superset of the fact's free variables' bits, so a bloom that shares no
     /// bit with `dom_bloom` proves the substitution touches nothing in `fa`.
     pub(crate) fn skips_fact(&self, fa: &LNFact) -> bool {
-        if self.count_fact_descents {
-            FP_FACT_DESCENTS.fetch_add(1, Relaxed);
-        }
-        if !self.fact_skip || fa.bloom() & self.dom_bloom != 0 {
-            return false;
-        }
-        if self.verify_fact_skip {
-            self.verify_fact_unchanged(fa);
-        }
-        if self.count_fact_descents {
-            FP_FACT_SKIPS.fetch_add(1, Relaxed);
-        }
-        true
+        self.fact_skip && fa.bloom() & self.dom_bloom == 0
     }
 
     /// The pass's rewrite of a `Disj` goal's alternatives.
     pub(crate) fn apply_disj(&self, alts: &[Guarded]) -> Option<Vec<Guarded>> {
         (self.disj)(alts)
-    }
-
-    /// Oracle for one bloom skip: descend into `fa` anyway and panic if a
-    /// term actually changes, i.e. if the fingerprint missed a domain
-    /// variable.  Probes the view directly, so it is independent of the bloom
-    /// decision it checks.
-    fn verify_fact_unchanged(&self, fa: &LNFact) {
-        for t in fa.terms.iter() {
-            if let Some(c) = self.view.apply_changed(t)
-                && c != *t
-            {
-                panic!(
-                    "TAM_RS_VERIFY_FP: bloom-skip dropped a real change \
-                            (fact contained a domain var the fingerprint missed) \
-                            — unsound bit assignment"
-                );
-            }
-        }
     }
 }
 

@@ -90,61 +90,6 @@ pub fn set_display_width(line_length: usize, ribbon: usize) {
 }
 
 thread_local! {
-    /// When set, [`Doc::text`]/[`Doc::char`] measure each token's *fill* width
-    /// as its HTML-entity-escaped column count instead of its visible column
-    /// count.  This mirrors HS's web render path, which builds every document
-    /// through the `HtmlDoc Doc` transformer: its `Document (HtmlDoc d)`
-    /// instance (`Text/PrettyPrint/Html.hs`) runs `escapeHtmlEntities`
-    /// on every `text`/`char` token BEFORE the HughesPJ fill measures it, so a
-    /// `<`/`>` costs 4 columns (`&lt;`/`&gt;`) and a `'` costs 5 (`&#39;`) when
-    /// deciding line breaks.  The interactive server escapes AFTER rendering
-    /// (`html_escape`), so without matching this accounting its `fsep`/`fcat`
-    /// wraps a pair-tuple `<…>` at a different column than HS (a space
-    /// appears/disappears before a tuple's closing `>`).
-    ///
-    /// This is presentation-only: it never affects proof search or verdicts,
-    /// and it is scoped (via [`HtmlEntityWidthGuard`]) to the web
-    /// constraint-system pane only, so the `--prove` byte-identity corpus is
-    /// untouched (the flag defaults to `false`).
-    static HTML_ENTITY_WIDTH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Column width of `s` after HTML-entity escaping, matching HS
-/// `escapeHtmlEntities` (`Text/PrettyPrint/Html.hs`) and the server's
-/// `html_escape`: `<`/`>` → `&lt;`/`&gt;` (4), `&` → `&amp;` (5), `'` →
-/// `&#39;` (5), `"` → `&quot;` (6); every other codepoint counts as 1 column.
-fn html_entity_col_width(s: &str) -> usize {
-    s.chars()
-        .map(|c| match c {
-            '<' | '>' => 4,
-            '&' | '\'' => 5,
-            '"' => 6,
-            _ => 1,
-        })
-        .sum()
-}
-
-/// RAII guard enabling HTML-entity fill-width accounting on the current thread
-/// until dropped (see [`HTML_ENTITY_WIDTH`]).  Restores the previous value on
-/// drop, so nested/re-entrant use is safe.
-#[must_use = "dropping this guard immediately ends the scope it protects"]
-pub struct HtmlEntityWidthGuard(bool);
-
-impl HtmlEntityWidthGuard {
-    /// Enable entity-width accounting for the current thread; the previous
-    /// value is restored when the returned guard is dropped.
-    pub fn enable() -> Self {
-        HtmlEntityWidthGuard(HTML_ENTITY_WIDTH.with(|c| c.replace(true)))
-    }
-}
-
-impl Drop for HtmlEntityWidthGuard {
-    fn drop(&mut self) {
-        HTML_ENTITY_WIDTH.with(|c| c.set(self.0));
-    }
-}
-
-thread_local! {
     /// The full "HtmlDoc" render mode: a faithful port of HS building every
     /// web pane through the `HtmlDoc Doc` transformer (`Text/PrettyPrint/Html.hs`).
     /// When enabled:
@@ -152,8 +97,7 @@ thread_local! {
     ///     BEFORE it enters the layout, exactly as the `Document (HtmlDoc d)`
     ///     instance (`Html.hs`) — so the stored bytes are already escaped
     ///     and the HughesPJ fill measures each token at its escaped-entity width
-    ///     (`<`/`>` = 4, `&`/`'` = 5, `"` = 6).  This is a superset of the
-    ///     width-only [`HtmlEntityWidthGuard`].
+    ///     (`<`/`>` = 4, `&`/`'` = 5, `"` = 6).
     ///   * the highlight combinators ([`keyword`]/[`operator`]/[`comment`] via
     ///     [`Doc::highlight`]) wrap their argument in a `<span class="hl_*">…</span>`
     ///     emitted as ZERO-WIDTH text (HS `withTag`, `Html.hs`,
@@ -205,18 +149,6 @@ pub fn html_mode() -> bool {
 /// from blaze-html) — escape the five HTML metacharacters in the exact HS
 /// order/mapping so escaped column widths and output bytes match.
 pub use crate::pretty_html::escape_html_entities;
-
-/// The fill width of a text run `s`: its visible column count, or — under an
-/// active [`HtmlEntityWidthGuard`] or [`HtmlDocGuard`] — its HTML-entity-escaped
-/// column count.
-#[inline]
-fn fill_width(s: &str) -> usize {
-    if HTML_MODE.with(|c| c.get()) || HTML_ENTITY_WIDTH.with(|c| c.get()) {
-        html_entity_col_width(s)
-    } else {
-        s.chars().count()
-    }
-}
 
 // ============================================================================
 // Doc tree
@@ -342,8 +274,7 @@ impl Doc {
             let w = esc.chars().count();
             Doc::text_w(&esc, w)
         } else {
-            let w = fill_width(s);
-            Doc::text_w(s, w)
+            Doc::text_w(s, s.chars().count())
         }
     }
 
@@ -372,20 +303,9 @@ impl Doc {
         }
     }
 
+    /// HS `char c = text [c]`, also under `HtmlDoc` (`Html.hs`).
     pub fn char(c: char) -> Doc {
-        let mut buf = [0u8; 4];
-        let s = c.encode_utf8(&mut buf);
-        // HS `Document (HtmlDoc d)` (`Html.hs`): `char = HtmlDoc . text .
-        // escapeHtmlEntities . return`.  Escape in HtmlDoc mode (a bare `<`
-        // becomes `&lt;`, width 4); plain mode is unchanged.
-        if html_mode() {
-            let esc = escape_html_entities(s);
-            let w = esc.chars().count();
-            Doc::text_w(&esc, w)
-        } else {
-            let w = fill_width(s);
-            Doc::text_w(s, w)
-        }
+        Doc::text(c.encode_utf8(&mut [0u8; 4]))
     }
 
     /// HS `<>` (beside without space).

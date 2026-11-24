@@ -2009,19 +2009,6 @@ fn pp_proof<T: ProofBody>(node: &T, out: &mut String, depth: usize) {
     }
 }
 
-/// Render a `ProofMethod` to a flat string exactly as HS `prettyProofMethod`
-/// (ProofMethod.hs) — the SAME renderer the `--prove` proof tree
-/// uses, so `solve( <goal> )` carries the faithful fact spacing (`!KU( ~ltk )`),
-/// LVar dots (`#vk.2`), and contradiction reasons.  Used by the interactive
-/// web UI's applicable-methods list + proof snippet (`tamarin-server`), which
-/// must match `--prove`'s method text.  Rendered at the process display width
-/// (100 for the web); the semantic web gate normalises any wrapping away.
-pub fn pretty_proof_method_inline(
-    m: &crate::constraint::solver::proof_method::ProofMethod,
-) -> String {
-    pp_step_doc(m, "").render()
-}
-
 /// HS `prettyProofMethod m` as a Doc (ProofMethod.hs), for
 /// callers that lay the method out INSIDE a larger Doc context — the web
 /// "Applicable Proof Methods" list (`Web/Theory.hs` `numbered' $

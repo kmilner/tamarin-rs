@@ -464,7 +464,6 @@ end
         h,
         ProverSessionOptions {
             sys_retention: crate::constraint::solver::search::SysRetention::KeepAll,
-            show_saturation_steps: true,
             ..Default::default()
         },
     )

@@ -165,9 +165,6 @@ fn stamps_and_marker_excluded_from_partial_eq() {
     b.content_stamp.set(a.content_stamp.get().wrapping_add(1));
     b.subst_stamp.set(a.subst_stamp.get().wrapping_add(1));
     b.subst_applied_marker.set(Some((123, 456)));
-    b.formulas_stamp.set(a.formulas_stamp.get().wrapping_add(1));
-    b.solved_formulas_stamp
-        .set(a.solved_formulas_stamp.get().wrapping_add(1));
     assert_eq!(a, b, "PartialEq must ignore the stamp/marker cells");
 }
 
@@ -437,31 +434,11 @@ fn formula_accessors_bump_content_stamp() {
 }
 
 #[test]
-fn tracked_formula_accessors_bump_per_store_stamp() {
-    let mut s = System::empty();
-    let f0 = s.formulas_stamp.get();
-    let _ = s.formulas_mut();
-    assert_ne!(
-        s.formulas_stamp.get(),
-        f0,
-        "formulas_mut bumps formulas_stamp"
-    );
-    let sv0 = s.solved_formulas_stamp.get();
-    let _ = s.solved_formulas_mut();
-    assert_ne!(
-        s.solved_formulas_stamp.get(),
-        sv0,
-        "solved_formulas_mut bumps its stamp"
-    );
-}
-
-#[test]
-fn untracked_formula_accessors_bump_only_per_store_stamp() {
+fn untracked_formula_accessors_bump_no_stamp() {
     let mut s = System::empty();
     let c0 = s.content_stamp.get();
     let b0 = s.subst_stamp.get();
     s.max_var_idx_cache.set(Some(5));
-    let f0 = s.formulas_stamp.get();
     let _ = s.formulas_mut_untracked();
     assert_eq!(
         s.content_stamp.get(),
@@ -478,141 +455,12 @@ fn untracked_formula_accessors_bump_only_per_store_stamp() {
         Some(5),
         "untracked formula door leaves caches"
     );
-    assert_ne!(
-        s.formulas_stamp.get(),
-        f0,
-        "untracked formula door bumps formulas_stamp"
-    );
 
-    let sv0 = s.solved_formulas_stamp.get();
     let _ = s.solved_formulas_mut_untracked();
     assert_eq!(
         s.content_stamp.get(),
         c0,
         "untracked solved door leaves content_stamp"
-    );
-    assert_ne!(
-        s.solved_formulas_stamp.get(),
-        sv0,
-        "untracked solved door bumps its stamp"
-    );
-}
-
-#[test]
-fn content_mut_bumps_per_store_formula_stamps() {
-    let mut s = System::empty();
-    let f0 = s.formulas_stamp.get();
-    let sv0 = s.solved_formulas_stamp.get();
-    let _ = s.content_mut();
-    assert_ne!(
-        s.formulas_stamp.get(),
-        f0,
-        "content_mut bumps formulas_stamp"
-    );
-    assert_ne!(
-        s.solved_formulas_stamp.get(),
-        sv0,
-        "content_mut bumps solved_formulas_stamp"
-    );
-}
-
-#[test]
-fn mint_fresh_stamps_refreshes_per_store_and_clears_caches() {
-    let s = System::empty();
-    let ident = |src: &Arc<Guarded>| (Arc::clone(src), tamarin_utils::fx_hash_one(src.as_ref()));
-    let _ = s.formulas_canon_table(ident);
-    let _ = s.solved_formulas_canon_table(ident);
-    assert!(s.formulas_canon_cache.borrow().is_some());
-    assert!(s.solved_formulas_canon_cache.borrow().is_some());
-    let f0 = s.formulas_stamp.get();
-    let sv0 = s.solved_formulas_stamp.get();
-    s.mint_fresh_stamps();
-    assert_ne!(
-        s.formulas_stamp.get(),
-        f0,
-        "mint_fresh_stamps refreshes formulas_stamp"
-    );
-    assert_ne!(
-        s.solved_formulas_stamp.get(),
-        sv0,
-        "mint_fresh_stamps refreshes solved stamp"
-    );
-    assert!(
-        s.formulas_canon_cache.borrow().is_none(),
-        "mint_fresh_stamps drops formulas cache"
-    );
-    assert!(
-        s.solved_formulas_canon_cache.borrow().is_none(),
-        "mint_fresh_stamps drops solved cache"
-    );
-}
-
-#[test]
-fn canon_table_stamp_hit_reuses_and_miss_rebuilds_incrementally() {
-    let mut s = System::empty();
-    s.formulas_mut().push(Arc::new(crate::guarded::gfalse()));
-    s.formulas_mut().push(Arc::new(crate::guarded::gtrue()));
-
-    let calls = Cell::new(0u32);
-    let canon = |src: &Arc<Guarded>| {
-        calls.set(calls.get() + 1);
-        (Arc::clone(src), tamarin_utils::fx_hash_one(src.as_ref()))
-    };
-
-    // First force: full build canons every entry.
-    let t1 = s.formulas_canon_table(canon);
-    assert_eq!(t1.entries.len(), 2);
-    assert_eq!(calls.get(), 2, "full build canons every entry");
-
-    // Unchanged stamp: verbatim reuse of the same table Arc, zero canon.
-    let t2 = s.formulas_canon_table(canon);
-    assert!(Arc::ptr_eq(&t1, &t2), "stamp hit reuses the same table Arc");
-    assert_eq!(calls.get(), 2, "stamp hit runs no canon");
-
-    // Push a third formula (bumps formulas_stamp); the first two keep their
-    // `Arc` identity, so only the new entry is recanoned.
-    s.formulas_mut().push(Arc::new(crate::guarded::gfalse()));
-    let t3 = s.formulas_canon_table(canon);
-    assert!(!Arc::ptr_eq(&t1, &t3), "stamp miss builds a new table");
-    assert_eq!(t3.entries.len(), 3);
-    assert_eq!(
-        calls.get(),
-        3,
-        "incremental rebuild recanons only the changed entry"
-    );
-    assert!(
-        Arc::ptr_eq(&t1.entries[0].0, &t3.entries[0].0),
-        "unchanged src Arc reused"
-    );
-    assert!(
-        Arc::ptr_eq(&t1.entries[1].0, &t3.entries[1].0),
-        "unchanged src Arc reused"
-    );
-}
-
-#[test]
-fn canon_cache_shared_then_independent_across_clone() {
-    let mut a = System::empty();
-    a.formulas_mut().push(Arc::new(crate::guarded::gfalse()));
-    let ident = |src: &Arc<Guarded>| (Arc::clone(src), tamarin_utils::fx_hash_one(src.as_ref()));
-    let ta = a.formulas_canon_table(ident);
-
-    // A clone inherits the stamp AND shares the cached generation.
-    let mut b = a.clone();
-    let tb = b.formulas_canon_table(ident);
-    assert!(
-        Arc::ptr_eq(&ta, &tb),
-        "a clone shares the parent's cached table (equal stamp)"
-    );
-
-    // Mutating `b` bumps only `b`'s stamp: `b` rebuilds, `a` is undisturbed.
-    b.formulas_mut().push(Arc::new(crate::guarded::gtrue()));
-    let tb2 = b.formulas_canon_table(ident);
-    assert!(!Arc::ptr_eq(&tb, &tb2), "b rebuilds after its own mutation");
-    let ta2 = a.formulas_canon_table(ident);
-    assert!(
-        Arc::ptr_eq(&ta, &ta2),
-        "a still reuses its generation (untouched)"
     );
 }
 

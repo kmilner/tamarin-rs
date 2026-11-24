@@ -604,9 +604,8 @@ mod tests {
     // <~ {t.1}` must wrap EXACTLY as HS's `prettyEqStore`→`prettySubst`→
     // `prettyTerm` Doc does inside the `equations:`/`subst:` nesting under
     // the web HtmlDoc width (100/67 with entity fill-widths).  Expected
-    // bytes extracted verbatim from the cached HS response for
-    // `examples/ake/dh/UM_three_pass.spthy` (`&nbsp;`→space, `<br/>`→\n,
-    // entities decoded, hl-spans stripped).
+    // bytes extracted from the cached HS response for
+    // `examples/ake/dh/UM_three_pass.spthy` (`&nbsp;`→space, `<br/>`→\n).
     #[test]
     fn um3_subst_term_wraps_like_hs() {
         use tamarin_term::function_symbols::{
@@ -675,9 +674,9 @@ mod tests {
         let union = f_app_ac(AcSym::Union, vec![t1, t2, t3]);
         let term = pair(vec![pube("UM3"), a5(), b5(), union]);
 
-        // Build under the entity-width guard (HS HtmlDoc measures escaped
-        // widths at `text` time; RS captures fill widths at Doc build).
-        let _g = crate::pretty_hpj::HtmlEntityWidthGuard::enable();
+        // HS HtmlDoc escapes at `text` time, so the fill measures escaped
+        // widths; RS captures them at Doc build, under the guard.
+        let _g = crate::pretty_hpj::HtmlDocGuard::enable();
         // The `prettySubst` mapping line (SubstVFree.hs).
         let line = pretty_nterm(&term)
             .beside_sp(Doc::text(" <~ {"))
@@ -687,22 +686,22 @@ mod tests {
         // — the mapping sits at nest 2+2 exactly as in `prettyEqStore`.
         let doc = combine("equations", vcat(vec![combine("subst", vcat(vec![line]))]));
         let out = doc.render_with(100, 67);
-        let expected = "equations:\n  \
-subst:\n    \
-<'UM3', $A.5, $B.5, \n     \
-(<'1', 'g'^~ex.5>++\n      \
-<'2', Y.5, \n       \
-MAC(first(h(<z.5, 'g'^(~ea.5*~x.5), $A.5, $B.5, \n                    \
-'g'^~ex.5, Y.5>)),\n           \
-<'I', $A.5, $B.5, 'g'^~ex.5, Y.5>)\n      \
->++\n      \
-<'3', \n       \
-MAC(first(h(<z.5, 'g'^(~ea.5*~x.5), $A.5, $B.5, \n                    \
-'g'^~ex.5, Y.5>)),\n           \
-<'R', $B.5, $A.5, Y.5, 'g'^~ex.5>)\n      \
->\n     \
+        let expected = "<span class=\"hl_keyword\">equations</span>:\n  \
+<span class=\"hl_keyword\">subst</span>:\n    \
+&lt;&#39;UM3&#39;, $A.5, $B.5, \n     \
+(&lt;&#39;1&#39;, &#39;g&#39;^~ex.5&gt;++\n      \
+&lt;&#39;2&#39;, Y.5, \n       \
+MAC(first(h(&lt;z.5, &#39;g&#39;^(~ea.5*~x.5), $A.5, $B.5, \n                    \
+&#39;g&#39;^~ex.5, Y.5&gt;)),\n           \
+&lt;&#39;I&#39;, $A.5, $B.5, &#39;g&#39;^~ex.5, Y.5&gt;)\n      \
+&gt;++\n      \
+&lt;&#39;3&#39;, \n       \
+MAC(first(h(&lt;z.5, &#39;g&#39;^(~ea.5*~x.5), $A.5, $B.5, \n                    \
+&#39;g&#39;^~ex.5, Y.5&gt;)),\n           \
+&lt;&#39;R&#39;, $B.5, $A.5, Y.5, &#39;g&#39;^~ex.5&gt;)\n      \
+&gt;\n     \
 )\n    \
->  <~ {t.1}";
+&gt;  &lt;~ {t.1}";
         assert_eq!(out, expected, "got:\n{out}\nexpected:\n{expected}");
     }
 }

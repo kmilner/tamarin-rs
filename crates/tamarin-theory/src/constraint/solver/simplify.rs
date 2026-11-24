@@ -1028,23 +1028,14 @@ fn insert_implied_formulas_pass(
 
     let maude = red.ctx.maude.clone();
     let mut new_formulas: Vec<Guarded> = Vec::new();
-    // Canon keys (+ FxHash prefilter hashes) of the accepted candidates,
-    // threaded across every universal in lock-step with `new_formulas`
-    // (`try_match_all_guards` pushes to both).  Owning it here (instead of
-    // recomputing `out.iter().map(canon)` on entry to each
-    // `try_match_all_guards`) computes each candidate's canon ONCE — the
-    // pushed value is byte-identical to a recompute because the push uses the
-    // same `implied_apply_canon_cow`.
-    let mut new_formulas_canon: Vec<(crate::guarded::Guarded, u64)> = Vec::new();
-    // Canon keys of the existing formulas, computed at most ONCE for the whole
-    // pass: `red.sys.formulas`/`solved_formulas` are not mutated inside the
-    // loop (only the local `new_formulas` grows; `red.insert_formula` runs
-    // after), so the tables are loop-invariant — and built LAZILY on the first
-    // candidate that reaches dedup, so a pass whose universals produce no
-    // candidate (no matching action assignment) skips the O(|formulas|) canon
-    // walk entirely.  Laziness is unobservable: the table contents depend only
-    // on the un-mutated stores, not on when they are built.
-    let dedup_tables = ImpliedDedupTables::new(&red.sys);
+    // Stored formulas are kept in stored normal form, so a normalised
+    // candidate is compared structurally, as `Stored.notMember` does.
+    debug_assert!(red
+        .sys
+        .formulas
+        .iter()
+        .chain(red.sys.solved_formulas.iter())
+        .all(|f| crate::guarded::normalise_stored_formula_cow(f).is_none()));
     for (vars, guards, body) in &universals {
         // Mirrors Haskell's `impliedFormulas`'s `prepare` partition
         // (`System.hs`): Action and Eq atoms drive matching,
@@ -1096,10 +1087,9 @@ fn insert_implied_formulas_pass(
             &sys_actions,
             &actions_by_name,
             body,
-            &dedup_tables,
+            &red.sys,
             &other_guards,
             &mut new_formulas,
-            &mut new_formulas_canon,
         )?;
     }
     if new_formulas.is_empty() {
@@ -1118,123 +1108,6 @@ fn insert_implied_formulas_pass(
     red.insert_formulas(&new_formulas)
 }
 
-/// Canonicalising key for implied-formula dedup: AC `BinOp` permutations
-/// re-sorted, then stored normal form.  This is the SINGLE source of the dedup
-/// canon — the existing/threaded canon vectors and the per-candidate site both
-/// call it, so they cannot drift out of lock-step.  Both stages reuse their
-/// borrowed input when the transform is a structural no-op, so an
-/// already-canonical formula pays zero clones — the dedup only materialises
-/// (`into_owned`) a survivor.
-///
-/// No bound-var canonicalisation: `Guarded` binders are DeBruijn, so `Bound`
-/// vars carry no idx and alpha-equivalent formulas already compare `==`.
-///
-/// Comparison is in stored normal form (HS 150f5eba: `insertImpliedFormulas`
-/// normalises derived instances before the membership pre-check) — a raw
-/// duplicate-carrying candidate must match its normalised stored twin, or the
-/// pass re-fires it every simplifier iteration.
-///
-/// NO α-normalisation of variable idxs: HS's membership pre-check compares the
-/// (stored-normalised) instance RAW against `sFormulas`/`sSolvedFormulas`, and
-/// an implied instance is a deterministic function of (clause, matched
-/// actions) — guardedness means every opened clause var is bound by the match,
-/// so no per-call fresh mint reaches the instance.  Collapsing idxs (e.g.
-/// rewriting every `x`-named LVar to idx 0) merges instances HS keeps
-/// distinct whenever their matched action terms share a var NAME — e.g.
-/// csf26-ac counter.spthy, whose diagonal IH instances over a fresh `Inc`
-/// rule instance's `x.7`/`x.10` would merge with the iteration-1 `x`/`y.1`
-/// ones, suppressing 3 of HS's `insertGoalStatus` ticks and shifting every
-/// later goal `nr:` annotation in the web panes (batch output is unaffected).
-fn implied_apply_canon_cow(
-    f: &crate::guarded::Guarded,
-) -> std::borrow::Cow<'_, crate::guarded::Guarded> {
-    use std::borrow::Cow;
-    match crate::guarded::normalise_stored_formula_cow(f) {
-        None => Cow::Borrowed(f),
-        Some(g) => Cow::Owned(g),
-    }
-}
-
-/// Lazily-built dedup tables for `insert_implied_formulas_pass`: for every
-/// existing formula / solved formula, its canon key (via
-/// `implied_apply_canon_cow`) plus its `fx_hash_one` prefilter hash.
-///
-/// Lazy (`OnceCell`, forced by the first candidate reaching dedup) because the
-/// stores are pass-invariant — `red.sys.formulas`/`solved_formulas` are never
-/// mutated inside the per-universal loop — so the contents are independent of
-/// WHEN the table is built, and a pass producing zero candidates skips the
-/// canon walk entirely.
-///
-/// The actual `CanonTable` lives on the `System` (keyed by the per-store
-/// `formulas_stamp` / `solved_formulas_stamp`): the first force here consults
-/// that cache via [`System::formulas_canon_table`] /
-/// [`System::solved_formulas_canon_table`], reusing the cached generation
-/// verbatim on a stamp hit and otherwise rebuilding it incrementally
-/// (pointer-keyed entry reuse).  So a formula canoned once per `System` lineage
-/// is not recanoned per simplifier iteration.
-///
-/// The u64 hash is a per-entry prefilter, not a per-merge index (contrast the
-/// refuted goal-merge fingerprint bucket index): hash inequality proves canon
-/// inequality (`Hash`/`PartialEq` derive consistency), so the deep AST
-/// equality walk only runs on hash agreement.  Hashes never reach output.
-struct ImpliedDedupTables<'a> {
-    sys: &'a crate::constraint::system::System,
-    formulas_canon: std::cell::OnceCell<std::sync::Arc<crate::constraint::system::CanonTable>>,
-    solved_canon: std::cell::OnceCell<std::sync::Arc<crate::constraint::system::CanonTable>>,
-}
-
-impl<'a> ImpliedDedupTables<'a> {
-    fn new(sys: &'a crate::constraint::system::System) -> Self {
-        ImpliedDedupTables {
-            sys,
-            formulas_canon: std::cell::OnceCell::new(),
-            solved_canon: std::cell::OnceCell::new(),
-        }
-    }
-
-    /// Canon closure for a single stored `Arc<Guarded>`: the `implied_apply_canon_cow`
-    /// key plus its prefilter hash, with the canon materialised as an `Arc` that
-    /// REUSES the source `Arc` when the canonicalisation is a structural no-op
-    /// (`Cow::Borrowed`) — a refcount bump, no extra tree.
-    fn canon(
-        src: &std::sync::Arc<crate::guarded::Guarded>,
-    ) -> (std::sync::Arc<crate::guarded::Guarded>, u64) {
-        let c = implied_apply_canon_cow(src.as_ref());
-        let h = tamarin_utils::fx_hash_one(c.as_ref());
-        let arc = match c {
-            std::borrow::Cow::Borrowed(_) => std::sync::Arc::clone(src),
-            std::borrow::Cow::Owned(g) => std::sync::Arc::new(g),
-        };
-        (arc, h)
-    }
-
-    fn formulas_canon(
-        &self,
-    ) -> &[(
-        std::sync::Arc<crate::guarded::Guarded>,
-        std::sync::Arc<crate::guarded::Guarded>,
-        u64,
-    )] {
-        &self
-            .formulas_canon
-            .get_or_init(|| self.sys.formulas_canon_table(Self::canon))
-            .entries
-    }
-
-    fn solved_canon(
-        &self,
-    ) -> &[(
-        std::sync::Arc<crate::guarded::Guarded>,
-        std::sync::Arc<crate::guarded::Guarded>,
-        u64,
-    )] {
-        &self
-            .solved_canon
-            .get_or_init(|| self.sys.solved_formulas_canon_table(Self::canon))
-            .entries
-    }
-}
-
 /// Try every assignment of system actions to the universal's action
 /// guards. For each consistent assignment that binds all universal
 /// vars, instantiate the body and add to `new_formulas`.
@@ -1248,15 +1121,9 @@ fn try_match_all_guards(
     // name-equal group, in original `sys_actions` order.
     actions_by_name: &tamarin_utils::FastMap<String, Vec<u32>>,
     body: &crate::guarded::Guarded,
-    // Canon keys (+ hash prefilters) of the existing formula stores, built
-    // lazily and shared across every universal — see `ImpliedDedupTables`.
-    dedup_tables: &ImpliedDedupTables<'_>,
+    sys: &crate::constraint::system::System,
     other_guards: &[&crate::atom::Atom<tamarin_term::lterm::LNTerm>],
     out: &mut Vec<crate::guarded::Guarded>,
-    // Canon keys (+ hash prefilters) of accepted candidates, 1:1 with `out`
-    // and threaded across universals by the caller (so each candidate's canon
-    // is computed once).
-    out_canon: &mut Vec<(crate::guarded::Guarded, u64)>,
 ) -> Result<(), crate::prove::ProveError> {
     use crate::atom::ProtoAtom;
     use crate::guarded::subst_guarded;
@@ -1280,10 +1147,9 @@ fn try_match_all_guards(
         actions_by_name: &tamarin_utils::FastMap<String, Vec<u32>>,
         acc: &LNSubst,
         body: &crate::guarded::Guarded,
-        dedup_tables: &ImpliedDedupTables<'_>,
+        sys: &crate::constraint::system::System,
         other_guards: &[&crate::atom::Atom<tamarin_term::lterm::LNTerm>],
         out: &mut Vec<crate::guarded::Guarded>,
-        out_canon: &mut Vec<(crate::guarded::Guarded, u64)>,
     ) -> Result<(), crate::prove::ProveError> {
         if guard_idx == guards.len() {
             // All Action guards matched.  Now decide what the implied
@@ -1322,31 +1188,18 @@ fn try_match_all_guards(
             //   gall _ []   gf              = gf
             //   gall _ _    gf | gf == gtrue = gtrue
             //   gall ss atos gf             = GGuarded All ss atos gf
-            let implied = crate::guarded::gall(Vec::new(), surviving_gatoms, body_subst);
-            // Compare in the same stored normal form as the formula tables.
-            // AC permutations compare equal. Free variables retain their indices,
-            // even if the equation store maps two variables to the same term.
-            let canon = implied_apply_canon_cow(&implied);
-            // Hashes filter candidates. Equality decides membership on a hash match.
-            let canon_hash = tamarin_utils::fx_hash_one(canon.as_ref());
-            let already = dedup_tables
-                .formulas_canon()
-                .iter()
-                .any(|(_, fc, fh)| *fh == canon_hash && fc.as_ref() == canon.as_ref())
-                || dedup_tables
-                    .solved_canon()
-                    .iter()
-                    .any(|(_, fc, fh)| *fh == canon_hash && fc.as_ref() == canon.as_ref())
-                || out_canon
-                    .iter()
-                    .any(|(fc, fh)| *fh == canon_hash && fc == canon.as_ref());
-            if !already {
-                // Keep `out_canon` 1:1 with `out` so the `already` probe above
-                // stays correct as `out` grows across candidates.  Materialise
-                // the survivor's canon (`into_owned`) BEFORE moving `implied`.
-                let canon = canon.into_owned();
+            // HS `insertImpliedFormulas` normalises each instance before its
+            // membership test against both stores (150f5eba).
+            let implied = crate::guarded::normalise_stored_formula_owned(crate::guarded::gall(
+                Vec::new(),
+                surviving_gatoms,
+                body_subst,
+            ));
+            if !crate::guarded::stores_contains(&sys.formulas, &implied)
+                && !crate::guarded::stores_contains(&sys.solved_formulas, &implied)
+                && !out.contains(&implied)
+            {
                 out.push(implied);
-                out_canon.push((canon, canon_hash));
             }
             return Ok(());
         }
@@ -1403,10 +1256,9 @@ fn try_match_all_guards(
                             actions_by_name,
                             &combined,
                             body,
-                            dedup_tables,
+                            sys,
                             other_guards,
                             out,
-                            out_canon,
                         )?;
                     }
                 }
@@ -1446,10 +1298,9 @@ fn try_match_all_guards(
                                 actions_by_name,
                                 acc,
                                 body,
-                                dedup_tables,
+                                sys,
                                 other_guards,
                                 out,
-                                out_canon,
                             )?;
                         }
                         return Ok(());
@@ -1529,10 +1380,9 @@ fn try_match_all_guards(
                         actions_by_name,
                         &combined,
                         body,
-                        dedup_tables,
+                        sys,
                         other_guards,
                         out,
-                        out_canon,
                     )?;
                 }
             }
@@ -1541,10 +1391,6 @@ fn try_match_all_guards(
         Ok(())
     }
 
-    // `dedup_tables` arrives from the caller (its canon tables are built at
-    // most once per pass, shared across universals).  `out_canon` likewise
-    // arrives from the caller, threaded across universals in lock-step with `out`
-    // (`rec` pushes each accepted candidate's canon), so it is never recomputed.
     rec(
         maude,
         vars,
@@ -1555,10 +1401,9 @@ fn try_match_all_guards(
         actions_by_name,
         &LNSubst::empty(),
         body,
-        dedup_tables,
+        sys,
         other_guards,
         out,
-        out_canon,
     )?;
     Ok(())
 }

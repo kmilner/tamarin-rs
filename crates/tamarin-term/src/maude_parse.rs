@@ -35,23 +35,12 @@ impl std::error::Error for ParseError {}
 struct Cursor<'a> {
     src: &'a [u8],
     pos: usize,
-    sig: Option<&'a MaudeSig>,
+    sig: &'a MaudeSig,
 }
 
 impl<'a> Cursor<'a> {
-    fn new(src: &'a [u8]) -> Self {
-        Cursor {
-            src,
-            pos: 0,
-            sig: None,
-        }
-    }
-    fn with_sig(src: &'a [u8], sig: &'a MaudeSig) -> Self {
-        Cursor {
-            src,
-            pos: 0,
-            sig: Some(sig),
-        }
+    fn new(src: &'a [u8], sig: &'a MaudeSig) -> Self {
+        Cursor { src, pos: 0, sig }
     }
     fn rest(&self) -> &[u8] {
         &self.src[self.pos..]
@@ -117,20 +106,8 @@ impl<'a> Cursor<'a> {
 // =============================================================================
 
 /// Parse a `unify` reply.
-pub fn parse_unify_reply(reply: &[u8]) -> Result<Vec<MSubst>, ParseError> {
-    let mut c = Cursor::new(reply);
-    parse_unify_reply_from(&mut c)
-}
-
-pub(crate) fn parse_unify_reply_with_sig(
-    reply: &[u8],
-    sig: &MaudeSig,
-) -> Result<Vec<MSubst>, ParseError> {
-    let mut c = Cursor::with_sig(reply, sig);
-    parse_unify_reply_from(&mut c)
-}
-
-fn parse_unify_reply_from(c: &mut Cursor<'_>) -> Result<Vec<MSubst>, ParseError> {
+pub(crate) fn parse_unify_reply(reply: &[u8], sig: &MaudeSig) -> Result<Vec<MSubst>, ParseError> {
+    let c = &mut Cursor::new(reply, sig);
     if c.eat_str(b"No unifier.") {
         let _ = c.skip_eol();
         return Ok(vec![]);
@@ -139,20 +116,8 @@ fn parse_unify_reply_from(c: &mut Cursor<'_>) -> Result<Vec<MSubst>, ParseError>
 }
 
 /// Parse a `match` reply.
-pub fn parse_match_reply(reply: &[u8]) -> Result<Vec<MSubst>, ParseError> {
-    let mut c = Cursor::new(reply);
-    parse_match_reply_from(&mut c)
-}
-
-pub(crate) fn parse_match_reply_with_sig(
-    reply: &[u8],
-    sig: &MaudeSig,
-) -> Result<Vec<MSubst>, ParseError> {
-    let mut c = Cursor::with_sig(reply, sig);
-    parse_match_reply_from(&mut c)
-}
-
-fn parse_match_reply_from(c: &mut Cursor<'_>) -> Result<Vec<MSubst>, ParseError> {
+pub(crate) fn parse_match_reply(reply: &[u8], sig: &MaudeSig) -> Result<Vec<MSubst>, ParseError> {
+    let c = &mut Cursor::new(reply, sig);
     if c.eat_str(b"No match.") {
         let _ = c.skip_eol();
         return Ok(vec![]);
@@ -161,20 +126,8 @@ fn parse_match_reply_from(c: &mut Cursor<'_>) -> Result<Vec<MSubst>, ParseError>
 }
 
 /// Parse a `reduce` reply: `result <Sort>: <term>\n`.
-pub fn parse_reduce_reply(reply: &[u8]) -> Result<MTerm, ParseError> {
-    let mut c = Cursor::new(reply);
-    parse_reduce_reply_from(&mut c)
-}
-
-pub(crate) fn parse_reduce_reply_with_sig(
-    reply: &[u8],
-    sig: &MaudeSig,
-) -> Result<MTerm, ParseError> {
-    let mut c = Cursor::with_sig(reply, sig);
-    parse_reduce_reply_from(&mut c)
-}
-
-fn parse_reduce_reply_from(c: &mut Cursor<'_>) -> Result<MTerm, ParseError> {
+pub(crate) fn parse_reduce_reply(reply: &[u8], sig: &MaudeSig) -> Result<MTerm, ParseError> {
+    let c = &mut Cursor::new(reply, sig);
     if !c.eat_str(b"result ") {
         return Err(ParseError(format!(
             "expected `result `, got: {:?}",
@@ -195,20 +148,11 @@ fn parse_reduce_reply_from(c: &mut Cursor<'_>) -> Result<MTerm, ParseError> {
 }
 
 /// Parse a `get variants` reply.
-pub fn parse_variants_reply(reply: &[u8]) -> Result<Vec<MSubst>, ParseError> {
-    let mut c = Cursor::new(reply);
-    parse_variants_reply_from(&mut c)
-}
-
-pub(crate) fn parse_variants_reply_with_sig(
+pub(crate) fn parse_variants_reply(
     reply: &[u8],
     sig: &MaudeSig,
 ) -> Result<Vec<MSubst>, ParseError> {
-    let mut c = Cursor::with_sig(reply, sig);
-    parse_variants_reply_from(&mut c)
-}
-
-fn parse_variants_reply_from(c: &mut Cursor<'_>) -> Result<Vec<MSubst>, ParseError> {
+    let c = &mut Cursor::new(reply, sig);
     let _ = c.skip_eol();
     let mut variants = Vec::new();
     loop {
@@ -514,7 +458,7 @@ fn skip_term(c: &mut Cursor) -> Result<(), ParseError> {
     Ok(())
 }
 
-fn build_app(sig: Option<&MaudeSig>, ident: &[u8], args: Vec<MTerm>) -> MTerm {
+fn build_app(sig: &MaudeSig, ident: &[u8], args: Vec<MTerm>) -> MTerm {
     // AC/C operators are all `tam`-prefixed.  Strip the prefix once and
     // compare the suffix against the (compile-time) symbol-name constants,
     // avoiding the per-call `Vec` allocations that `pp_maude_ac_sym` (and
@@ -536,7 +480,7 @@ fn build_app(sig: Option<&MaudeSig>, ident: &[u8], args: Vec<MTerm>) -> MTerm {
                 return crate::term::f_app_ac(op, args);
             }
         }
-        if let Some(sym) = sig.and_then(|sig| sig.fun_sym_by_wire(ident)) {
+        if let Some(sym) = sig.fun_sym_by_wire(ident) {
             match sym {
                 FunSym::NoEq(sym) if sym.arity == args.len() => {
                     return Term::App(FunSym::NoEq(sym), args.into());
@@ -667,6 +611,7 @@ mod tests {
 
     #[test]
     fn skipped_terms_accept_and_consume_the_parse_term_grammar() {
+        let sig = MaudeSig::default();
         for src in [
             &b"x18446744073709551615:Msg"[..],
             b"#3:Fresh",
@@ -675,16 +620,16 @@ mod tests {
             b"list(cons(c(1),cons(%2:Pub,nil)))",
             b"tamXCFUzero",
         ] {
-            let mut parsed = Cursor::new(src);
+            let mut parsed = Cursor::new(src, &sig);
             parse_term(&mut parsed).unwrap();
-            let mut skipped = Cursor::new(src);
+            let mut skipped = Cursor::new(src, &sig);
             skip_term(&mut skipped).unwrap();
             assert_eq!(skipped.pos, parsed.pos, "{}", String::from_utf8_lossy(src));
             assert!(skipped.is_eof());
         }
         for src in [&b"#x:Msg"[..], b"bad:Msg", b"c(x)", b"f(c(1)"] {
-            let mut parsed = Cursor::new(src);
-            let mut skipped = Cursor::new(src);
+            let mut parsed = Cursor::new(src, &sig);
+            let mut skipped = Cursor::new(src, &sig);
             assert_eq!(
                 skip_term(&mut skipped).is_err(),
                 parse_term(&mut parsed).is_err(),
@@ -696,13 +641,13 @@ mod tests {
 
     #[test]
     fn parse_no_unifier() {
-        let r = parse_unify_reply(b"No unifier.\n").unwrap();
+        let r = parse_unify_reply(b"No unifier.\n", &MaudeSig::default()).unwrap();
         assert!(r.is_empty());
     }
 
     #[test]
     fn parse_no_match() {
-        let r = parse_match_reply(b"No match.\n").unwrap();
+        let r = parse_match_reply(b"No match.\n", &MaudeSig::default()).unwrap();
         assert!(r.is_empty());
     }
 
@@ -710,7 +655,7 @@ mod tests {
     fn parse_substitution_requires_entry() {
         // HS `many1 parseEntry`: a `Solution` header followed by neither
         // `empty substitution` nor an `xN` entry must fail the whole parse.
-        let r = parse_unify_reply(b"\nSolution 1\n\n");
+        let r = parse_unify_reply(b"\nSolution 1\n\n", &MaudeSig::default());
         assert!(r.is_err());
     }
 
@@ -719,7 +664,11 @@ mod tests {
     /// rather than kept in Maude's print order (HS `fAppACfct`).
     #[test]
     fn parse_user_defined_ac_application() {
-        let t = parse_reduce_reply(b"result Msg: tamXCAUmy-op(c(2),c(1))\n").unwrap();
+        let t = parse_reduce_reply(
+            b"result Msg: tamXCAUmy-op(c(2),c(1))\n",
+            &MaudeSig::default(),
+        )
+        .unwrap();
         match t {
             Term::App(FunSym::Ac(AcSym::AcFct(s)), args) => {
                 assert_eq!(s.name, b"my_op");
@@ -739,7 +688,8 @@ mod tests {
     /// routing.
     #[test]
     fn parse_nullary_ident_containing_ac_marker() {
-        let t = parse_reduce_reply(b"result Msg: tamXCFUtamXCAfoo\n").unwrap();
+        let t =
+            parse_reduce_reply(b"result Msg: tamXCFUtamXCAfoo\n", &MaudeSig::default()).unwrap();
         match t {
             Term::App(FunSym::NoEq(s), args) => {
                 assert_eq!(s.name, b"tamXCAfoo");
@@ -757,7 +707,11 @@ mod tests {
     /// class or collapse a unary application.
     #[test]
     fn parse_unary_ident_containing_ac_marker_does_not_collapse() {
-        let t = parse_reduce_reply(b"result Msg: tamXCFUtamXCAfoo(x1:Msg)\n").unwrap();
+        let t = parse_reduce_reply(
+            b"result Msg: tamXCFUtamXCAfoo(x1:Msg)\n",
+            &MaudeSig::default(),
+        )
+        .unwrap();
         match t {
             Term::App(FunSym::NoEq(s), args) => {
                 assert_eq!(s.name, b"tamXCAfoo");
@@ -779,7 +733,11 @@ mod tests {
     /// bytes used by the AC encoding.
     #[test]
     fn parse_binary_ident_containing_ac_marker_keeps_arg_order() {
-        let t = parse_reduce_reply(b"result Msg: tamXCFUtamXCAfoo(c(2), c(1))\n").unwrap();
+        let t = parse_reduce_reply(
+            b"result Msg: tamXCFUtamXCAfoo(c(2), c(1))\n",
+            &MaudeSig::default(),
+        )
+        .unwrap();
         match t {
             Term::App(FunSym::NoEq(s), args) => {
                 assert_eq!(s.name, b"tamXCAfoo");
@@ -844,6 +802,7 @@ mod tests {
               \nVariant 2\nrewrites: 1\nMsg: %1:Msg\n\
               x1:Msg --> tamXCFUpair(%1:Msg, %2:Msg)\n\
               \nNo more variants.\nrewrites: 1\n",
+            &MaudeSig::default(),
         )
         .unwrap();
         let pair = |a, b| {
@@ -882,6 +841,7 @@ mod tests {
             b"\nVariant 1\nrewrites: 0\n[TOP]: list(#1:Fresh)\n\
               x0:Fresh --> #1:Fresh\n\
               \nNo more variants.\nrewrites: 0\n",
+            &MaudeSig::default(),
         )
         .unwrap();
         assert_eq!(variants.len(), 1);
@@ -893,16 +853,20 @@ mod tests {
     /// footer is an error too.  Neither one gives an empty variant list.
     #[test]
     fn parse_variants_reply_requires_a_variant_and_a_footer() {
-        assert!(parse_variants_reply(b"\nNo more variants.\nrewrites: 0\n").is_err());
+        assert!(
+            parse_variants_reply(b"\nNo more variants.\nrewrites: 0\n", &MaudeSig::default())
+                .is_err()
+        );
         assert!(parse_variants_reply(
-            b"\nVariant 1\nrewrites: 0\nMsg: #1:Msg\nx1:Msg --> #1:Msg\n\nNo more variants.\n"
+            b"\nVariant 1\nrewrites: 0\nMsg: #1:Msg\nx1:Msg --> #1:Msg\n\nNo more variants.\n",
+            &MaudeSig::default(),
         )
         .is_err());
     }
 
     #[test]
     fn parse_simple_reduce_reply() {
-        let r = parse_reduce_reply(b"result Pub: p(1)\n").unwrap();
+        let r = parse_reduce_reply(b"result Pub: p(1)\n", &MaudeSig::default()).unwrap();
         match r {
             Term::Lit(MaudeLit::MaudeConst(1, LSort::Pub)) => {}
             x => panic!("got {:?}", x),

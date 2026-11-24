@@ -89,15 +89,6 @@ fn show_acfct_sym_matches_derived_show() {
     );
 }
 
-#[test]
-fn implicit_sig_includes_pair_and_inv() {
-    let s = implicit_fun_sig();
-    assert!(s.contains(&FunSym::NoEq(pair_sym())));
-    assert!(s.contains(&FunSym::NoEq(inv_sym())));
-    assert!(s.contains(&FunSym::Ac(AcSym::Mult)));
-    assert!(s.contains(&FunSym::Ac(AcSym::Union)));
-}
-
 // =========================================================================
 // Haskell-faithfulness invariants for FunctionSymbols enum orders.
 //

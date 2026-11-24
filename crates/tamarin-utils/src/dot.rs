@@ -12,58 +12,20 @@
 //! full builder API and [`show_dot`], so the bytes reaching both the batch
 //! `--output-dot` writer and the interactive graph routes are `Text.Dot`'s.
 //!
-//! What is `pub` here tracks `Text.Dot`'s own export list (Text/Dot.hs),
-//! so a combinator with no RS caller yet still carries the visibility its
-//! upstream counterpart has.  The escapers are the other side of that rule:
-//! `escapeRecord` / `fixMultiLineLabel` / `escapeDotGraphLabel` are internal
-//! to the Haskell module, so they are private here too.
-//!
-//! Two places are WIDER than the export list, both because Rust cannot express
-//! what Haskell does there:
-//!   * `NodeId` and `Record` are exported abstract upstream (the `-- abstract`
-//!     notes at Text/Dot.hs), but a Rust enum's variants inherit the
-//!     enum's visibility, so hiding the constructors would need a wrapper type.
-//!     Nothing outside this module names a variant.
-//!   * `GraphElement` is not exported at all upstream, yet it appears in the
-//!     signatures of `addElements` (Text/Dot.hs) and
-//!     `getDotGenStateElements` (Text/Dot.hs), which ARE exported; Haskell
-//!     allows that, Rust does not.
-//!
-//! Two `pub` items answer to something other than a NAME in that list:
-//! [`NodeId::to_dot_string`] is `instance Show NodeId` (Text/Dot.hs),
-//! which an abstract type carries to its users anyway, and
-//! [`DotGraph::scope_named`] is `createSubGraph` (Text/Dot.hs) at a
-//! `Just cid`, the shape `cluster` itself uses (Text/Dot.hs).
-//!
-//! The combinators upstream exports that have no counterpart here are `runDot`,
-//! `modifyDotGenState`, `htmlLabel` (whose `("html_label", …)` pair `write_attr`
-//! special-cases directly), the `[String]` conveniences `hcat'`/`vcat'`
-//! (Text/Dot.hs) and the `'`/`_` result-shape variants of
-//! `record`/`mrecord`.
+//! Only the combinators that serializer uses are ported.
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum NodeId {
-    /// Auto-generated node id (e.g. `n42`).
-    Generated(String),
-    /// User-provided integer node id (rendered `u42`/`u_42`).
-    User(i64),
-}
+pub struct NodeId(String);
 
 impl NodeId {
-    pub fn from_user(i: i64) -> Self {
-        NodeId::User(i)
-    }
-
+    /// `instance Show NodeId` (Text/Dot.hs).
     pub fn to_dot_string(&self) -> String {
-        match self {
-            NodeId::Generated(s) => s.clone(),
-            NodeId::User(i) if *i < 0 => format!("u_{}", -i),
-            NodeId::User(i) => format!("u{}", i),
-        }
+        self.0.clone()
     }
 
+    /// `createClusterNodeId` (Text/Dot.hs).
     pub fn cluster(name: &str) -> Self {
-        NodeId::Generated(quote_dot_id(&format!("cluster_{}", name)))
+        NodeId(quote_dot_id(&format!("cluster_{}", name)))
     }
 }
 
@@ -72,7 +34,6 @@ pub enum GraphElement {
     Attribute(String, String),
     Node(NodeId, Vec<(String, String)>),
     Edge(NodeId, NodeId, Vec<(String, String)>),
-    Scope(Vec<GraphElement>),
     SubGraph(Option<NodeId>, Vec<GraphElement>),
 }
 
@@ -95,10 +56,6 @@ impl DotGraph {
         id
     }
 
-    pub fn set_id(&mut self, id: u64) {
-        self.next_id = id;
-    }
-
     pub fn elements(&self) -> &[GraphElement] {
         &self.elements
     }
@@ -106,7 +63,7 @@ impl DotGraph {
     /// `rawNode`: allocate a node and return its id.
     pub fn raw_node(&mut self, attrs: Vec<(String, String)>) -> NodeId {
         let id = self.next_id();
-        let nid = NodeId::Generated(format!("n{}", id));
+        let nid = NodeId(format!("n{}", id));
         self.elements.push(GraphElement::Node(nid.clone(), attrs));
         nid
     }
@@ -127,74 +84,34 @@ impl DotGraph {
         self.raw_node(fixed)
     }
 
-    /// `userNode`: attach attributes to a user-supplied node id.
-    pub fn user_node(&mut self, nid: NodeId, attrs: Vec<(String, String)>) {
-        self.elements.push(GraphElement::Node(nid, attrs));
-    }
-
     /// `edge`: from→to with attributes.
     pub fn edge(&mut self, from: NodeId, to: NodeId, attrs: Vec<(String, String)>) {
         self.elements.push(GraphElement::Edge(from, to, attrs));
     }
 
-    /// `scope`: run `body` against a fresh sub-graph that inherits the
-    /// id counter, then attach the result as an unnamed sub-graph.
+    /// `scope` (Text/Dot.hs): an unnamed sub-graph.
     pub fn scope<R, F: FnOnce(&mut DotGraph) -> R>(&mut self, body: F) -> R {
-        let mut sub = DotGraph::new();
-        sub.set_id(self.next_id);
-        let r = body(&mut sub);
-        self.next_id = sub.next_id;
-        self.elements
-            .push(GraphElement::SubGraph(None, sub.elements));
-        r
+        self.sub_graph(None, body)
     }
 
-    /// `roleCluster`'s dot half (Theory/Constraint/System/Dot.hs — the
-    /// theory-side module, not the `Text/Dot.hs` every other citation here
-    /// names): a [`scope`] carrying a
-    /// CALLER-supplied cluster id — HS builds it with `createClusterNodeId`
-    /// ([`NodeId::cluster`]) rather than from the counter.  The `nextId` HS
-    /// runs first is a no-op on the numbering: the sub-state is re-seeded with
-    /// the pre-increment value, so the body starts at the counter the caller
-    /// was already on.
-    ///
-    /// [`scope`]: DotGraph::scope
+    /// `createSubGraph (Just cid)` (Text/Dot.hs), as `roleCluster`
+    /// (Theory/Constraint/System/Dot.hs) uses it with a
+    /// [`NodeId::cluster`] id.
     pub fn scope_named<R, F: FnOnce(&mut DotGraph) -> R>(&mut self, cid: NodeId, body: F) -> R {
-        let mut sub = DotGraph::new();
-        sub.set_id(self.next_id);
+        self.sub_graph(Some(cid), body)
+    }
+
+    /// `createSubGraph` (Text/Dot.hs): the body continues the id counter.
+    fn sub_graph<R, F: FnOnce(&mut DotGraph) -> R>(&mut self, cid: Option<NodeId>, body: F) -> R {
+        let mut sub = DotGraph {
+            next_id: self.next_id,
+            elements: Vec::new(),
+        };
         let r = body(&mut sub);
         self.next_id = sub.next_id;
         self.elements
-            .push(GraphElement::SubGraph(Some(cid), sub.elements));
+            .push(GraphElement::SubGraph(cid, sub.elements));
         r
-    }
-
-    /// `cluster`: same as `scope`, but creates a named cluster.
-    pub fn cluster<R, F: FnOnce(&mut DotGraph) -> R>(&mut self, body: F) -> (NodeId, R) {
-        let id = self.next_id();
-        let cid = NodeId::Generated(format!("cluster_{}", id));
-        let mut sub = DotGraph::new();
-        sub.set_id(self.next_id);
-        let r = body(&mut sub);
-        self.next_id = sub.next_id;
-        self.elements
-            .push(GraphElement::SubGraph(Some(cid.clone()), sub.elements));
-        (cid, r)
-    }
-
-    pub fn share(&mut self, attrs: Vec<(String, String)>, nodes: Vec<NodeId>) {
-        let mut inner: Vec<GraphElement> = attrs
-            .into_iter()
-            .map(|(k, v)| GraphElement::Attribute(k, v))
-            .collect();
-        for n in nodes {
-            inner.push(GraphElement::Node(n, Vec::new()));
-        }
-        self.elements.push(GraphElement::Scope(inner));
-    }
-
-    pub fn same(&mut self, nodes: Vec<NodeId>) {
-        self.share(vec![("rank".into(), "same".into())], nodes);
     }
 
     pub fn attribute(&mut self, key: &str, val: &str) {
@@ -204,12 +121,12 @@ impl DotGraph {
 
     pub fn node_attributes(&mut self, attrs: Vec<(String, String)>) {
         self.elements
-            .push(GraphElement::Node(NodeId::Generated("node".into()), attrs));
+            .push(GraphElement::Node(NodeId("node".into()), attrs));
     }
 
     pub fn edge_attributes(&mut self, attrs: Vec<(String, String)>) {
         self.elements
-            .push(GraphElement::Node(NodeId::Generated("edge".into()), attrs));
+            .push(GraphElement::Node(NodeId("edge".into()), attrs));
     }
 }
 
@@ -260,7 +177,7 @@ fn write_element(out: &mut String, e: &GraphElement) {
             write_attrs(out, attrs);
             out.push(';');
         }
-        GraphElement::Scope(inner) | GraphElement::SubGraph(None, inner) => {
+        GraphElement::SubGraph(None, inner) => {
             out.push_str("{\n");
             for e in inner {
                 write_element(out, e);
@@ -379,10 +296,6 @@ pub enum Record<P> {
     VCat(Vec<Record<P>>),
 }
 
-pub fn field<P>(label: &str) -> Record<P> {
-    Record::Field(None, fix_multi_line_label(label))
-}
-
 pub fn port_field<P>(port: P, label: &str) -> Record<P> {
     Record::Field(Some(port), fix_multi_line_label(label))
 }
@@ -470,39 +383,16 @@ pub fn record<P: Clone>(
     rec: &Record<P>,
     attrs: Vec<(String, String)>,
 ) -> (NodeId, Vec<(P, NodeId)>) {
-    gen_record(graph, "record", rec, attrs)
-}
-
-/// `mrecord`: like [`record`] but with rounded corners.
-pub fn mrecord<P: Clone>(
-    graph: &mut DotGraph,
-    rec: &Record<P>,
-    attrs: Vec<(String, String)>,
-) -> (NodeId, Vec<(P, NodeId)>) {
-    gen_record(graph, "Mrecord", rec, attrs)
-}
-
-fn gen_record<P: Clone>(
-    graph: &mut DotGraph,
-    shape: &str,
-    rec: &Record<P>,
-    mut attrs: Vec<(String, String)>,
-) -> (NodeId, Vec<(P, NodeId)>) {
     let (lbl, port_ids) = record_label(graph, rec);
     let mut full = vec![
-        ("shape".to_string(), shape.to_string()),
+        ("shape".to_string(), "record".to_string()),
         ("label".to_string(), lbl),
     ];
-    full.append(&mut attrs);
+    full.extend(attrs);
     let nid = graph.raw_node(full);
     let ports = port_ids
         .into_iter()
-        .map(|(p, pid)| {
-            (
-                p,
-                NodeId::Generated(format!("{}:{}", nid.to_dot_string(), pid)),
-            )
-        })
+        .map(|(p, pid)| (p, NodeId(format!("{}:{}", nid.0, pid))))
         .collect();
     (nid, ports)
 }
@@ -537,23 +427,6 @@ mod tests {
     }
 
     #[test]
-    fn user_nodes_and_negative_ids() {
-        let mut g = DotGraph::new();
-        let a = NodeId::from_user(7);
-        let b = NodeId::from_user(-3);
-        g.user_node(a.clone(), vec![]);
-        g.user_node(b.clone(), vec![]);
-        g.edge(a, b, vec![]);
-        // `instance Show NodeId` (Text/Dot.hs) prints `u<i>`. For a
-        // negative id it prints `u_<-i>`. An empty attribute list emits no
-        // brackets (`showAttrs []`).
-        assert_eq!(
-            show_dot("u", &g),
-            "digraph \"u\" {\nu7;\nu_3;\nu7 -> u_3;\n\n}\n"
-        );
-    }
-
-    #[test]
     fn quoting_label_with_quotes() {
         // `escapedLabel` (Text/Dot.hs) escapes `"` and nothing else. The
         // backslash below therefore stays unescaped. The `quoteDotId` path
@@ -572,21 +445,15 @@ mod tests {
         // that quoting. It emits `label=<...>` with no quotes, so graphviz
         // reads the value as HTML-like.
         let mut g = DotGraph::new();
-        g.user_node(
-            NodeId::from_user(1),
-            vec![
-                ("label".into(), "line1\nline2".into()),
-                ("tooltip".into(), "say \"hi\"".into()),
-            ],
-        );
-        g.user_node(
-            NodeId::from_user(2),
-            vec![("html_label".into(), "<<b>x</b>>".into())],
-        );
+        g.raw_node(vec![
+            ("label".into(), "line1\nline2".into()),
+            ("tooltip".into(), "say \"hi\"".into()),
+        ]);
+        g.raw_node(vec![("html_label".into(), "<<b>x</b>>".into())]);
         assert_eq!(
             show_dot("a", &g),
-            "digraph \"a\" {\nu1[label=\"line1\\lline2\",tooltip=\"say \\\"hi\\\"\"];\n\
-             u2[label=<<b>x</b>>];\n\n}\n"
+            "digraph \"a\" {\nn0[label=\"line1\\lline2\",tooltip=\"say \\\"hi\\\"\"];\n\
+             n1[label=<<b>x</b>>];\n\n}\n"
         );
     }
 
@@ -616,18 +483,14 @@ mod tests {
     }
 
     #[test]
-    fn cluster_creates_named_subgraph() {
+    fn scope_named_emits_named_subgraph() {
         let mut g = DotGraph::new();
-        let (cid, _) = g.cluster(|sub| {
+        g.scope_named(NodeId::cluster("A"), |sub| {
             sub.node(vec![]);
         });
-        // `cluster` (Text/Dot.hs) uses the current counter value for
-        // the cluster id. It then starts the body at `succ uq`. The body node
-        // is therefore `n1`, and never `n0`.
-        assert_eq!(cid.to_dot_string(), "cluster_0");
         assert_eq!(
             show_dot("g", &g),
-            "digraph \"g\" {\nsubgraph cluster_0 {\nn1;\n\n}\n\n}\n"
+            "digraph \"g\" {\nsubgraph \"cluster_A\" {\nn0;\n\n}\n\n}\n"
         );
     }
 
@@ -642,12 +505,12 @@ mod tests {
     fn record_node_emits_label_with_ports() {
         let mut g = DotGraph::new();
         let rec: Record<&'static str> = hcat_records(vec![
-            field("a"),
+            Record::Field(None, "a".into()),
             port_field("p1", "b"),
             // The `escape` function of `renderRecord` (Text/Dot.hs)
             // puts a backslash in front of the record metacharacters. No other
             // code escapes them, so the attribute layer leaves them alone.
-            field("c<|>{}"),
+            Record::Field(None, "c<|>{}".into()),
         ]);
         let (nid, ports) = record(&mut g, &rec, vec![]);
         // The port field takes id 0, so the record node itself gets `n1`. The
@@ -672,28 +535,17 @@ mod tests {
         // this nesting for a rule box.
         let mut g = DotGraph::new();
         let rec: Record<&'static str> = vcat_records(vec![
-            hcat_records(vec![field("a"), field("b")]),
-            hcat_records(vec![field("c")]),
+            hcat_records(vec![
+                Record::Field(None, "a".into()),
+                Record::Field(None, "b".into()),
+            ]),
+            hcat_records(vec![Record::Field(None, "c".into())]),
         ]);
-        // `mrecord` is `genRecord "Mrecord"`. Only the shape differs.
-        mrecord(&mut g, &rec, vec![("color".into(), "blue".into())]);
+        record(&mut g, &rec, vec![("color".into(), "blue".into())]);
         assert_eq!(
             show_dot("r", &g),
             "digraph \"r\" {\n\
-             n0[shape=\"Mrecord\",label=\"{{a|b}|{c}}\",color=\"blue\"];\n\n}\n"
-        );
-    }
-
-    #[test]
-    fn same_wraps_nodes_in_a_rank_scope() {
-        // `same = share [("rank","same")]` (Text/Dot.hs) emits a
-        // `Scope` with no name. The scope holds the attribute. One node per id
-        // follows the attribute, and those nodes carry no brackets.
-        let mut g = DotGraph::new();
-        g.same(vec![NodeId::from_user(1), NodeId::from_user(2)]);
-        assert_eq!(
-            show_dot("g", &g),
-            "digraph \"g\" {\n{\nrank=\"same\";\nu1;\nu2;\n\n}\n\n}\n"
+             n0[shape=\"record\",label=\"{{a|b}|{c}}\",color=\"blue\"];\n\n}\n"
         );
     }
 }

@@ -259,8 +259,8 @@ pub struct ProofContextOptions {
     pub sys_retention: crate::constraint::solver::search::SysRetention,
     pub show_saturation_steps: bool,
     /// The caller already annotated loop breakers while closing the theory.
-    /// Standalone contexts leave this false. Variant preparation is completed
-    /// here in either case because raw AC queries are phase-sensitive.
+    /// Standalone contexts leave this false; their unprepared rules get
+    /// their variants here.
     pub loop_breakers_prepared: bool,
 }
 
@@ -598,9 +598,8 @@ impl ProofContext {
         maude: &MaudeHandle,
         initial: &[IntrRuleAC],
     ) -> Vec<IntrRuleAC> {
-        let mut intruder_rules =
-            crate::intruder_rules::subterm_constructor_rules(false, maude, sig);
-        intruder_rules.extend(crate::intruder_rules::special_intruder_rules(false));
+        let mut intruder_rules = crate::intruder_rules::subterm_constructor_rules(maude, sig);
+        intruder_rules.extend(crate::intruder_rules::special_intruder_rules());
         // Union construction and decomposition supply multiset KU sources
         // and KD chain extensions (`multisetIntruderRules`, IntruderRules.hs).
         if sig.enable_mset {
@@ -623,12 +622,10 @@ impl ProofContext {
         // AC first, then NoEq; appended after `rules0` and before the
         // DH/BP cached variants.
         intruder_rules.extend(crate::intruder_rules::destruction_rules_ac(
-            false,
             maude,
             &sig.ac_user_fun_syms(),
         ));
         intruder_rules.extend(crate::intruder_rules::destruction_rules_no_eq(
-            false,
             maude,
             &sig.no_eq_fun_syms(),
         ));
@@ -1347,7 +1344,7 @@ end"#;
     /// A small Maude-free rule list: the special intruder rules
     /// (`coerce`, `pub`, `fresh`, `isend`, `irecv`).
     fn sample_rules() -> Vec<IntrRuleAC> {
-        let rules = crate::intruder_rules::special_intruder_rules(false);
+        let rules = crate::intruder_rules::special_intruder_rules();
         assert!(rules.len() > 1, "sample needs several rules to compare");
         rules
     }

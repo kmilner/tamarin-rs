@@ -29,10 +29,8 @@
 
 use std::fmt;
 use std::fmt::Write as _;
-use std::sync::{OnceLock, RwLock};
 
 use tamarin_utils::pretty_hpj::{fcat, fsep, parens, punctuate, Doc, HtmlDocGuard, FLAT_WIDTH};
-use tamarin_utils::FastMap;
 
 use crate::function_symbols::{diff_sym, exp_sym, pair_sym, AcSym, CSym, FunSym, EMAP_SYM_STRING};
 use crate::lterm::{sort_prefix, BVar, LNTerm, LSort, LVar, Name, NameTag};
@@ -82,38 +80,8 @@ pub fn ac_op_symbol(op: AcSym) -> &'static str {
         AcSym::Xor => "\u{2295}",
         AcSym::Union => "++",
         AcSym::NatPlus => "%+",
-        AcSym::AcFct(sym) => ac_fct_op_symbol_interned(sym.name),
+        AcSym::AcFct(sym) => ac_fct_op_symbol(&String::from_utf8_lossy(sym.name)),
     }
-}
-
-/// One process-wide cache of user-defined AC separators, keyed on the IDENTITY
-/// of the symbol's interned name.  `AcFctSym::new` draws `name` from the byte
-/// intern pool, so the pointer is valid for the whole process and equal names
-/// share one address; `(ptr, len)` therefore names exactly one immutable byte
-/// string.  Every entry is a canonical `&'static str` from the string intern
-/// pool, determined by the key's content alone, so all threads see the one
-/// separator per name whether they hit or miss.  Bounded by the theory's
-/// user-defined AC signature.
-fn ac_fct_op_cache() -> &'static RwLock<FastMap<(usize, usize), &'static str>> {
-    static C: OnceLock<RwLock<FastMap<(usize, usize), &'static str>>> = OnceLock::new();
-    C.get_or_init(|| RwLock::new(FastMap::default()))
-}
-
-/// [`ac_fct_op_symbol`] for a symbol name that is already interned: a hit is a
-/// read-locked lookup on the `(ptr, len)` key, so rendering a user-AC
-/// application allocates nothing.
-fn ac_fct_op_symbol_interned(name: &'static [u8]) -> &'static str {
-    let key = (name.as_ptr() as usize, name.len());
-    if let Some(&sep) = ac_fct_op_cache().read().unwrap().get(&key) {
-        return sep;
-    }
-    // Resolved before the write lock is taken: `ac_fct_op_symbol` locks the
-    // intern pool, and holding both at once would nest the two locks.  A
-    // concurrent miss on the same key resolves to the same canonical pointer,
-    // so the losing insert overwrites the entry with an identical value.
-    let sep = ac_fct_op_symbol(&String::from_utf8_lossy(name));
-    ac_fct_op_cache().write().unwrap().insert(key, sep);
-    sep
 }
 
 /// The infix separator of a user-defined AC symbol: Haskell

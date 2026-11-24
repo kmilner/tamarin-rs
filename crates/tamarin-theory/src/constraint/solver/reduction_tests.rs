@@ -530,8 +530,6 @@ fn goal_rebuild_keeps_bounds_exact_and_reserves_removed_variables() {
     .expect("solve substitution");
     assert_eq!(bounds_max(&red.sys), 100);
 
-    // With TAM_RS_VERIFY_BOUNDS_CACHE=1 this also checks every intermediate
-    // bounds lookup while decomposing the first goal, before restoring later.
     red.subst_system().expect("rebuild goals with exact bounds");
     assert_eq!(red.sys.goals.len(), 4);
     assert!(red.sys.goals.iter().any(|(g, _)| *g == later));

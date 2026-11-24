@@ -331,28 +331,7 @@ impl EquationStore {
         //
         // Mirrors Haskell `performSplit` (EquationStore.hs):
         //   mkNewEqStore before after <$> orderedSubsts disj
-        if tamarin_utils::env_gate!("TAM_DBG_PERFORM_SPLIT") {
-            eprintln!(
-                "[perform_split] split_id={:?}, {} substs (pre-sort):",
-                id,
-                disj.substs.len()
-            );
-            for (i, s) in disj.substs.iter().enumerate() {
-                eprintln!("[perform_split]   raw[{}]: {:?}", i, s.to_list());
-            }
-            // Show full eq_store.subst too — system substitution at this point
-            eprintln!("[perform_split] eq_store.subst entries:");
-            for (k, v) in self.subst.to_list() {
-                eprintln!("[perform_split]   {:?} → {:?}", k, v);
-            }
-        }
         let sorted_substs = ordered_substs(&disj.substs);
-        if tamarin_utils::env_gate!("TAM_DBG_PERFORM_SPLIT") {
-            eprintln!("[perform_split] sorted result:");
-            for (i, s) in sorted_substs.iter().enumerate() {
-                eprintln!("[perform_split]   case_{}: {:?}", i + 1, s.to_list());
-            }
-        }
         let mut out = Vec::with_capacity(sorted_substs.len());
         for subst in sorted_substs {
             let mut new_store = self.clone();

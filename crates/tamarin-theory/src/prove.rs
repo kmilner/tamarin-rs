@@ -1444,14 +1444,7 @@ pub fn prove_lemma(
     // prover session.
     guarded_or_error(&lemma.formula)?;
 
-    let session = ProverSession::build(
-        theory,
-        maude,
-        ProverSessionOptions {
-            show_saturation_steps: true,
-            ..Default::default()
-        },
-    )?;
+    let session = ProverSession::build(theory, maude, ProverSessionOptions::default())?;
     prove_lemma_in_session(&session, lemma_name, proof_bound)
 }
 

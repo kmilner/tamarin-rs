@@ -42,43 +42,6 @@ pub fn at_pos<C: Ord + Clone, V: Ord + Clone>(t: &VTerm<C, V>, p: &[i64]) -> Opt
     }
 }
 
-/// `t.replace_pos(s, p)`: replace the subterm at `p` with `s`.
-pub fn replace_pos<C: Ord + Clone, V: Ord + Clone>(
-    t: &VTerm<C, V>,
-    s: &VTerm<C, V>,
-    p: &[i64],
-) -> Option<VTerm<C, V>> {
-    if p.is_empty() {
-        return Some(s.clone());
-    }
-    match t {
-        Term::Lit(_) => None,
-        Term::App(FunSym::Ac(sym), args) => match (p[0], &args[..]) {
-            (0, [head, rest @ ..]) => {
-                let new_head = replace_pos(head, s, &p[1..])?;
-                let mut new_args = vec![new_head];
-                new_args.extend(rest.iter().cloned());
-                Some(f_app(FunSym::Ac(*sym), new_args))
-            }
-            (1, [head, rest @ ..]) if !rest.is_empty() => {
-                let tail = f_app(FunSym::Ac(*sym), rest.to_vec());
-                let new_tail = replace_pos(&tail, s, &p[1..])?;
-                Some(f_app(FunSym::Ac(*sym), vec![head.clone(), new_tail]))
-            }
-            _ => None,
-        },
-        Term::App(fsym, args) => {
-            let i = p[0] as usize;
-            if p[0] < 0 || i >= args.len() {
-                return None;
-            }
-            let mut new = args.to_vec();
-            new[i] = replace_pos(&args[i], s, &p[1..])?;
-            Some(f_app(*fsym, new))
-        }
-    }
-}
-
 /// `find_pos t s`: all positions at which subterm `t` occurs inside `s`,
 /// or `None` if `t` is not a subterm. Port of HS `findPos` (Positions.hs).
 ///
@@ -261,14 +224,6 @@ mod tests {
     }
 
     #[test]
-    fn replace_pos_at_first_child() {
-        let t: LNTerm = pair(msg_var("x", 0), msg_var("y", 0));
-        let new = msg_var("z", 0);
-        let r = replace_pos(&t, &new, &[0]).unwrap();
-        assert_eq!(r, pair(msg_var("z", 0), msg_var("y", 0)));
-    }
-
-    #[test]
     fn positions_includes_root_and_each_subterm() {
         let t: LNTerm = pair(msg_var("x", 0), msg_var("y", 0));
         let ps = positions(&t);
@@ -280,11 +235,11 @@ mod tests {
 
     /// The code addresses AC applications through the right-leaning binary
     /// encoding `*[t1,t2,t3] ≡ t1 * (t2 * t3)` (`atPosMay`, Positions.hs;
-    /// `replacePos`, Positions.hs; `positions`, Positions.hs).
+    /// `positions`, Positions.hs).
     /// `0` selects the head, and `1` selects the tail multiset.  The k-th of n
     /// arguments therefore sits at `1^k ++ [0]`.  The last one sits at `1^k`.
-    /// No argument sits at `[k]`.  [`positions`], [`at_pos`] and
-    /// [`replace_pos`] have to agree on this encoding, because a term's own
+    /// No argument sits at `[k]`.  [`positions`] and [`at_pos`]
+    /// have to agree on this encoding, because a term's own
     /// position list is what indexes into that term.  `constant_positions`
     /// feeds these positions straight into `StRhs`, and `print_position`
     /// turns them into `AUTO_*` fact names.
@@ -318,12 +273,5 @@ mod tests {
         // difference is unreachable in practice.  `positions` never emits a
         // bare index >= 2 for an AC node.
         assert_eq!(at_pos(&t, &[2]), None);
-        // `replace_pos` descends the same encoding.  The AC smart constructor
-        // then flattens the rebuilt tail into its parent again.
-        let z = msg_var("z", 0);
-        assert_eq!(
-            replace_pos(&t, &z, &[1, 1]),
-            Some(f_app_ac(AcSym::Mult, vec![a, b, z]))
-        );
     }
 }

@@ -1966,10 +1966,9 @@ fn restriction_guard_matching_preserves_backend_errors() {
                 &actions,
                 &by_name,
                 &crate::guarded::gfalse(),
-                &ImpliedDedupTables::new(&sys),
+                &sys,
                 &[],
                 &mut out,
-                &mut Vec::new(),
             );
             if failed {
                 assert!(matches!(result, Err(crate::prove::ProveError::Maude(_))));

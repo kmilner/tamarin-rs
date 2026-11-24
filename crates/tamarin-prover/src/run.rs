@@ -478,9 +478,9 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     //     (which production proving still parses via
     //     `mk_bp_intruder_variants`); HS's `variants` command likewise
     //     generates BP at runtime, so the two stay byte-identical.
-    let dh_rules = tamarin_theory::intruder_rules::dh_intruder_rules(false, &maude);
+    let dh_rules = tamarin_theory::intruder_rules::dh_intruder_rules(&maude);
     let bp_maude = start_maude(tamarin_term::maude_sig::bp_maude_sig())?;
-    let bp_rules = tamarin_theory::intruder_rules::bp_intruder_rules(false, &bp_maude);
+    let bp_rules = tamarin_theory::intruder_rules::bp_intruder_rules(&bp_maude);
     // HS `putStrLn (dhS ++ bpS)` where each block is `renderDoc .
     // prettyIntruderVariants` (Theory/Model/Rule.hs):
     // blank-line-separated `rule (modulo AC) NAME:` rules with HughesPJ body

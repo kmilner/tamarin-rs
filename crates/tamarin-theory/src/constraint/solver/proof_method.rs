@@ -382,37 +382,6 @@ pub fn exec_proof_method(
     Ok(result)
 }
 
-/// `checkAndExecProofMethod`: structurally validates the method
-/// against `sys` before delegating to `exec_proof_method`. Mirrors
-/// Haskell's pre-conditions:
-///
-/// - `Finished r` → `is_finished` must return a result with the same
-///   reason kind.
-/// - `Induction` → only valid on a fresh system with a single formula.
-/// - `SolveGoal g` → `g` must be in `sys.goals`.
-/// - `Simplify` / `Sorry` → always valid.
-pub fn check_and_exec_proof_method(
-    ctx: &ProofContext,
-    method: &ProofMethod,
-    sys: &System,
-) -> std::result::Result<Option<Vec<(CaseName, System)>>, crate::prove::ProveError> {
-    match method {
-        ProofMethod::Finished(r) => {
-            if !finished_step_is_valid(ctx, sys, r)? {
-                return Ok(None);
-            }
-        }
-        ProofMethod::Induction => {}
-        ProofMethod::SolveGoal(g) => {
-            if !sys.goals.iter().any(|(existing, _)| existing == g) {
-                return Ok(None);
-            }
-        }
-        ProofMethod::Simplify | ProofMethod::Sorry(_) | ProofMethod::Invalidated => {}
-    }
-    exec_proof_method(ctx, method, sys)
-}
-
 /// Validate a stored terminal marker by result kind. Contradiction reasons
 /// are runtime details; an UNFINISHABLE marker additionally checks exhaustion.
 pub(crate) fn finished_step_is_valid(
@@ -635,20 +604,5 @@ mod tests {
         assert_eq!(r.len(), 2);
         assert!(r.iter().any(|(n, _)| n == "empty_trace"));
         assert!(r.iter().any(|(n, _)| n == "non_empty_trace"));
-    }
-
-    #[test]
-    fn check_solve_goal_rejects_unknown() {
-        let ctx = match ctx() {
-            Some(c) => c,
-            None => return,
-        };
-        let s = System::empty();
-        // Goal not in sys.goals → check should fail.
-        let v = tamarin_term::lterm::LVar::new("k", tamarin_term::lterm::LSort::Msg, 0);
-        let f = crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]);
-        let g = Goal::Action(v, f);
-        let r = check_and_exec_proof_method(&ctx, &ProofMethod::SolveGoal(g), &s).unwrap();
-        assert!(r.is_none());
     }
 }

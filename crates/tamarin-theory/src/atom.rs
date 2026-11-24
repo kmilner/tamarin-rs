@@ -185,15 +185,6 @@ impl<T> Atom<T> {
     pub fn is_action(&self) -> bool {
         matches!(self, ProtoAtom::Action(_, _))
     }
-    pub fn is_eq(&self) -> bool {
-        matches!(self, ProtoAtom::EqE(_, _))
-    }
-    pub fn is_subterm(&self) -> bool {
-        matches!(self, ProtoAtom::Subterm(_, _))
-    }
-    pub fn is_less(&self) -> bool {
-        matches!(self, ProtoAtom::Less(_, _))
-    }
     pub fn is_last(&self) -> bool {
         matches!(self, ProtoAtom::Last(_))
     }
@@ -275,26 +266,18 @@ mod tests {
         lit(Lit::Var(LVar::new(name, LSort::Node, 0)))
     }
 
-    /// Every predicate used by production code matches exactly its own
-    /// variant. The syntactic-sugar variant matches none of them.
+    /// Every predicate matches exactly its own variant. The syntactic-sugar
+    /// variant matches none of them.
     #[test]
     fn atom_predicates() {
         let atoms: Vec<Atom<LNTerm>> = vec![
             ProtoAtom::Action(x(), fresh_fact(y())),
-            ProtoAtom::EqE(x(), y()),
-            ProtoAtom::Subterm(x(), y()),
-            ProtoAtom::Less(x(), y()),
             ProtoAtom::Last(x()),
+            ProtoAtom::EqE(x(), y()),
             ProtoAtom::Syntactic(Unit2),
         ];
         for (i, a) in atoms.iter().enumerate() {
-            let row = [
-                a.is_action(),
-                a.is_eq(),
-                a.is_subterm(),
-                a.is_less(),
-                a.is_last(),
-            ];
+            let row = [a.is_action(), a.is_last()];
             for (j, hit) in row.iter().enumerate() {
                 assert_eq!(*hit, i == j, "predicate {j} on {a:?}");
             }

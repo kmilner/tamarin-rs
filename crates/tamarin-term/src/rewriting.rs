@@ -55,18 +55,6 @@ impl<A> Match<A> {
     pub fn empty() -> Self {
         Match::DelayedMatches(Vec::new())
     }
-    pub fn no_match() -> Self {
-        Match::NoMatch
-    }
-
-    /// `matchOnlyIf b`: an empty match if `b`, otherwise `NoMatch`.
-    pub fn only_if(b: bool) -> Self {
-        if b {
-            Match::empty()
-        } else {
-            Match::NoMatch
-        }
-    }
 
     /// `matchWith t p`: a single-pair match problem.
     pub fn match_with(term: A, pattern: A) -> Self {
@@ -142,14 +130,8 @@ mod tests {
         // The Haskell `Monoid` instance short-circuits on either side.  A
         // guard that checks only one side therefore fails this test.
         let a: Match<i32> = Match::match_with(1, 2);
-        assert!(matches!(
-            a.clone().append(Match::no_match()),
-            Match::NoMatch
-        ));
-        assert!(matches!(Match::no_match().append(a), Match::NoMatch));
-        // `matchOnlyIf False` is the other producer of the absorbing element.
-        assert!(matches!(Match::<i32>::only_if(false), Match::NoMatch));
-        assert_eq!(Match::<i32>::only_if(true).flatten(), Some(Vec::new()));
+        assert!(matches!(a.clone().append(Match::NoMatch), Match::NoMatch));
+        assert!(matches!(Match::NoMatch.append(a), Match::NoMatch));
     }
 
     #[test]
