@@ -757,7 +757,7 @@ fn fatal_source_error_discards_completed_sibling_arms() {
 
 #[test]
 fn merge_candidates_finishes_each_group_before_starting_the_next() {
-    use crate::constraint::solver::reduction::{SolveBranch, SolveOutcome};
+    use crate::constraint::solver::reduction::SystemBranch;
     use std::cell::Cell;
     use tamarin_term::lterm::{LSort, LVar};
 
@@ -778,15 +778,14 @@ fn merge_candidates_finishes_each_group_before_starting_the_next() {
             calls.set(call + 1);
             if call == 0 {
                 assert_eq!((eqs[0].lhs, eqs[0].rhs), (10, 11));
-                let store = red.sys.eq_store().clone();
                 let counter = red.maude.fresh_counter_peek();
-                Ok::<_, crate::prove::ProveError>(SolveOutcome::Cases(vec![
-                    SolveBranch {
-                        eq_store: store.clone(),
+                Ok::<_, crate::prove::ProveError>(SystemOutcome::Cases(vec![
+                    SystemBranch {
+                        sys: red.sys.clone(),
                         counter,
                     },
-                    SolveBranch {
-                        eq_store: store,
+                    SystemBranch {
+                        sys: red.sys.clone(),
                         counter,
                     },
                 ]))
@@ -796,7 +795,7 @@ fn merge_candidates_finishes_each_group_before_starting_the_next() {
                     !red.sys.eq_store().subst.is_empty(),
                     "the first group's node equality must precede the second payload solve"
                 );
-                Ok(SolveOutcome::Linear)
+                Ok(SystemOutcome::Linear)
             }
         },
     )
@@ -1281,6 +1280,78 @@ fn partial_atom_valuation_last_returns_none_when_successor_not_in_trace() {
         Some(true),
         "`isLast` is the first guard and outranks the successor check"
     );
+}
+
+/// HS `nodesAfter` walks `rawLessRel`, which includes unsolved chains: a
+/// chain from `n` to an in-trace node refutes `Last n`.
+#[test]
+fn partial_atom_valuation_last_follows_unsolved_chains() {
+    let Some(h) = maude() else { return };
+    use crate::constraint::constraints::Goal;
+    use crate::rule::{ConcIdx, PremIdx};
+    let node = |n: &str| tamarin_term::lterm::LVar::new(n, tamarin_term::lterm::LSort::Node, 0);
+    let (n, m) = (node("n"), node("m"));
+    let mut sys = System::empty();
+    sys.add_goal(Goal::Chain((n, ConcIdx(0)), (m, PremIdx(0))));
+    sys.add_goal(Goal::Action(
+        m,
+        crate::fact::LNFact::new(
+            crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "P", 0),
+            vec![],
+        ),
+    ));
+    let ab_adj = sys.build_always_before_adj();
+    let node_rule_map = sys.node_rule_map();
+    let reducible = h.maude_sig().reducible_fun_syms_fast.clone();
+    let subterms = crate::tools::subterm_store::StoreValuation::new(&reducible, &sys.subterm_store);
+    let last_n = partial_atom_valuation_with(
+        &sys,
+        &h,
+        &ab_adj,
+        &node_rule_map,
+        &subterms,
+        &crate::atom::ProtoAtom::Last(tamarin_term::vterm::var_term(n)),
+    );
+    assert_eq!(last_n, Some(false));
+}
+
+/// HS `partialAtomValuation` asks `unifiableLNTerms` before reading node ids:
+/// variables of incompatible sorts are unequal in every model.
+#[test]
+fn partial_atom_valuation_eq_unifies_before_reading_node_ids() {
+    let Some(h) = maude() else { return };
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    let (i, j) = (
+        LVar::new("i", LSort::Node, 0),
+        LVar::new("j", LSort::Node, 0),
+    );
+    let mut sys = System::empty();
+    let eval = |sys: &System, x: LVar, y: LVar| {
+        let ab_adj = sys.build_always_before_adj();
+        let node_rule_map = sys.node_rule_map();
+        let reducible = h.maude_sig().reducible_fun_syms_fast.clone();
+        let subterms =
+            crate::tools::subterm_store::StoreValuation::new(&reducible, &sys.subterm_store);
+        partial_atom_valuation_with(
+            sys,
+            &h,
+            &ab_adj,
+            &node_rule_map,
+            &subterms,
+            &crate::atom::ProtoAtom::EqE(var_term(x), var_term(y)),
+        )
+    };
+    let a = LVar::new("A", LSort::Pub, 0);
+    let b = LVar::new("b", LSort::Fresh, 0);
+    assert_eq!(eval(&sys, a, b), Some(false));
+    assert_eq!(eval(&sys, i, j), None);
+    sys.add_less(crate::constraint::constraints::LessAtom::new(
+        i,
+        j,
+        crate::constraint::constraints::Reason::Formula,
+    ));
+    assert_eq!(eval(&sys, i, j), Some(false));
 }
 
 #[test]
@@ -1847,75 +1918,6 @@ fn ku_action_uniqueness_unchanged_when_terms_differ() {
     let res = enforce_ku_action_uniqueness_pass(&mut r).expect("solver operation");
     assert!(matches!(res, SystemOutcome::Linear));
     assert_eq!(r.changed, ChangeIndicator::Unchanged);
-}
-
-/// Builds `x = 'z'` as one `Guarded`.  The sort of `x` is a parameter.
-fn eq_pub_lit_with_sort(sort: tamarin_term::lterm::LSort) -> crate::guarded::Guarded {
-    use crate::atom::ProtoAtom;
-    use crate::guarded::Guarded;
-    use tamarin_term::lterm::{BVar, LVar, Name, NameTag};
-    use tamarin_term::vterm::{const_term, var_term};
-    Guarded::Atom(ProtoAtom::EqE(
-        var_term(BVar::Free(LVar::new("x", sort, 0))),
-        const_term(Name::new(NameTag::Pub, "z")),
-    ))
-}
-
-/// `dedupe_formulas_pass` compares `Guarded` equality and keeps the first
-/// `Arc` of each group of equal formulas.
-#[test]
-fn dedupe_formulas_drops_a_repeated_formula() {
-    let Some(ctx) = ctx() else { return };
-    use tamarin_term::lterm::LSort;
-    let first = std::sync::Arc::new(eq_pub_lit_with_sort(LSort::Msg));
-    let second = std::sync::Arc::new(eq_pub_lit_with_sort(LSort::Msg));
-    assert_eq!(
-        *first, *second,
-        "the pair must be equal under `Guarded` `Eq`"
-    );
-    assert!(
-        !std::sync::Arc::ptr_eq(&first, &second),
-        "the pair must be two allocations, so the surviving one is identifiable"
-    );
-
-    let mut sys = System::empty();
-    sys.formulas_mut().push(first.clone());
-    sys.formulas_mut().push(second);
-    let mut r = Reduction::new(&ctx, sys);
-    dedupe_formulas_pass(&mut r);
-    assert_eq!(r.changed, ChangeIndicator::Changed);
-    assert_eq!(r.sys.formulas.len(), 1, "the equal pair collapses");
-    assert!(
-        std::sync::Arc::ptr_eq(&r.sys.formulas[0], &first),
-        "the FIRST occurrence is kept, not the later equal one"
-    );
-}
-
-/// The other side: the binder sort is part of `Guarded` equality, so two
-/// formulas that differ only in it stay apart and the pass drops nothing.
-#[test]
-fn dedupe_formulas_keeps_formulas_of_different_sort() {
-    let Some(ctx) = ctx() else { return };
-    use tamarin_term::lterm::LSort;
-    let f1 = eq_pub_lit_with_sort(LSort::Msg);
-    let f2 = eq_pub_lit_with_sort(LSort::Fresh);
-    assert_ne!(f1, f2, "the sorts must keep the pair distinct");
-
-    let mut sys = System::empty();
-    sys.formulas_mut().push(std::sync::Arc::new(f1.clone()));
-    sys.formulas_mut().push(std::sync::Arc::new(f2.clone()));
-    let mut r = Reduction::new(&ctx, sys);
-    dedupe_formulas_pass(&mut r);
-    assert_eq!(r.changed, ChangeIndicator::Unchanged);
-    assert_eq!(
-        r.sys
-            .formulas
-            .iter()
-            .map(|f| (**f).clone())
-            .collect::<Vec<_>>(),
-        vec![f1, f2],
-        "both formulas are retained, in order"
-    );
 }
 
 #[test]

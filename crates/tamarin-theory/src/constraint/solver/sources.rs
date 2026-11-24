@@ -217,17 +217,13 @@ pub(crate) fn initial_source_cases(
     let mut sys = System::empty();
     sys.source_kind = Some(crate::constraint::system::SourceKind::RawSources);
     sys.insert_lemmas(ctx.safety_restrictions.iter().cloned());
+    if !matches!(goal, Goal::Action(..) | Goal::Premise(..)) {
+        return Ok(Vec::new());
+    }
     let mut red = Reduction::new(ctx, sys);
     red.insert_goal(goal.clone());
-    // `solveGoal` (Goals.hs) marks the goal before solving it, since
-    // unification can rewrite its terms.
-    red.mark_goal_as_solved(goal);
-
-    let outcome = match goal {
-        Goal::Action(node, fa) => red.solve_action_goal(node, fa)?,
-        Goal::Premise(prem, fa) => red.solve_premise_goal(prem, fa)?,
-        _ => return Ok(Vec::new()),
-    };
+    let outcome = crate::constraint::solver::goals::solve_goal(&mut red, goal)?;
+    // `polish ((name, se), _) = ([name], se)`.
     Ok(match outcome {
         GoalCases::LinearNamed(name) => vec![(vec![name], red.sys)],
         GoalCases::Cases(branches) => branches
@@ -1415,7 +1411,7 @@ fn refine_source_case(
     prepared: &PreparedSourceMatch,
     case_sys: System,
 ) -> Result<Vec<System>, crate::prove::ProveError> {
-    use crate::constraint::solver::reduction::{Reduction, SolveOutcome, SplitStrategy};
+    use crate::constraint::solver::reduction::{Reduction, SplitStrategy};
     let PreparedSourceMatch {
         renamed_abstract_node,
         prem_rewire,
@@ -1461,53 +1457,24 @@ fn refine_source_case(
         })
         .collect();
     // -----------------------------------------------------------------
-    // `solveTermEqs SplitNow` (Reduction.hs) branches over `performSplit`.
-    // A linear result installs its equation store directly; a branching
-    // result returns the stores and counters for separate continuations.
-    // Preserve Maude's unifier order through those continuations.
-    let arm_eq_stores: Vec<(crate::tools::equation_store::EquationStore, u64)> =
-        if term_eqs.is_empty() {
-            // No refineSubst; keep current eq_store as the sole arm.
-            vec![(
-                refined.sys.eq_store().clone(),
-                refined.maude.fresh_counter_peek(),
-            )]
-        } else {
-            let outcome = refined.solve_term_eqs(SplitStrategy::SplitNow, &term_eqs);
-            match outcome {
-                Err(error) => return Err(error),
-                Ok(SolveOutcome::Contradictory) => {
-                    return Ok(Vec::new());
-                }
-                Ok(SolveOutcome::Linear) => {
-                    // Single arm: solve_term_eqs already installed it
-                    // into refined.sys.eq_store().  Mirror as a single-arm
-                    // Vec so the post-continuation runs once with that
-                    // store.
-                    vec![(
-                        refined.sys.eq_store().clone(),
-                        refined.maude.fresh_counter_peek(),
-                    )]
-                }
-                Ok(SolveOutcome::Cases(arms)) => arms
-                    .into_iter()
-                    .map(|arm| (arm.eq_store, arm.counter))
-                    .collect(),
-            }
-        };
+    // `solveTermEqs SplitNow` (Reduction.hs) branches over `performSplit`,
+    // in Maude's unifier order.
+    let arms = if term_eqs.is_empty() {
+        // No refineSubst; the case continues as the sole arm.
+        vec![refined.into_branch()]
+    } else {
+        let outcome = refined.solve_term_eqs(SplitStrategy::SplitNow, &term_eqs)?;
+        refined.outcome_branches(outcome)
+    };
 
     // Each arm continues from the post-refineSubst system with its own
     // equation store and FreshT counter (HS `DisjT` over `performSplit`,
     // Reduction.hs), substitutes it through the case, and restricts it to
     // the live goal's variables (`frees (cdGoal th)` after `set cdGoal
     // goalTerm`).
-    let template = refined.sys;
-    let mut out = Vec::with_capacity(arm_eq_stores.len());
-    for (arm_eq_store, arm_counter) in arm_eq_stores {
-        let mut arm_sys = template.clone();
-        arm_sys.invalidate_max_var_idx_cache();
-        arm_sys.set_eq_store(std::sync::Arc::new(arm_eq_store));
-        let mut refined = Reduction::new_inheriting(ctx, arm_sys, arm_counter);
+    let mut out = Vec::with_capacity(arms.len());
+    for arm in arms {
+        let mut refined = Reduction::new_inheriting(ctx, arm.sys, arm.counter);
         refined.subst_system()?;
         if refined.sys.eq_store().is_false() {
             continue;

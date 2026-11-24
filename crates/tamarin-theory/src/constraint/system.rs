@@ -762,35 +762,6 @@ impl System {
         }
     }
 
-    /// Apply the equation-store substitution to less-atom endpoints. The
-    /// fields are borrowed together here so no raw `SystemContent` reference
-    /// has to escape through the untracked solver door.
-    pub(crate) fn normalise_less_atoms(&mut self) -> bool {
-        if self.content.eq_store.subst.is_empty() {
-            return false;
-        }
-        let content = &mut self.content;
-        let subst = &content.eq_store.subst;
-        let mut changed = false;
-        let normalize = |id: &NodeId| match subst.image_of(id) {
-            Some(tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(var))) => *var,
-            _ => *id,
-        };
-        for atom in &mut content.less_atoms {
-            let smaller = normalize(&atom.smaller);
-            let larger = normalize(&atom.larger);
-            changed |= smaller != atom.smaller || larger != atom.larger;
-            atom.smaller = smaller;
-            atom.larger = larger;
-        }
-        if changed {
-            // Substitution cannot increase the cached maximum here, but the
-            // content stamp must invalidate a stale simplification marker.
-            self.bump_content_stamp();
-        }
-        changed
-    }
-
     /// `&mut` to `formulas` with NO stamp bump: the untracked-door analog of
     /// [`formulas_mut`](Self::formulas_mut) for whole-system rewriters
     /// (`subst_system_once`, `rename_precise_system`), which manage

@@ -1,0 +1,142 @@
+theory AnnotatedKuGoals
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: xor
+functions: fst/1, h/1, pair/2, sdec/2, senc/2, snd/1
+equations:
+    fst(<x.1, x.2>) = x.1,
+    sdec(senc(x.1, x.2), x.2) = x.1,
+    snd(<x.1, x.2>) = x.2
+
+rule (modulo E) Setup:
+   [ Fr( ~k ) ] --> [ !Key( ~k ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Send:
+   [ !Key( ~k ), Fr( ~m ) ]
+  --[ Secret( ~m ) ]->
+   [ Out( senc(<h(~m), ~m>, ~k) ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Recv:
+   [ !Key( ~k ), In( senc(<x, y>, ~k) )[+] ] --[ Got( y ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Reveal:
+   [ !Key( ~k ) ] --[ Rev( ~k ) ]-> [ Out( ~k ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Gen:
+   [ Fr( ~a ), Fr( ~b ) ]
+  --[ Gen( ~a, ~b ) ]->
+   [ St( ~a, ~b ), Out( h(~a) ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Leak:
+   [ St( a, b ) ] --[ Leak( b ) ]-> [ Out( b ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Chk:
+   [ St( a, b ), In( (b⊕h(a)) )[+] ] --[ Done( a, b ) ]-> [ ]
+
+  /*
+  rule (modulo AC) Chk:
+     [ St( a, b ), In( z )[+] ] --[ Done( a, b ) ]-> [ ]
+    variants (modulo AC)
+    1. a     = a.4
+       b     = b.4
+       z     = (b.4⊕h(a.4))
+    
+    2. a     = a.4
+       b     = zero
+       z     = h(a.4)
+    
+    3. a     = x.4
+       b     = h(x.4)
+       z     = zero
+    
+    4. a     = x.4
+       b     = (x.5⊕h(x.4))
+       z     = x.5
+  */
+
+lemma got_secret:
+  all-traces
+  "∀ y #i.
+    (Got( y ) @ #i) ⇒ ((∃ #j. Secret( y ) @ #j) ∨ (∃ k #r. Rev( k ) @ #r))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ y #i.
+  (Got( y ) @ #i)
+ ∧
+  (∀ #j. (Secret( y ) @ #j) ⇒ ⊥) ∧ (∀ k #r. (Rev( k ) @ #r) ⇒ ⊥)"
+*/
+simplify
+solve( !KU( senc(<x, y>, ~k) )[+] @ #vk )
+  case Send
+  by contradiction /* from formulas */
+next
+  case c_senc
+  solve( !Key( ~k ) ▶₀ #i )
+    case Setup
+    solve( !KU( ~k ) @ #vk.2 )
+      case Reveal
+      by contradiction /* from formulas */
+    qed
+  qed
+qed
+
+lemma done_needs_leak:
+  all-traces "∀ a b #i. (Done( a, b ) @ #i) ⇒ (∃ #l. Leak( b ) @ #l)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ a b #i. (Done( a, b ) @ #i) ∧ ∀ #l. (Leak( b ) @ #l) ⇒ ⊥"
+*/
+simplify
+solve( St( a, b ) ▶₀ #i )
+  case Gen
+  solve( !KU( (~b⊕h(~a)) )[+] @ #vk )
+    case c_xor
+    by solve( !KU( ~b )[+] @ #vk.1 )
+  next
+    case coerce
+    solve( !KD( (~b⊕h(~a)) )[+] ▶₀ #vk )
+      case Gen
+      by solve( (#vl, 0) ~~> (#vk, 0) )
+    next
+      case Leak
+      solve( St( a.1, t ) ▶₀ #vr.1 )
+        case Gen
+        by solve( (#vl, 0) ~~> (#vk, 0) )
+      qed
+    next
+      case Reveal
+      by solve( (#vl, 0) ~~> (#vk, 0) )
+    next
+      case Send
+      solve( (#vl, 0) ~~> (#vk, 0) )
+        case d_0_sdec
+        solve( (#vr.2, 0) ~~> (#vk, 0) )
+          case d_0_fst
+          by solve( (#vr.3, 0) ~~> (#vk, 0) )
+        next
+          case d_0_snd
+          by solve( (#vr.3, 0) ~~> (#vk, 0) )
+        qed
+      qed
+    qed
+  qed
+qed
+
+
+
+end

@@ -2512,62 +2512,13 @@ fn lit_sort_contains(t: &tamarin_term::lterm::LNTerm, target: tamarin_term::lter
     }
 }
 
-/// Dispatch a goal to the appropriate `solve_*_goal` primitive on a
-/// `Reduction`. Mirrors the case dispatch at the top of Haskell's
-/// `solveGoal`. Returns the corresponding `GoalCases` outcome.
-pub(crate) fn dispatch_solve_goal(
+/// HS `solveGoal` (Goals.hs): mark the goal solved, then solve it.
+/// Marking first matters because unification inside the solver can
+/// rewrite the goal's terms.
+pub(crate) fn solve_goal(
     red: &mut crate::constraint::solver::reduction::Reduction<'_>,
     g: &Goal,
 ) -> Result<crate::constraint::solver::reduction::GoalCases, crate::prove::ProveError> {
-    // Haskell-faithful: mark the goal as solved BEFORE delegating to
-    // the specific solver.  Mirrors `solveGoal` (Goals.hs):
-    //   solveGoal goal = do
-    //       -- mark before solving, as representation might change due
-    //       -- to unification
-    //       markGoalAsSolved "directly" goal
-    //       ...
-    //       case goal of
-    //         ActionG i fa  -> solveAction ...
-    //         PremiseG p fa -> solvePremise ...
-    //         ...
-    //
-    // The comment in Haskell ("representation might change due to
-    // unification") refers exactly to the case where `solveFactEqs` or
-    // `substSystem` running INSIDE the solver rewrites the goal's terms
-    // (e.g. Check0's `Loop(loopId, kOrig, kOrig)` repeated-arg unification
-    // rewrites `Loop(t1, t2, t3)` → `Loop(t1, t2, t2)`).  An attempted
-    // post-solve mark with the ORIGINAL goal then misses the (now
-    // substituted) goal in the map and leaves it open.  Concrete
-    // trigger: Minimal_HashChain Loop_Start source-case Check0 left
-    // its abstract Loop goal open, which then triggered another graft
-    // iteration adding a duplicate Check0 node.
-    // HS-faithful `solve goal = maybe (solveGoal goal) ...
-    // (solveWithSource ctxt ths goal)` (ProofMethod.hs).
-    // HS tries source-case dispatch FIRST; only if it returns
-    // `Nothing` does it fall back to `solveGoal` (which emits the
-    // `traceExecM ("solveGoal " ++ goalKind goal)` line).  Mirror
-    // here for source-backed goals: try the source application once,
-    // and if it returns `Some(cases)`, return them directly without
-    // emitting the `solveGoal kind=Premise fact=...` trace.
-    //
-    // During saturation only KU source picks use `solveWithSource`; safe
-    // premise goals go directly through `solveGoal`.
-    if !crate::constraint::solver::sources::in_precompute_mode()
-        && let Some(mut branches) =
-            crate::constraint::solver::sources::solve_with_source(red.ctx, &red.sys, g, &red.maude)?
-    {
-        use crate::constraint::solver::reduction::GoalCases;
-        return Ok(match branches.len() {
-            0 => GoalCases::Contradictory,
-            1 => {
-                let branch = branches.pop().unwrap();
-                red.sys = branch.sys;
-                red.maude.reset_counter_to(branch.counter);
-                GoalCases::LinearNamed(branch.name)
-            }
-            _ => GoalCases::Cases(branches),
-        });
-    }
     red.mark_goal_as_solved(g);
     Ok(match g {
         Goal::Action(i, fa) => red.solve_action_goal(i, fa)?,
@@ -2577,6 +2528,23 @@ pub(crate) fn dispatch_solve_goal(
         Goal::Disj(d) => red.solve_disj_goal(d)?,
         Goal::Subterm(st) => red.solve_subterm_goal(st)?,
     })
+}
+
+/// Solve a goal during proof search: HS `solve` (ProofMethod.hs),
+/// `maybe (solveGoal goal) ... (solveWithSource ctxt ths goal)`. A goal
+/// that matches a precomputed source takes the source's cases; any other
+/// goal goes to [`solve_goal`].
+pub(crate) fn dispatch_solve_goal(
+    red: &mut crate::constraint::solver::reduction::Reduction<'_>,
+    g: &Goal,
+) -> Result<crate::constraint::solver::reduction::GoalCases, crate::prove::ProveError> {
+    if !crate::constraint::solver::sources::in_precompute_mode()
+        && let Some(branches) =
+            crate::constraint::solver::sources::solve_with_source(red.ctx, &red.sys, g, &red.maude)?
+    {
+        return Ok(red.finish_goal_cases(branches));
+    }
+    solve_goal(red, g)
 }
 
 #[cfg(test)]

@@ -1,0 +1,38 @@
+theory AnnotatedKuGoals
+begin
+
+/* An annotated In premise gives its ISend node an annotated KU premise
+   (mkISendRuleAC), and an annotated KU goal without a precomputed source
+   labels its node with intruder rules whose premises carry the annotation
+   (annotatePrems in solveAction).  No corpus theory reaches either. */
+
+builtins: xor, hashing, symmetric-encryption
+
+rule Setup:
+  [ Fr(~k) ] --> [ !Key(~k) ]
+
+rule Send:
+  [ !Key(~k), Fr(~m) ] --[ Secret(~m) ]-> [ Out(senc(<h(~m), ~m>, ~k)) ]
+
+rule Recv:
+  [ !Key(~k), In(senc(<x, y>, ~k))[+] ] --[ Got(y) ]-> [ ]
+
+rule Reveal:
+  [ !Key(~k) ] --[ Rev(~k) ]-> [ Out(~k) ]
+
+rule Gen:
+  [ Fr(~a), Fr(~b) ] --[ Gen(~a, ~b) ]-> [ St(~a, ~b), Out(h(~a)) ]
+
+rule Leak:
+  [ St(a, b) ] --[ Leak(b) ]-> [ Out(b) ]
+
+rule Chk:
+  [ St(a, b), In(h(a) XOR b)[+] ] --[ Done(a, b) ]-> [ ]
+
+lemma got_secret:
+  "All y #i. Got(y) @ i ==> (Ex #j. Secret(y) @ j) | (Ex k #r. Rev(k) @ r)"
+
+lemma done_needs_leak:
+  "All a b #i. Done(a, b) @ i ==> Ex #l. Leak(b) @ l"
+
+end

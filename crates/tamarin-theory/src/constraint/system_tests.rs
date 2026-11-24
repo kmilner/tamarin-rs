@@ -194,7 +194,6 @@ fn content_untracked_callers_are_enumerated() {
         "subst_node_ids",
         "set_nodes",
         "rename_precise_system",
-        "normalise_less_atoms_pass",
     ];
     let src_root = concat!(env!("CARGO_MANIFEST_DIR"), "/src");
     // Build the call needles by concatenation so THIS test's own source

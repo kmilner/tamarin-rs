@@ -20,13 +20,10 @@ system and its counter together. Code continuing a branch must use
 `bounds_max(system)`: temporary allocations made before the split may not be
 present in the system, so recomputing the bound can rewind the counter.
 
-There are two result levels:
-
-- `SolveOutcome::Cases` contains equation stores and counters. The caller
-  supplies the common pre-split system snapshot and applies the rest of the
-  operation to every arm.
-- `GoalCases`, `SystemOutcome`, and the simplify/source APIs contain complete
-  systems and counters. Their caller continues directly from each branch.
+Every split result (`SystemOutcome`, `GoalCases`, and the simplify/source
+APIs) holds complete systems and counters, so the caller continues directly
+from each branch. `continue_in_arms` runs the rest of an operation in every
+branch and collects the completed ones.
 
 When adding a split point, keep the operation that consumes its result close
 to it. Do not install arm zero and silently leave sibling state elsewhere;

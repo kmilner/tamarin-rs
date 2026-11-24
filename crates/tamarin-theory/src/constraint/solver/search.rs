@@ -1977,9 +1977,8 @@ mod tests {
     }
 
     /// This system holds only trivially-true formulas.  `simplify` clears them
-    /// with `dedupe_formulas_pass` and then
-    /// `drop_trivially_true_formulas_pass`, and the child then closes as
-    /// Solved.  A `simplify` that leaves the formulas in place never finishes
+    /// (`reduceFormulas` reinserts `gtrue` as solved), and the child then
+    /// closes as Solved.  A `simplify` that leaves the formulas in place never finishes
     /// the search, and the search returns `Sorry`.
     #[test]
     fn search_simplify_drops_trivially_true_formulas_then_solves() {

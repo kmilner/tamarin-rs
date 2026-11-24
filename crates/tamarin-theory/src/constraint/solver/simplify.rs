@@ -1,22 +1,13 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Port of `Theory.Constraint.Solver.Simplify`.
-//!
-//! `simplifySystem` runs CR-rules that don't case-split until the
-//! system stabilises. For the authoritative per-pass order — including
-//! the KD-node (N5↓) pass and the Rust-specific passes
-//! (remove_solved_split_goals, propagate_subterm_obvious — the
-//! `simpSubterms` analog —, dedupe_formulas, drop_trivially_true,
-//! normalise_less_atoms) — see the documented sequence at the
-//! `simplify_system` loop below.
-//!
-//! Each pass is a `Reduction` step that may modify the system. This Rust
-//! port implements the full fixpoint loop and every pass. Branch and fresh-
-//! counter ownership follows `constraint/solver/BRANCHING.md`.
+//! Port of `Theory.Constraint.Solver.Simplify`: `simplifySystem` applies
+//! the non-splitting CR-rules (`SIMPLIFY_PASSES`, in Haskell's non-diff
+//! order) until a whole iteration changes nothing. Branch and fresh-counter
+//! ownership follows `constraint/solver/BRANCHING.md`.
 
 use crate::constraint::solver::reduction::{
-    ChangeIndicator, GoalCases, Reduction, SystemBranch, SystemOutcome,
+    continue_in_arms, ChangeIndicator, GoalCases, Reduction, SystemBranch, SystemOutcome,
 };
 use crate::tools::equation_store::LNSubst;
 use crate::tools::subterm_store::nat_subterm_equalities;
@@ -55,9 +46,6 @@ const SIMPLIFY_PASSES: &[Pass] = &[
     Pass::Fallible(simp_injective_fact_eq_mon_pass),
     Pass::Fallible(merge_last_injective_fact_nodes),
     Pass::Fallible(insert_implied_formulas_pass),
-    Pass::Linear(dedupe_formulas_pass),
-    Pass::Linear(drop_trivially_true_formulas_pass),
-    Pass::Linear(normalise_less_atoms_pass),
 ];
 
 /// Upstream aec550a2: interfering nodes at the end of an injective fact's
@@ -89,9 +77,8 @@ fn merge_last_injective_fact_nodes(
             equations.push(eq);
         }
     }
-    let base = red.sys.clone();
     let result = red.solve_node_id_eqs(&equations);
-    complete_solve(red, base, result)
+    complete_solve(red, result)
 }
 
 /// The non-diff tail of HS `simplifySystem` (Simplify.hs), run once after
@@ -216,73 +203,38 @@ fn continue_simplify_branches(
     next_pass: usize,
     changed: ChangeIndicator,
 ) -> Result<Vec<SystemBranch>, crate::prove::ProveError> {
-    let mut out = Vec::new();
-    for arm in arms {
-        let mut branch_out = continue_simplify_branch(arm, ctx, passes, next_pass, changed)?;
-        out.append(&mut branch_out);
-    }
-    Ok(out)
+    let arms = arms
+        .into_iter()
+        .filter(|arm| !arm.sys.eq_store().is_false())
+        .collect();
+    continue_in_arms(ctx, arms, |branch| {
+        branch.changed = changed;
+        Ok(
+            match continue_simplify_iteration(branch, passes, next_pass)? {
+                Some(branches) => SystemOutcome::Cases(branches),
+                None if branch.changed == ChangeIndicator::Changed => {
+                    SystemOutcome::Cases(simplify_system_fan_out_inner_with_passes(branch, passes)?)
+                }
+                None => {
+                    simp_post_loop_steps(branch);
+                    SystemOutcome::Linear
+                }
+            },
+        )
+    })
 }
 
-fn continue_simplify_branch(
-    arm: SystemBranch,
-    ctx: &crate::constraint::solver::context::ProofContext,
-    passes: &[Pass],
-    next_pass: usize,
-    changed: ChangeIndicator,
-) -> Result<Vec<SystemBranch>, crate::prove::ProveError> {
-    if arm.sys.eq_store().is_false() {
-        return Ok(Vec::new());
-    }
-    let mut branch = Reduction::new_inheriting(ctx, arm.sys, arm.counter);
-    branch.changed = changed;
-    match continue_simplify_iteration(&mut branch, passes, next_pass)? {
-        Some(branches) => Ok(branches),
-        None if branch.changed == ChangeIndicator::Changed => {
-            simplify_system_fan_out_inner_with_passes(&mut branch, passes)
-        }
-        None => {
-            simp_post_loop_steps(&mut branch);
-            Ok(vec![SystemBranch {
-                sys: branch.sys,
-                counter: branch.maude.fresh_counter_peek(),
-            }])
-        }
-    }
-}
-
-/// Attach a low-level equality result to its common pre-solve system.
+/// `noContradictoryEqStore` after an equality solve: mark a failed solve
+/// contradictory, pass every other outcome through.
 fn complete_solve(
     red: &mut Reduction,
-    base: crate::constraint::system::System,
-    res: std::result::Result<
-        crate::constraint::solver::reduction::SolveOutcome,
-        crate::prove::ProveError,
-    >,
+    res: std::result::Result<SystemOutcome, crate::prove::ProveError>,
 ) -> Result<SystemOutcome, crate::prove::ProveError> {
-    Ok(match res {
-        Err(error) => return Err(error),
-        Ok(crate::constraint::solver::reduction::SolveOutcome::Contradictory) => {
-            red.mark_contradictory();
-            SystemOutcome::Contradictory
-        }
-        Ok(crate::constraint::solver::reduction::SolveOutcome::Linear) => SystemOutcome::Linear,
-        Ok(crate::constraint::solver::reduction::SolveOutcome::Cases(arms)) => {
-            let cases = arms
-                .into_iter()
-                .map(|arm| {
-                    let mut sys = base.clone();
-                    sys.invalidate_max_var_idx_cache();
-                    sys.set_eq_store(std::sync::Arc::new(arm.eq_store));
-                    SystemBranch {
-                        sys,
-                        counter: arm.counter,
-                    }
-                })
-                .collect();
-            red.finish_system_cases(cases)
-        }
-    })
+    let outcome = res?;
+    if matches!(outcome, SystemOutcome::Contradictory) {
+        red.mark_contradictory();
+    }
+    Ok(outcome)
 }
 
 /// HS `nonUnifiableNodes i j` (Simplify.hs, Contradictions.hs): both nodes
@@ -400,82 +352,39 @@ fn non_injective_fact_instances_pairs(
     out
 }
 
-/// CR-rule *N6* — `exploitUniqueMsgOrder` (`Simplify.hs`).
+/// CR-rule *N6*, HS `exploitUniqueMsgOrder` (Simplify.hs): a term that is
+/// both a KD conclusion and a KU action is deconstructed before it is
+/// constructed. Each `M.fromList` keeps the last node for a repeated term.
 ///
-/// Every term `m` that appears as both a KD-conclusion (at node
-/// `i_kd`) and a KU-action (at node `i_ku`) must satisfy
-/// `i_kd < i_ku` — the adversary deconstructs `m` from a message
-/// before it can use `m` as part of a constructed message.  This
-/// is normal-form invariant N6 from the constraint-system paper.
-///
-/// Adds `LessAtom(i_kd, i_ku, NormalForm)` for every such pair
-/// (skipping cases where `i_kd == i_ku`, which would just be a
-/// redundant reflexive ordering).
+/// The insertion is unconditional, including the reflexive `i < i` when one
+/// node concludes `KD(m)` and acts `KU(m)`; the resulting cycle prunes source
+/// cases from rules that misuse the reserved K facts (regression/trace/
+/// issue515.spthy).
 fn exploit_unique_msg_order(red: &mut Reduction) {
-    use crate::constraint::constraints::{LessAtom, NodeId, Reason};
-    use crate::fact::FactTag;
+    use crate::constraint::constraints::{LessAtom, Reason};
     use std::collections::BTreeMap;
-    use tamarin_term::lterm::LNTerm;
-
-    // Collect KD-conclusion (term, node) pairs.
-    let mut kd_conc: BTreeMap<LNTerm, NodeId> = BTreeMap::new();
-    for (id, rule) in red.sys.nodes.iter() {
-        for fa in &rule.conclusions {
-            if matches!(fa.tag, FactTag::Kd)
-                && let Some(m) = fa.terms.first()
-            {
-                // First occurrence wins; N5↓ has already merged
-                // duplicates by this point.
-                kd_conc.entry(m.clone()).or_insert_with(|| *id);
-            }
-        }
-    }
-    if kd_conc.is_empty() {
-        return;
-    }
-    // Collect KU-action (term, node) pairs.  Haskell `allActions`
-    // (System.hs) combines `unsolvedActionAtoms` with `rule.acts`
-    // — so we MUST include open Action goals here, not just rule
-    // actions.  Without this, KU goals added by existential atom
-    // decomposition (e.g. `∃ #j. KU(t) @ j`) don't participate in
-    // N6's NormalForm ordering, leaving a Cyclic detection gap.
-    let mut ku_act: BTreeMap<LNTerm, NodeId> = BTreeMap::new();
-    for (id, rule) in red.sys.nodes.iter() {
-        for fa in &rule.actions {
-            if matches!(fa.tag, FactTag::Ku)
-                && let Some(m) = fa.terms.first()
-            {
-                ku_act.entry(m.clone()).or_insert_with(|| *id);
-            }
-        }
-    }
-    for (goal, st) in red.sys.goals.iter() {
-        if st.solved {
-            continue;
-        }
-        if let crate::constraint::constraints::Goal::Action(i, fa) = goal
-            && matches!(fa.tag, FactTag::Ku)
-            && let Some(m) = fa.terms.first()
-        {
-            ku_act.entry(m.clone()).or_insert_with(|| *i);
-        }
-    }
-    if ku_act.is_empty() {
-        return;
-    }
-    // Intersection: for every term in both maps, add the ordering.  HS
-    // inserts UNCONDITIONALLY (`F.mapM_ insertLess … M.intersectionWith`,
-    // Simplify.hs) — including the REFLEXIVE `LessAtom i i` when one
-    // node both concludes KD(m) and carries a KU(m) action.  That self-edge
-    // makes `rawLessRel` cyclic, so the contradiction check kills the
-    // system: exactly how HS prunes source cases built from (wf-invalid)
-    // protocol rules that use the reserved KU/KD facts (regression/trace/
-    // issue515.spthy).  An `i_kd != i_ku` guard here would keep a spurious
-    // source case for every such KU pattern whose premises are solvable.
-    for (m, i_kd) in &kd_conc {
-        if let Some(i_ku) = ku_act.get(m) {
-            red.insert_less(LessAtom::new(*i_kd, *i_ku, Reason::NormalForm));
-        }
+    let kd_concs: BTreeMap<_, _> = red
+        .sys
+        .all_kd_concs()
+        .into_iter()
+        .map(|(i, _, m)| (m.clone(), i))
+        .collect();
+    let ku_actions: BTreeMap<_, _> = red
+        .sys
+        .all_ku_actions()
+        .into_iter()
+        .map(|(i, _, m)| (m.clone(), i))
+        .collect();
+    let lesses: Vec<LessAtom> = kd_concs
+        .iter()
+        .filter_map(|(m, i)| {
+            ku_actions
+                .get(m)
+                .map(|j| LessAtom::new(*i, *j, Reason::NormalForm))
+        })
+        .collect();
+    for less in lesses {
+        red.insert_less(less);
     }
 }
 
@@ -557,19 +466,8 @@ fn apply_formula_atom_changes(
             SystemOutcome::Linear => changes = rest,
             SystemOutcome::Contradictory => return Ok(SystemOutcome::Contradictory),
             SystemOutcome::Cases(arms) => {
-                let mut completed = Vec::new();
-                for arm in arms {
-                    let mut branch = Reduction::new_inheriting(red.ctx, arm.sys, arm.counter);
-                    match apply_formula_atom_changes(&mut branch, rest)? {
-                        SystemOutcome::Linear => completed.push(SystemBranch {
-                            sys: branch.sys,
-                            counter: branch.maude.fresh_counter_peek(),
-                        }),
-                        SystemOutcome::Cases(arms) => completed.extend(arms),
-                        SystemOutcome::Contradictory => {}
-                    }
-                }
-                return Ok(red.finish_system_cases(completed));
+                return red
+                    .continue_in_arms(arms, |branch| apply_formula_atom_changes(branch, rest));
             }
         }
     }
@@ -622,33 +520,28 @@ fn partial_atom_valuation_with(
             if x == y {
                 return Some(true);
             }
-            // Node-id case: compare via the order relation and
-            // rule-instance unifiability.
-            if let (Some(ni), Some(nj)) = (eq_node_id(x), eq_node_id(y)) {
-                if sys.always_before_with(ab_adj, &ni, &nj)
-                    || sys.always_before_with(ab_adj, &nj, &ni)
-                {
-                    return Some(false);
-                }
-                if non_unifiable_nodes(&ni, &nj) {
-                    return Some(false);
-                }
+            // HS asks `unifiableLNTerms` before reading node ids; a Maude
+            // error counts as unifiable.
+            if matches!(
+                maude.unify(&[tamarin_term::rewriting::Equal {
+                    lhs: x.clone(),
+                    rhs: y.clone(),
+                }]),
+                Ok(uns) if uns.is_empty()
+            ) {
+                return Some(false);
+            }
+            use tamarin_term::lterm::lterm_node_id;
+            let (Some(ni), Some(nj)) = (lterm_node_id(x), lterm_node_id(y)) else {
                 return None;
+            };
+            if sys.always_before_with(ab_adj, &ni, &nj)
+                || sys.always_before_with(ab_adj, &nj, &ni)
+                || non_unifiable_nodes(&ni, &nj)
+            {
+                return Some(false);
             }
-            // Term-level case: ask Maude whether the two terms are
-            // unifiable.  Mirrors Haskell's `EqE` arm in
-            // `partialAtomValuation` (Simplify.hs) via
-            // `unifiableLNTerms`.  If non-unifiable, the equality
-            // is False in every model.  If unifiable, we leave it
-            // unknown — the equality may or may not hold once the
-            // proof state is refined.
-            match maude.unify(&[tamarin_term::rewriting::Equal {
-                lhs: x.clone(),
-                rhs: y.clone(),
-            }]) {
-                Ok(uns) if uns.is_empty() => Some(false),
-                _ => None,
-            }
+            None
         }
         ProtoAtom::Action(t, lnfa) => {
             let n = eq_node_id(t)?;
@@ -688,49 +581,16 @@ fn partial_atom_valuation_with(
         }
         ProtoAtom::Last(t) => {
             let n = eq_node_id(t)?;
-            // Haskell-faithful (Simplify.hs):
-            //   Last i
-            //     | isLast sys i                       -> Just True
-            //     | any (isInTrace sys) (nodesAfter i) -> Just False
-            //     | otherwise -> case sLastAtom of
-            //         Just j | nonUnifiableNodes i j   -> Just False
-            //         _                                -> Nothing
-            //
-            // `nodesAfter i = filter (i /=) $ reachableSet [i] lessRel`
-            // where `lessRel = sLessAtoms ++ rawEdgeRel`.
-            // `isInTrace` is the 3-clause check (sNodes / isLast /
-            // unsolvedActionAtoms).  Do NOT add
-            // extra "successor exists → Some(false)" checks: HS returns
-            // `Nothing` when a successor is a free variable not in trace.
+            // HS `Last i` (Simplify.hs); `nodesAfter` walks `rawLessRel`,
+            // which includes unsolved chains.
             if sys.is_last(&n) {
                 return Some(true);
             }
-            // Build lessRel = less_atoms ∪ edges-as-less.
-            let less_rel: Vec<(
-                crate::constraint::constraints::NodeId,
-                crate::constraint::constraints::NodeId,
-            )> = sys
-                .less_atoms
+            if crate::constraint::solver::goals::reachable_set_adj(ab_adj.map(), &n, false)
                 .iter()
-                .map(|l| (l.smaller, l.larger))
-                .chain(sys.edges.iter().map(|e| (e.src.0, e.tgt.0)))
-                .collect();
-            // nodesAfter n = transitive closure from n via less_rel.
-            let mut frontier: Vec<crate::constraint::constraints::NodeId> = vec![n];
-            let mut seen: std::collections::BTreeSet<_> = [n].into_iter().collect();
-            while let Some(cur) = frontier.pop() {
-                for (a, b) in &less_rel {
-                    if a == &cur && !seen.contains(b) {
-                        seen.insert(*b);
-                        frontier.push(*b);
-                    }
-                }
-            }
-            // Check `any (isInTrace) (nodesAfter n)` (excluding n itself).
-            for j in seen.iter() {
-                if j != &n && sys.is_in_trace(j) {
-                    return Some(false);
-                }
+                .any(|j| sys.is_in_trace(j))
+            {
+                return Some(false);
             }
             // Final fallback: if there's a recorded last_atom and it's
             // non-unifiable with n, then n cannot be last.
@@ -748,16 +608,9 @@ fn partial_atom_valuation_with(
     }
 }
 
-/// The node id `partial_atom_valuation_with` reads out of a timepoint term:
-/// any variable leaf, coerced to `LSort::Node`.
-///
-/// DIVERGENCE from HS `partialAtomValuation` (Simplify.hs).  The `EqE`
-/// arm there asks `unifiableLNTerms` FIRST and only then reads `ltermNodeId`,
-/// which answers `Just` at `LSortNode` alone (LTerm.hs), so
-/// `$A = ~b` is `Just False` for HS.  Here the arm consults this coercing
-/// lookup before Maude and answers `None` for that atom.  The port's `Less`,
-/// `Action` and `Last` arms read the same lookup where HS's `ltermNodeId'`
-/// errors on any other sort.
+/// The node id `partial_atom_valuation_with` reads out of a timepoint term
+/// (HS `ltermNodeId'`): any variable leaf, coerced to `LSort::Node` where
+/// Haskell errors on another sort.
 fn eq_node_id(t: &tamarin_term::lterm::LNTerm) -> Option<crate::constraint::constraints::NodeId> {
     let tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(v)) = t else {
         return None;
@@ -1457,43 +1310,6 @@ fn match_atom_via_maude(
     Ok(out)
 }
 
-/// Apply the eq-store substitution to existing `less_atoms` so any
-/// mid-loop node merges propagate to atoms that were inserted earlier.
-fn normalise_less_atoms_pass(red: &mut Reduction) {
-    let mut changed = if red.sys.normalise_less_atoms() {
-        ChangeIndicator::Changed
-    } else {
-        ChangeIndicator::Unchanged
-    };
-    // HS-faithful dedup post-normalise: HS's `sLessAtoms` is a `Set`;
-    // post-subst image collapsing two distinct atoms is auto-deduped.
-    // See `subst_system_once` (reduction.rs) for full rationale.
-    let pre_len = red.sys.less_atoms.len();
-    let mut new_less: Vec<crate::constraint::constraints::LessAtom> = Vec::with_capacity(pre_len);
-    // First-occurrence-wins dedup: `LessAtom`'s manual `Eq` (constraints.rs)
-    // ignores the reason, so the identity key is the `(smaller,larger)`
-    // pair.  A `FastSet` membership probe: the atom is pushed iff its pair
-    // is unseen — the same relation a linear `any(|x| x == &la)` scan tests
-    // — turning the O(n²) dedup into O(n).  The set
-    // never escapes (only membership is read), so its hash order is
-    // irrelevant; only `new_less`'s Vec order is output-bearing.
-    let mut seen: tamarin_utils::FastSet<(tamarin_term::lterm::LVar, tamarin_term::lterm::LVar)> =
-        tamarin_utils::FastSet::default();
-    for la in std::mem::take(&mut red.sys.content_mut_untracked().less_atoms) {
-        if seen.insert((la.smaller, la.larger)) {
-            new_less.push(la);
-        }
-    }
-    if new_less.len() != pre_len {
-        changed = ChangeIndicator::Changed;
-        red.sys.invalidate_max_var_idx_cache();
-    }
-    red.sys.content_mut_untracked().less_atoms = new_less;
-    if changed == ChangeIndicator::Changed {
-        red.changed = ChangeIndicator::Changed;
-    }
-}
-
 /// HS `merge solver candidates` (Simplify.hs) over `(key, payload, node)`
 /// candidates: group by key (ascending, stable), keep each group's first
 /// entry, and solve the payload equalities with `solve_payload_eqs` and the
@@ -1509,10 +1325,7 @@ where
     F: Fn(
         &mut Reduction,
         &[tamarin_term::rewriting::Equal<P>],
-    ) -> std::result::Result<
-        crate::constraint::solver::reduction::SolveOutcome,
-        crate::prove::ProveError,
-    >,
+    ) -> std::result::Result<SystemOutcome, crate::prove::ProveError>,
 {
     use crate::constraint::constraints::NodeId;
     if candidates.len() < 2 {
@@ -1571,10 +1384,7 @@ where
     F: Fn(
         &mut Reduction,
         &[tamarin_term::rewriting::Equal<P>],
-    ) -> std::result::Result<
-        crate::constraint::solver::reduction::SolveOutcome,
-        crate::prove::ProveError,
-    >,
+    ) -> std::result::Result<SystemOutcome, crate::prove::ProveError>,
 {
     while let Some(((payload_eqs, node_eqs), rest)) = groups.split_first() {
         match merge_candidate_group(red, payload_eqs, node_eqs, solve_payload_eqs)? {
@@ -1599,17 +1409,13 @@ where
     F: Fn(
         &mut Reduction,
         &[tamarin_term::rewriting::Equal<P>],
-    ) -> std::result::Result<
-        crate::constraint::solver::reduction::SolveOutcome,
-        crate::prove::ProveError,
-    >,
+    ) -> std::result::Result<SystemOutcome, crate::prove::ProveError>,
 {
     if payload_eqs.is_empty() {
         return merge_candidate_node_eqs(red, node_eqs);
     }
-    let base = red.sys.clone();
     let res = solve_payload_eqs(red, payload_eqs);
-    Ok(match complete_solve(red, base, res)? {
+    Ok(match complete_solve(red, res)? {
         SystemOutcome::Linear => merge_candidate_node_eqs(red, node_eqs)?,
         SystemOutcome::Contradictory => SystemOutcome::Contradictory,
         SystemOutcome::Cases(arms) if node_eqs.is_empty() => SystemOutcome::Cases(arms),
@@ -1624,9 +1430,8 @@ fn merge_candidate_node_eqs(
     if node_eqs.is_empty() {
         return Ok(SystemOutcome::Linear);
     }
-    let base = red.sys.clone();
     let res = red.solve_node_id_eqs(node_eqs);
-    complete_solve(red, base, res)
+    complete_solve(red, res)
 }
 
 fn continue_merge_nodes(
@@ -1634,19 +1439,7 @@ fn continue_merge_nodes(
     arms: Vec<SystemBranch>,
     node_eqs: &[tamarin_term::rewriting::Equal<crate::constraint::constraints::NodeId>],
 ) -> Result<SystemOutcome, crate::prove::ProveError> {
-    let mut completed = Vec::new();
-    for arm in arms {
-        let mut branch = Reduction::new_inheriting(red.ctx, arm.sys, arm.counter);
-        match merge_candidate_node_eqs(&mut branch, node_eqs)? {
-            SystemOutcome::Linear => completed.push(SystemBranch {
-                sys: branch.sys,
-                counter: branch.maude.fresh_counter_peek(),
-            }),
-            SystemOutcome::Cases(arms) => completed.extend(arms),
-            SystemOutcome::Contradictory => {}
-        }
-    }
-    Ok(red.finish_system_cases(completed))
+    red.continue_in_arms(arms, |branch| merge_candidate_node_eqs(branch, node_eqs))
 }
 
 fn continue_merge_groups<P, F>(
@@ -1660,24 +1453,11 @@ where
     F: Fn(
         &mut Reduction,
         &[tamarin_term::rewriting::Equal<P>],
-    ) -> std::result::Result<
-        crate::constraint::solver::reduction::SolveOutcome,
-        crate::prove::ProveError,
-    >,
+    ) -> std::result::Result<SystemOutcome, crate::prove::ProveError>,
 {
-    let mut completed = Vec::new();
-    for arm in arms {
-        let mut branch = Reduction::new_inheriting(red.ctx, arm.sys, arm.counter);
-        match merge_candidate_groups(&mut branch, groups, solve_payload_eqs)? {
-            SystemOutcome::Linear => completed.push(SystemBranch {
-                sys: branch.sys,
-                counter: branch.maude.fresh_counter_peek(),
-            }),
-            SystemOutcome::Cases(arms) => completed.extend(arms),
-            SystemOutcome::Contradictory => {}
-        }
-    }
-    Ok(red.finish_system_cases(completed))
+    red.continue_in_arms(arms, |branch| {
+        merge_candidate_groups(branch, groups, solve_payload_eqs)
+    })
 }
 
 /// CR-rule *DG4* (HS `enforceNodeUniqueness`, Simplify.hs): identical Fresh
@@ -1716,9 +1496,8 @@ fn enforce_fresh_node_uniqueness_pass(
             .skip(1)
             .map(|i| tamarin_term::rewriting::Equal { lhs: keep, rhs: i })
             .collect();
-        let base = red.sys.clone();
         let res = red.solve_node_id_eqs(&eqs);
-        match complete_solve(red, base, res)? {
+        match complete_solve(red, res)? {
             SystemOutcome::Linear => {}
             outcome => return Ok(outcome),
         }
@@ -1726,80 +1505,23 @@ fn enforce_fresh_node_uniqueness_pass(
     Ok(SystemOutcome::Linear)
 }
 
-/// CR-rule *N5_u*: KU-action uniqueness. For every term `m` that
-/// appears as the argument of two distinct `KU(m)` actions, the
-/// producing nodes must be the same. Mirrors the KU (N5_u) component of
-/// Haskell's `enforceNodeUniqueness` (Simplify.hs; the
-/// diff-mode analog is `enforceFreshAndKuNodeUniqueness`,
-/// Simplify.hs) — we
-/// collect `(node_id, fact, term)` triples for KU actions, group by
-/// term, and within each group merge the trailing entries' facts and
-/// node ids onto the first.
-///
-/// Only emits non-trivial equalities (`solve_node_id_eqs` and
-/// `solve_fact_eqs` filter `lhs == rhs` themselves, but we mirror the
-/// pattern from `enforce_edge_uniqueness_pass` to avoid spurious
-/// `Changed` flags that would re-fire the simplify loop forever).
+/// CR-rule *N5_u* (HS `enforceNodeUniqueness`, Simplify.hs): the KU actions
+/// of a term are one action, merged with `solveFactEqs SplitNow`.
 fn enforce_ku_action_uniqueness_pass(
     red: &mut Reduction,
 ) -> Result<SystemOutcome, crate::prove::ProveError> {
     use crate::constraint::constraints::NodeId;
-    use crate::fact::{FactTag, LNFact};
+    use crate::fact::LNFact;
     use tamarin_term::lterm::LNTerm;
 
-    // Collect (node, fact, term) for every KU action — both the
-    // rule-instance actions and the UNSOLVED open goals.  Mirrors
-    // Haskell's `allKUActions`: `unsolvedActionAtoms sys ++ <rule actions>`.
-    // Do NOT include SOLVED goals here: an auto-solved KU(t) goal still
-    // points to a fresh-allocated vk node, so merging it emits
-    // `node_eqs` that induce self-loops in less_atoms.  Haskell's filter
-    // avoids this.
-    // Apply eq_store subst to the action term before grouping (mirrors
-    // HS's `allKUActions` which extracts m from the node's action fact
-    // AFTER substSystem propagated bindings).  Without this, RS's stored
-    // action terms may have bare vars (x.19 from requiresKU on
-    // pair-components) that haven't been rewritten by substSystem when
-    // the substitution is in eq_store but not yet applied.
-    let subst = &red.sys.eq_store().subst;
-    let apply_subst = |t: &LNTerm| -> LNTerm { tamarin_term::subst::apply_vterm(subst, t.clone()) };
-    // HS-faithful order: `allActions = unsolvedActionAtoms sys <|>
-    // <rule actions>` (System.hs).  Goals come FIRST so
-    // that `groupSortOn fst` keeps a goal's NodeId as `iKeep` and
-    // emits `solveTermEqs [iKeep = rule_node_id]` — meaning the
-    // rule node is renamed onto the goal's id, NOT vice versa.
-    // Nodes-first would instead collapse the goal id onto a fresh
-    // `vk.X` that dedup-merges with a grafted solved goal.  See
-    // Simplify.hs (`kuActions se = (\(i,fa,m) -> (m,(fa,i)))
-    // <$> allKUActions se`).
-    let mut acts: Vec<(LNTerm, LNFact, NodeId)> = Vec::new();
-    for (i, fa) in red.sys.unsolved_action_atoms() {
-        if matches!(fa.tag, FactTag::Ku)
-            && let Some(m) = fa.terms.first()
-        {
-            acts.push((apply_subst(m), fa.clone(), i));
-        }
-    }
-    // HS-faithful order: HS `allKUActions` draws rule actions from
-    // `M.toList (get sNodes se)` (node-id-sorted), and `merge`'s
-    // `groupSortOn fst` is stable (Simplify.hs), so within
-    // a term-group the kept action (`iKeep`) is the one from the LOWEST
-    // node-id.  RS iterated `sys.nodes` in Vec (production) order, so a
-    // term-group with no goal kept whichever same-term node was created
-    // first, not the lowest id.  Sort the rule-action nodes by node-id so
-    // `group[0]` is the lowest, matching HS.  (Unsolved KU-action goals are
-    // still pushed FIRST — `allKUActions` lists `unsolvedActionAtoms`
-    // before rule actions — so a goal still wins `iKeep` over a rule node.)
-    let mut sorted_nodes: Vec<_> = red.sys.nodes.iter().collect();
-    sorted_nodes.sort_by_key(|a| a.0);
-    for (id, rule) in sorted_nodes {
-        for fa in &rule.actions {
-            if matches!(fa.tag, FactTag::Ku)
-                && let Some(m) = fa.terms.first()
-            {
-                acts.push((apply_subst(m), fa.clone(), *id));
-            }
-        }
-    }
+    // HS `allKUActions`: unsolved goals precede node actions, so a goal's
+    // node id is kept within a term group.
+    let acts: Vec<(LNTerm, LNFact, NodeId)> = red
+        .sys
+        .all_ku_actions()
+        .into_iter()
+        .map(|(i, fa, m)| (m.clone(), fa.clone(), i))
+        .collect();
     // Haskell's `enforceFreshAndKuNodeUniqueness` merges the KU actions with
     // `solveFactEqs SplitNow` as the `merge` solver.
     merge_candidates(red, acts, |red, eqs| {
@@ -1843,11 +1565,14 @@ fn execute_captured_actions(
         // even if an earlier solve substituted its live goal key. The goal
         // solver labels a missing node or unifies an existing node's actions;
         // filtering against the updated goal map would skip required work.
-        let outcome = red.solve_action_goal(i, fa)?;
+        let outcome = crate::constraint::solver::goals::solve_goal(
+            red,
+            &crate::constraint::constraints::Goal::Action(*i, fa.clone()),
+        )?;
         match outcome {
             GoalCases::Contradictory => return Ok(SystemOutcome::Contradictory),
             GoalCases::LinearNamed(_) => {
-                // `red.sys` is already mutated in place by `solve_action_goal`.
+                // `red.sys` is already mutated in place by the goal solver.
                 remaining = suffix;
             }
             GoalCases::Cases(cases) => {
@@ -1875,29 +1600,18 @@ fn execute_captured_actions(
                 // EACH fanned arm using the ORIGINAL (i, fa) values
                 // (not re-collected from the substituted goal set).
                 // Continue over the borrowed suffix in each arm.
-                let mut completed = Vec::new();
-                for branch in cases {
-                    if branch.sys.eq_store().is_false() {
-                        continue;
-                    }
-
-                    // Keep each branch's FreshT continuation paired with its
-                    // system. Deliberately do not call `subst_system`:
-                    // Haskell applies it only at the start of the next outer
-                    // simplify iteration.
-                    let mut branch_red =
-                        Reduction::new_inheriting(red.ctx, branch.sys, branch.counter);
-                    let outcome = execute_captured_actions(&mut branch_red, suffix)?;
-                    match outcome {
-                        SystemOutcome::Linear => completed.push(SystemBranch {
-                            sys: branch_red.sys,
-                            counter: branch_red.maude.fresh_counter_peek(),
-                        }),
-                        SystemOutcome::Cases(arms) => completed.extend(arms),
-                        SystemOutcome::Contradictory => {}
-                    }
-                }
-                return Ok(red.finish_system_cases(completed));
+                // Deliberately no `subst_system`: Haskell applies it only at
+                // the start of the next outer simplify iteration.
+                let arms = cases
+                    .into_iter()
+                    .filter(|branch| !branch.sys.eq_store().is_false())
+                    .map(|branch| SystemBranch {
+                        sys: branch.sys,
+                        counter: branch.counter,
+                    })
+                    .collect();
+                return red
+                    .continue_in_arms(arms, |branch| execute_captured_actions(branch, suffix));
             }
         }
     }
@@ -1961,35 +1675,15 @@ fn enforce_kd_fact_uniqueness_pass(
     red: &mut Reduction,
 ) -> Result<SystemOutcome, crate::prove::ProveError> {
     use crate::constraint::constraints::NodeId;
-    use crate::fact::FactTag;
     use crate::rule::RuleACInst;
     use tamarin_term::lterm::LNTerm;
 
-    // Haskell-faithful (`Simplify.hs`): `enforceNodeUniqueness`
-    // kdConcs branch uses `(merge (solveRuleEqs SplitNow) kdConcs)`.
-    // The merger emits BOTH `solveRuleEqs` (full rule-instance
-    // equality) AND `solveNodeIdEqs` — both are required so the merged
-    // KD-conc rules are unified at the rule level.
-    //
-    // Collect (node, rule, term) for every KD-conc.
-    let mut kd_concs: Vec<(LNTerm, RuleACInst, NodeId)> = Vec::new();
-    for (id, rule) in red.sys.nodes.iter() {
-        for fa in &rule.conclusions {
-            if matches!(fa.tag, FactTag::Kd)
-                && let Some(m) = fa.terms.first()
-            {
-                kd_concs.push((m.clone(), rule.clone(), *id));
-            }
-        }
-    }
-    // Haskell uses `solveRuleEqs SplitNow` for the kdConcs merger
-    // (Simplify.hs `merge (solveRuleEqs SplitNow) kdConcs`).  Multi-arm AC
-    // unifications fork the DisjT continuation in HS (Reduction.hs);
-    // `merge_candidates` mirrors that via install + pending branches.
-    // Joux_EphkRev: dropping a `Cases` result here leaves the `mem::take`'d
-    // default eq-store (conj=[], next_split=0) installed — the next
-    // substSystem then parks its setNodes rule-eq disjunctions at
-    // SplitId(0)/(1)/(2) as spurious splitEqs goals HS never has.
+    let kd_concs: Vec<(LNTerm, RuleACInst, NodeId)> = red
+        .sys
+        .all_kd_concs()
+        .into_iter()
+        .map(|(i, ru, m)| (m.clone(), ru.clone(), i))
+        .collect();
     merge_candidates(red, kd_concs, |red, eqs| {
         red.solve_rule_eqs(
             crate::constraint::solver::reduction::SplitStrategy::SplitNow,
@@ -2091,41 +1785,17 @@ fn enforce_fresh_ordering_pass(red: &mut Reduction) {
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
 
-    // Fast path: an empty eq-store subst makes `apply_vterm` the identity,
-    // so the per-premise normalisation below is a no-op and the suppliers
-    // are collected from the raw terms.
-    //
-    // Step 1: collect (consumer_node_id, fresh_var) for every node
-    // whose premise is `Fr(~x)`. Matches Haskell's `getFreshVars`.
-    //
-    // The subst is read-only here and `suppliers` is fully collected before
-    // any `less_atoms` mutation below, so a scoped shared borrow of the
-    // eq-store subst suffices — `eq_store` and `nodes` are disjoint `System`
-    // fields, so this reads both at once with no per-pass BTreeMap+Term deep
-    // clone of the subst.
+    // `getFreshVars`: `(i, ~x)` for every premise `Fr(~x)` of node `i`.
     let mut suppliers: Vec<(crate::constraint::constraints::NodeId, LVar)> = Vec::new();
-    {
-        let subst = &red.sys.eq_store().subst;
-        let subst_empty = subst.is_empty();
-        for (id, rule) in red.sys.nodes.iter() {
-            for prem in &rule.premises {
-                if !matches!(prem.tag, FactTag::Fresh) {
-                    continue;
-                }
-                let t = match prem.terms.first() {
-                    Some(t) => t,
-                    None => continue,
-                };
-                let t_norm = if subst_empty {
-                    t.clone()
-                } else {
-                    tamarin_term::subst::apply_vterm(subst, t.clone())
-                };
-                if let Term::Lit(Lit::Var(v)) = t_norm
-                    && v.sort == tamarin_term::lterm::LSort::Fresh
-                {
-                    suppliers.push((*id, v));
-                }
+    for (id, rule) in red.sys.nodes.iter() {
+        for prem in &rule.premises {
+            if !matches!(prem.tag, FactTag::Fresh) {
+                continue;
+            }
+            if let Some(Term::Lit(Lit::Var(v))) = prem.terms.first()
+                && v.sort == tamarin_term::lterm::LSort::Fresh
+            {
+                suppliers.push((*id, *v));
             }
         }
     }
@@ -2385,10 +2055,9 @@ fn enforce_edge_uniqueness_pass(
     if node_eqs.is_empty() {
         return Ok(SystemOutcome::Linear);
     }
-    let base = red.sys.clone();
     let res = red.solve_node_id_eqs(&node_eqs);
     red.changed = ChangeIndicator::Changed;
-    complete_solve(red, base, res)
+    complete_solve(red, res)
 }
 
 /// Lift a `NodeId` (an `LVar` of sort Node) to an `LNTerm` variable —
@@ -2409,25 +2078,40 @@ fn simp_injective_fact_eq_mon_pass(
     if red.ctx.injective_fact_insts.is_empty() {
         return Ok(SystemOutcome::Linear);
     }
-    // HS `behaviourTerms` via `trimmedPairTerms`, in `M.toList` node order,
-    // keeping the tag so only same-tag premises are paired.
-    let mut by_inj: Vec<(
-        crate::constraint::constraints::NodeId,
-        crate::fact::FactTag,
+    // HS `getPairs`: per injective tag (in set order), `behaviourTerms` maps
+    // each node, in `M.toList` order, to its `trimmedPairTerms` premises.
+    type BehaviourTerms = Vec<(
         tamarin_term::lterm::LNTerm,
         Vec<(MonotonicBehaviour, tamarin_term::lterm::LNTerm)>,
-    )> = Vec::new();
-    for (id, rule) in red.sys.nodes_in_map_order() {
-        for prem in &rule.premises {
-            if let Some(behaviours) = red.ctx.injective_fact_insts.get(&prem.tag)
-                && let Some((first, pairs)) =
-                    crate::tools::injective_fact_instances::trimmed_pair_terms(prem, behaviours)
-            {
-                by_inj.push((*id, prem.tag, first, pairs));
-            }
-        }
-    }
-    if by_inj.len() < 2 {
+    )>;
+    let per_tag: Vec<Vec<(crate::constraint::constraints::NodeId, BehaviourTerms)>> = red
+        .ctx
+        .injective_fact_insts
+        .iter()
+        .map(|(tag, behaviours)| {
+            red.sys
+                .nodes_in_map_order()
+                .into_iter()
+                .map(|(id, rule)| {
+                    let terms = rule
+                        .premises
+                        .iter()
+                        .filter(|prem| prem.tag == *tag)
+                        .filter_map(|prem| {
+                            crate::tools::injective_fact_instances::trimmed_pair_terms(
+                                prem, behaviours,
+                            )
+                        })
+                        .collect();
+                    (*id, terms)
+                })
+                .collect()
+        })
+        .collect();
+    if per_tag
+        .iter()
+        .all(|nodes| nodes.iter().map(|(_, terms)| terms.len()).sum::<usize>() < 2)
+    {
         return Ok(SystemOutcome::Linear);
     }
 
@@ -2504,103 +2188,100 @@ fn simp_injective_fact_eq_mon_pass(
                                  t: &tamarin_term::lterm::LNTerm| {
         valuation.is_true_false(s, t) == Some(false)
     };
-    // HS `paired`: ordered pairs of same-tag premises with the same first
-    // term on different nodes.
+    // HS `paired`: premises with the same first term on different nodes,
+    // `((b, s), (_, t)) <- zip ss tt`.
     let ab_adj = red.sys.build_always_before_adj();
-    for a in 0..by_inj.len() {
-        for b in 0..by_inj.len() {
-            if a == b {
-                continue;
+    let paired = per_tag.iter().flat_map(|nodes| {
+        nodes.iter().flat_map(move |(i, l1)| {
+            nodes
+                .iter()
+                .filter(move |(j, _)| j != i)
+                .flat_map(move |(j, l2)| {
+                    l1.iter().flat_map(move |(first_i, ss)| {
+                        l2.iter()
+                            .filter(move |(first_j, _)| first_j == first_i)
+                            .flat_map(move |(_, tt)| {
+                                ss.iter()
+                                    .zip(tt)
+                                    .map(move |((bh, s), (_, t))| (bh, (i, s), (j, t)))
+                            })
+                    })
+                })
+        })
+    });
+    for (bh, (i, s), (j, t)) in paired {
+        // `simpSingle` turns decreasing positions into increasing
+        // ones with the node ids swapped.
+        let (eff_bh, ii, jj) = match bh {
+            MonotonicBehaviour::Decreasing => (MonotonicBehaviour::Increasing, j, i),
+            MonotonicBehaviour::StrictlyDecreasing => {
+                (MonotonicBehaviour::StrictlyIncreasing, j, i)
             }
-            let (i, tag_i, first_i, pairs_i) = &by_inj[a];
-            let (j, tag_j, first_j, pairs_j) = &by_inj[b];
-            if i == j || tag_i != tag_j || first_i != first_j {
-                continue;
+            other => (*other, i, j),
+        };
+        match eff_bh {
+            // (1)
+            MonotonicBehaviour::Constant if s != t => {
+                new_formulas.push(crate::guarded::Guarded::Atom(crate::atom::ProtoAtom::EqE(
+                    crate::formula::lift_free(s),
+                    crate::formula::lift_free(t),
+                )));
             }
-            // `((b, s), (_, t)) <- zip ss tt`
-            for (k, (bh, s)) in pairs_i.iter().enumerate() {
-                let t = match pairs_j.get(k) {
-                    Some((_, t)) => t,
-                    None => continue,
-                };
-                // `simpSingle` turns decreasing positions into increasing
-                // ones with the node ids swapped.
-                let (eff_bh, ii, jj) = match bh {
-                    MonotonicBehaviour::Decreasing => (MonotonicBehaviour::Increasing, j, i),
-                    MonotonicBehaviour::StrictlyDecreasing => {
-                        (MonotonicBehaviour::StrictlyIncreasing, j, i)
-                    }
-                    other => (*other, i, j),
-                };
-                match eff_bh {
-                    // (1)
-                    MonotonicBehaviour::Constant if s != t => {
-                        new_formulas.push(crate::guarded::Guarded::Atom(
-                            crate::atom::ProtoAtom::EqE(
-                                crate::formula::lift_free(s),
-                                crate::formula::lift_free(t),
-                            ),
-                        ));
-                    }
-                    // Each case has its own guard, so several can fire
-                    // together; e.g. (2) and (5) with a stale `s ≠ t` give
-                    // the cycle counter.spthy::counters_linear_order needs.
-                    MonotonicBehaviour::StrictlyIncreasing => {
-                        let ab_ij = red.sys.always_before_with(&ab_adj, ii, jj);
-                        let ab_ji = red.sys.always_before_with(&ab_adj, jj, ii);
-                        // (2)
-                        if s == t && ii != jj {
-                            new_formulas.push(crate::guarded::Guarded::Atom(
-                                crate::atom::ProtoAtom::EqE(
-                                    crate::formula::lift_free(&node_id_to_lnterm(ii)),
-                                    crate::formula::lift_free(&node_id_to_lnterm(jj)),
-                                ),
-                            ));
-                        }
-                        // (4)
-                        let comparable = ab_ij || ab_ji;
-                        let already_ineq = inequalities.contains(&(s.clone(), t.clone()))
-                            || inequalities.contains(&(t.clone(), s.clone()));
-                        if comparable && !already_ineq {
-                            let neg = crate::guarded::gall(
-                                Vec::new(),
-                                vec![crate::atom::ProtoAtom::EqE(
-                                    crate::formula::lift_free(s),
-                                    crate::formula::lift_free(t),
-                                )],
-                                crate::guarded::gfalse(),
-                            );
-                            new_formulas.push(neg);
-                        }
-                        // (3)
-                        if trivially_smaller(s, t) && !ab_ij {
-                            new_lesses.push((*ii, *jj));
-                        }
-                        // (5)
-                        if trivially_not_smaller(s, t)
-                            && !ab_ji
-                            && (inequalities.contains(&(s.clone(), t.clone()))
-                                || inequalities.contains(&(t.clone(), s.clone())))
-                        {
-                            new_lesses.push((*jj, *ii));
-                        }
-                    }
-                    // Only the less atoms (3) and (5) of the strict case.
-                    MonotonicBehaviour::Increasing => {
-                        if trivially_smaller(s, t) && !red.sys.always_before_with(&ab_adj, ii, jj) {
-                            new_lesses.push((*ii, *jj));
-                        }
-                        if trivially_not_smaller(s, t)
-                            && !red.sys.always_before_with(&ab_adj, jj, ii)
-                            && (inequalities.contains(&(s.clone(), t.clone()))
-                                || inequalities.contains(&(t.clone(), s.clone())))
-                        {
-                            new_lesses.push((*jj, *ii));
-                        }
-                    }
-                    _ => {}
+            // Each case has its own guard, so several can fire
+            // together; e.g. (2) and (5) with a stale `s ≠ t` give
+            // the cycle counter.spthy::counters_linear_order needs.
+            MonotonicBehaviour::StrictlyIncreasing => {
+                let ab_ij = red.sys.always_before_with(&ab_adj, ii, jj);
+                let ab_ji = red.sys.always_before_with(&ab_adj, jj, ii);
+                // (2)
+                if s == t && ii != jj {
+                    new_formulas.push(crate::guarded::Guarded::Atom(crate::atom::ProtoAtom::EqE(
+                        crate::formula::lift_free(&node_id_to_lnterm(ii)),
+                        crate::formula::lift_free(&node_id_to_lnterm(jj)),
+                    )));
+                }
+                // (4)
+                let comparable = ab_ij || ab_ji;
+                let already_ineq = inequalities.contains(&(s.clone(), t.clone()))
+                    || inequalities.contains(&(t.clone(), s.clone()));
+                if comparable && !already_ineq {
+                    let neg = crate::guarded::gall(
+                        Vec::new(),
+                        vec![crate::atom::ProtoAtom::EqE(
+                            crate::formula::lift_free(s),
+                            crate::formula::lift_free(t),
+                        )],
+                        crate::guarded::gfalse(),
+                    );
+                    new_formulas.push(neg);
+                }
+                // (3)
+                if trivially_smaller(s, t) && !ab_ij {
+                    new_lesses.push((*ii, *jj));
+                }
+                // (5)
+                if trivially_not_smaller(s, t)
+                    && !ab_ji
+                    && (inequalities.contains(&(s.clone(), t.clone()))
+                        || inequalities.contains(&(t.clone(), s.clone())))
+                {
+                    new_lesses.push((*jj, *ii));
                 }
             }
+            // Only the less atoms (3) and (5) of the strict case.
+            MonotonicBehaviour::Increasing => {
+                if trivially_smaller(s, t) && !red.sys.always_before_with(&ab_adj, ii, jj) {
+                    new_lesses.push((*ii, *jj));
+                }
+                if trivially_not_smaller(s, t)
+                    && !red.sys.always_before_with(&ab_adj, jj, ii)
+                    && (inequalities.contains(&(s.clone(), t.clone()))
+                        || inequalities.contains(&(t.clone(), s.clone())))
+                {
+                    new_lesses.push((*jj, *ii));
+                }
+            }
+            _ => {}
         }
     }
     // `mapM_ insertFormula newFormulas`, then `mapM_ insertLess newLesses`.
@@ -2618,18 +2299,10 @@ fn simp_injective_fact_eq_mon_pass(
         SystemOutcome::Linear => insert_lesses(red),
         SystemOutcome::Contradictory => return Ok(SystemOutcome::Contradictory),
         SystemOutcome::Cases(arms) => {
-            return Ok(SystemOutcome::Cases(
-                arms.into_iter()
-                    .map(|arm| {
-                        let mut branch = Reduction::new_inheriting(red.ctx, arm.sys, arm.counter);
-                        insert_lesses(&mut branch);
-                        SystemBranch {
-                            sys: branch.sys,
-                            counter: branch.maude.fresh_counter_peek(),
-                        }
-                    })
-                    .collect(),
-            ));
+            return red.continue_in_arms(arms, |branch| {
+                insert_lesses(branch);
+                Ok(SystemOutcome::Linear)
+            });
         }
     }
     let updated_formulas = formula_set(red);
@@ -2661,53 +2334,6 @@ fn reduce_formulas_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::pro
     red.sys.formulas_mut().retain(|f| !to_decompose.contains(f));
     red.changed = ChangeIndicator::Changed;
     red.insert_formulas(&to_decompose)
-}
-
-/// Drop `gtrue` (`Conj []`) entries from the formula list — those are
-/// vacuously satisfied. Mirrors a tiny piece of `reduceFormulas`.
-///
-/// IMPORTANT: gtrue must also be recorded in `solved_formulas`, because
-/// `is_initial_system` discriminates a fresh system from one that has
-/// closed a trivial formula via the (non-emptiness of) `solved_formulas`.
-/// Without this marker, a system whose only formula was `gtrue` becomes
-/// indistinguishable from the initial system after this pass — so
-/// `is_finished` keeps returning `None` (initial) and the search reaches
-/// "no method" Sorry, even though the proof is trivially Solved.
-/// This matches Haskell's `insertFormula` which calls `markAsSolved`
-/// on every formula it inserts, including `gtrue`.
-fn drop_trivially_true_formulas_pass(red: &mut Reduction) {
-    let before = red.sys.formulas.len();
-    let gt = crate::guarded::gtrue();
-    let had_gtrue = crate::guarded::stores_contains(&red.sys.formulas, &gt);
-    red.sys.invalidate_max_var_idx_cache();
-    red.sys.formulas_mut().retain(|f| **f != gt);
-    if had_gtrue && !crate::guarded::stores_contains(&red.sys.solved_formulas, &gt) {
-        red.sys.insert_solved_formula(gt);
-    }
-    if red.sys.formulas.len() != before {
-        red.changed = ChangeIndicator::Changed;
-    }
-}
-
-/// Deduplicate the formula list, keeping the first `Arc` of each group of
-/// equal formulas. Haskell uses `Set` storage so this is implicit; we use
-/// `Vec` so a manual pass is needed.
-fn dedupe_formulas_pass(red: &mut Reduction) {
-    use crate::constraint::solver::reduction::first_occurrences;
-    // Read via `iter()` (Deref, no mut borrow) so the common no-op path (no
-    // duplicates) takes ZERO mutable borrow and ZERO stamp bump — this pass
-    // runs every simplify fixpoint iteration, including the final no-op one
-    // that follows the `subst_system` marker-set, and an unconditional bump
-    // here would staleify that marker and collapse the skip (design Finding 2).
-    let first = first_occurrences(&red.sys.formulas[..]);
-    if first.contains(&false) {
-        // A real drop: `formulas_mut()` bumps `content_stamp` on handout.
-        let mut keep = first.iter();
-        red.sys
-            .formulas_mut()
-            .retain(|_| *keep.next().unwrap_or(&false));
-        red.changed = ChangeIndicator::Changed;
-    }
 }
 
 /// HS `simpSubterms` (Simplify.hs) running `simpSubtermStore`
