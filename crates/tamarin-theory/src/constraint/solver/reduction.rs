@@ -823,7 +823,9 @@ impl<'ctx> Reduction<'ctx> {
     }
 
     /// HS `insertFormula` (Reduction.hs): normalise `g`, then insert it
-    /// with `mark` set.
+    /// with `mark` set. As in HS, the reduction's fresh counter must already
+    /// avoid `g`'s variables (a system that contains them, or a seeded
+    /// counter); otherwise a fresh variable can collide with one of them.
     pub fn insert_formula(
         &mut self,
         g: Guarded,

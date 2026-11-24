@@ -77,10 +77,6 @@ fn singleton_and_factor_simplification_propagate_transport_failure() {
         store.clone().foreach_disj(&maude, simp_singleton),
         Err(AddEqsError::Maude(_))
     ));
-    assert!(matches!(
-        store.apply_factor_or_compose(&LNSubst::empty(), &maude),
-        Err(AddEqsError::Maude(_))
-    ));
 }
 
 #[test]

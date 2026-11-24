@@ -325,6 +325,8 @@ enum Caches {
     Cleared,
     /// Neither cache is touched; the caller invalidates them if needed.
     Untouched,
+    /// The full max cache is cleared; the node-only component is kept.
+    FullCleared,
     /// The cached max still equals the full walk afterwards.
     Exact,
 }
@@ -347,9 +349,9 @@ fn mutations_bump_exactly_their_stamps() {
     #[rustfmt::skip]
     let rows: &[(&str, Mutation, bool, bool, Caches)] = &[
         ("add_goal", |s| s.add_goal(Goal::Action(mvar(0), LNFact::new(FactTag::Out, vec![]))), true, false, Caches::Exact),
-        ("set_eq_store", |s| s.set_eq_store(std::sync::Arc::new(EquationStore::default())), false, true, Caches::Untouched),
-        ("eq_store_mut", |s| _ = s.eq_store_mut(), false, true, Caches::Untouched),
-        ("take_eq_store", |s| assert!(!s.take_eq_store().subst.is_empty()), false, true, Caches::Untouched),
+        ("set_eq_store", |s| s.set_eq_store(std::sync::Arc::new(EquationStore::default())), false, true, Caches::FullCleared),
+        ("eq_store_mut", |s| _ = s.eq_store_mut(), false, true, Caches::FullCleared),
+        ("take_eq_store", |s| assert!(!s.take_eq_store().subst.is_empty()), false, true, Caches::FullCleared),
         ("content_mut", |s| _ = s.content_mut(), true, true, Caches::Cleared),
         ("content_mut_untracked", |s| _ = s.content_mut_untracked(), false, false, Caches::Untouched),
         ("formulas_mut", |s| _ = s.formulas_mut(), true, false, Caches::Untouched),
@@ -391,6 +393,7 @@ fn mutations_bump_exactly_their_stamps() {
         match cache {
             Caches::Cleared => assert_eq!(caches(&child), (None, None), "{label}"),
             Caches::Untouched => assert_eq!(caches(&child), before, "{label}"),
+            Caches::FullCleared => assert_eq!(caches(&child), (None, before.1), "{label}"),
             Caches::Exact => assert_eq!(bounds_max(&child), bounds_max_uncached(&child), "{label}"),
         }
     }

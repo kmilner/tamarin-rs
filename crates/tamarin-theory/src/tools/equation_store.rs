@@ -564,26 +564,10 @@ impl EquationStore {
                     self.conj.remove(idx);
                 }
             }
-            self.apply_factor_or_compose(&factor, maude)?;
+            self.apply_eq_store(maude, &factor)?;
             return Ok(true);
         }
         Ok(false)
-    }
-
-    /// Compose `factor` into the free substitution, re-unifying remaining
-    /// disjs via `apply_eq_store` when its domain/range precondition holds.
-    /// Otherwise compose directly.
-    fn apply_factor_or_compose(
-        &mut self,
-        factor: &LNSubst,
-        maude: &MaudeHandle,
-    ) -> Result<(), AddEqsError> {
-        if subst_domain_range_overlap(factor) {
-            self.subst = factor.compose(&self.subst);
-            Ok(())
-        } else {
-            self.apply_eq_store(maude, factor)
-        }
     }
 
     /// `simpDisjunction` (EquationStore.hs): simplify a lone disjunction,

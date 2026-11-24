@@ -576,11 +576,13 @@ impl System {
     }
 
     /// Install a new equation store, bumping `subst_stamp`. The private field
-    /// makes this the only whole-store assignment path.
+    /// makes this the only whole-store assignment path. The store's variables
+    /// count towards the max-var index, so its cache is dropped too.
     #[inline]
     pub fn set_eq_store(&mut self, es: Arc<EquationStore>) {
         self.content.eq_store = es;
         self.bump_subst_stamp();
+        self.max_var_idx_cache.set(None);
     }
 
     /// Read the equation store without exposing a writable field.
@@ -595,6 +597,7 @@ impl System {
     #[inline]
     pub fn take_eq_store(&mut self) -> Arc<EquationStore> {
         self.bump_subst_stamp();
+        self.max_var_idx_cache.set(None);
         std::mem::take(&mut self.content.eq_store)
     }
 
@@ -1078,6 +1081,7 @@ impl System {
         // clones `eq_store.subst` once), so a fired skip is never invalidated
         // by the pass's own bookkeeping.
         self.bump_subst_stamp();
+        self.max_var_idx_cache.set(None);
         Arc::make_mut(&mut self.content.eq_store)
     }
 
