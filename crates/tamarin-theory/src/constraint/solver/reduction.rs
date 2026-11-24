@@ -237,24 +237,28 @@ impl<'ctx> Reduction<'ctx> {
     /// callers can skip the case cleanly (matches HS Disj-monad mzero
     /// semantics on the caller side).
     pub fn insert_edge(&mut self, e: Edge) -> Result<SolveOutcome, crate::prove::ProveError> {
-        // Look up the conclusion fact (source) and premise fact (target).
-        let fa_conc = self
-            .sys
-            .nodes
-            .iter()
-            .find(|(n, _)| n == &e.src.0)
-            .and_then(|(_, r)| r.conclusions.get(e.src.1 .0).cloned());
-        let fa_prem = self
-            .sys
-            .nodes
-            .iter()
-            .find(|(n, _)| n == &e.tgt.0)
-            .and_then(|(_, r)| r.premises.get(e.tgt.1 .0).cloned());
-        // When either fact is missing (rule lookup failed),
-        // `insert_edge_tail`'s `None` path does a raw insert.  Shouldn't
-        // happen in practice unless the caller passes an edge for a node
-        // that's not in the system.
-        self.insert_edge_tail(e, fa_conc.as_ref(), fa_prem.as_ref())
+        // HS `nodeConcFact` / `nodePremFact` (System.hs) fail unless both
+        // endpoints are system nodes with the indexed facts.
+        let fact = |node, conc: bool, idx: usize| {
+            let (_, rule) = self
+                .sys
+                .nodes
+                .iter()
+                .find(|(n, _)| n == node)
+                .expect("edge endpoint must be a system node");
+            let facts = if conc {
+                &rule.conclusions
+            } else {
+                &rule.premises
+            };
+            facts
+                .get(idx)
+                .cloned()
+                .expect("edge endpoint fact index must exist")
+        };
+        let fa_conc = fact(&e.src.0, true, e.src.1 .0);
+        let fa_prem = fact(&e.tgt.0, false, e.tgt.1 .0);
+        self.insert_edge_tail(e, &fa_conc, &fa_prem)
     }
 
     /// Shared tail of `insert_edge` / `insert_edge_with_facts`
@@ -263,30 +267,24 @@ impl<'ctx> Reduction<'ctx> {
     /// (`modM sEdges`, Reduction.hs).  On unification failure it
     /// mirrors `noContradictoryEqStore` (Reduction.hs) via
     /// `mark_contradictory` + early return, so the edge is never added to
-    /// the contradicted state.  Facts equal (or absent) means the Maude
-    /// call would trivially succeed, so we skip straight to the insert.
+    /// the contradicted state.  Equal facts need no unification.
     fn insert_edge_tail(
         &mut self,
         e: Edge,
-        fa_conc: Option<&crate::fact::LNFact>,
-        fa_prem: Option<&crate::fact::LNFact>,
+        fa_conc: &crate::fact::LNFact,
+        fa_prem: &crate::fact::LNFact,
     ) -> Result<SolveOutcome, crate::prove::ProveError> {
-        let res = if let (Some(fa_c), Some(fa_p)) = (fa_conc, fa_prem) {
-            if fa_c != fa_p {
-                self.solve_fact_eqs(
-                    SplitStrategy::SplitNow,
-                    &[tamarin_term::rewriting::Equal {
-                        lhs: fa_c.clone(),
-                        rhs: fa_p.clone(),
-                    }],
-                )
-            } else {
-                Ok(SolveOutcome::Linear)
-            }
+        let res = if fa_conc != fa_prem {
+            self.solve_fact_eqs(
+                SplitStrategy::SplitNow,
+                &[tamarin_term::rewriting::Equal {
+                    lhs: fa_conc.clone(),
+                    rhs: fa_prem.clone(),
+                }],
+            )?
         } else {
-            Ok(SolveOutcome::Linear)
+            SolveOutcome::Linear
         };
-        let res = res?;
         if matches!(res, SolveOutcome::Contradictory) {
             self.mark_contradictory();
             return Ok(res);
@@ -311,7 +309,7 @@ impl<'ctx> Reduction<'ctx> {
         fa_conc: &crate::fact::LNFact,
         fa_prem: &crate::fact::LNFact,
     ) -> Result<SolveOutcome, crate::prove::ProveError> {
-        self.insert_edge_tail(e, Some(fa_conc), Some(fa_prem))
+        self.insert_edge_tail(e, fa_conc, fa_prem)
     }
 
     /// `insertLast` — HS-faithful port of Reduction.hs:

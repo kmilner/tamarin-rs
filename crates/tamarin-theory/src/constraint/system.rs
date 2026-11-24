@@ -969,6 +969,53 @@ impl System {
         })
     }
 
+    /// HS `allKUActions` (System.hs): every `KU(m)` action as
+    /// `(node, fact, m)`, unsolved action goals first (`M.toList sGoals`
+    /// order), then node actions (`M.toList sNodes` order).
+    pub fn all_ku_actions(
+        &self,
+    ) -> Vec<(NodeId, &crate::fact::LNFact, &tamarin_term::lterm::LNTerm)> {
+        let mut goals: Vec<(NodeId, &crate::fact::LNFact)> = self.unsolved_action_atoms().collect();
+        goals.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+        let node_actions = self
+            .nodes_in_map_order()
+            .into_iter()
+            .flat_map(|(i, ru)| ru.actions.iter().map(move |fa| (*i, fa)));
+        goals
+            .into_iter()
+            .chain(node_actions)
+            .filter(|(_, fa)| fa.is_ku())
+            .filter_map(|(i, fa)| fa.terms.first().map(|m| (i, fa, m)))
+            .collect()
+    }
+
+    /// HS `allKDConcs` (System.hs): every `KD(m)` conclusion as
+    /// `(node, rule, m)`, in `M.toList sNodes` order.
+    pub fn all_kd_concs(&self) -> Vec<(NodeId, &RuleACInst, &tamarin_term::lterm::LNTerm)> {
+        self.nodes_in_map_order()
+            .into_iter()
+            .flat_map(|(i, ru)| {
+                ru.conclusions
+                    .iter()
+                    .filter(|fa| fa.is_kd())
+                    .filter_map(move |fa| fa.terms.first().map(|m| (*i, ru, m)))
+            })
+            .collect()
+    }
+
+    /// HS `isLast` (System.hs).
+    pub fn is_last(&self, i: &NodeId) -> bool {
+        self.last_atom.as_ref() == Some(i)
+    }
+
+    /// HS `isInTrace` (System.hs): `i` is a node, the last node, or the
+    /// timepoint of an unsolved action.
+    pub fn is_in_trace(&self, i: &NodeId) -> bool {
+        self.nodes.iter().any(|(n, _)| n == i)
+            || self.is_last(i)
+            || self.unsolved_action_atoms().any(|(n, _)| n == *i)
+    }
+
     /// All unsolved premise goals, as `(NodePrem, LNFact)`. Port of HS
     /// `unsolvedPremises` (System.hs).  Same insertion-order caveat
     /// as [`unsolved_chains`](Self::unsolved_chains).

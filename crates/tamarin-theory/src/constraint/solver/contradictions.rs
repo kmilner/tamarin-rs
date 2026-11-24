@@ -11,12 +11,6 @@
 //! gated on `enable_dh`/`enable_bp` inside `contradictions` itself
 //! (matching HS Contradictions.hs `contradictions`); everything has a
 //! faithful port below.
-//!
-//! In addition to the HS-ported conditions, RS emits two RS-only
-//! soundness backstops at the IncompatibleEqs slot
-//! (`has_incompatible_edge_facts`, `has_fresh_fact_sort_violation`)
-//! that have no Haskell counterpart;
-//! see the per-check note at the IncompatibleEqs push in `contradictions`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::rc::Rc;
@@ -82,23 +76,15 @@ pub fn contradictions(
     //   Cyclic, SubtermCyclic, NonNormalTerms, ForbiddenKD, ImpossibleChain,
     //   ForbiddenExp, ForbiddenBP, ForbiddenChain, IncompatibleEqs,
     //   FormulasFalse, then NonInjectiveFactInstance, then NodeAfterLast.
-    //
-    // RS-only soundness backstops are emitted at the IncompatibleEqs slot
-    // (NOT a port of the `eqsIsFalse` check, HS Contradictions.hs): they
-    // fire where HS's Maude unifier / `solveFactEqs` would already have
-    // pruned the branch at CONSTRUCTION time (sort-aware unification, edge
-    // tag-matching) so HS's `contradictions` never sees these systems. See
-    // the per-check notes below.
 
     // Shared node-id → rule index for the map-consuming checks below
     // (`has_impossible_chain`, `has_forbidden_constr_chain`,
-    // `has_forbidden_chain`, `has_incompatible_edge_facts`,
-    // `non_injective_fact_instances`).  `sys` is held immutable for the
-    // whole body and `nodes` has no interior mutability, so one build
-    // serves all of them.  `OnceCell` rather than an eager build: each
-    // consumer forces it only after its own early-outs (no unsolved chain
-    // goal, no AC-constructor node, no edges, no injective fact tags), so
-    // a pass whose consumers all bail never builds it.
+    // `has_forbidden_chain`, `non_injective_fact_instances`).  `sys` is
+    // held immutable for the whole body, so one build serves all of them.
+    // `OnceCell` rather than an eager build: each consumer forces it only
+    // after its own early-outs (no unsolved chain goal, no AC-constructor
+    // node, no injective fact tags), so a pass whose consumers all bail
+    // never builds it.
     let node_rules: std::cell::OnceCell<NodeRuleMap<'_>> = std::cell::OnceCell::new();
 
     // 2. SubtermCyclic — `isContradictory subtermStore`.
@@ -142,18 +128,7 @@ pub fn contradictions(
     if has_forbidden_constr_chain(sys, &node_rules) {
         out.push(Contradiction::ForbiddenACConstrChain);
     }
-    // 9. IncompatibleEqs: enforce equal fact tags across edges and Fresh
-    // arguments for Fr facts, then check `eqsIsFalse sEqStore`
-    // (Contradictions.hs). The first two probes are Rust soundness checks:
-    // edge insertion/fact-equation solving does not yet reject every invalid
-    // tag or Fresh sort at construction, as Haskell does. Keep these checks
-    // until construction enforces those invariants.
-    if has_incompatible_edge_facts(sys, &node_rules) {
-        out.push(Contradiction::IncompatibleEqs);
-    }
-    if has_fresh_fact_sort_violation(sys) {
-        out.push(Contradiction::IncompatibleEqs);
-    }
+    // 9. IncompatibleEqs: `eqsIsFalse sEqStore` (Contradictions.hs).
     if sys.eq_store().is_false() {
         out.push(Contradiction::IncompatibleEqs);
     }
@@ -918,54 +893,12 @@ fn has_forbidden_chain<'a>(
         ) {
             continue;
         }
-        // (3) Some KU(t_start) action node precedes the chain
-        // start `c.0`.  HS-faithful: `allKUActions` (System.hs)
-        // unions BOTH `unsolvedActionAtoms` (unsolved ActionG goals)
-        // AND node `rActs` lists.
-        //
-        // Only a KU of exactly `t_start` counts (HS `fst x == t_start`).
-        // Treating other variables as equal because one case of an open
-        // split maps them alike closes branches that hold real traces.
-        //
-        // Walk node actions first:
-        for (id, rule) in sys.nodes.iter() {
-            for fa in &rule.actions {
-                if !matches!(fa.tag, FactTag::Ku) {
-                    continue;
-                }
-                let t_ku = match fa.terms.first() {
-                    Some(t) => t,
-                    None => continue,
-                };
-                if t_ku != t_start {
-                    continue;
-                }
-                if id == &c.0 {
-                    continue;
-                }
-                if sys.always_before_with(ab_adj, id, &c.0) {
-                    return true;
-                }
-            }
-        }
-        // Then walk unsolved ActionG goals (HS's `unsolvedActionAtoms`):
-        for (id, fa) in sys.unsolved_action_atoms() {
-            if !matches!(fa.tag, FactTag::Ku) {
-                continue;
-            }
-            let t_ku = match fa.terms.first() {
-                Some(t) => t,
-                None => continue,
-            };
-            if t_ku != t_start {
-                continue;
-            }
-            if id == c.0 {
-                continue;
-            }
-            if sys.always_before_with(ab_adj, &id, &c.0) {
-                return true;
-            }
+        // (3) Some KU(t_start) action precedes the chain start (HS
+        // `allKUActions`). Only a KU of exactly `t_start` counts.
+        if sys.all_ku_actions().iter().any(|(id, _, t)| {
+            *t == t_start && *id != c.0 && sys.always_before_with(ab_adj, id, &c.0)
+        }) {
+            return true;
         }
     }
     false
@@ -990,7 +923,6 @@ fn has_forbidden_chain<'a>(
 ///       - `g` is simple
 ///       - all `MsgVar` args of `g` are KU-known earlier than `i`
 fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltAdj) -> bool {
-    use crate::fact::FactTag;
     use crate::rule::{IntrRuleACInfo, RuleInfo};
     use tamarin_term::function_symbols::{FunSym, EXP_SYM_STRING};
     use tamarin_term::lterm::{contains_private, frees, is_msg_var, sort_of_name, LNTerm, LSort};
@@ -1039,27 +971,7 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
         None
     }
 
-    // `allKUActions`: HS System.hs.  Unions
-    // `unsolvedActionAtoms sys` (open KU goals) and the
-    // `rActs` lists of each node.  Returns (NodeId, fact, term).
-    // For "knownEarlier" we only need (NodeId, term).
-    let mut all_ku: Vec<(NodeId, LNTerm)> = Vec::new();
-    for (i, fa) in sys.unsolved_action_atoms() {
-        if matches!(fa.tag, FactTag::Ku)
-            && let Some(m) = fa.terms.first()
-        {
-            all_ku.push((i, m.clone()));
-        }
-    }
-    for (id, rule) in sys.nodes.iter() {
-        for fa in &rule.actions {
-            if matches!(fa.tag, FactTag::Ku)
-                && let Some(m) = fa.terms.first()
-            {
-                all_ku.push((*id, m.clone()));
-            }
-        }
-    }
+    let all_ku = sys.all_ku_actions();
 
     // The `alwaysBefore` adjacency (`ab_adj`) is built once by the caller
     // (`contradictions`) and shared across all ordering checks; queried here
@@ -1111,12 +1023,12 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
         // whose node `j` is `alwaysBefore` `i`.
         let earlier_msg_vars = || -> Vec<LNTerm> {
             let mut out = Vec::new();
-            for (j, t) in &all_ku {
+            for (j, _, t) in &all_ku {
                 if !is_msg_var(t) {
                     continue;
                 }
                 if sys.always_before_with(ab_adj, j, i) {
-                    out.push(t.clone());
+                    out.push((*t).clone());
                 }
             }
             out
@@ -1729,88 +1641,6 @@ fn has_false_formula(sys: &System) -> bool {
         .any(|f| matches!(f.as_ref(), Guarded::Disj(v) if v.is_empty()))
 }
 
-/// `Fr(t)` requires `t` to be a Fresh-sorted variable. Maude's
-/// sort-aware unifier rejects bindings like `seed = f(k)` where
-/// `f` is a constructor (returning Msg sort). When our source-case
-/// grafting bypasses that check — e.g. on Minimal_HashChain where
-/// the Gen_Start direct-to-Gen_Stop precomputed case is grafted
-/// onto a runtime `!Final(f(k))` premise, conflating Gen_Start's
-/// `seed` with `f(k)` — the resulting `Fr(f(k))` is unsatisfiable.
-/// Mirrors the sort-check Haskell's unifier performs implicitly.
-fn has_fresh_fact_sort_violation(sys: &System) -> bool {
-    use crate::fact::FactTag;
-    use tamarin_term::lterm::LSort;
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    for (_, rule) in sys.nodes.iter() {
-        // Check premises (where Fr lives) and conclusions/actions
-        // for completeness — any Fresh-tagged fact with a non-Fresh
-        // term is a sort violation.
-        for fact in rule
-            .premises
-            .iter()
-            .chain(rule.conclusions.iter())
-            .chain(rule.actions.iter())
-        {
-            if !matches!(fact.tag, FactTag::Fresh) {
-                continue;
-            }
-            let t = match fact.terms.first() {
-                Some(t) => t,
-                None => continue,
-            };
-            match t {
-                Term::Lit(Lit::Var(v)) if v.sort == LSort::Fresh => {}
-                Term::Lit(Lit::Var(v)) if v.sort == LSort::Msg => {
-                    // Msg can narrow to Fresh later — don't flag.
-                }
-                _ => return true,
-            }
-        }
-    }
-    false
-}
-
-/// Soundness invariant: every edge in a well-formed system must
-/// connect a conclusion and premise with identical fact tags (and
-/// arity).  Tamarin's `solveChainGoal` / `solvePremise` only ever
-/// add edges after `solveFactEqs` succeeds, which requires the
-/// fact tags to match.  In our port, an edge with mismatched tags
-/// can arise when node-id substitution collapses a case node onto
-/// an unrelated live node — the edge survives the rename but
-/// connects incompatible facts.  Such a system has no model.
-fn has_incompatible_edge_facts<'a>(
-    sys: &'a System,
-    node_rules: &std::cell::OnceCell<NodeRuleMap<'a>>,
-) -> bool {
-    // No edges → no edge can be incompatible; bail before touching the map.
-    if sys.edges.is_empty() {
-        return false;
-    }
-    // The pass-shared node-id → rule map (instead of two linear
-    // `nodes.iter().find` scans per edge → O(edges*nodes)).
-    let node_rule_map = node_rules.get_or_init(|| sys.node_rule_map());
-    for e in &sys.edges {
-        let src_rule = node_rule_map.get(&e.src.0).copied();
-        let tgt_rule = node_rule_map.get(&e.tgt.0).copied();
-        let (Some(sr), Some(tr)) = (src_rule, tgt_rule) else {
-            continue;
-        };
-        let fc = match sr.conclusions.get(e.src.1 .0) {
-            Some(f) => f,
-            None => continue,
-        };
-        let fp = match tr.premises.get(e.tgt.1 .0) {
-            Some(f) => f,
-            None => continue,
-        };
-        if fc.tag != fp.tag || fc.terms.len() != fp.terms.len() {
-            return true;
-        }
-    }
-    false
-}
-
 /// Detect any node that is strictly after `last(_)`. Mirrors Haskell's
 /// `nodesAfterLast`.
 ///
@@ -1847,20 +1677,11 @@ fn node_after_last(
     // abstract precompute-time node-ids spuriously trip the contradiction.
     // `adj` is the raw less-relation, built once by the caller
     // (`contradictions`) and shared.
-    // isInTrace: collect every node-id that is "in the trace".
-    let mut in_trace: BTreeSet<NodeId> = BTreeSet::new();
-    for (id, _) in sys.nodes.iter() {
-        in_trace.insert(*id);
-    }
-    in_trace.insert(last); // isLast is true for `last`
-    for (id, _) in sys.unsolved_action_atoms() {
-        in_trace.insert(id);
-    }
     // Strictly-reachable set from `last` (seed removed) via the shared routine.
     let visited = crate::constraint::solver::goals::reachable_set_adj(adj, &last, false);
     visited
         .into_iter()
-        .filter(|n| in_trace.contains(n))
+        .filter(|n| sys.is_in_trace(n))
         .map(|after| Contradiction::NodeAfterLast(last, after))
         .collect()
 }

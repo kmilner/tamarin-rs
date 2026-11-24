@@ -134,16 +134,15 @@ fn non_injective_fact_witness_emitted() {
 }
 
 /// The pass-shared `NodeRuleMap` is lazy: checks whose early-outs
-/// fire must leave the `OnceCell` untouched, while a mismatched-tag
-/// edge must both trip `has_incompatible_edge_facts` and populate it.
+/// fire must leave the `OnceCell` untouched.
 #[test]
-fn shared_node_rule_map_lazy_and_incompatible_edge_detected() {
-    use crate::constraint::constraints::{Edge, LessAtom, Reason};
+fn shared_node_rule_map_stays_lazy_on_early_outs() {
+    use crate::constraint::constraints::{LessAtom, Reason};
     use crate::constraint::system::System;
     use crate::fact::{Fact, FactTag, Multiplicity};
     use crate::rule::{
-        ConcIdx, IntrRuleACInfo, PremIdx, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleACInst,
-        RuleAttributes, RuleInfo,
+        IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleACInst, RuleAttributes,
+        RuleInfo,
     };
     use tamarin_term::builtin::msg_var;
 
@@ -171,8 +170,8 @@ fn shared_node_rule_map_lazy_and_incompatible_edge_detected() {
         )
     };
 
-    // Early-out paths: an Adversary less-atom over non-AC rules and
-    // no edges — neither check may force the shared map.
+    // Early-out path: an Adversary less-atom over non-AC rules must not
+    // force the shared map.
     let i = n("1");
     let k = n("2");
     let mut sys = System::empty();
@@ -181,21 +180,10 @@ fn shared_node_rule_map_lazy_and_incompatible_edge_detected() {
     sys.add_less(LessAtom::new(i, k, Reason::Adversary));
     let cell = std::cell::OnceCell::new();
     assert!(!has_forbidden_constr_chain(&sys, &cell));
-    assert!(!has_incompatible_edge_facts(&sys, &cell));
     assert!(
         cell.get().is_none(),
         "early-outs must not build the shared map"
     );
-
-    // A conclusion-A → premise-B edge is tag-incompatible; detecting
-    // it forces the shared map.
-    sys.add_edge(Edge {
-        src: (i, ConcIdx(0)),
-        tgt: (k, PremIdx(0)),
-    });
-    let cell = std::cell::OnceCell::new();
-    assert!(has_incompatible_edge_facts(&sys, &cell));
-    assert!(cell.get().is_some());
 }
 
 /// The [`NfMemo`] must never change a verdict: every candidate answered

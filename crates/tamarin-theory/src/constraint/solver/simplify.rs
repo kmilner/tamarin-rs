@@ -659,33 +659,6 @@ fn partial_atom_valuation_with(
         |i: &crate::constraint::constraints::NodeId, j: &crate::constraint::constraints::NodeId| {
             non_unifiable_nodes(maude, node_rule, i, j).unwrap_or(false)
         };
-    // HS-faithful `isInTrace` (System.hs):
-    //   isInTrace sys i =
-    //        i `M.member` sNodes
-    //     || isLast sys i
-    //     || any ((i ==) . fst) (unsolvedActionAtoms sys)
-    // The `unsolvedActionAtoms` clause is critical: free node-id variables
-    // that appear only as the timepoint of an unsolved Action goal (e.g.
-    // a freshly-opened existential `Expired(k)@e`) ARE guaranteed to be
-    // instantiated to a trace index. Without this clause, RS would return
-    // `None` for `Less(last, e)` where HS returns `Just False`, leaving
-    // `Less(last, e) ∨ Less(e, last)` un-simplifiable in evalFormulaAtoms
-    // and forcing a runtime DisjG split that HS skips.  Concretely:
-    // TESLA::knows_only_expired_chain_keys had 2 such extra case_1/case_2
-    // splits; TPM_DKRS::PCR_Write_charn the same pattern.
-    let is_in_trace = |n: &crate::constraint::constraints::NodeId| -> bool {
-        if node_rule.contains_key(n) {
-            return true;
-        }
-        if sys.last_atom.as_ref() == Some(n) {
-            return true;
-        }
-        sys.goals.iter().any(|(g, st)| {
-            !st.solved
-                && matches!(g,
-            crate::constraint::constraints::Goal::Action(i, _) if i == n)
-        })
-    };
     match atom {
         ProtoAtom::Less(i, j) => {
             let ni = eq_node_id(i)?;
@@ -715,13 +688,11 @@ fn partial_atom_valuation_with(
             //   isLast sys i && isInTrace sys j  -> Just False
             //   isLast sys j && isInTrace sys i &&
             //     nonUnifiableNodes i j          -> Just True
-            if let Some(la) = &sys.last_atom {
-                if la == &ni && is_in_trace(&nj) {
-                    return Some(false);
-                }
-                if la == &nj && is_in_trace(&ni) && non_unifiable_nodes(&ni, &nj) {
-                    return Some(true);
-                }
+            if sys.is_last(&ni) && sys.is_in_trace(&nj) {
+                return Some(false);
+            }
+            if sys.is_last(&nj) && sys.is_in_trace(&ni) && non_unifiable_nodes(&ni, &nj) {
+                return Some(true);
             }
             None
         }
@@ -827,12 +798,10 @@ fn partial_atom_valuation_with(
             // `nodesAfter i = filter (i /=) $ reachableSet [i] lessRel`
             // where `lessRel = sLessAtoms ++ rawEdgeRel`.
             // `isInTrace` is the 3-clause check (sNodes / isLast /
-            // unsolvedActionAtoms) — see `is_in_trace` above.  Do NOT add
+            // unsolvedActionAtoms).  Do NOT add
             // extra "successor exists → Some(false)" checks: HS returns
             // `Nothing` when a successor is a free variable not in trace.
-            if let Some(la) = &sys.last_atom
-                && la == &n
-            {
+            if sys.is_last(&n) {
                 return Some(true);
             }
             // Build lessRel = less_atoms ∪ edges-as-less.
@@ -858,7 +827,7 @@ fn partial_atom_valuation_with(
             }
             // Check `any (isInTrace) (nodesAfter n)` (excluding n itself).
             for j in seen.iter() {
-                if j != &n && is_in_trace(j) {
+                if j != &n && sys.is_in_trace(j) {
                     return Some(false);
                 }
             }
