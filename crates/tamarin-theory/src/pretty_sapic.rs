@@ -40,8 +40,8 @@
 //!
 //! Scope: every `SapicAction` and `ProcessCombinator` variant, but only the
 //! TOP node of a process — `prettySapic'`'s recursive `$-$`/`nest` layout
-//! (Theory/Sapic/Process.hs) is not ported here; `pretty_theory::open_process_doc`
-//! walks the tree and calls [`pretty_sapic_top_level`] per node.
+//! (Theory/Sapic/Process.hs) is [`open_process_doc`], which walks the tree and
+//! calls [`pretty_sapic_top_level`] per node.
 
 use std::collections::BTreeSet;
 
@@ -366,6 +366,124 @@ pub fn pretty_sapic_top_level(p: &PlainProcess) -> String {
 /// (Theory/Model/Rule.hs): the `process="..."` rule-attribute value.
 pub fn pretty_sapic_top_level_attr(p: &PlainProcess) -> String {
     pretty_sapic_top_level_with(p, MsrPrinter::Attribute)
+}
+
+/// HS `prettySapic'` (Theory/Sapic/Process.hs) as a Doc. Parentheses encode
+/// the parser's precedence and right extent, branch combinators regain their
+/// `then`/`in` keywords, and an annotated process prints as `(process)@term`.
+///
+/// The action/combinator text shares the byte-faithful top-level action
+/// renderer, without first appending and then stripping a semicolon.
+///
+/// `prettyProcess = prettySapic = prettySapic' rulePrinter`
+/// (TheoryObject.hs, Print.hs), so an embedded MSR renders its
+/// premises through `unextractMatchingVariables mv` — every pattern-match
+/// variable keeps its `=` marker.  This is the printer that
+/// [`crate::pretty_sapic::pretty_sapic_top_level`] selects; the
+/// `process="..."` rule attribute uses the other one.
+pub(crate) fn open_process_doc(pr: &crate::sapic::PlainProcess) -> crate::pretty_hpj::Doc {
+    use crate::pretty_hpj::{parens, Doc};
+    use crate::sapic::{Process, ProcessCombinator, SapicAction};
+    fn node_text(p: &crate::sapic::PlainProcess) -> String {
+        crate::pretty_sapic::pretty_sapic_open_node(p)
+    }
+    fn annotation(pr: &crate::sapic::PlainProcess) -> &crate::sapic::ProcessParsedAnnotation {
+        match pr {
+            Process::Null(a) | Process::Comb(_, a, _, _) | Process::Action(_, a, _) => a,
+        }
+    }
+    fn is_chain(pr: &crate::sapic::PlainProcess) -> bool {
+        matches!(
+            pr,
+            Process::Comb(
+                ProcessCombinator::Parallel | ProcessCombinator::Ndc,
+                a,
+                _,
+                _
+            ) if a.location.is_none()
+        )
+    }
+    fn is_delimited(pr: &crate::sapic::PlainProcess) -> bool {
+        match pr {
+            Process::Null(_) | Process::Action(SapicAction::ProcessCall(_, _), _, _) => true,
+            Process::Action(action, _, body) if matches!(body.as_ref(), Process::Null(_)) => {
+                matches!(
+                    action,
+                    SapicAction::New(_)
+                        | SapicAction::ChIn { .. }
+                        | SapicAction::ChOut { .. }
+                        | SapicAction::Event(_)
+                )
+            }
+            _ => false,
+        }
+    }
+    fn located(pr: &crate::sapic::PlainProcess, loc: &crate::sapic::SapicTerm) -> Doc {
+        parens(form(pr))
+            .beside(Doc::text("@"))
+            .beside(Doc::text(crate::pretty_sapic::pretty_sapic_term(loc)))
+    }
+    fn pp(pr: &crate::sapic::PlainProcess) -> Doc {
+        match annotation(pr).location.as_ref() {
+            Some(loc) => located(pr, loc),
+            None => form(pr),
+        }
+    }
+    fn delimited(pr: &crate::sapic::PlainProcess) -> Doc {
+        match annotation(pr).location.as_ref() {
+            Some(loc) => parens(located(pr, loc)),
+            None if is_delimited(pr) => form(pr),
+            None => parens(form(pr)),
+        }
+    }
+    fn left_op(pr: &crate::sapic::PlainProcess) -> Doc {
+        if is_chain(pr) {
+            form(pr)
+        } else {
+            delimited(pr)
+        }
+    }
+    fn form(pr: &crate::sapic::PlainProcess) -> Doc {
+        match pr {
+            Process::Null(_) => Doc::text("0"),
+            Process::Comb(ProcessCombinator::Parallel | ProcessCombinator::Ndc, _, left, right) => {
+                left_op(left)
+                    .beside_sp(Doc::text(node_text(pr)))
+                    .beside_sp(delimited(right))
+            }
+            Process::Comb(comb, _, left, right) => {
+                let keyword = match comb {
+                    ProcessCombinator::Cond(_) | ProcessCombinator::CondEq(_, _) => "then",
+                    ProcessCombinator::Lookup(_, _) | ProcessCombinator::Let { .. } => "in",
+                    ProcessCombinator::Parallel | ProcessCombinator::Ndc => unreachable!(),
+                };
+                let header = Doc::text(node_text(pr)).beside_sp(Doc::text(keyword));
+                if matches!(right.as_ref(), Process::Null(_)) {
+                    header.above_g(pp(left).nest(4))
+                } else {
+                    header
+                        .above_g(delimited(left).nest(4))
+                        .above_g(Doc::text("else"))
+                        .above_g(pp(right).nest(4))
+                }
+            }
+            Process::Action(SapicAction::Rep, _, body) => Doc::text("!").beside(parens(pp(body))),
+            Process::Action(SapicAction::ProcessCall(_, _), _, _) => Doc::text(node_text(pr)),
+            Process::Action(_, _, body) if matches!(body.as_ref(), Process::Null(_)) => {
+                Doc::text(node_text(pr))
+            }
+            Process::Action(_, _, body) => {
+                let next = if is_chain(body) {
+                    parens(form(body)).nest(1)
+                } else {
+                    pp(body)
+                };
+                Doc::text(format!("{};", node_text(pr))).above_g(next)
+            }
+        }
+    }
+
+    pp(pr)
 }
 
 #[cfg(test)]

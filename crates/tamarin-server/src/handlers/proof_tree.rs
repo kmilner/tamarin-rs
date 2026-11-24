@@ -39,7 +39,7 @@ use tamarin_theory::constraint::system::System;
 use tamarin_theory::pretty_system::pretty_non_graph_system;
 use tamarin_theory::theory::TheoryItem;
 
-use crate::handlers::path_parse::{encode_sub_path, url_path_escape};
+use crate::handlers::path_parse::{theory_url, TheoryPath};
 
 /// The immutable, system-free part of a replayed proof node.
 ///
@@ -893,22 +893,17 @@ pub(crate) fn render_sub_proof_snippet(
             snippet.children.len()
         )));
     };
-    let url_path = encode_sub_path(proof_path);
+    let proof = |sub: &[String]| TheoryPath::Proof {
+        lemma: lemma.to_string(),
+        sub: sub.to_vec(),
+    };
     // HS `subProofSnippet = vcat [ …proofMethods…, text "", <h3>Constraint
     // system</h3>, [dynamic-graph], sequent, <h3>N sub-case(s)</h3>, …subCases ]`
     // — each element is a `vcat` line; join with `\n`, then postprocess once.
     let mut parts: Vec<String> = Vec::new();
     // Applicable Proof Methods (ranked at this node's proof depth, HS
     // `subProofSnippet` uses `length proofPath`).
-    write_applicable_methods(
-        &mut parts,
-        idx,
-        lemma,
-        &url_path,
-        proof_path.len(),
-        system,
-        ctx,
-    )?;
+    write_applicable_methods(&mut parts, idx, lemma, proof_path, system, ctx)?;
     // HS `text ""` — a blank line before the Constraint-system header.
     parts.push(String::new());
     parts.push("<h3>Constraint system</h3>".to_string());
@@ -917,15 +912,9 @@ pub(crate) fn render_sub_proof_snippet(
         // pointing at `InteractiveDotGraphR` = the `intdot` route (the HTML
         // shell that in turn fetches `interactive-graph-def`), NOT the raw
         // DOT route directly (`Web/Theory.hs`).
-        let src = format!(
-            "/thy/trace/{idx}/intdot/proof/{lemma}{path}",
-            idx = idx,
-            lemma = url_path_escape(lemma),
-            path = url_path,
-        );
         parts.push(format!(
             "<dynamic-graph graphSrc=\"{}\"></dynamic-graph>",
-            src
+            theory_url(idx, "intdot", &proof(proof_path))
         ));
     }
     // HS `preformatted (Just "sequent") (prettyNonGraphSystem se)` =
@@ -941,7 +930,6 @@ pub(crate) fn render_sub_proof_snippet(
     for (case_name, child_annotated) in &snippet.children {
         let mut child_path = proof_path.to_vec();
         child_path.push(case_name.clone());
-        let child_url = encode_sub_path(&child_path);
         // HS `withTag "h4" [] (text "Case" <-> text name)` = `<h4>Case NAME</h4>`.
         parts.push(format!(
             "<h4>Case {}</h4>",
@@ -955,15 +943,9 @@ pub(crate) fn render_sub_proof_snippet(
             continue;
         }
         // HS `refDotInteractiveStaticPath` → `<static-graph graphSrc=…>`.
-        let src = format!(
-            "/thy/trace/{idx}/intdot/proof/{lemma}{path}",
-            idx = idx,
-            lemma = url_path_escape(lemma),
-            path = child_url,
-        );
         parts.push(format!(
             "<static-graph graphSrc=\"{}\"></static-graph>",
-            src
+            theory_url(idx, "intdot", &proof(&child_path))
         ));
     }
     Ok(tamarin_theory::pretty_hpj::postprocess_html(
@@ -993,45 +975,19 @@ fn has_graph_content(sys: &System) -> bool {
         .any(|(g, st)| !st.solved && (g.is_action() || g.is_chain()))
 }
 
-fn write_applicable_methods(
-    out: &mut Vec<String>,
-    idx: usize,
-    lemma: &str,
-    url_path: &str,
-    depth: usize,
-    sys: &System,
+/// HS `rankProofMethods` (ProofMethod.hs) as the web uses it: the ranked
+/// `(method, explanation)` list, filtered to the methods `execProofMethod`
+/// accepts. Both the method pane's numbering and the `method/<N>` route read
+/// this one list, so a clicked number always selects the method displayed.
+pub(crate) fn applicable_methods(
     ctx: &ProofContext,
-) -> Result<(), String> {
-    use tamarin_theory::pretty_hpj::{self as hpj, Doc};
-    // The ranking used at this proof depth (HS `subProofSnippet`:
-    // `ranking = useHeuristic heuristic (length proofPath)`,
-    // `Web/Theory.hs`).
-    let ranking = ranking_at_depth(Some(ctx), depth);
-    // Match Haskell `rankProofMethods` (`ProofMethod.hs`):
-    //   stoppingMethod = Finished <$> isFinished ctxt sys
-    //   in execMethods $ maybe proofMethods ((:[]) . (,"")) stoppingMethod
-    // When `isFinished` yields a verdict the WHOLE method list is replaced
-    // by the single stopping method `[Finished r]` (and `execProofMethod
-    // (Finished _) = Just M.empty` always survives the `execMethods`
-    // filter).  Otherwise the list is `proofMethods` (Simplify / Induction
-    // / SolveGoal), filtered by `execProofMethod`.  In Rust,
-    // `candidate_methods` is that un-filtered `proofMethods` list (used by
-    // the search loop which tries each in order); for the UI we filter via
-    // `exec_proof_method` so the user-visible numbering matches the actual
-    // click semantics.
-    // Each entry is `(method, expl)` — `expl` is HS's `rankProofMethods`
-    // explanation string (`"nr. N …"` for SolveGoal, `""` otherwise),
-    // rendered by `prettyPM` as a trailing `// <expl>` line comment.
-    // `candidate_methods_with_expl` performs the terminal check itself, so a
-    // finished system yields its one `Finished` method without a duplicate
-    // contradiction sweep here.
+    sys: &System,
+    depth: usize,
+) -> Result<Vec<(ProofMethod, String)>, String> {
     let mut methods = Vec::new();
     for candidate in
         candidate_methods_with_expl(sys, ctx, depth).map_err(|error| error.to_string())?
     {
-        // HS-faithful WHNF-depth applicability (Web/Theory.hs via
-        // ProofMethod.hs). Must stay in lockstep with
-        // `theory::apply_method`'s method-number filter.
         if tamarin_theory::constraint::solver::proof_method::is_applicable_for_display(
             ctx,
             &candidate.0,
@@ -1042,6 +998,24 @@ fn write_applicable_methods(
             methods.push(candidate);
         }
     }
+    Ok(methods)
+}
+
+fn write_applicable_methods(
+    out: &mut Vec<String>,
+    idx: usize,
+    lemma: &str,
+    proof_path: &[String],
+    sys: &System,
+    ctx: &ProofContext,
+) -> Result<(), String> {
+    let depth = proof_path.len();
+    use tamarin_theory::pretty_hpj::{self as hpj, Doc};
+    // The ranking used at this proof depth (HS `subProofSnippet`:
+    // `ranking = useHeuristic heuristic (length proofPath)`,
+    // `Web/Theory.hs`).
+    let ranking = ranking_at_depth(Some(ctx), depth);
+    let methods = applicable_methods(ctx, sys, depth)?;
     if methods.is_empty() {
         use tamarin_theory::constraint::solver::proof_method::Result as Terminal;
         let heading = match is_finished_or_stuck(ctx, sys).map_err(|error| error.to_string())? {
@@ -1098,12 +1072,14 @@ fn write_applicable_methods(
     let mut method_blocks: Vec<String> = Vec::with_capacity(methods.len());
     for (i, (m, expl)) in methods.iter().enumerate() {
         let nr = i + 1;
-        let href = format!(
-            "/thy/trace/{idx}/main/method/{lemma}/{nr}{path}",
-            idx = idx,
-            lemma = url_path_escape(lemma),
-            nr = nr,
-            path = url_path
+        let href = theory_url(
+            idx,
+            "main",
+            &TheoryPath::Method {
+                lemma: lemma.to_string(),
+                idx: nr as i64,
+                sub: proof_path.to_vec(),
+            },
         );
         let link = hpj::with_tag(
             "a",
@@ -1125,7 +1101,11 @@ fn write_applicable_methods(
         method_blocks.join("\n\n")
     ));
     // Autoprove menu links (a./b./[o.]/s.) — self-contained block.
-    write_autoprove_links(out, idx, &url_path_escape(lemma), url_path, ctx);
+    let proof = TheoryPath::Proof {
+        lemma: lemma.to_string(),
+        sub: proof_path.to_vec(),
+    };
+    write_autoprove_links(out, idx, &proof, ctx);
     Ok(())
 }
 
@@ -1137,17 +1117,14 @@ fn write_applicable_methods(
 /// with cut ∈ {idfs=CutDFS, characterize=CutNothing}; `AutoProverAllR`
 /// omits the oracle flag.  `linkToPath` prepends the `internal-link`
 /// class (the gate sorts class tokens, so ordering is immaterial).
-/// `lemma_esc` is the already-`url_path_escape`d lemma segment.
 fn write_autoprove_links(
     out: &mut Vec<String>,
     idx: usize,
-    lemma_esc: &str,
-    url_path: &str,
+    proof: &TheoryPath,
     ctx: &ProofContext,
 ) {
     use tamarin_theory::pretty_hpj as hpj;
-    let l = lemma_esc;
-    let p = url_path;
+    let url = |route: &str| theory_url(idx, route, proof);
     let bound = 5; // HS `fromMaybe 5 (apBound ti.autoProver)` — default depth bound.
                    // HS `autoProverLinks` (Web/Theory.hs) wraps each link's visible
                    // text in `keyword_` — an `hl_keyword` span in HtmlDoc mode, plain text
@@ -1161,14 +1138,19 @@ fn write_autoprove_links(
     let kw = |s: &str| hpj::keyword_(s).render();
     // a. autoprove  (A. for all solutions)   [nameSuffix = emptyDoc]
     out.push(format!(
-        "a. <a class=\"internal-link autoprove\" href=\"/thy/trace/{idx}/autoprove/idfs/0/False/proof/{l}{p}\">{ap}</a> \
-         (A. <a class=\"internal-link characterization\" href=\"/thy/trace/{idx}/autoprove/characterize/0/False/proof/{l}{p}\">{fas}</a>)",
-        ap = kw("autoprove"), fas = kw("for all solutions"),
+        "a. <a class=\"internal-link autoprove\" href=\"{a}\">{ap}</a> \
+         (A. <a class=\"internal-link characterization\" href=\"{c}\">{fas}</a>)",
+        a = url("autoprove/idfs/0/False"),
+        c = url("autoprove/characterize/0/False"),
+        ap = kw("autoprove"),
+        fas = kw("for all solutions"),
     ));
     // b. bounded autoprove  (B. for all solutions)  with proof-depth bound N
     out.push(format!(
-        "b. <a class=\"internal-link bounded-autoprove\" href=\"/thy/trace/{idx}/autoprove/idfs/{bound}/False/proof/{l}{p}\">{ap}</a> \
-         (B. <a class=\"internal-link bounded-characterization\" href=\"/thy/trace/{idx}/autoprove/characterize/{bound}/False/proof/{l}{p}\">{fas}</a>)  with proof-depth bound {bound}",
+        "b. <a class=\"internal-link bounded-autoprove\" href=\"{a}\">{ap}</a> \
+         (B. <a class=\"internal-link bounded-characterization\" href=\"{c}\">{fas}</a>)  with proof-depth bound {bound}",
+        a = url(&format!("autoprove/idfs/{bound}/False")),
+        c = url(&format!("autoprove/characterize/{bound}/False")),
         ap = kw("autoprove"), fas = kw("for all solutions"),
     ));
     // o. oracle autoprove — only when the heuristic uses an oracle
@@ -1176,14 +1158,16 @@ fn write_autoprove_links(
     // single hsep separator).
     if uses_oracle(ctx) {
         out.push(format!(
-            "o. <a class=\"internal-link oracle-autoprove\" href=\"/thy/trace/{idx}/autoprove/idfs/0/True/proof/{l}{p}\">{ap}</a> until oracle returns nothing",
+            "o. <a class=\"internal-link oracle-autoprove\" href=\"{a}\">{ap}</a> until oracle returns nothing",
+            a = url("autoprove/idfs/0/True"),
             ap = kw("autoprove"),
         ));
     }
     // s. autoprove for all lemmas  (S. for all solutions)  for all lemmas<trailing space>
     out.push(format!(
-        "s. <a class=\"internal-link autoprove-all\" href=\"/thy/trace/{idx}/autoproveAll/idfs/0/proof/{l}{p}\">{ap}</a> \
-         (S. <a class=\"internal-link characterization-all\" href=\"/thy/trace/{idx}/autoproveAll/characterize/0/proof/{l}{p}\">{fas}</a>)  for all lemmas ",
+        "s. <a class=\"internal-link autoprove-all\" href=\"{a}\">{ap}</a> \
+         (S. <a class=\"internal-link characterization-all\" href=\"{c}\">{fas}</a>)  for all lemmas ",
+        a = url("autoproveAll/idfs/0"), c = url("autoproveAll/characterize/0"),
         ap = kw("autoprove"), fas = kw("for all solutions"),
     ));
 }

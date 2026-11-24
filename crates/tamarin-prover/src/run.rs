@@ -920,15 +920,6 @@ fn create_dir_once(dir: &std::path::Path) -> std::io::Result<()> {
     })
 }
 
-/// The `GraphOptions` every `outputTraces` graph is rendered with.  The label
-/// [`trace_label_options`] builds ADVERTISES these very values (the
-/// `SL2-AS0-CL0-A1-C1-NB` segment), so the renderers and the label read one
-/// source: two independent reads can drift into a label that describes a body
-/// it did not produce.
-fn trace_graph_options() -> tamarin_theory::constraint::system::graph::GraphOptions {
-    tamarin_theory::constraint::system::graph::GraphOptions::default()
-}
-
 /// HS `traceLabelOptions` (Batch.hs): the fixed middle segment of an
 /// `outputTraces` label.  Batch always feeds it `defaultGraphOptions`
 /// (Graph.hs) and `defaultDotOptions` (Theory/Constraint/System/Dot.hs) — Batch.hs
@@ -938,7 +929,7 @@ fn trace_graph_options() -> tamarin_theory::constraint::system::graph::GraphOpti
 fn trace_label_options() -> &'static str {
     static LABEL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     LABEL.get_or_init(|| {
-        let o = trace_graph_options();
+        let o = tamarin_theory::constraint::system::graph::GraphOptions::default();
         // `show graphOptions._goSimplificationLevel` — the derived `Show`, i.e.
         // the bare constructor name `SL0`..`SL3`.
         let s1 = format!("{:?}", o.simplification_level);
@@ -994,8 +985,7 @@ fn wants_trace_output(args: &Args) -> bool {
 /// need not reproduce — the bytes are identical either way).
 fn write_output_traces(args: &Args, traces: Vec<(String, System)>) -> Result<(), String> {
     use std::io::Write;
-    use tamarin_theory::constraint::system::graph::RenderSystem;
-    let opts = trace_graph_options();
+    let opts = tamarin_theory::constraint::system::graph::GraphOptions::default();
     if let Some(p) = &args.trace_dot {
         // `intercalate "\n" $ map serializeDot labelledSystems`.  Each graph
         // already ends `}\n`, so the separator yields one blank line between
@@ -1017,21 +1007,13 @@ fn write_output_traces(args: &Args, traces: Vec<(String, System)>) -> Result<(),
     if let Some(p) = &args.trace_json {
         // `sequentsToJSONPretty graphOptions labelledSystems` — one document
         // for all graphs; an empty list is `{"graphs": []}`.  Batch does NOT
-        // pre-abbreviate the systems (that is the web proof route only), so
-        // the systems cross the clone-for-render boundary as they are; each
-        // is converted and dropped per graph inside the streaming writer.
+        // pre-abbreviate the systems (that is the web proof route only).
         // `BL.writeFile` — the lazy-ByteString writer, whose IOException
         // names `withBinaryFile` instead.
         let io = |e: &std::io::Error| write_io_exception(p, "withBinaryFile", e);
         let mut w = std::io::BufWriter::new(fs::File::create(p).map_err(|e| io(&e))?);
-        tamarin_theory::constraint::system::json::write_sequents_json_pretty(
-            &opts,
-            traces
-                .into_iter()
-                .map(|(label, sys)| (label, RenderSystem::from_prover(sys))),
-            &mut w,
-        )
-        .map_err(|e| io(&e))?;
+        tamarin_theory::constraint::system::json::write_sequents_json_pretty(&opts, traces, &mut w)
+            .map_err(|e| io(&e))?;
         w.flush().map_err(|e| io(&e))?;
     }
     Ok(())
@@ -1569,14 +1551,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // left it on, matching HS, where this forcing happens inside the
             // same `showSaturation = True` close.
             let stats = session.precomputation_stats().map_err(RunError::from)?;
-            // HS `casesInfo` (ClosedTheory.hs).
-            let chain_info = |n: usize| -> String {
-                if n == 0 {
-                    "deconstructions complete".to_string()
-                } else {
-                    format!("{n} partial deconstructions left")
-                }
-            };
             let mut doc = String::new();
             // `ppWf` (Batch.hs) joined by `$--$`: exactly one blank
             // line between the WARNING and the stats, nothing when the
@@ -1594,24 +1568,8 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 }
                 doc.push('\n');
             }
-            doc.push_str(&format!(
-                "Multiset rewriting rules{}: {}\n",
-                if stats.has_restrictions {
-                    " and restrictions"
-                } else {
-                    ""
-                },
-                stats.rules
-            ));
-            doc.push_str(&format!(
-                "Raw sources: {} cases, {}\n",
-                stats.raw_cases,
-                chain_info(stats.raw_chains)
-            ));
-            doc.push_str(&format!(
-                "Refined sources: {} cases, {}",
-                stats.refined_cases,
-                chain_info(stats.refined_chains)
+            doc.push_str(&tamarin_theory::pretty_theory::pretty_precomputation(
+                &stats,
             ));
             // The trailing newline comes from `println!` (HS `putStrLn`).
             println!("{}", doc);

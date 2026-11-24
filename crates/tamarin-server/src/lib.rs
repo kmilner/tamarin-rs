@@ -37,7 +37,7 @@
 //! `autoproveAll`, `verify`, `next`, `prev`, `download`, `reload`,
 //! `get_and_append`, `del/path`, `unload`, and graph
 //! rendering (`intdot`/`graph`/`interactive-graph-def` render live SVG
-//! via the DOT pipeline, with a DOT-text fallback).
+//! via the DOT pipeline).
 //!
 //! Stubs (return a JSON `{alert}` envelope, HTTP 200):
 //!   - diff theories (`/thy/equiv/...`)

@@ -8,7 +8,7 @@
 //!   - Genuine stubs, which answer a 200 `{alert}` envelope
 //!
 //! Coverage matrix:
-//!   - GET  /thy/trace/<idx>/graph/*path                  LIVE — SVG or DOT fallback
+//!   - GET  /thy/trace/<idx>/graph/*path                  LIVE — SVG via dot
 //!   - POST /thy/trace/<idx>/edit/*path                   ({alert})
 //!   - GET  /thy/trace/<idx>/del/path/*path               LIVE — returns {redirect}
 //!   - GET  /thy/trace/<idx>/next/<section>/*path         LIVE — text/plain URL
@@ -25,41 +25,42 @@ use common::*;
 // ---------------------------------------------------------------------
 // Graph routes — LIVE (DOT pipeline).
 //
-// `graph` renders the system's SVG through `dot`.  It falls back to the DOT
-// source when the binary is missing.  `routes_graph.rs` compares the other two
-// routes against the oracle's bytes.  Those two routes are `intdot`'s shell
-// page and `interactive-graph-def`'s DOT document.
+// `graph` renders the system's SVG through `dot` (HS `renderGraphCode`).
+// `routes_graph.rs` compares the other two routes against the oracle's bytes.
 // ---------------------------------------------------------------------
+
+/// Write an executable stub standing in for `dot`, called as HS `dotToImg`
+/// does: `-Tsvg -K<mode> -o <img> <graph>`.
+fn dot_stub(name: &str, body: &str) -> String {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("tam-dot-stub-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("mkdir stub dir");
+    let path = dir.join(name);
+    let mut f = std::fs::File::create(&path).expect("create stub");
+    writeln!(f, "#!/bin/sh\n{body}").unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+/// A failing `dot` layout is retried with `-Kfdp`; when both fail the route
+/// is HS's `notFound`.
 #[tokio::test]
-async fn test_graph_returns_image_or_dot() {
-    // A proof node — the paths `thyPathSystem` draws.  A lemma / help / rules
-    // path is its catch-all `error` instead (see `routes_graph.rs`).
-    let s = start_server_with_theory("issue193.spthy").await;
+async fn test_graph_retries_with_fdp() {
+    let fdp_only = dot_stub(
+        "fdp-only.sh",
+        "[ \"$2\" = -Kfdp ] || exit 1\n[ -s \"$5\" ] || exit 2\nprintf '<svg><!--fdp--></svg>' > \"$4\"",
+    );
+    let s = start_server_with_theory_and("issue193.spthy", |cfg| cfg.dot_path = fdp_only).await;
     let res = s.get("/thy/trace/1/graph/proof/debug").await;
     assert_eq!(res.status(), 200);
-    let ct = content_type(&res);
-    let body = res.text().await.expect("text");
-    // The presence of `dot` decides which of the two answers the server sends.
-    // The content type and the body must therefore agree.  `image/svg+xml`
-    // carries dot's SVG.  The fallback carries the DOT document that
-    // `interactive-graph-def` also serves.
-    if ct.starts_with("image/svg+xml") {
-        assert!(
-            body.contains("<svg") && body.contains("</svg>"),
-            "svg content type must carry dot's rendered image; got {}",
-            &body[..body.len().min(200)],
-        );
-    } else {
-        assert!(
-            ct.starts_with("text/plain"),
-            "the only other answer is the DOT fallback; got CT={ct}",
-        );
-        assert!(
-            body.starts_with("digraph \"G\" {\n"),
-            "the fallback must be the DOT document itself; got {}",
-            &body[..body.len().min(200)],
-        );
-    }
+    assert_eq!(content_type(&res), "image/svg+xml");
+    assert_eq!(res.text().await.expect("text"), "<svg><!--fdp--></svg>");
+
+    let failing = dot_stub("dot-fail.sh", "exit 1");
+    let s = start_server_with_theory_and("issue193.spthy", |cfg| cfg.dot_path = failing).await;
+    let res = s.get("/thy/trace/1/graph/proof/debug").await;
+    assert_eq!(res.status(), 404);
 }
 
 #[tokio::test]

@@ -43,6 +43,26 @@ use simplify::{compress_system, simplify_system};
 
 use crate::constraint::system::System;
 
+/// HS `resolveNodePremFact` (System.hs), as both renderers reach it
+/// through Graph.hs.
+pub(crate) fn resolve_node_prem_fact<'a>(
+    prem: &crate::constraint::constraints::NodePrem,
+    rules: &crate::constraint::system::NodeRuleMap<'a>,
+) -> Option<&'a crate::fact::LNFact> {
+    rules.get(&prem.0).and_then(|ru| ru.premises.get(prem.1 .0))
+}
+
+/// HS `resolveNodeConcFact` (System.hs), as both renderers reach it
+/// through Graph.hs.
+pub(crate) fn resolve_node_conc_fact<'a>(
+    conc: &crate::constraint::constraints::NodeConc,
+    rules: &crate::constraint::system::NodeRuleMap<'a>,
+) -> Option<&'a crate::fact::LNFact> {
+    rules
+        .get(&conc.0)
+        .and_then(|ru| ru.conclusions.get(conc.1 .0))
+}
+
 /// Mirror of HS `Graph` (Graph.hs) restricted to the fields the two
 /// renderers read.
 pub struct Graph<'a> {

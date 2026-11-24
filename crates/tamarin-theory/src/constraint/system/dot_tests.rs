@@ -23,7 +23,7 @@ fn sapic_suffix_trimming_preserves_haskell_edge_cases() {
 fn dot_for_empty_system() {
     let sys = System::empty();
     assert_eq!(
-        system_to_dot(&sys),
+        system_to_dot_with(&sys, &GraphOptions::default()),
         concat!(
             "digraph \"G\" {\n",
             "nodesep=\"0.3\";\n",
@@ -374,7 +374,7 @@ fn dot_uses_pretty_printing_for_terms() {
     );
     sys.add_node(LVar::new("i", LSort::Node, 0), rule);
     assert_eq!(
-        system_to_dot(&sys),
+        system_to_dot_with(&sys, &GraphOptions::default()),
         concat!(
             "digraph \"G\" {\n",
             "nodesep=\"0.3\";\n",
@@ -466,7 +466,7 @@ fn dot_with_cluster_passes_graphviz_lint() {
     };
     sys.add_node(LVar::new("a", LSort::Node, 1), mk("InitA", Some("Alice")));
     sys.add_node(LVar::new("b", LSort::Node, 2), mk("InitB", Some("Bob")));
-    let s = system_to_dot(&sys);
+    let s = system_to_dot_with(&sys, &GraphOptions::default());
     // Try piping through `dot` if it's available; otherwise skip.  Pass NO
     // file operand: graphviz reads a named input INSTEAD of stdin, so a
     // trailing `/dev/null` would lay out the empty graph and exit 0 whatever
@@ -542,7 +542,7 @@ fn dot_abbreviations_and_legend_appear_only_when_abbreviate_is_set() {
     sys.add_node(LVar::new("a", LSort::Node, 1), mk("R1"));
     sys.add_node(LVar::new("b", LSort::Node, 2), mk("R2"));
     sys.add_node(LVar::new("c", LSort::Node, 3), mk("R3"));
-    let s = system_to_dot(&sys);
+    let s = system_to_dot_with(&sys, &GraphOptions::default());
     // With `goAbbreviate` set, `renderLNFact` (System/Dot.hs) substitutes the
     // generated name into the fact rows themselves, not just into the legend.
     assert!(s.contains("Out( SE1 )"), "facts not abbreviated: {}", s);
@@ -909,7 +909,7 @@ fn dot_cluster_preamble_uses_cluster_attributes() {
     };
     sys.add_node(LVar::new("a", LSort::Node, 1), mk("InitA", "P"));
     sys.add_node(LVar::new("b", LSort::Node, 2), mk("InitB", "Q"));
-    let s = system_to_dot(&sys);
+    let s = system_to_dot_with(&sys, &GraphOptions::default());
     const PREAMBLE: &str = concat!(
         "digraph \"G\" {\n",
         "nodesep=\"0.8\";\n",

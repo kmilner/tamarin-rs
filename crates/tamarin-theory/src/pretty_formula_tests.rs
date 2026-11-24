@@ -45,7 +45,10 @@ fn trivial_formulas() {
 #[test]
 fn unannotated_comment_renders_inline() {
     // `multiComment_ ["unannotated"]` → `/* unannotated */`.
-    assert_eq!(unannotated_comment_doc().render(), "/* unannotated */");
+    assert_eq!(
+        crate::pretty_hpj::multi_comment_(&["unannotated"]).render(),
+        "/* unannotated */"
+    );
 }
 
 #[test]

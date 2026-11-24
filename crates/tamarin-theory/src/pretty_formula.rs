@@ -156,23 +156,6 @@ pub fn disj_goal_to_doc(gfs: &[Guarded]) -> crate::pretty_hpj::Doc {
     hpj::fsep(punct)
 }
 
-/// HS `multiComment_ ["unannotated"]`
-/// (Theory/Text/Pretty.hs):
-///   `comment $ fsep [text "/*", vcat $ map text ls, text "*/"]`
-/// With a single line `"unannotated"`, `vcat [text "unannotated"]` is
-/// just `text "unannotated"`, and `fsep` joins the three with single
-/// spaces when they fit (they always do at any indent ≤ ribbon), giving
-/// `/* unannotated */`.  `comment` is a highlight wrapper — a no-op for
-/// raw (non-coloured) output.
-fn unannotated_comment_doc() -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj::{self as hpj, Doc};
-    hpj::fsep(vec![
-        Doc::text("/*"),
-        Doc::text("unannotated"),
-        Doc::text("*/"),
-    ])
-}
-
 /// Render a proof-step line that may carry the `/* unannotated */`
 /// comment, reproducing HS `prettyIncrementalProof.ppStep`
 /// (ProofSkeleton.hs):
@@ -205,7 +188,7 @@ pub fn step_line_with_unann(
     let core = if annotated {
         method_doc
     } else {
-        hpj::sep(vec![method_doc, unannotated_comment_doc()])
+        hpj::sep(vec![method_doc, hpj::multi_comment_(&["unannotated"])])
     };
     // HS `ppCases ps [] = prettyCase ps (kwBy <> text " ") <> prettyStep ps`
     // (Theory/Proof.hs): the `by ` keyword is laid out BESIDE the WHOLE

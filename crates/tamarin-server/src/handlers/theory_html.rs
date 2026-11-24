@@ -8,7 +8,7 @@
 //! rules in the UI, and to wire `Autoprove` links the frontend
 //! recognises.
 
-use crate::handlers::path_parse::{encode_sub_path, url_path_escape, SourceKind, TheoryPath};
+use crate::handlers::path_parse::{theory_url, SourceKind, TheoryPath};
 use crate::handlers::root::html_escape;
 use crate::handlers::{default_layout, OPTIONS_MENU_ITEMS};
 use crate::state::TheoryEntry;
@@ -206,15 +206,12 @@ fn proto_rule_count(entry: &TheoryEntry) -> usize {
     )
 }
 
-/// HS `casesInfo` rendering: `(N cases, deconstructions complete)` or
-/// `(N cases, K partial deconstructions left)`.
+/// HS `casesInfo` in parentheses (Web/Theory.hs).
 fn cases_info(n_cases: usize, n_chains: usize) -> String {
-    let chain_info = if n_chains == 0 {
-        "deconstructions complete".to_string()
-    } else {
-        format!("{} partial deconstructions left", n_chains)
-    };
-    format!("({} cases, {})", n_cases, chain_info)
+    format!(
+        "({})",
+        tamarin_theory::pretty_theory::cases_info(n_cases, n_chains)
+    )
 }
 
 /// HS `lemmaIndex` (`src/Web/Theory.hs`): the lemma header
@@ -258,7 +255,7 @@ fn lemma_index(
         tq,
         tamarin_theory::pretty_formula::lnformula_doc(&l.formula),
     );
-    let n_url = url_path_escape(&l.name);
+    let lemma_url = |route: &str, path: TheoryPath| theory_url(idx, route, &path);
     use tamarin_theory::pretty_hpj as hpj;
     // HS `lemmaIndex` (Web/Theory.hs), a single Doc joined by `$-$`
     // (newline).  For a freshly-loaded (Unmarked) lemma `markStatus` is the
@@ -285,9 +282,11 @@ fn lemma_index(
     out.push_str(&formula_hdr);
     out.push('\n');
     out.push_str(&format!(
-        "<a class=\"internal-link edit\" href=\"/thy/trace/{idx}/main/edit/{n_url}\">edit lemma</a>  or  \
-         <a class=\"internal-link delete\" href=\"/thy/trace/{idx}/main/delete/{n_url}\">delete lemma</a>",
-        idx = idx, n_url = n_url));
+        "<a class=\"internal-link edit\" href=\"{edit}\">edit lemma</a>  or  \
+         <a class=\"internal-link delete\" href=\"{delete}\">delete lemma</a>",
+        edit = lemma_url("main", TheoryPath::Edit(l.name.clone())),
+        delete = lemma_url("main", TheoryPath::Delete(l.name.clone()))
+    ));
     out.push_str(close);
     out.push('\n');
     // `proofIndex l._lName tidx renderUrl mkRoute annPrf` — the annotated
@@ -305,20 +304,24 @@ fn lemma_index(
             // `remove-step`); the method text is `keyword_ "sorry"`.
             out.push_str(&format!(
                 "{by} <a class=\"internal-link proof-step sorry-step\" \
-                 href=\"/thy/trace/{idx}/main/proof/{n_url}\">{sorry}</a>",
+                 href=\"{href}\">{sorry}</a>",
                 by = hpj::keyword_("by").render(),
                 sorry = hpj::keyword_("sorry").render(),
-                idx = idx,
-                n_url = n_url
+                href = lemma_url(
+                    "main",
+                    TheoryPath::Proof {
+                        lemma: l.name.clone(),
+                        sub: Vec::new(),
+                    }
+                ),
             ));
         }
     }
     // `$-$ text "" $-$ addLink`.
     out.push_str("\n\n");
     out.push_str(&format!(
-        "<a class=\"internal-link add\" href=\"/thy/trace/{idx}/main/add/{n_url}\">add lemma</a>",
-        idx = idx,
-        n_url = n_url
+        "<a class=\"internal-link add\" href=\"{}\">add lemma</a>",
+        lemma_url("main", TheoryPath::Add(l.name.clone()))
     ));
     Ok(())
 }
@@ -531,11 +534,13 @@ fn pp_step(
         let (mo, mc) = mark_wrap(cx, node);
         out.push_str(&format!("{}{} {}", mo, hpj::keyword_("by").render(), mc));
     }
-    let url = format!(
-        "/thy/trace/{idx}/main/proof/{lemma}{path}",
-        idx = cx.idx,
-        lemma = url_path_escape(cx.lemma),
-        path = encode_sub_path(path)
+    let url = theory_url(
+        cx.idx,
+        "main",
+        &TheoryPath::Proof {
+            lemma: cx.lemma.to_string(),
+            sub: path.to_vec(),
+        },
     );
     if !node.annotated {
         // `superfluousStep = withTag "span" [("class","hl_superfluous")] ppMethod`.
@@ -557,8 +562,16 @@ fn pp_step(
         // `invalidatedStep`: an `Invalidated` step also gets a `verify it` link.
         if color == StepColor::Yellow && matches!(node.method, ProofMethod::Invalidated) {
             out.push_str(&format!(
-                " <a class=\"internal-link hl_medium\" href=\"/thy/trace/{idx}/verify/proof/{lemma}\">verify it</a>",
-                idx = cx.idx, lemma = url_path_escape(cx.lemma)));
+                " <a class=\"internal-link hl_medium\" href=\"{}\">verify it</a>",
+                theory_url(
+                    cx.idx,
+                    "verify",
+                    &TheoryPath::Proof {
+                        lemma: cx.lemma.to_string(),
+                        sub: Vec::new(),
+                    },
+                )
+            ));
         }
     }
     // `<> case psMethod step of Sorry _ -> emptyDoc; _ -> removeStep`, appended

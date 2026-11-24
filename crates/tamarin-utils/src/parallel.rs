@@ -375,6 +375,15 @@ impl<T> std::fmt::Debug for SharedOnce<T> {
     }
 }
 
+impl<T> From<T> for SharedOnce<T> {
+    fn from(value: T) -> Self {
+        Self {
+            value: value.into(),
+            owner: Default::default(),
+        }
+    }
+}
+
 impl<T> SharedOnce<T> {
     pub fn get(&self) -> Option<&T> {
         self.value.get()

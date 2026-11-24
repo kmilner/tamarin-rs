@@ -35,7 +35,7 @@ use tamarin_term::lterm::{LNTerm, LVar, Name};
 use tamarin_term::term::{show_term, Term};
 use tamarin_term::vterm::Lit;
 
-use crate::constraint::constraints::{NodeConc, NodeId, NodePrem, Reason};
+use crate::constraint::constraints::{NodeId, Reason};
 use crate::fact::{
     fact_tag_multiplicity, is_proto_fact, show_fact_tag, FactTag, LNFact, Multiplicity,
 };
@@ -50,26 +50,11 @@ use crate::constraint::system::graph::color::{
     build_node_color_map, fact_doc_of, reason_color, NodeColorMap,
 };
 use crate::constraint::system::graph::options::GraphOptions;
-use crate::constraint::system::graph::render_system::RenderSystem;
 use crate::constraint::system::graph::repr::{Cluster, GEdge, GNode, MissingHint, NodeType};
-use crate::constraint::system::graph::{system_to_graph, Graph};
-use crate::constraint::system::NodeRuleMap;
-
-/// HS `resolveNodePremFact` (System.hs) via Graph.hs.
-fn resolve_node_prem_fact<'a>(prem: &NodePrem, rules: &NodeRuleMap<'a>) -> Option<&'a LNFact> {
-    rules
-        .get(&prem.0)
-        .copied()
-        .and_then(|ru| ru.premises.get(prem.1 .0))
-}
-
-/// HS `resolveNodeConcFact` (System.hs) via Graph.hs.
-fn resolve_node_conc_fact<'a>(conc: &NodeConc, rules: &NodeRuleMap<'a>) -> Option<&'a LNFact> {
-    rules
-        .get(&conc.0)
-        .copied()
-        .and_then(|ru| ru.conclusions.get(conc.1 .0))
-}
+use crate::constraint::system::graph::{
+    resolve_node_conc_fact, resolve_node_prem_fact, system_to_graph, Graph,
+};
+use crate::constraint::system::{NodeRuleMap, System};
 
 // ---------------------------------------------------------------------
 // String helpers
@@ -575,13 +560,9 @@ fn json_graph(label: &str, graph: &Graph<'_>, color_map: &NodeColorMap) -> Value
 /// `BL.writeFile` (JSON.hs, `src/Web/Theory.hs`), so the
 /// wire bytes are the document's own UTF-8 — which is what writing this
 /// `String` out as UTF-8 produces.
-///
-/// The inputs are [`RenderSystem`]s: this endpoint is reached with systems
-/// that `web_utils_abbrev::abbrev` may have rewritten into a display-only
-/// shape, so the whole route is typed render-only from that boundary on.
 pub fn sequents_to_json_pretty(
     graph_options: &GraphOptions,
-    systems: &[(String, &RenderSystem)],
+    systems: &[(String, &System)],
 ) -> String {
     let mut out = Vec::new();
     write_sequents_json_pretty(
@@ -612,7 +593,7 @@ pub fn write_sequents_json_pretty<L, R, W>(
 ) -> std::io::Result<()>
 where
     L: AsRef<str>,
-    R: std::borrow::Borrow<RenderSystem>,
+    R: std::borrow::Borrow<System>,
     W: std::io::Write,
 {
     // The frame `write_value` gives `object([("graphs", Value::Array(…))])`:
@@ -780,7 +761,6 @@ fn remove_pseudo_unicode(mut s: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constraint::system::System;
     use crate::fact::Fact;
     use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
     use tamarin_term::lterm::{LSort, NameTag};
@@ -895,10 +875,7 @@ mod tests {
     fn json_body_keeps_non_ascii_label_in_utf8() {
         let out = sequents_to_json_pretty(
             &GraphOptions::default(),
-            &[(
-                "Theory: ⊕".to_string(),
-                &RenderSystem::from_prover(System::default()),
-            )],
+            &[("Theory: ⊕".to_string(), &System::default())],
         );
         assert!(
             out.as_bytes().windows(3).any(|w| w == b"\xe2\x8a\x95"),
@@ -939,7 +916,7 @@ mod tests {
             &GraphOptions::default(),
             &[(
                 "Theory: NSPK3 Lemma: injective_agree".to_string(),
-                &RenderSystem::from_prover(System::default()),
+                &System::default(),
             )],
         );
         assert_eq!(out, include_str!("../../../tests/assets/hsjson_root.json"));
@@ -970,10 +947,7 @@ mod tests {
             .push((Goal::Action(nid, fa), GoalStatus::default()));
         let out = sequents_to_json_pretty(
             &GraphOptions::default(),
-            &[(
-                "Theory: NSPK3 Lemma: injective_agree".to_string(),
-                &RenderSystem::from_prover(sys),
-            )],
+            &[("Theory: NSPK3 Lemma: injective_agree".to_string(), &sys)],
         );
         assert_eq!(
             out,
@@ -990,10 +964,7 @@ mod tests {
         let label = "a&b<c>d\"e\\f\ng\rh\ti\u{0}j\u{8}k\u{c}l\u{1f}m";
         let out = sequents_to_json_pretty(
             &GraphOptions::default(),
-            &[(
-                label.to_string(),
-                &RenderSystem::from_prover(System::default()),
-            )],
+            &[(label.to_string(), &System::default())],
         );
         assert_eq!(
             out,
@@ -1036,10 +1007,7 @@ mod tests {
         );
         sys.goals_mut()
             .push((Goal::Action(nid, fa), GoalStatus::default()));
-        let out = sequents_to_json_pretty(
-            &GraphOptions::default(),
-            &[("L".to_string(), &RenderSystem::from_prover(sys))],
-        );
+        let out = sequents_to_json_pretty(&GraphOptions::default(), &[("L".to_string(), &sys)]);
         assert!(
             out.contains("\"jgnConst\": \"'a&b<c>d'\""),
             "jgnConst: {out}"
@@ -1065,10 +1033,7 @@ mod tests {
     fn pseudo_unicode_pass_mangles_a_literal_escape_in_the_payload() {
         let out = sequents_to_json_pretty(
             &GraphOptions::default(),
-            &[(
-                "x\\u003cy\\u003ez".to_string(),
-                &RenderSystem::from_prover(System::default()),
-            )],
+            &[("x\\u003cy\\u003ez".to_string(), &System::default())],
         );
         assert!(out.contains("\"jgLabel\": \"x\\<y\\>z\","), "{out}");
         assert!(serde_json::from_str::<Value>(&out).is_err());
@@ -1111,10 +1076,7 @@ mod tests {
         let mut sys = System::empty();
         sys.add_node(LVar::new("a", LSort::Node, 1), mk("InitA", "P"));
         sys.add_node(LVar::new("b", LSort::Node, 2), mk("InitB", "Q"));
-        let out = sequents_to_json_pretty(
-            &GraphOptions::default(),
-            &[("L".to_string(), &RenderSystem::from_prover(sys))],
-        );
+        let out = sequents_to_json_pretty(&GraphOptions::default(), &[("L".to_string(), &sys)]);
         assert!(
             out.contains("            \"jgNodes\": [],\n"),
             "clustered nodes must leave the top-level list empty:\n{out}"

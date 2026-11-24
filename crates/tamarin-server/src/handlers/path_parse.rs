@@ -88,15 +88,39 @@ impl TheoryPath {
     }
 }
 
-/// Canonical URL path-segment escaping shared by the theory/graph/proof
-/// handlers: keep `[A-Za-z0-9_.-]`, percent-encode everything else.
+/// Yesod `getUrlRender` of a theory route: `/thy/trace/<idx>/<route>`
+/// followed by `path`'s segments (`renderTheoryPath`, Web/Types.hs), each
+/// escaped by [`url_path_escape`]. `route` holds the route's own pieces
+/// (e.g. `main`, `autoprove/idfs/0/False`), which need no escaping.
+pub(crate) fn theory_url(idx: usize, route: &str, path: &TheoryPath) -> String {
+    let mut url = format!("/thy/trace/{idx}/{route}");
+    for seg in path.render() {
+        url.push('/');
+        url.push_str(&url_path_escape(&seg));
+    }
+    url
+}
+
+/// One path piece as Yesod renders it: `joinPath` (yesod-core) adds a dash to
+/// a piece made only of dashes, then http-types `encodePathSegment`
+/// percent-encodes every UTF-8 byte outside `[A-Za-z0-9-_.~:@&=+$,]`.
 pub(crate) fn url_path_escape(s: &str) -> String {
-    s.chars()
-        .map(|c| match c {
-            c if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '.' => c.to_string(),
-            c => format!("%{:02X}", c as u32),
-        })
-        .collect()
+    let dashed;
+    let s = if s.bytes().all(|b| b == b'-') {
+        dashed = format!("-{s}");
+        dashed.as_str()
+    } else {
+        s
+    };
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~:@&=+$,".contains(&b) {
+            out.push(char::from(b));
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 /// Match Haskell's `prefixWithUnderscore`.  Empty + `_*` strings get
@@ -109,20 +133,6 @@ pub(crate) fn prefix_with_underscore(s: &str) -> String {
     } else {
         s.to_string()
     }
-}
-
-/// Encode a proof/method sub-path as leading-slash-joined URL segments,
-/// applying [`prefix_with_underscore`] then [`url_path_escape`] to each
-/// (mirrors Yesod `getUrlRender`'s per-segment encoding).  Empty input
-/// yields the empty string, so callers can append the result directly
-/// after `.../proof/<lemma>` or `.../method/<lemma>/<idx>`.
-pub(crate) fn encode_sub_path(sub: &[String]) -> String {
-    let mut s = String::new();
-    for seg in sub {
-        s.push('/');
-        s.push_str(&url_path_escape(&prefix_with_underscore(seg)));
-    }
-    s
 }
 
 /// Inverse of [`prefix_with_underscore`].
@@ -398,6 +408,24 @@ mod tests {
         ] {
             let url = p.render().join("/");
             assert_eq!(parse(&url), Some(p.clone()), "{p:?} rendered as {url}");
+        }
+    }
+    /// Pinned against the oracle's `next/<unknown>/lemma/<x>` echo, which
+    /// re-renders the parsed path through `getUrlRender`.
+    #[test]
+    fn url_escaping_matches_yesod() {
+        for (name, url) in [
+            ("a~b:c@d&e=f+g$h,i", "a~b:c@d&e=f+g$h,i"),
+            ("a\u{e9}b", "a%C3%A9b"),
+            ("a b!'*();", "a%20b%21%27%2A%28%29%3B"),
+            ("-", "--"),
+            ("--", "---"),
+            ("_x", "__x"),
+        ] {
+            assert_eq!(
+                theory_url(1, "main", &TheoryPath::Lemma(name.into())),
+                format!("/thy/trace/1/main/lemma/{url}"),
+            );
         }
     }
     /// `parseCases`'s `safeRead` reads `Int`, so the case indices are signed:

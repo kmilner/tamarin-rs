@@ -364,7 +364,8 @@ fn dot_output_for_a_simple_system() {
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    use tamarin_theory::constraint::system::dot::system_to_dot;
+    use tamarin_theory::constraint::system::dot::system_to_dot_with;
+    use tamarin_theory::constraint::system::graph::GraphOptions;
     use tamarin_theory::constraint::system::System;
     use tamarin_theory::fact::{fresh_fact, out_fact};
     use tamarin_theory::rule::{
@@ -387,7 +388,7 @@ fn dot_output_for_a_simple_system() {
     );
     let nid = LVar::new("i", LSort::Node, 0);
     sys.add_node(nid, rule);
-    let dot = system_to_dot(&sys);
+    let dot = system_to_dot_with(&sys, &GraphOptions::default());
     assert_eq!(
         dot,
         concat!(

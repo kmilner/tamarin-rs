@@ -92,53 +92,18 @@ pub(crate) fn wf_report_html(report: &[WfError]) -> String {
     tamarin_theory::pretty_hpj::postprocess_html(body.trim_end_matches('\n'))
 }
 
-/// Build the HS `makeWfErrorsHtml` banner (`src/Web/Handler.hs`): wrap
-/// the wellformedness report in a `<div class="wf-warning">`, prefixed by the
-/// literal `WARNING: ...<br /><br />` line and followed by the report body
-/// rendered exactly as HS's `renderHtmlDoc (htmlDoc $ prettyWfErrorReport
-/// report)` — each source line's leading spaces turned into `&nbsp;` and a
-/// `<br/>` appended, with NO entity escaping (HS `postprocessHtmlDoc`,
-/// Text/PrettyPrint/Html.hs; see the body comment for why the
-/// escaping `Document` instance never runs).  Empty report ⇒ empty string
-/// (HS `makeWfErrorsHtml [] = ""`).
-///
-/// `format_wf_block` is reused as the single source of truth for the report
-/// body: strip its `/* ... */` framing to recover the same
-/// `prettyWfErrorReport` text HS feeds to `renderHtmlDoc`, then re-render it
-/// HS-web-style.  Line-wrap width may differ from HS's web render, but the
-/// parity gate compares structure/text (whitespace-collapsed), so only the
-/// word tokens must match — which they do (the body is byte-identical to the
-/// `--prove` `/* */` block, itself HS-byte-faithful).
+/// HS `makeWfErrorsHtml` (src/Web/Handler.hs): the report in a
+/// `<div class="wf-warning">` under a literal WARNING line; empty for an
+/// empty report.
 fn make_wf_errors_html(report: &[WfError]) -> String {
     if report.is_empty() {
         return String::new();
     }
-    let block = tamarin_theory::pretty_theory::format_wf_block(report);
-    // `format_wf_block` frames the body as
-    //   "/*\nWARNING: the following wellformedness checks failed!\n\n<body>*/"
-    // where <body> is the byte-exact `prettyWfErrorReport` text.  Strip the
-    // fixed prefix/suffix to recover just <body>.
-    const PREFIX: &str = "/*\nWARNING: the following wellformedness checks failed!\n\n";
-    let body = block
-        .strip_prefix(PREFIX)
-        .and_then(|b| b.strip_suffix("*/"))
-        .unwrap_or(&block);
-    // HS `renderHtmlDoc = postprocessHtmlDoc . render . getHtmlDoc`
-    // (Html.hs) — the body is NOT entity-escaped: `htmlDoc = HtmlDoc`
-    // (Html.hs) only wraps an ALREADY BUILT plain `Doc`, so the escaping
-    // `Document (HtmlDoc d)` instance (Html.hs) never runs over
-    // `prettyWfErrorReport`'s text.  Only `postprocessHtmlDoc = unlines . map
-    // (addBreak . indent) . lines` (Html.hs) applies: each line's
-    // leading spaces become `&nbsp;` runs, `<br/>` is appended, and lines
-    // rejoin with `\n` (trailing `\n`).  A body carrying `<`/`>` — a pair term
-    // in a `Fr` fact or in the `multRestrictedReport` rule dump — therefore
-    // reaches the browser raw, exactly as in HS.
-    let rendered = tamarin_theory::pretty_hpj::postprocess_html(body);
-    // HS `makeWfErrorsHtml`: <div> + literal WARNING line + rendered body + </div>.
     format!(
         "<div class=\"wf-warning\">\n\
          WARNING: the following wellformedness checks failed!<br /><br />\n\
-         {rendered}\n</div>",
+         {}\n</div>",
+        wf_report_html(report)
     )
 }
 

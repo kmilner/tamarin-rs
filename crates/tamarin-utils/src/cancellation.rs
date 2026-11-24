@@ -4,7 +4,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Condvar, Mutex,
+    Arc, Mutex,
 };
 use std::time::Duration;
 
@@ -204,82 +204,6 @@ fn lock_contended<T>(
     }
 }
 
-enum CellState<T, E> {
-    Empty,
-    Building,
-    Ready(Result<T, E>),
-}
-
-/// Single-flight initialization. Cancellation/panics leave the slot empty;
-/// other waiters retry using their own request rather than inheriting its error.
-/// Completed values and ordinary errors retain the original OnceLock policy.
-pub struct CancellableOnce<T, E> {
-    state: Mutex<CellState<T, E>>,
-    ready: Condvar,
-}
-impl<T, E> Default for CancellableOnce<T, E> {
-    fn default() -> Self {
-        Self {
-            state: Mutex::new(CellState::Empty),
-            ready: Condvar::new(),
-        }
-    }
-}
-impl<T: Clone, E: Clone + From<Cancelled>> CancellableOnce<T, E> {
-    pub fn from_result(value: Result<T, E>) -> Self {
-        Self {
-            state: Mutex::new(CellState::Ready(value)),
-            ready: Condvar::new(),
-        }
-    }
-
-    pub fn get(&self) -> Option<Result<T, E>> {
-        match &*self.state.lock().unwrap() {
-            CellState::Ready(value) => Some(value.clone()),
-            _ => None,
-        }
-    }
-    pub fn get_or_init(&self, build: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
-        let mut state = self.state.lock().unwrap();
-        loop {
-            check()?;
-            match &*state {
-                CellState::Ready(value) => return value.clone(),
-                CellState::Building => {
-                    state = if current().is_some() {
-                        self.ready
-                            .wait_timeout(state, Duration::from_millis(250))
-                            .unwrap()
-                            .0
-                    } else {
-                        self.ready.wait(state).unwrap()
-                    }
-                }
-                CellState::Empty => {
-                    *state = CellState::Building;
-                    break;
-                }
-            }
-        }
-        drop(state);
-        struct Reset<'a, T, E>(&'a CancellableOnce<T, E>);
-        impl<T, E> Drop for Reset<'_, T, E> {
-            fn drop(&mut self) {
-                let mut state = self.0.state.lock().unwrap();
-                if matches!(*state, CellState::Building) {
-                    *state = CellState::Empty;
-                }
-                self.0.ready.notify_all();
-            }
-        }
-        let _reset = Reset(self);
-        let value = build();
-        check()?;
-        *self.state.lock().unwrap() = CellState::Ready(value.clone());
-        value
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,68 +233,6 @@ mod tests {
         child.token().cancel();
         assert!(!parent.is_cancelled());
         assert!(!peer.token().is_cancelled());
-    }
-
-    #[test]
-    fn cancelled_initializer_is_not_cached_and_waiter_retries() {
-        let cell = Arc::new(CancellableOnce::<usize, Cancelled>::default());
-        let token = CancellationToken::default();
-        let (started_tx, started_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let owner_cell = cell.clone();
-        let owner_token = token.clone();
-        let owner = std::thread::spawn(move || {
-            let _guard = CancellationGuard::new(Some(owner_token));
-            owner_cell.get_or_init(|| {
-                started_tx.send(()).unwrap();
-                release_rx.recv().unwrap();
-                // Even a superficially successful partial result cannot escape.
-                Ok(13)
-            })
-        });
-        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        let waiter_cell = cell.clone();
-        let waiter = std::thread::spawn(move || waiter_cell.get_or_init(|| Ok(42)));
-        token.cancel();
-        release_tx.send(()).unwrap();
-        assert_eq!(owner.join().unwrap(), Err(Cancelled));
-        assert_eq!(waiter.join().unwrap(), Ok(42));
-        assert_eq!(cell.get(), Some(Ok(42)));
-    }
-
-    #[test]
-    fn cancelled_waiter_leaves_initializer_alone() {
-        let cell = Arc::new(CancellableOnce::<usize, Cancelled>::default());
-        let (started_tx, started_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let owner_cell = cell.clone();
-        let owner = std::thread::spawn(move || {
-            owner_cell.get_or_init(|| {
-                started_tx.send(()).unwrap();
-                release_rx.recv().unwrap();
-                Ok(42)
-            })
-        });
-        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
-        let token = CancellationToken::default();
-        let waiter_token = token.clone();
-        let waiter_cell = cell.clone();
-        let (done_tx, done_rx) = mpsc::channel();
-        let waiter = std::thread::spawn(move || {
-            let _guard = CancellationGuard::new(Some(waiter_token));
-            done_tx
-                .send(waiter_cell.get_or_init(|| panic!("waiter became initializer")))
-                .unwrap();
-        });
-        token.cancel();
-        assert_eq!(
-            done_rx.recv_timeout(Duration::from_secs(5)).unwrap(),
-            Err(Cancelled)
-        );
-        release_tx.send(()).unwrap();
-        waiter.join().unwrap();
-        assert_eq!(owner.join().unwrap(), Ok(42));
-        assert_eq!(cell.get(), Some(Ok(42)));
     }
 
     #[test]

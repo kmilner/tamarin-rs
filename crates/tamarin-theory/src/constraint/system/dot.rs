@@ -92,25 +92,13 @@ use crate::constraint::system::graph::options::GraphOptions;
 use crate::constraint::system::graph::repr::{
     extract_base_name, extract_role, GEdge, GNode, MissingHint, NodeType,
 };
-use crate::constraint::system::graph::{system_to_graph, Graph};
+use crate::constraint::system::graph::{
+    resolve_node_conc_fact, resolve_node_prem_fact, system_to_graph, Graph,
+};
 
 // ---------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------
-
-/// Render a [`System`] into a Graphviz DOT document with default graph
-/// options.  Returns a self-contained `digraph "G" { … }` block.
-///
-/// The options are the pair the batch writer picks (`defaultGraphOptions` —
-/// SL2, no auto-source, no clustering, abbreviate, compress — Graph.hs,
-/// and `defaultDotOptions`, System/Dot.hs, both named at `Batch.hs`); the
-/// label is the one the web routes fix.  No upstream
-/// call site combines the two — `dotSystemCompact` takes its options from
-/// whoever calls it — so this is a test-only convenience, `pub` because
-/// `tamarin-server`'s route tests render through it too.
-pub fn system_to_dot(sys: &System) -> String {
-    system_to_dot_with(sys, &GraphOptions::default())
-}
 
 /// Render a [`System`] into a Graphviz DOT document under the given
 /// options — the interactive graph routes' entry point.
@@ -417,8 +405,8 @@ fn classify_edge(
     tgt: &crate::constraint::constraints::NodePrem,
 ) -> EdgeKind {
     // Look up tag of the source-conclusion or target-premise.
-    let conc_tag = lookup_conc_tag(orig_node_map, src);
-    let prem_tag = lookup_prem_tag(orig_node_map, tgt);
+    let conc_tag = resolve_node_conc_fact(src, orig_node_map).map(|fa| fa.tag);
+    let prem_tag = resolve_node_prem_fact(tgt, orig_node_map).map(|fa| fa.tag);
     let is_proto = |t: Option<&FactTag>| -> bool { matches!(t, Some(FactTag::Proto(_, _, _))) };
     // HS `isPersistentFact` (Theory/Model/Fact.hs) reads the tag's
     // multiplicity, and HS `factTagMultiplicity` (Theory/Model/Fact.hs)
@@ -443,28 +431,6 @@ fn classify_edge(
     } else {
         EdgeKind::Other
     }
-}
-
-/// HS `resolveNodeConcFact` (System.hs) reached through Graph.hs,
-/// keeping only the tag `dotEdge`'s predicates test.
-fn lookup_conc_tag(
-    orig_node_map: &NodeRuleMap<'_>,
-    nc: &crate::constraint::constraints::NodeConc,
-) -> Option<FactTag> {
-    let (nid, idx) = nc;
-    let ru = orig_node_map.get(nid)?;
-    ru.conclusions.get(idx.0).map(|fa| fa.tag)
-}
-
-/// HS `resolveNodePremFact` (System.hs) reached through Graph.hs,
-/// keeping only the tag `dotEdge`'s predicates test.
-fn lookup_prem_tag(
-    orig_node_map: &NodeRuleMap<'_>,
-    np: &crate::constraint::constraints::NodePrem,
-) -> Option<FactTag> {
-    let (nid, idx) = np;
-    let ru = orig_node_map.get(nid)?;
-    ru.premises.get(idx.0).map(|fa| fa.tag)
 }
 
 /// Port of Haskell `roleColor` (System/Dot.hs): a deterministic per-role
