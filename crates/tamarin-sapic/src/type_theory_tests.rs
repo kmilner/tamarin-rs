@@ -45,7 +45,7 @@ fn render_msr(thy: &Theory) -> String {
 /// `Sapic.typeTheory` on the theory the `spthytyped` print then renders.
 fn typed(input: &str) -> Theory {
     let mut thy = build(input);
-    type_theory_env(&mut thy).unwrap();
+    type_theory(&mut thy).unwrap();
     thy
 }
 

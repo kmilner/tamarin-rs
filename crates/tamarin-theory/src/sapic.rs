@@ -11,8 +11,8 @@
 //! Coverage:
 //! - `Theory.Sapic.Position` — full
 //! - `Theory.Sapic.Term` — `SapicType`, `SapicLVar` data types and
-//!   defaults; pretty-printing (`pretty_sapic.rs`) and `to_lvar` ported.
-//!   The `toLNTerm` converter is not ported yet.
+//!   defaults, the `toLVar`/`toLNTerm`/`toLNFact`/`toLFormula` erasures;
+//!   pretty-printing is in `pretty_sapic.rs`.
 //! - `Theory.Sapic.Annotation` — `ProcessParsedAnnotation` and the
 //!   `GoodAnnotation` trait
 //! - `Theory.Sapic.Process` — the `Process<Ann, V>` data type,
@@ -23,13 +23,13 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_term::lterm::{BVar, LVar, Name};
+use tamarin_term::lterm::{BVar, LNTerm, LVar, Name};
 use tamarin_term::subst::Subst;
-use tamarin_term::term::map_lits;
+use tamarin_term::term::{f_app, map_lits};
 use tamarin_term::vterm::{Lit, VTerm};
 
 use crate::atom::map_atom;
-use crate::fact::Fact;
+use crate::fact::{Fact, LNFact};
 use crate::formula::{map_atoms, SyntacticLNFormula, SyntacticNFormula};
 
 // =============================================================================
@@ -37,14 +37,6 @@ use crate::formula::{map_atoms, SyntacticLNFormula, SyntacticNFormula};
 // =============================================================================
 
 pub type ProcessPosition = Vec<i64>;
-
-/// `descendant child parent`: whether `parent` is a prefix of `child`.
-pub fn descendant<T: PartialEq>(child: &[T], parent: &[T]) -> bool {
-    if parent.len() > child.len() {
-        return false;
-    }
-    parent.iter().zip(child.iter()).all(|(a, b)| a == b)
-}
 
 pub fn pretty_position(p: &ProcessPosition) -> String {
     p.iter().map(|n| n.to_string()).collect()
@@ -105,6 +97,19 @@ pub type SapicLNFact = Fact<SapicTerm>;
 pub type SapicNFormula<V> = SyntacticNFormula<V>;
 /// HS `SapicFormula` (Theory/Sapic/Term.hs).
 pub type SapicFormula = SapicNFormula<SapicLVar>;
+
+/// HS `toLNTerm` (Theory/Sapic/Term.hs): drop every variable's type tag.
+pub fn to_ln_term(t: &SapicTerm) -> LNTerm {
+    map_lits(t, &mut |lit| match lit {
+        Lit::Var(sv) => Lit::Var(sv.var),
+        Lit::Con(c) => Lit::Con(*c),
+    })
+}
+
+/// HS `toLNFact` (Theory/Sapic/Term.hs).
+pub fn to_ln_fact(f: &SapicLNFact) -> LNFact {
+    f.map_ref(to_ln_term)
+}
 
 /// HS `toLFormula` (Theory/Sapic/Term.hs): replace each free
 /// variable by its `LVar`, dropping the type tag.  The four nested `fmap`s
@@ -606,22 +611,6 @@ pub fn process_at<'a, Ann, V>(p: &'a Process<Ann, V>, pos: &[i64]) -> Option<&'a
     }
 }
 
-/// `PatternSapicLVar`: pattern variables either bind a new variable
-/// (`PatternBind`) or match an existing one (`PatternMatch`).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum PatternSapicLVar {
-    Bind(SapicLVar),
-    Match(SapicLVar),
-}
-
-impl PatternSapicLVar {
-    pub fn as_var(&self) -> &SapicLVar {
-        match self {
-            PatternSapicLVar::Bind(v) | PatternSapicLVar::Match(v) => v,
-        }
-    }
-}
-
 /// `freesSapicTerm`: free variables of a SAPIC term, in source order, with
 /// duplicates (HS Sapic/Term.hs, `freesSapicTerm = foldMap (: [])` —
 /// a plain in-order traversal, neither sorted nor deduplicated).
@@ -650,42 +639,10 @@ pub fn frees_sapic_fact(f: &Fact<SapicTerm>) -> Vec<SapicLVar> {
 /// A substitution mapping SAPIC variables to SAPIC terms.
 pub type SapicSubst = Subst<Name, SapicLVar>;
 
-/// Apply a SAPIC substitution to a SAPIC term.
-pub fn subst_term(subst: &SapicSubst, t: &SapicTerm) -> SapicTerm {
-    tamarin_term::subst::apply_vterm(subst, t.clone())
-}
-
-/// Apply a SAPIC substitution to a SAPIC fact (tag and annotations kept).
-pub fn subst_fact(subst: &SapicSubst, f: &SapicLNFact) -> SapicLNFact {
-    f.map_ref(|t| subst_term(subst, t))
-}
-
-/// `applyMatchVars subst vs` (Theory/Sapic/Process.hs): a match
-/// variable is replaced by every variable of its image under `subst`, and kept
-/// as it is when `subst` does not define it.  Matching `=t` against a
-/// substituted compound term binds the term's own variables instead of the
-/// match variable that no longer occurs.
-pub fn apply_match_vars<C, V>(subst: &Subst<C, V>, vs: &BTreeSet<V>) -> BTreeSet<V>
-where
-    C: Ord + Clone,
-    V: Ord + Clone,
-{
-    let mut out = BTreeSet::new();
-    for v in vs {
-        match subst.image_of(v) {
-            Some(img) => out.extend(tamarin_term::vterm::vars_vterm_in_order(img)),
-            None => {
-                out.insert(v.clone());
-            }
-        }
-    }
-    out
-}
-
-/// `applyMatchVars' f vs` (Theory/Sapic/Process.hs): the same rewrite
-/// driven by a caller-supplied rewrite instead of a substitution.  HS applies
-/// `f` to `varTerm v` and keeps the variables of the result, so the parameter
-/// here is that composite `f . varTerm`.
+/// `applyMatchVars' f vs` (Theory/Sapic/Process.hs): each match variable
+/// becomes the variables of its image, so matching `=t` against a substituted
+/// compound term binds the term's own variables instead of the match variable
+/// that no longer occurs.  `f` is HS's `f . varTerm`.
 pub fn apply_match_vars_with<C, V>(
     mut f: impl FnMut(&V) -> VTerm<C, V>,
     vs: &BTreeSet<V>,
@@ -701,19 +658,197 @@ where
 }
 
 // =============================================================================
-// Action / combinator predicates (mirroring Sapic.ProcessUtils)
-//
-// `is_lock`/`is_unlock`/`is_eq` are faithful ports of the corresponding HS
-// predicates (ProcessUtils.hs), which are generic over the
-// annotation and inspect only the action/combinator shape.
+// Substitution (`Apply` / `ApplyM` instances, Theory/Sapic/Process.hs)
 // =============================================================================
 
-pub fn is_lock<Ann, V>(p: &Process<Ann, V>) -> bool {
-    matches!(p, Process::Action(SapicAction::Lock(_), _, _))
+/// The image of one variable under a substitution; `None` leaves it alone.
+pub type VarImage<'a> = &'a dyn Fn(&SapicLVar) -> Option<SapicTerm>;
+
+fn apply_term(image: VarImage, t: &SapicTerm) -> SapicTerm {
+    match t {
+        VTerm::Lit(Lit::Var(v)) => image(v).unwrap_or_else(|| t.clone()),
+        VTerm::Lit(Lit::Con(_)) => t.clone(),
+        VTerm::App(f, args) => f_app(*f, args.iter().map(|a| apply_term(image, a)).collect()),
+    }
 }
-pub fn is_unlock<Ann, V>(p: &Process<Ann, V>) -> bool {
-    matches!(p, Process::Action(SapicAction::Unlock(_), _, _))
+
+fn apply_bound_term(
+    image: VarImage,
+    t: &VTerm<Name, BVar<SapicLVar>>,
+) -> VTerm<Name, BVar<SapicLVar>> {
+    match t {
+        VTerm::Lit(Lit::Var(BVar::Free(v))) => match image(v) {
+            Some(i) => map_lits(&i, &mut |l| match l {
+                Lit::Con(c) => Lit::Con(*c),
+                Lit::Var(w) => Lit::Var(BVar::Free(w.clone())),
+            }),
+            None => t.clone(),
+        },
+        VTerm::Lit(_) => t.clone(),
+        VTerm::App(f, args) => f_app(
+            *f,
+            args.iter().map(|a| apply_bound_term(image, a)).collect(),
+        ),
+    }
 }
+
+fn apply_formula(image: VarImage, f: &SapicFormula) -> SapicFormula {
+    map_atoms(f.clone(), &mut |_, a| {
+        map_atom(a, &mut |t| apply_bound_term(image, t))
+    })
+}
+
+/// HS `Apply (Subst c v) v`: a bound variable becomes the variable its image
+/// is.  Haskell errors on a compound image; `applyM`'s capture checks rule
+/// that out for every substitution with non-variable images.
+fn apply_var(image: VarImage, v: &SapicLVar) -> SapicLVar {
+    match image(v) {
+        Some(VTerm::Lit(Lit::Var(w))) => w,
+        _ => v.clone(),
+    }
+}
+
+fn apply_match_set(image: VarImage, vs: &BTreeSet<SapicLVar>) -> BTreeSet<SapicLVar> {
+    apply_match_vars_with(
+        |v| image(v).unwrap_or_else(|| tamarin_term::vterm::var_term(v.clone())),
+        vs,
+    )
+}
+
+/// HS `apply subst` on a `SapicAction` (Theory/Sapic/Process.hs).  The MSR
+/// match set takes the `applyMatchVars'` rewrite like `ChIn`, where HS's
+/// `Set.map (apply subst)` aborts on a compound image.
+pub fn apply_action(image: VarImage, ac: &SapicAction<SapicLVar>) -> SapicAction<SapicLVar> {
+    let mut mapped = map_terms_action(
+        |t| apply_term(image, t),
+        |f| apply_formula(image, f),
+        |v| apply_var(image, v),
+        ac,
+    );
+    // `map_terms_action` renamed the match set through `apply_var`; rewrite
+    // the original set instead, so the substitution applies once.
+    if let (
+        SapicAction::ChIn { match_vars, .. } | SapicAction::Msr { match_vars, .. },
+        SapicAction::ChIn {
+            match_vars: original,
+            ..
+        }
+        | SapicAction::Msr {
+            match_vars: original,
+            ..
+        },
+    ) = (&mut mapped, ac)
+    {
+        *match_vars = apply_match_set(image, original);
+    }
+    mapped
+}
+
+/// HS `apply subst` on a `ProcessCombinator` (Theory/Sapic/Process.hs).
+pub fn apply_comb(
+    image: VarImage,
+    c: &ProcessCombinator<SapicLVar>,
+) -> ProcessCombinator<SapicLVar> {
+    let mut mapped = map_terms_comb(
+        |t| apply_term(image, t),
+        |f| apply_formula(image, f),
+        |v| apply_var(image, v),
+        c,
+    );
+    if let (
+        ProcessCombinator::Let { match_vars, .. },
+        ProcessCombinator::Let {
+            match_vars: original,
+            ..
+        },
+    ) = (&mut mapped, c)
+    {
+        *match_vars = apply_match_set(image, original);
+    }
+    mapped
+}
+
+/// HS `apply subst` on a process (Theory/Sapic/Process.hs), ignoring
+/// capture.  Parsed locations are rewritten too
+/// (`applyProcessParsedAnnotation`); the back-substitution is not.
+pub fn apply_process<Ann: GoodAnnotation + Clone>(
+    image: VarImage,
+    p: &Process<Ann, SapicLVar>,
+) -> Process<Ann, SapicLVar> {
+    map_process(
+        p,
+        &mut |ac| apply_action(image, ac),
+        &mut |c| apply_comb(image, c),
+        &mut |ann| {
+            let parsed = ann.parsed().clone().map_location(|l| apply_term(image, &l));
+            ann.clone().set_parsed(parsed)
+        },
+    )
+}
+
+/// HS `CapturedEx` (Theory/Sapic/Process.hs): the binder of `in`,
+/// `lookup` or `new` that `applyM` found in the substitution's domain.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Captured {
+    In(SapicLVar),
+    Lookup(SapicLVar),
+    New(SapicLVar),
+}
+
+impl std::fmt::Display for Captured {
+    /// HS's derived `Show LetExceptions` (Theory/Sapic/Process.hs), which is
+    /// what reaches the user when the exception escapes.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Captured::In(v) => write!(f, "CapturedEx CapturedIn {v}"),
+            Captured::Lookup(v) => write!(f, "CapturedEx CapturedLookup {v}"),
+            Captured::New(v) => write!(f, "CapturedEx CapturedNew {v}"),
+        }
+    }
+}
+
+/// HS `applyM subst` on a process (Theory/Sapic/Process.hs): [`apply_process`]
+/// after `applyM`'s capture checks, in its pre-order.  A `new` or `lookup`
+/// binder in the domain is captured, and so is an `in` of a single variable in
+/// the domain unless its name starts with `pat_`.
+pub fn apply_m_process<Ann: GoodAnnotation + Clone>(
+    subst: &SapicSubst,
+    p: &Process<Ann, SapicLVar>,
+) -> Result<Process<Ann, SapicLVar>, Captured> {
+    check_captures(subst, p)?;
+    Ok(apply_process(&|v| subst.image_of(v).cloned(), p))
+}
+
+fn check_captures<Ann>(subst: &SapicSubst, p: &Process<Ann, SapicLVar>) -> Result<(), Captured> {
+    let in_dom = |v: &SapicLVar| subst.image_of(v).is_some();
+    match p {
+        Process::Null(_) => Ok(()),
+        Process::Action(ac, _, body) => {
+            match ac {
+                SapicAction::New(v) if in_dom(v) => return Err(Captured::New(v.clone())),
+                SapicAction::ChIn {
+                    msg: VTerm::Lit(Lit::Var(v)),
+                    ..
+                } if in_dom(v) && !v.var.name.starts_with("pat_") => {
+                    return Err(Captured::In(v.clone()));
+                }
+                _ => {}
+            }
+            check_captures(subst, body)
+        }
+        Process::Comb(c, _, l, r) => {
+            if let ProcessCombinator::Lookup(_, v) = c
+                && in_dom(v)
+            {
+                return Err(Captured::Lookup(v.clone()));
+            }
+            check_captures(subst, l)?;
+            check_captures(subst, r)
+        }
+    }
+}
+
+/// HS `isEq` (Sapic/ProcessUtils.hs).
 pub fn is_eq<Ann, V>(p: &Process<Ann, V>) -> bool {
     matches!(p, Process::Comb(ProcessCombinator::CondEq(_, _), _, _, _))
 }
@@ -746,9 +881,7 @@ mod tests {
     }
 
     #[test]
-    fn position_relations_and_rendering() {
-        assert!(descendant(&[1, 2, 3], &[1, 2]));
-        assert!(!descendant(&[1, 2], &[1, 2, 3]));
+    fn position_rendering() {
         assert_eq!(pretty_position(&vec![1, 2, 1]), "121");
     }
 
@@ -883,13 +1016,6 @@ mod tests {
     }
 
     #[test]
-    fn predicate_helpers() {
-        assert!(is_lock(&lock_action("k")));
-        assert!(!is_unlock(&lock_action("k")));
-        assert!(!is_lock(&null_proc()));
-    }
-
-    #[test]
     fn process_at_returns_root_and_navigates() {
         let p = lock_action("k");
         assert!(process_at(&p, &[]).is_some());
@@ -901,6 +1027,7 @@ mod tests {
 
     #[test]
     fn process_contains_finds_locks() {
+        let is_lock = |p: &PlainProcess| matches!(p, Process::Action(SapicAction::Lock(_), _, _));
         let p = lock_action("k");
         assert!(process_contains(&p, is_lock));
         assert!(!process_contains(&null_proc(), is_lock));
@@ -909,9 +1036,7 @@ mod tests {
     /// A match variable stands for whatever its image binds: a compound image
     /// contributes all of its variables, and an image that is itself a
     /// variable contributes that one. A variable the substitution does not
-    /// define survives. `apply_match_vars_with` reaches the same result
-    /// through a caller-supplied rewrite, which is what lets a caller resolve
-    /// a variable against a key spelling of its own.
+    /// define survives.
     #[test]
     fn apply_match_vars_replaces_a_variable_by_the_variables_of_its_image() {
         use tamarin_term::term::f_app_list;
@@ -923,17 +1048,7 @@ mod tests {
         let vs: BTreeSet<SapicLVar> = [v("x"), v("y"), v("z")].into_iter().collect();
         let want: BTreeSet<SapicLVar> = [v("a"), v("b"), v("c"), v("z")].into_iter().collect();
 
-        assert_eq!(apply_match_vars(&subst, &vs), want);
-        assert_eq!(
-            apply_match_vars_with(
-                |w| subst
-                    .image_of(w)
-                    .cloned()
-                    .unwrap_or_else(|| var_term(w.clone())),
-                &vs
-            ),
-            want
-        );
+        assert_eq!(apply_match_set(&|w| subst.image_of(w).cloned(), &vs), want);
     }
 
     /// A process tree is `Eq`, and the comparison descends into the formulas

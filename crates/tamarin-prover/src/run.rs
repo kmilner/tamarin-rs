@@ -1484,7 +1484,7 @@ impl TheoryPipeline<'_> {
                     // ones in place, and the recomputed `function:` items
                     // replace the source-positioned ones at the end of the
                     // item list.
-                    if let Err(e) = tamarin_sapic::type_theory::type_theory_env(
+                    if let Err(e) = tamarin_sapic::type_theory::type_theory(
                         std::sync::Arc::make_mut(&mut self.elaborated),
                     ) {
                         // HS: `ProcessNotWellformed` / typing exceptions

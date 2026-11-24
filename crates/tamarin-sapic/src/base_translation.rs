@@ -16,17 +16,19 @@
 use std::collections::BTreeSet;
 
 use tamarin_term::lterm::{LNTerm, LSort, LVar};
-use tamarin_term::vterm::{var_term, Lit};
+use tamarin_term::vterm::var_term;
 
 use tamarin_theory::atom::ProtoAtom;
 use tamarin_theory::formula::{
     for_all_var, formula_frees, lift_free, ProtoFormula, SyntacticLNFormula,
 };
-use tamarin_theory::sapic::{to_lformula, ProcessPosition, SapicAction, SapicLVar, SapicTerm};
+use tamarin_theory::sapic::{
+    to_lformula, to_ln_fact, to_ln_term, ProcessPosition, SapicAction, SapicLVar, SapicTerm,
+};
 
 use crate::annotation::ProcessAnnotation;
 use crate::facts::{
-    AnnotatedRule, RulePosition, SpecialPosition, StateKind, TransAction, TransFact,
+    lstate, AnnotatedRule, RulePosition, SpecialPosition, StateKind, TransAction, TransFact,
 };
 
 /// A single translation "rule body": `(prems, acts, concs, restr)`.
@@ -42,27 +44,7 @@ pub(crate) type RuleBody = (
 /// `baseTransNull` (Basetranslation.hs):
 ///   `[([State LState p tildex], [], [], [])]`
 pub(crate) fn base_trans_null(p: &ProcessPosition, tildex: &BTreeSet<LVar>) -> Vec<RuleBody> {
-    let st = TransFact::State(
-        StateKind::LState,
-        p.clone(),
-        tildex.iter().copied().collect(),
-    );
-    vec![(vec![st], vec![], vec![], vec![])]
-}
-
-/// Type-erase: HS works over `LNTerm` (untyped) for the rule facts; the
-/// translation calls `toLNTerm` / `toLVar` on SAPIC terms.  Convert a typed
-/// SAPIC term to a plain `LNTerm` (drop the type tag).
-pub(crate) fn to_ln_term(t: &SapicTerm) -> LNTerm {
-    tamarin_term::term::map_lits(t, &mut |lit| match lit {
-        Lit::Var(sv) => Lit::Var(sv.var),
-        Lit::Con(c) => Lit::Con(*c),
-    })
-}
-
-/// `toLNFact` over a SAPIC fact (drop type tags from every term).
-pub(crate) fn to_ln_fact(f: &tamarin_theory::sapic::SapicLNFact) -> tamarin_theory::fact::LNFact {
-    f.map_ref(to_ln_term)
+    vec![(vec![lstate(p, &[], tildex)], vec![], vec![], vec![])]
 }
 
 /// `Data.List.union xs ys = xs ++ filter (`notElem` xs) (nub ys)`: keep `xs` in
@@ -98,16 +80,9 @@ pub(crate) fn base_trans_action(
     p: &ProcessPosition,
     tildex: &BTreeSet<LVar>,
 ) -> Result<(Vec<RuleBody>, BTreeSet<LVar>), String> {
-    // `def_state = State LState p tildex`
-    let def_state = |tx: &BTreeSet<LVar>| {
-        TransFact::State(StateKind::LState, p.clone(), tx.iter().copied().collect())
-    };
-    // `def_state' tx = State LState (p++[1]) tx`
+    // `def_state = State LState p tildex`, `def_state' tx = State LState (p++[1]) tx`
     let mut p1 = p.clone();
     p1.push(1);
-    let def_state_next = |tx: &BTreeSet<LVar>| {
-        TransFact::State(StateKind::LState, p1.clone(), tx.iter().copied().collect())
-    };
 
     match ac {
         // (Rep): replication (Basetranslation.hs).  Two rules:
@@ -118,13 +93,9 @@ pub(crate) fn base_trans_action(
         // turns each persistent-semistate instance back into a fresh linear
         // `def_state'` for the replicated body.  `tildex` is unchanged.
         SapicAction::Rep => {
-            let semistate = TransFact::State(
-                StateKind::PSemiState,
-                p1.clone(),
-                tildex.iter().copied().collect(),
-            );
+            let semistate = TransFact::State(StateKind::PSemiState, p1.clone(), tildex.clone());
             let body1: RuleBody = (
-                vec![def_state(tildex)],
+                vec![lstate(p, &[], tildex)],
                 vec![],
                 vec![semistate.clone()],
                 vec![],
@@ -132,7 +103,7 @@ pub(crate) fn base_trans_action(
             let body2: RuleBody = (
                 vec![semistate],
                 vec![],
-                vec![def_state_next(tildex)],
+                vec![lstate(p, &[1], tildex)],
                 vec![],
             );
             Ok((vec![body1, body2], tildex.clone()))
@@ -144,9 +115,9 @@ pub(crate) fn base_trans_action(
             let mut tx2 = tildex.clone();
             tx2.insert(lv);
             let body: RuleBody = (
-                vec![def_state(tildex), TransFact::Fr(lv)],
+                vec![lstate(p, &[], tildex), TransFact::Fr(lv)],
                 vec![],
-                vec![def_state_next(&tx2)],
+                vec![lstate(p, &[1], &tx2)],
                 vec![],
             );
             Ok((vec![body], tx2))
@@ -159,9 +130,9 @@ pub(crate) fn base_trans_action(
                 acts.push(TransAction::EventEmpty);
             }
             let body: RuleBody = (
-                vec![def_state(tildex)],
+                vec![lstate(p, &[], tildex)],
                 acts,
-                vec![def_state_next(tildex)],
+                vec![lstate(p, &[1], tildex)],
                 vec![],
             );
             Ok((vec![body], tildex.clone()))
@@ -214,9 +185,9 @@ pub(crate) fn base_trans_action(
                         let mut tx2 = tildex.clone();
                         tx2.extend(ln_term_vars(&t));
                         let body: RuleBody = (
-                            vec![def_state(tildex), TransFact::In(t)],
+                            vec![lstate(p, &[], tildex), TransFact::In(t)],
                             vec![],
-                            vec![def_state_next(&tx2)],
+                            vec![lstate(p, &[1], &tx2)],
                             vec![],
                         );
                         Ok((vec![body], tx2))
@@ -263,21 +234,17 @@ pub(crate) fn base_trans_action(
             if async_channels {
                 // `[([def_state], [], [Message tc t, def_state' tildex], [])]`.
                 let body: RuleBody = (
-                    vec![def_state(tildex)],
+                    vec![lstate(p, &[], tildex)],
                     vec![],
-                    vec![TransFact::Message(tc, t), def_state_next(tildex)],
+                    vec![TransFact::Message(tc, t), lstate(p, &[1], tildex)],
                     vec![],
                 );
                 Ok((vec![body], tildex.clone()))
             } else {
                 // `semistate = State LSemiState (p++[1]) tildex`.
-                let semistate = TransFact::State(
-                    StateKind::LSemiState,
-                    p1.clone(),
-                    tildex.iter().copied().collect(),
-                );
+                let semistate = TransFact::State(StateKind::LSemiState, p1.clone(), tildex.clone());
                 let body1: RuleBody = (
-                    vec![def_state(tildex)],
+                    vec![lstate(p, &[], tildex)],
                     vec![],
                     vec![TransFact::Message(tc.clone(), t.clone()), semistate.clone()],
                     vec![],
@@ -285,7 +252,7 @@ pub(crate) fn base_trans_action(
                 let body2: RuleBody = (
                     vec![semistate, TransFact::Ack(tc, t)],
                     vec![],
-                    vec![def_state_next(tildex)],
+                    vec![lstate(p, &[1], tildex)],
                     vec![],
                 );
                 Ok((vec![body1, body2], tildex.clone()))
@@ -308,27 +275,23 @@ pub(crate) fn base_trans_action(
                 vec![]
             };
             let in_rule: RuleBody = (
-                vec![def_state(tildex), TransFact::In(tc.clone())],
+                vec![lstate(p, &[], tildex), TransFact::In(tc.clone())],
                 in_acts,
-                vec![TransFact::Out(t.clone()), def_state_next(tildex)],
+                vec![TransFact::Out(t.clone()), lstate(p, &[1], tildex)],
                 vec![],
             );
             if async_channels {
                 let msg_rule: RuleBody = (
-                    vec![def_state(tildex)],
+                    vec![lstate(p, &[], tildex)],
                     vec![],
-                    vec![TransFact::Message(tc, t), def_state_next(tildex)],
+                    vec![TransFact::Message(tc, t), lstate(p, &[1], tildex)],
                     vec![],
                 );
                 Ok((vec![in_rule, msg_rule], tildex.clone()))
             } else {
-                let semistate = TransFact::State(
-                    StateKind::LSemiState,
-                    p1.clone(),
-                    tildex.iter().copied().collect(),
-                );
+                let semistate = TransFact::State(StateKind::LSemiState, p1.clone(), tildex.clone());
                 let msg_rule: RuleBody = (
-                    vec![def_state(tildex)],
+                    vec![lstate(p, &[], tildex)],
                     vec![],
                     vec![TransFact::Message(tc.clone(), t.clone()), semistate.clone()],
                     vec![],
@@ -336,7 +299,7 @@ pub(crate) fn base_trans_action(
                 let ack_rule: RuleBody = (
                     vec![semistate, TransFact::Ack(tc, t)],
                     vec![],
-                    vec![def_state_next(tildex)],
+                    vec![lstate(p, &[1], tildex)],
                     vec![],
                 );
                 Ok((vec![in_rule, msg_rule, ack_rule], tildex.clone()))
@@ -346,9 +309,9 @@ pub(crate) fn base_trans_action(
         SapicAction::ChOut { chan: None, msg } => {
             let t = to_ln_term(msg);
             let body: RuleBody = (
-                vec![def_state(tildex)],
+                vec![lstate(p, &[], tildex)],
                 vec![],
-                vec![def_state_next(tildex), TransFact::Out(t)],
+                vec![lstate(p, &[1], tildex), TransFact::Out(t)],
                 vec![],
             );
             Ok((vec![body], tildex.clone()))
@@ -371,11 +334,11 @@ pub(crate) fn base_trans_action(
             tx2.insert(v);
             let body: RuleBody = (
                 vec![
-                    def_state(tildex),
+                    lstate(p, &[], tildex),
                     TransFact::CellLocked(lt1.clone(), var_term(v)),
                 ],
                 vec![],
-                vec![def_state_next(&tx2), TransFact::PureCell(lt1, lt2)],
+                vec![lstate(p, &[1], &tx2), TransFact::PureCell(lt1, lt2)],
                 vec![],
             );
             Ok((vec![body], tx2))
@@ -386,9 +349,9 @@ pub(crate) fn base_trans_action(
             let lt1 = to_ln_term(t1);
             let lt2 = to_ln_term(t2);
             let body: RuleBody = (
-                vec![def_state(tildex)],
+                vec![lstate(p, &[], tildex)],
                 vec![],
-                vec![def_state_next(tildex), TransFact::PureCell(lt1, lt2)],
+                vec![lstate(p, &[1], tildex), TransFact::PureCell(lt1, lt2)],
                 vec![],
             );
             Ok((vec![body], tildex.clone()))
@@ -398,9 +361,9 @@ pub(crate) fn base_trans_action(
         //   [([def_state], [], [def_state' tildex], [])]
         SapicAction::Lock(_) | SapicAction::Unlock(_) if an.pure_state => {
             let body: RuleBody = (
-                vec![def_state(tildex)],
+                vec![lstate(p, &[], tildex)],
                 vec![],
-                vec![def_state_next(tildex)],
+                vec![lstate(p, &[1], tildex)],
                 vec![],
             );
             Ok((vec![body], tildex.clone()))
@@ -413,9 +376,9 @@ pub(crate) fn base_trans_action(
             let lt1 = to_ln_term(t1);
             let lt2 = to_ln_term(t2);
             let body: RuleBody = (
-                vec![def_state(tildex)],
+                vec![lstate(p, &[], tildex)],
                 vec![TransAction::InsertA(lt1, lt2)],
-                vec![def_state_next(tildex)],
+                vec![lstate(p, &[1], tildex)],
                 vec![],
             );
             Ok((vec![body], tildex.clone()))
@@ -424,9 +387,9 @@ pub(crate) fn base_trans_action(
         SapicAction::Delete(t) => {
             let lt = to_ln_term(t);
             let body: RuleBody = (
-                vec![def_state(tildex)],
+                vec![lstate(p, &[], tildex)],
                 vec![TransAction::DeleteA(lt)],
-                vec![def_state_next(tildex)],
+                vec![lstate(p, &[1], tildex)],
                 vec![],
             );
             Ok((vec![body], tildex.clone()))
@@ -445,12 +408,12 @@ pub(crate) fn base_trans_action(
             let mut tx2 = tildex.clone();
             tx2.insert(v);
             let body: RuleBody = (
-                vec![def_state(tildex), TransFact::Fr(v)],
+                vec![lstate(p, &[], tildex), TransFact::Fr(v)],
                 vec![
                     TransAction::LockNamed(lt.clone(), v),
                     TransAction::LockUnnamed(lt, v),
                 ],
-                vec![def_state_next(&tx2)],
+                vec![lstate(p, &[1], &tx2)],
                 vec![],
             );
             Ok((vec![body], tx2))
@@ -466,12 +429,12 @@ pub(crate) fn base_trans_action(
             let v = an_v.0;
             let lt = to_ln_term(t);
             let body: RuleBody = (
-                vec![def_state(tildex)],
+                vec![lstate(p, &[], tildex)],
                 vec![
                     TransAction::UnlockNamed(lt.clone(), v),
                     TransAction::UnlockUnnamed(lt, v),
                 ],
-                vec![def_state_next(tildex)],
+                vec![lstate(p, &[1], tildex)],
                 vec![],
             );
             Ok((vec![body], tildex.clone()))
@@ -482,9 +445,9 @@ pub(crate) fn base_trans_action(
         // behaviour; this rule just threads the state on by one position.
         SapicAction::ProcessCall(_, _) => {
             let body: RuleBody = (
-                vec![def_state(tildex)],
+                vec![lstate(p, &[], tildex)],
                 vec![],
-                vec![def_state_next(tildex)],
+                vec![lstate(p, &[1], tildex)],
                 vec![],
             );
             Ok((vec![body], tildex.clone()))
@@ -514,7 +477,7 @@ pub(crate) fn base_trans_action(
                 tx2.extend(fact_vars(f));
             }
             // premises: def_state : map TamarinFact l
-            let mut prems_facts: Vec<TransFact> = vec![def_state(tildex)];
+            let mut prems_facts: Vec<TransFact> = vec![lstate(p, &[], tildex)];
             prems_facts.extend(l.into_iter().map(TransFact::TamarinFact));
             // actions: map TamarinAct a ++ [EventEmpty | needsAss]
             let mut act_facts: Vec<TransAction> =
@@ -523,7 +486,7 @@ pub(crate) fn base_trans_action(
                 act_facts.push(TransAction::EventEmpty);
             }
             // conclusions: def_state' tx' : map TamarinFact r
-            let mut conc_facts: Vec<TransFact> = vec![def_state_next(&tx2)];
+            let mut conc_facts: Vec<TransFact> = vec![lstate(p, &[1], &tx2)];
             conc_facts.extend(r.into_iter().map(TransFact::TamarinFact));
             // restrictions: `map toLFormula res'` (Theory/Sapic/Term.hs
             // drops the type tags).
@@ -550,22 +513,7 @@ pub(crate) fn base_trans_comb(
 ) -> Result<CombResult, String> {
     use tamarin_theory::sapic::ProcessCombinator as PC;
 
-    // `def_state = State LState p tildex`
-    let def_state = |tx: &BTreeSet<LVar>| {
-        TransFact::State(StateKind::LState, p.clone(), tx.iter().copied().collect())
-    };
-    // `def_state1 tx = State LState (p++[1]) tx`
-    let mut p1 = p.clone();
-    p1.push(1);
-    let def_state1 = |tx: &BTreeSet<LVar>| {
-        TransFact::State(StateKind::LState, p1.clone(), tx.iter().copied().collect())
-    };
-    // `def_state2 tx = State LState (p++[2]) tx`
-    let mut p2 = p.clone();
-    p2.push(2);
-    let def_state2 = |tx: &BTreeSet<LVar>| {
-        TransFact::State(StateKind::LState, p2.clone(), tx.iter().copied().collect())
-    };
+    // `def_state = State LState p tildex`, `def_stateN tx = State LState (p++[N]) tx`
 
     match c {
         // Parallel (Basetranslation.hs):
@@ -573,9 +521,9 @@ pub(crate) fn base_trans_comb(
         //    tildex, Just tildex)
         PC::Parallel => {
             let body: RuleBody = (
-                vec![def_state(tildex)],
+                vec![lstate(p, &[], tildex)],
                 vec![],
-                vec![def_state1(tildex), def_state2(tildex)],
+                vec![lstate(p, &[1], tildex), lstate(p, &[2], tildex)],
                 vec![],
             );
             Ok((vec![body], tildex.clone(), Some(tildex.clone())))
@@ -600,15 +548,15 @@ pub(crate) fn base_trans_comb(
                 return Err(wf_unbound(vars_f.difference(tildex).copied()));
             }
             let body_eq: RuleBody = (
-                vec![def_state(tildex)],
+                vec![lstate(p, &[], tildex)],
                 vec![TransAction::PredicateA(fa.clone())],
-                vec![def_state1(tildex)],
+                vec![lstate(p, &[1], tildex)],
                 vec![],
             );
             let body_neq: RuleBody = (
-                vec![def_state(tildex)],
+                vec![lstate(p, &[], tildex)],
                 vec![TransAction::NegPredicateA(fa)],
-                vec![def_state2(tildex)],
+                vec![lstate(p, &[2], tildex)],
                 vec![],
             );
             Ok((
@@ -635,15 +583,15 @@ pub(crate) fn base_trans_comb(
             }
             // then-arm carries `[f]`; else-arm carries `[Not f]`.
             let body_then: RuleBody = (
-                vec![def_state(tildex)],
+                vec![lstate(p, &[], tildex)],
                 vec![],
-                vec![def_state1(tildex)],
+                vec![lstate(p, &[1], tildex)],
                 vec![f.clone()],
             );
             let body_else: RuleBody = (
-                vec![def_state(tildex)],
+                vec![lstate(p, &[], tildex)],
                 vec![],
-                vec![def_state2(tildex)],
+                vec![lstate(p, &[2], tildex)],
                 vec![f.not()],
             );
             Ok((
@@ -668,13 +616,13 @@ pub(crate) fn base_trans_comb(
             tx_prime.insert(vs);
             let body: RuleBody = (
                 vec![
-                    def_state(tildex),
+                    lstate(p, &[], tildex),
                     TransFact::PureCell(lt.clone(), var_term(lv)),
                     TransFact::Fr(vs),
                 ],
                 vec![],
                 vec![
-                    def_state1(&tx_prime),
+                    lstate(p, &[1], &tx_prime),
                     TransFact::CellLocked(lt, var_term(vs)),
                 ],
                 vec![],
@@ -693,15 +641,15 @@ pub(crate) fn base_trans_comb(
             let mut tx_prime = tildex.clone();
             tx_prime.insert(lv);
             let body_in: RuleBody = (
-                vec![def_state(tildex)],
+                vec![lstate(p, &[], tildex)],
                 vec![TransAction::IsIn(lt.clone(), lv)],
-                vec![def_state1(&tx_prime)],
+                vec![lstate(p, &[1], &tx_prime)],
                 vec![],
             );
             let body_notset: RuleBody = (
-                vec![def_state(tildex)],
+                vec![lstate(p, &[], tildex)],
                 vec![TransAction::IsNotSet(lt)],
-                vec![def_state2(tildex)],
+                vec![lstate(p, &[2], tildex)],
                 vec![],
             );
             Ok((vec![body_in, body_notset], tx_prime, Some(tildex.clone())))
@@ -733,12 +681,12 @@ pub(crate) fn base_trans_comb(
                 live.extend(ln_term_vars(&stage.input));
             }
             let mut bodies = vec![(
-                vec![def_state(tildex)],
+                vec![lstate(p, &[], tildex)],
                 vec![],
                 vec![TransFact::FLet(
                     let_stage_position(p, 0),
                     stages[0].input.clone(),
-                    tildex.iter().copied().collect(),
+                    tildex.clone(),
                 )],
                 vec![],
             )];
@@ -752,16 +700,16 @@ pub(crate) fn base_trans_comb(
                         TransFact::FLet(
                             let_stage_position(p, i + 1),
                             reduct.as_ref().unwrap_or(&next.input).clone(),
-                            next_vars.iter().copied().collect(),
+                            next_vars.clone(),
                         )
                     } else {
-                        def_state1(&result_vars)
+                        lstate(p, &[1], &result_vars)
                     };
                     let body: RuleBody = (
                         vec![TransFact::FLet(
                             let_stage_position(p, i),
                             pattern.clone(),
-                            vars.iter().copied().collect(),
+                            vars.clone(),
                         )],
                         vec![],
                         vec![destination],
@@ -783,10 +731,10 @@ pub(crate) fn base_trans_comb(
                         vec![TransFact::FLet(
                             let_stage_position(p, i),
                             stage.input.clone(),
-                            vars.iter().copied().collect(),
+                            vars.clone(),
                         )],
                         vec![],
-                        vec![def_state2(tildex)],
+                        vec![lstate(p, &[2], tildex)],
                         failures,
                     );
                     bodies.push(failure);
@@ -900,7 +848,7 @@ pub(crate) fn base_init(
         position: RulePosition::Special(SpecialPosition::InitPosition),
         prems: vec![],
         acts: vec![TransAction::InitEmpty],
-        concs: vec![TransFact::State(StateKind::LState, vec![], vec![])],
+        concs: vec![TransFact::State(StateKind::LState, vec![], BTreeSet::new())],
         restr: vec![],
         index: 0,
         matches_destructor_equation: false,
@@ -1123,6 +1071,7 @@ pub(crate) fn res_locking(has_unlock: bool, v: &LVar) -> tamarin_theory::restric
 mod tests {
     use super::*;
     use tamarin_term::lterm::LSort;
+    use tamarin_term::vterm::Lit;
     use tamarin_theory::sapic::ProcessCombinator;
 
     fn lv(name: &str, idx: u64) -> LVar {

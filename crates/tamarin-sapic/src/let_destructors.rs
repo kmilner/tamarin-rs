@@ -12,14 +12,12 @@ use tamarin_term::subst::Subst;
 use tamarin_term::subterm_rule::CtxtStRule;
 use tamarin_term::term::f_app;
 use tamarin_term::vterm::{var_term, Lit, VTerm};
-use tamarin_theory::formula::apply_subst;
 use tamarin_theory::sapic::{
-    apply_match_vars, map_process, map_terms_action, map_terms_comb, subst_term, Process,
-    ProcessCombinator, SapicLVar, SapicTerm,
+    apply_m_process, map_process, Process, ProcessCombinator, SapicLVar, SapicTerm,
 };
 use tamarin_utils::fresh::{FastFreshState, MonadFresh};
 
-use crate::annotation::{AnnotatedProcess, LetStage, ProcessAnnotation};
+use crate::annotation::{AnnotatedProcess, LetStage};
 
 type Equations = BTreeMap<FunSym, Vec<(Vec<LNTerm>, LNTerm)>>;
 
@@ -34,7 +32,7 @@ pub(crate) fn translate_let_destr(
             tamarin_term::macro_expand::Macro::new(
                 m.name.clone(),
                 m.params.iter().map(|v| SapicLVar::untyped(*v)).collect(),
-                ln_to_sapic(&m.body),
+                crate::typing::to_sapic_term(&m.body),
             )
         })
         .collect();
@@ -134,9 +132,9 @@ fn stages(
 ) -> Result<Option<Vec<LetStage>>, String> {
     let mut plan = Vec::new();
     for (pattern, term) in bindings {
-        let result = crate::base_translation::to_ln_term(&pattern);
+        let result = tamarin_theory::sapic::to_ln_term(&pattern);
         let bound = frees(&result).into_iter().collect();
-        let term = crate::base_translation::to_ln_term(&term);
+        let term = tamarin_theory::sapic::to_ln_term(&term);
         if let VTerm::App(f, args) = &term
             && is_destructor_symbol(f)
         {
@@ -206,11 +204,9 @@ fn map_proc(
                 && let VTerm::Lit(Lit::Var(v)) = left
                 && !match_vars.contains(v)
             {
-                return map_proc(
-                    equations,
-                    fresh,
-                    apply_subst_process(&make_let_subst(v, right), *pl),
-                );
+                let pl = apply_m_process(&make_let_subst(v, right), &pl)
+                    .map_err(|captured| captured.to_string())?;
+                return map_proc(equations, fresh, pl);
             }
             ann.let_plan = plan;
             ann.else_branch = !matches!(*pr, Process::Null(_));
@@ -256,85 +252,10 @@ fn make_let_subst(svar: &SapicLVar, t2: &SapicTerm) -> Subst<Name, SapicLVar> {
     Subst::from_list(pairs)
 }
 
-/// Apply a SAPIC substitution to process terms, formulas and parsed locations
-/// (`applyM`, Sapic/Process.hs). Typing keeps the eliminated let's variable
-/// distinct from inner binders.
-fn apply_subst_process(
-    subst: &Subst<Name, SapicLVar>,
-    p: AnnotatedProcess<LVar>,
-) -> AnnotatedProcess<LVar> {
-    map_process(
-        &p,
-        &mut |action| subst_action(subst, action),
-        &mut |comb| subst_comb(subst, comb),
-        &mut |ann| subst_annotation(subst, ann.clone()),
-    )
-}
-
-fn subst_annotation(
-    subst: &Subst<Name, SapicLVar>,
-    mut ann: ProcessAnnotation<LVar>,
-) -> ProcessAnnotation<LVar> {
-    ann.parsing_ann = ann
-        .parsing_ann
-        .map_location(|location| subst_term(subst, &location));
-    ann
-}
-
-/// `apply subst` for a `SapicAction SapicLVar` (Sapic/Process.hs):
-/// `mapTermsAction`, with `ChIn` and `Msr` match variables rewritten by
-/// [`apply_match_vars`].
-fn subst_action(
-    subst: &Subst<Name, SapicLVar>,
-    ac: &tamarin_theory::sapic::SapicAction<SapicLVar>,
-) -> tamarin_theory::sapic::SapicAction<SapicLVar> {
-    use tamarin_theory::sapic::SapicAction as A;
-    let mut mapped = map_terms_action(
-        |t| subst_term(subst, t),
-        // Formula binders are De Bruijn indices outside the substitution domain.
-        |f| apply_subst(subst, f.clone()),
-        // Preserve action binders; match-variable sets are handled below.
-        |v| v.clone(),
-        ac,
-    );
-    if let A::ChIn { match_vars, .. } | A::Msr { match_vars, .. } = &mut mapped {
-        // A compound match image contributes all its free variables.
-        // Haskell's MSR path uses `Set.map (apply subst)` (Sapic/Process.hs),
-        // which rejects compound images; Rust accepts them as for `ChIn`.
-        *match_vars = apply_match_vars(subst, match_vars);
-    }
-    mapped
-}
-
-/// `apply subst` for a `ProcessCombinator SapicLVar` (Sapic/Process.hs).
-fn subst_comb(
-    subst: &Subst<Name, SapicLVar>,
-    c: &ProcessCombinator<SapicLVar>,
-) -> ProcessCombinator<SapicLVar> {
-    let mut mapped = map_terms_comb(
-        |t| subst_term(subst, t),
-        // The eliminated let's value also occurs in conditional formulas.
-        |f| apply_subst(subst, f.clone()),
-        |v| v.clone(),
-        c,
-    );
-    if let ProcessCombinator::Let { match_vars, .. } = &mut mapped {
-        *match_vars = apply_match_vars(subst, match_vars);
-    }
-    mapped
-}
-
-/// Lift an `LNTerm` (untyped) back to a SAPIC term (all variables untyped).
-fn ln_to_sapic(t: &LNTerm) -> SapicTerm {
-    tamarin_term::term::map_lits(t, &mut |lit| match lit {
-        Lit::Var(v) => Lit::Var(SapicLVar::untyped(*v)),
-        Lit::Con(c) => Lit::Con(*c),
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::annotation::ProcessAnnotation;
     use std::collections::BTreeSet;
     use tamarin_term::lterm::{LSort, NameTag};
     use tamarin_term::vterm::var_term;
@@ -506,6 +427,35 @@ mod tests {
         assert_eq!(out.annotation().parsing_ann.location, Some(location));
     }
 
+    /// `translateLetDestr` eliminates a variable let with `applyM`
+    /// (LetDestructors.hs), whose capture check rejects an `in(=x)` of the
+    /// let's variable: the oracle stops with `CapturedEx CapturedIn x`.
+    #[test]
+    fn let_elimination_rejects_a_captured_input() {
+        let x = svar("x");
+        let input = Process::Action(
+            SapicAction::ChIn {
+                chan: None,
+                msg: var_term(x.clone()),
+                match_vars: BTreeSet::from([x.clone()]),
+            },
+            ann(),
+            Box::new(Process::Null(ann())),
+        );
+        let lett = Process::Comb(
+            ProcessCombinator::Let {
+                left: var_term(x),
+                right: pub_name("v"),
+                match_vars: BTreeSet::new(),
+            },
+            ann(),
+            Box::new(input),
+            Box::new(Process::Null(ann())),
+        );
+        let err = translate_let_destr(&[], &BTreeSet::new(), lett).unwrap_err();
+        assert_eq!(err, "CapturedEx CapturedIn x");
+    }
+
     /// `apply subst` (Sapic/Process.hs) rewrites an eliminated let's variable
     /// in embedded MSR restrictions as well as fact rows.
     #[test]
@@ -575,13 +525,16 @@ mod tests {
         let a = svar("a");
         let image = tamarin_term::builtin::pair(var_term(a.clone()), pub_name("tag"));
         let subst = make_let_subst(&x, &image);
+        let image_of = |v: &SapicLVar| subst.image_of(v).cloned();
 
         let comb = ProcessCombinator::Let {
             left: var_term(x.clone()),
             right: pub_name("message"),
             match_vars: BTreeSet::from([x.clone()]),
         };
-        let ProcessCombinator::Let { match_vars, .. } = subst_comb(&subst, &comb) else {
+        let ProcessCombinator::Let { match_vars, .. } =
+            tamarin_theory::sapic::apply_comb(&image_of, &comb)
+        else {
             panic!("expected Let")
         };
         assert_eq!(match_vars, BTreeSet::from([a.clone()]));
@@ -595,7 +548,7 @@ mod tests {
             chan,
             msg,
             match_vars,
-        } = subst_action(&subst, &input)
+        } = tamarin_theory::sapic::apply_action(&image_of, &input)
         else {
             panic!("expected input")
         };
@@ -610,7 +563,9 @@ mod tests {
             rest: Vec::new(),
             match_vars: BTreeSet::from([x]),
         };
-        let SapicAction::Msr { match_vars, .. } = subst_action(&subst, &action) else {
+        let SapicAction::Msr { match_vars, .. } =
+            tamarin_theory::sapic::apply_action(&image_of, &action)
+        else {
             panic!("expected MSR")
         };
         assert_eq!(match_vars, BTreeSet::from([a]));

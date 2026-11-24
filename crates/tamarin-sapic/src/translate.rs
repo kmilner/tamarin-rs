@@ -30,7 +30,7 @@ use tamarin_theory::formula::{LNFormula, SyntacticLNFormula};
 use tamarin_theory::restriction::Restriction;
 use tamarin_theory::rule::ProtoRuleE;
 use tamarin_theory::sapic::{GoodAnnotation, PlainProcess, Process, ProcessPosition, SapicLVar};
-use tamarin_utils::prelude_ext::nub_on;
+use tamarin_utils::prelude_ext::nub;
 
 use tamarin_theory::sapic::ProcessCombinator;
 
@@ -40,24 +40,16 @@ use crate::base_translation::{
     single_session_restriction, state_restrictions, RuleBody,
 };
 use crate::facts::{to_rule, AnnotatedRule, RulePosition, StateKind, TransFact};
-
-type Pos = Vec<i64>;
-type PosSet = BTreeSet<Vec<i64>>;
+use crate::progress_translation::Progress;
 
 /// Per-translation context for the gated progress / reliable / async wrappers
 /// (HS `trans` = `progressTrans . reliableChannelTrans . baseTrans` in
-/// `sapic/src/Sapic.hs`).  The progress function domain / inverse are computed once
-/// (HS recomputes `pfFrom`/`pfInv` per node; identical result, computed once
-/// here for speed).
+/// `sapic/src/Sapic.hs`).  `progress` is set iff `_transProgress`.
 struct TransCtx {
     needs_in_ev_res: bool,
     async_channels: bool,
-    trans_progress: bool,
     trans_reliable: bool,
-    /// progress-function domain `pfFrom anP` (only used when `trans_progress`).
-    dom_pf: PosSet,
-    /// progress-function inverse `pfInv anP` (only used when `trans_progress`).
-    inv_pf: Option<Box<dyn Fn(&[i64]) -> Option<Pos>>>,
+    progress: Option<Progress>,
 }
 
 /// `propagateNames` (Facts.hs): push each node's process-names down to
@@ -220,7 +212,7 @@ fn trans_action(
     tildex: &BTreeSet<LVar>,
 ) -> Result<(Vec<RuleBody>, BTreeSet<LVar>), String> {
     // reliable channel act: overrides base for 'c'/'r' channels, else base.
-    let (bodies, tx1) = if ctx.trans_reliable {
+    let (mut bodies, mut tx1) = if ctx.trans_reliable {
         match crate::reliable_channel::reliable_channel_trans_act(ac, p, tildex)? {
             Some(res) => res,
             None => base_trans_action(ctx.async_channels, ctx.needs_in_ev_res, ac, ann, p, tildex)?,
@@ -228,18 +220,11 @@ fn trans_action(
     } else {
         base_trans_action(ctx.async_channels, ctx.needs_in_ev_res, ac, ann, p, tildex)?
     };
-    if ctx.trans_progress {
-        let inv = ctx.inv_pf.as_ref().expect("inv_pf set when trans_progress");
-        Ok(crate::progress_translation::progress_trans_act(
-            &ctx.dom_pf,
-            inv,
-            p,
-            bodies,
-            tx1,
-        ))
-    } else {
-        Ok((bodies, tx1))
+    if let Some(progress) = &ctx.progress {
+        bodies = progress.trans_rules(p, bodies);
+        progress.extend_vars(p, &mut tx1);
     }
+    Ok((bodies, tx1))
 }
 
 /// `trans_comb` = `progressTransComb baseTransComb`.  Reliable channels do NOT
@@ -255,27 +240,22 @@ fn trans_comb(
     // Its failure transition must be available instead of forcing the let
     // to succeed merely to discharge the progress restriction.
     let mut progress_ann;
-    let ann = if ctx.trans_progress && matches!(c, ProcessCombinator::Let { .. }) {
+    let ann = if ctx.progress.is_some() && matches!(c, ProcessCombinator::Let { .. }) {
         progress_ann = ann.clone();
         progress_ann.else_branch = true;
         &progress_ann
     } else {
         ann
     };
-    let (bodies, tx1, tx2) = base_trans_comb(c, ann, p, tildex)?;
-    if ctx.trans_progress {
-        let inv = ctx.inv_pf.as_ref().expect("inv_pf set when trans_progress");
-        Ok(crate::progress_translation::progress_trans_comb(
-            &ctx.dom_pf,
-            inv,
-            p,
-            bodies,
-            tx1,
-            tx2,
-        ))
-    } else {
-        Ok((bodies, tx1, tx2))
+    let (mut bodies, mut tx1, mut tx2) = base_trans_comb(c, ann, p, tildex)?;
+    if let Some(progress) = &ctx.progress {
+        bodies = progress.trans_rules(p, bodies);
+        progress.extend_vars(p, &mut tx1);
+        if let Some(tx2) = &mut tx2 {
+            progress.extend_vars(p, tx2);
+        }
     }
+    Ok((bodies, tx1, tx2))
 }
 
 /// `substStatePos p_old p_new` over a list of generated rules
@@ -312,38 +292,29 @@ fn subst_state_pos_fact(f: TransFact, p_old: &[i64], p_new: &[i64]) -> TransFact
     }
 }
 
-/// `getLockPositions = pfoldMap getLock` (Basetranslation.hs): the lock
-/// variables of every `Lock` action with `pureState=False` and a `lock`
-/// annotation, in `pfoldMap` order, NOT deduplicated.
-fn get_lock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<LVar> {
+/// `getLockPositions` / `getUnlockPositions` (Basetranslation.hs): the lock
+/// variable of every `Lock` (or, with `unlock`, `Unlock`) action that has
+/// `pureState=False` and its `lock`/`unlock` annotation, in `pfoldMap` order.
+fn lock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>, unlock: bool) -> Vec<LVar> {
     use tamarin_theory::sapic::SapicAction;
     let mut out = Vec::new();
     tamarin_theory::sapic::for_each_process(p, &mut |proc| {
-        if let Process::Action(SapicAction::Lock(_), an, _) = proc
-            && !an.pure_state
-            && let Some(v) = &an.lock
-        {
+        let Process::Action(action, an, _) = proc else {
+            return;
+        };
+        if an.pure_state {
+            return;
+        }
+        let var = match action {
+            SapicAction::Lock(_) if !unlock => &an.lock,
+            SapicAction::Unlock(_) if unlock => &an.unlock,
+            _ => return,
+        };
+        if let Some(v) = var {
             out.push(v.0);
         }
     });
     out
-}
-
-/// `nub $ getUnlockPositions` (Basetranslation.hs): the lock variables of
-/// every `Unlock` action with `pureState=False` and an `unlock` annotation, in
-/// `pfoldMap` order, first-occurrence deduplicated (HS `List.nub`).
-fn get_unlock_positions(p: &Process<ProcessAnnotation<LVar>, SapicLVar>) -> Vec<LVar> {
-    use tamarin_theory::sapic::SapicAction;
-    let mut raw = Vec::new();
-    tamarin_theory::sapic::for_each_process(p, &mut |proc| {
-        if let Process::Action(SapicAction::Unlock(_), an, _) = proc
-            && !an.pure_state
-            && let Some(v) = &an.unlock
-        {
-            raw.push(v.0);
-        }
-    });
-    nub_on(&raw, |v| *v)
 }
 
 /// The result of translating a single top-level process.
@@ -416,34 +387,18 @@ pub(crate) fn translate(
     };
     let an_proc = crate::locks::annotate_locks(an_proc_states)?;
 
-    // Build the translation context (gated progress/reliable/async wrappers).
-    // The progress-function domain / inverse are computed once (HS recomputes
-    // them per node; same result).
-    let (dom_pf, inv_pf): (PosSet, Option<Box<dyn Fn(&[i64]) -> Option<Pos>>>) =
-        if opts.trans_progress {
-            let dom = crate::progress_function::pf_from(&an_proc)?;
-            let inv = crate::progress_function::pf_inv(&an_proc)?;
-            (dom, Some(Box::new(inv)))
-        } else {
-            (PosSet::new(), None)
-        };
-    let ctx = TransCtx {
-        needs_in_ev_res,
-        async_channels: opts.async_channels,
-        trans_progress: opts.trans_progress,
-        trans_reliable: opts.trans_reliable,
-        dom_pf,
-        inv_pf,
+    let progress = if opts.trans_progress {
+        Some(Progress::new(&an_proc)?)
+    } else {
+        None
     };
 
     // initial rules + initial tildex.  HS chains (right-to-left via `=<<`):
     //   baseInit → progressInit → reliableChannelInit → reportInit
     // i.e. reportInit runs LAST, prepending the `ReportRule` to the front.
     let (mut init_rules, mut init_tx) = base_init(&an_proc);
-    if opts.trans_progress {
-        let (r, t) = crate::progress_translation::progress_init(&an_proc, init_rules, init_tx)?;
-        init_rules = r;
-        init_tx = t;
+    if let Some(progress) = &progress {
+        (init_rules, init_tx) = progress.init(init_rules, init_tx);
     }
     if opts.trans_reliable {
         let (r, t) = crate::reliable_channel::reliable_channel_init(&an_proc, init_rules, init_tx);
@@ -456,6 +411,12 @@ pub(crate) fn translate(
         init_tx = t;
     }
 
+    let ctx = TransCtx {
+        needs_in_ev_res,
+        async_channels: opts.async_channels,
+        trans_reliable: opts.trans_reliable,
+        progress,
+    };
     // protocol rules
     let proto_rules = generate_rules(&ctx, &an_proc, &Vec::new(), &init_tx)?;
 
@@ -533,8 +494,8 @@ pub(crate) fn translate(
     // hardcoded restrictions, in HS order:
     //   lockingWithUnlock = map (resLocking True)  (nub  getUnlockPositions)
     //   lockingOnlyLock   = map (resLocking False) (getLockPositions \\ getUnlockPositions)
-    let unlock_positions = get_unlock_positions(&an_proc); // nub'd
-    let lock_positions = get_lock_positions(&an_proc); // NOT nub'd (HS `getLockPositions`)
+    let unlock_positions = nub(lock_positions(&an_proc, true));
+    let lock_positions = lock_positions(&an_proc, false);
     for v in &unlock_positions {
         restrictions.push(crate::base_translation::res_locking(true, v));
     }
@@ -548,8 +509,8 @@ pub(crate) fn translate(
 
     // HS chains (right-to-left via `=<<`):
     //   baseRestr → progressRestr (if progress) → reliableChannelRestr (if reliable)
-    if opts.trans_progress {
-        restrictions = crate::progress_translation::progress_restr(&an_proc, restrictions)?;
+    if let Some(progress) = &ctx.progress {
+        restrictions = progress.restr(&an_proc, restrictions)?;
     }
     if opts.trans_reliable {
         restrictions = crate::reliable_channel::reliable_channel_restr(&an_proc, restrictions);
@@ -647,7 +608,7 @@ fn is_pos_neg_atom(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::typing::type_and_rename_process;
+    use crate::typing::{init_te_from_sig, type_and_rename_process_in};
     use tamarin_parser::ast as p;
     use tamarin_term::lterm::LSort;
     use tamarin_theory::process_convert::convert_process;
@@ -804,7 +765,8 @@ mod tests {
         // type over an empty signature (defaults all funs).
         let sig = tamarin_term::maude_sig::MaudeSig::default();
         let plain = convert_process(&typing2_process(), &sig).unwrap();
-        let typed = type_and_rename_process(&sig, &[], &plain).unwrap();
+        let mut env = init_te_from_sig(&sig, &[]).unwrap();
+        let typed = type_and_rename_process_in(&mut env, &plain).unwrap();
         let st_rules = std::collections::BTreeSet::new();
         let tr = translate(&typed, false, &st_rules, &[], TranslateOptions::default()).unwrap();
         // The rules are Init, new, event, out and null, in that order.  They

@@ -14,7 +14,7 @@ use tamarin_theory::sapic::{
     for_each_process, frees_sapic_fact, frees_sapic_term, GoodAnnotation, Process,
     ProcessCombinator, SapicAction, SapicLVar,
 };
-use tamarin_utils::prelude_ext::nub_on;
+use tamarin_utils::prelude_ext::nub;
 
 /// `bindings`: variables bound *precisely at this point* in `p`.
 pub(crate) fn bindings<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
@@ -130,10 +130,7 @@ pub(crate) fn captured_variables<A: GoodAnnotation>(p: &Process<A, SapicLVar>) -
 /// `drop` member is equivalent to filtering all members out, so the result
 /// matches HS `Data.List.(\\)` byte-for-byte while preserving source order.
 fn nub_difference(xs: Vec<SapicLVar>, drop: &BTreeSet<SapicLVar>) -> Vec<SapicLVar> {
-    nub_on(&xs, |v| v.clone())
-        .into_iter()
-        .filter(|v| !drop.contains(v))
-        .collect()
+    nub(xs).into_iter().filter(|v| !drop.contains(v)).collect()
 }
 
 #[cfg(test)]

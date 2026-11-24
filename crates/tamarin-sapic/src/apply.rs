@@ -29,7 +29,6 @@ use tamarin_theory::rule_restriction::rule_restrictions;
 use tamarin_theory::theory::{LNMacro, OpenProtoRule, Theory, TheoryItem};
 
 use crate::translate::{needs_in_ev_res, translate, TranslateOptions};
-use crate::typing::{collect_user_fun_typings, type_and_rename_process};
 
 /// HS `Sapic.checkWellformedness` (Warnings.hs) over the UNTRANSLATED
 /// theory: warn-check the single top-level process.  The process arrives with
@@ -50,9 +49,9 @@ pub fn sapic_pre_report(thy: &Theory) -> Vec<WfError> {
     }
 }
 
-/// Apply the SAPIC `process:` translation to a theory that contains exactly one
-/// top-level process.  A no-op for non-process theories (`thy.is_sapic()` is
-/// false), so non-SAPIC corpus files are byte-unchanged.
+/// HS `Sapic.typeTheory >=> Sapic.translate` (TheoryLoader.hs
+/// `processOpenTheory`): type every process of the theory, then translate the
+/// single top-level process when there is exactly one.
 ///
 /// `user_set_heuristic` is true when the source / CLI already fixed a heuristic
 /// (in which case HS's `addHeuristic` returns `Nothing` and we do NOT add `p`).
@@ -64,29 +63,18 @@ pub fn sapic_pre_report(thy: &Theory) -> Vec<WfError> {
 /// `preReport ++ postReport`).  Empty for a well-formed (or
 /// non-SAPIC) theory.
 pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfError>, ElabError> {
-    if !thy.is_sapic() {
-        return Ok(Vec::new());
-    }
-
-    // The single top-level process, inlined, plus its warning report — the
-    // report is returned to the caller and translation proceeds regardless
-    // (these are warnings, not hard errors).
-    let Some(plain) = thy.processes().next().cloned() else {
-        return Ok(Vec::new());
+    // The warnings read the untyped process; translation proceeds regardless.
+    let wf_report = if thy.is_sapic() {
+        sapic_pre_report(thy)
+    } else {
+        Vec::new()
     };
-    let wf_report = sapic_pre_report(thy);
-
-    // `typeTheory` (renameUnique + type inference), using the theory
-    // signature's MaudeSig (HS `initTEFromSig`).  The user `functions:` typing
-    // declarations (`theoryFunctionTypingInfos`, e.g. `f(bitstring):bitstring`)
-    // seed the function-typing environment so `typeWith` can back-propagate a
-    // declared argument/return type onto the bound variables.
-    let user_fun_typings = collect_user_fun_typings(thy);
+    crate::type_theory::type_theory(thy)?;
+    if !thy.is_sapic() {
+        return Ok(wf_report);
+    }
+    let typed = thy.processes().next().expect("is_sapic").clone();
     let maude_sig = &thy.signature;
-    let typed =
-        type_and_rename_process(maude_sig, &user_fun_typings, &plain).map_err(|e| ElabError {
-            message: format!("SAPIC typing: {e}"),
-        })?;
 
     // translate → rules + restrictions.  `needs_in_ev_res = any
     // lemmaNeedsInEvRes (theoryLemmas th)` (sapic/src/Sapic.hs): gates the
@@ -108,10 +96,10 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
     // Process lets and generated rules/restrictions use the same macro
     // declarations (`closeTheoryItem`, CloseRule.hs).
     let macros: Vec<LNMacro> = thy.macros().cloned().collect();
-    let translation =
-        translate(&typed, needs_in_ev, st_rules, &macros, opts).map_err(|e| ElabError {
-            message: format!("SAPIC translation: {e}"),
-        })?;
+    // A translation exception escapes to GHC's runtime, which prints its
+    // `show` alone after `tamarin-prover: `.
+    let translation = translate(&typed, needs_in_ev, st_rules, &macros, opts)
+        .map_err(|message| ElabError { message })?;
 
     // The `predicate:` declarations the embedded `_restrict` formulas expand
     // against: HS `liftedExpandFormula` reads `theoryPredicates thy`
@@ -146,7 +134,7 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
         let mut closed: Vec<LNFormula> = Vec::with_capacity(restr_formulas.len());
         for phi in restr_formulas {
             closed.push(expand_formula(&predicates, phi).map_err(|e| ElabError {
-                message: format!("SAPIC _restrict expansion: {e}"),
+                message: e.to_string(),
             })?);
         }
         let mut generated: Vec<Restriction> = Vec::with_capacity(closed.len());
@@ -242,8 +230,9 @@ mod tests {
         // The same translation `apply_sapic` runs, so the rule it injects can
         // be compared against the values the translation produced.
         let maude_sig = thy.signature.clone();
-        let plain = thy.processes().next().unwrap().clone();
-        let typed = type_and_rename_process(&maude_sig, &[], &plain).unwrap();
+        let mut typed_thy = thy.clone();
+        crate::type_theory::type_theory(&mut typed_thy).unwrap();
+        let typed = typed_thy.processes().next().unwrap().clone();
         let translation = translate(
             &typed,
             false,
@@ -300,6 +289,39 @@ mod tests {
             "Restr_letywz_2_1_1"
         );
         assert_eq!(&injected.info.restrictions, restr_formulas);
+    }
+
+    /// Haskell types the whole theory before translating (`typeTheory >=>
+    /// translate`), so the function types an `equivLemma` process teaches
+    /// reach the top-level process: the oracle names the output rule
+    /// `outfclol_0_1`, with `process="out(f(c.1:lol));"`.
+    #[test]
+    fn earlier_processes_type_the_translated_process() {
+        let src = "theory T begin\n\
+            functions: f/1\n\
+            equivLemma: (new a:lol; out(f(a))) (new b; out(f(b)))\n\
+            process:\n\
+              new c; out(f(c))\n\
+            end";
+        let parsed = tamarin_parser::parse_theory(src, &[]).unwrap();
+        let mut thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
+        apply_sapic(&mut thy, false).unwrap();
+        assert!(
+            thy.rules()
+                .any(|r| r.rule.info.name == ProtoRuleName::Stand("outfclol_0_1")),
+            "the top-level process was typed without the equivLemma's types"
+        );
+    }
+
+    /// Translation and `_restrict` expansion exceptions reach the user as
+    /// their bare `show`: the oracle prints `undefined predicate Foo/1` here.
+    #[test]
+    fn restrict_expansion_errors_are_reported_bare() {
+        let src = "theory T begin\nprocess:\n  in(x); if Foo(x) then out('a')\nend";
+        let parsed = tamarin_parser::parse_theory(src, &[]).unwrap();
+        let mut thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
+        let err = apply_sapic(&mut thy, false).unwrap_err();
+        assert_eq!(err.message, "undefined predicate Foo/1");
     }
 
     /// A `macros:` declaration whose call sits in the process body, so the

@@ -35,17 +35,14 @@ use std::collections::BTreeMap;
 
 use tamarin_parser::ast as p;
 use tamarin_term::maude_sig::MaudeSig;
-use tamarin_term::vterm::{Lit, VTerm};
 
-use crate::formula::apply_subst;
 #[cfg(test)]
 use crate::process_convert::{action as convert_action, combinator as convert_combinator};
 use crate::process_convert::{
     add_root_annotation, convert_process_with, term as convert_term, ConvertError,
 };
 use crate::sapic::{
-    apply_match_vars_with, subst_term, traverse_terms_action, traverse_terms_comb, try_map_process,
-    PlainProcess, Process, ProcessCombinator, SapicAction, SapicLVar, SapicSubst, SapicTerm,
+    apply_m_process, Captured, PlainProcess, Process, SapicAction, SapicLVar, SapicSubst, SapicTerm,
 };
 use crate::theory::ProcessDef;
 
@@ -119,7 +116,17 @@ fn inline_call(
     let subst = SapicSubst::from_list(pairs);
 
     // `applyM (substFromList extend_sup) p` — capture-checking substitution.
-    let substituted = apply_m_process(&subst, body)?;
+    let substituted = apply_m_process(&subst, &body).map_err(|captured| {
+        let (v, binder) = match captured {
+            Captured::In(v) => (v, "in"),
+            Captured::Lookup(v) => (v, "lookup"),
+            Captured::New(v) => (v, "new"),
+        };
+        ConvertError::new(format!(
+            "captured variable {} in process call ({binder})",
+            v.var.name
+        ))
+    })?;
 
     // `processAddAnnotation substP (mempty {processnames = [name]})`: tag the
     // body's root node with the call name (drives `role=` / colour).
@@ -136,189 +143,9 @@ fn inline_call(
     ))
 }
 
-/// `applyM subst p` over an `LProcess` (Sapic/Process.hs): apply `subst` to
-/// every term, raising a capture error if a substituted parameter would be
-/// captured by an inner binder (`new` / `lookup` / single-var `in`).
-///
-/// HS `applyM` is capture-DETECTING (it throws `CapturedEx`), NOT
-/// capture-avoiding.  For parameterless calls (`subst` empty) this is a no-op
-/// rename and never fails.
-fn apply_m_process(subst: &SapicSubst, p: PlainProcess) -> Result<PlainProcess, ConvertError> {
-    if subst.is_empty() {
-        return Ok(p);
-    }
-    try_map_process(
-        &p,
-        &mut |action| apply_m_action(subst, action),
-        &mut |comb| apply_m_comb(subst, comb),
-        &mut |ann| Ok(apply_annotation(subst, ann.clone())),
-    )
-}
-
-/// Upstream #922's `applyMProcessParsedAnnotation`: locations are ordinary
-/// terms, so substitution may replace a location variable by any term (not
-/// merely another variable). Process names and the back-substitution are
-/// deliberately left untouched.
-fn apply_annotation(
-    subst: &SapicSubst,
-    ann: crate::sapic::ProcessParsedAnnotation,
-) -> crate::sapic::ProcessParsedAnnotation {
-    ann.map_location(|loc| subst_term(subst, &loc))
-}
-
-/// True iff a substitution maps `v` (in either typed or untyped form) — i.e.
-/// `v ∈ dom subst`, used for the capture checks.
-fn in_domain(subst: &SapicSubst, v: &SapicLVar) -> bool {
-    subst.image_of(v).is_some() || subst.image_of(&SapicLVar::untyped(v.var)).is_some()
-}
-
-/// `applyM` for `SapicAction` (Sapic/Process.hs): substitute terms,
-/// raising `CapturedNew` / `CapturedIn` on capture.  Everything the capture
-/// checks do not claim falls through to `apply subst`
-/// (Sapic/Process.hs).
-fn apply_m_action(
-    subst: &SapicSubst,
-    ac: &SapicAction<SapicLVar>,
-) -> Result<SapicAction<SapicLVar>, ConvertError> {
-    match ac {
-        // `New v` with `v ∈ dom subst` would be captured (Sapic/Process.hs).
-        SapicAction::New(v) => {
-            if in_domain(subst, v) {
-                return Err(ConvertError::new(format!(
-                    "captured variable {} in process call (new)",
-                    v.var.name
-                )));
-            }
-            Ok(SapicAction::New(v.clone()))
-        }
-        // `ChIn` of a single captured var is captured unless its name starts
-        // with `pat_` (Sapic/Process.hs).
-        SapicAction::ChIn {
-            chan,
-            msg,
-            match_vars,
-        } => {
-            if let VTerm::Lit(Lit::Var(v)) = msg
-                && in_domain(subst, v)
-                && !v.var.name.starts_with("pat_")
-            {
-                return Err(ConvertError::new(format!(
-                    "captured variable {} in process call (in)",
-                    v.var.name
-                )));
-            }
-            Ok(SapicAction::ChIn {
-                chan: chan.as_ref().map(|t| subst_term(subst, t)),
-                msg: subst_term(subst, msg),
-                // HS special-cases `ChIn` in `Apply SapicSubst (SapicAction
-                // SapicLVar)` (Sapic/Process.hs) to reach this rewrite.
-                // When inlining a call like `Q(h(a))` into `in(<y, =x>)`, the
-                // param match-var `x` becomes the vars of `h(a)` (= `{a}`) so that
-                // `bindingsAct = frees(<y,h(a)>) \ {a} = {y}` — i.e. the already-
-                // bound `a` is NOT rebound (Bindings.hs).  Without this the
-                // stale `{x}` would leave `a` looking unbound, rebinding it to a
-                // fresh `a.N` and adding a spurious state-fact variable.
-                match_vars: apply_match_vars_with(|v| call_image(subst, v), match_vars),
-            })
-        }
-        SapicAction::Msr { match_vars, .. } => {
-            // Pinned HS reaches `Set.map (apply subst)` here and aborts if a
-            // call argument for a match variable is compound.  Deliberately
-            // use the same robust free-variable rewrite as `ChIn` and `Let`.
-            let mut mapped = traverse_terms_action(
-                |t| Ok(subst_term(subst, t)),
-                |f| Ok(apply_subst(subst, f.clone())),
-                |v| Ok(v.clone()),
-                ac,
-            )?;
-            let SapicAction::Msr {
-                match_vars: mapped_match_vars,
-                ..
-            } = &mut mapped
-            else {
-                unreachable!("traversing an MSR action preserves its constructor")
-            };
-            *mapped_match_vars = apply_match_vars_with(|v| call_image(subst, v), match_vars);
-            Ok(mapped)
-        }
-        _ => traverse_terms_action(
-            |t| Ok(subst_term(subst, t)),
-            // The call's arguments replace the formal parameters inside an
-            // embedded `_restrict` as they do in the fact rows.  A quantifier
-            // binder is a `Bound` De Bruijn index, outside the substitution's
-            // domain, so it cannot capture a variable of an argument.
-            |f| Ok(apply_subst(subst, f.clone())),
-            // Other action binders are outside the call substitution's
-            // domain; `ChIn` and `Msr` match variables were handled above.
-            |v| Ok(v.clone()),
-            ac,
-        ),
-    }
-}
-
-/// `applyM` for `ProcessCombinator` (Sapic/Process.hs): `Lookup`'s bound var
-/// being captured raises `CapturedLookup`.
-fn apply_m_comb(
-    subst: &SapicSubst,
-    c: &ProcessCombinator<SapicLVar>,
-) -> Result<ProcessCombinator<SapicLVar>, ConvertError> {
-    match c {
-        ProcessCombinator::Lookup(t, v) => {
-            if in_domain(subst, v) {
-                return Err(ConvertError::new(format!(
-                    "captured variable {} in process call (lookup)",
-                    v.var.name
-                )));
-            }
-            Ok(ProcessCombinator::Lookup(subst_term(subst, t), v.clone()))
-        }
-        ProcessCombinator::Let { match_vars, .. } => {
-            let mut mapped = traverse_terms_comb(
-                |t| Ok(subst_term(subst, t)),
-                |f| Ok(apply_subst(subst, f.clone())),
-                |v| Ok(v.clone()),
-                c,
-            )?;
-            let ProcessCombinator::Let {
-                match_vars: mapped_match_vars,
-                ..
-            } = &mut mapped
-            else {
-                unreachable!("traversing a Let combinator preserves its constructor")
-            };
-            *mapped_match_vars = apply_match_vars_with(|v| call_image(subst, v), match_vars);
-            Ok(mapped)
-        }
-        _ => traverse_terms_comb(
-            |t| Ok(subst_term(subst, t)),
-            // The call's arguments replace the formal parameters inside the
-            // conditional's formula.
-            |f| Ok(apply_subst(subst, f.clone())),
-            |v| Ok(v.clone()),
-            c,
-        ),
-    }
-}
-
-/// The image of `v` under the parameter substitution.  `extend_sup`
-/// (Theory/Text/Parser/Sapic.hs) keys a typed formal under both its
-/// typed and its untyped spelling, so a variable resolves against either.  A
-/// variable the substitution does not define stands for itself.
-///
-/// This is the `f . varTerm` that [`apply_match_vars_with`] (HS
-/// `applyMatchVars'`, Theory/Sapic/Process.hs) drives.
-fn call_image(subst: &SapicSubst, v: &SapicLVar) -> SapicTerm {
-    subst
-        .image_of(v)
-        .or_else(|| subst.image_of(&SapicLVar::untyped(v.var)))
-        .cloned()
-        .unwrap_or_else(|| tamarin_term::vterm::var_term(v.clone()))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::BTreeSet;
     use tamarin_term::lterm::LSort;
     use tamarin_term::maude_sig::pair_maude_sig;
 
@@ -551,39 +378,5 @@ mod tests {
             body.annotation().location,
             Some(convert_term(&location, &sig).unwrap())
         );
-    }
-
-    #[test]
-    fn call_substitution_rewrites_let_and_msr_match_vars() {
-        let x = SapicLVar::untyped(tamarin_term::lterm::LVar::new("x", LSort::Msg, 0));
-        let a = SapicLVar::untyped(tamarin_term::lterm::LVar::new("a", LSort::Msg, 0));
-        let image = tamarin_term::builtin::pair(
-            tamarin_term::vterm::var_term(a.clone()),
-            tamarin_term::lterm::pub_term("tag"),
-        );
-        let subst = SapicSubst::from_list(vec![(x.clone(), image)]);
-        let match_vars = BTreeSet::from([x.clone()]);
-
-        let comb = ProcessCombinator::Let {
-            left: tamarin_term::vterm::var_term(x.clone()),
-            right: tamarin_term::lterm::pub_term("message"),
-            match_vars: match_vars.clone(),
-        };
-        let ProcessCombinator::Let { match_vars, .. } = apply_m_comb(&subst, &comb).unwrap() else {
-            panic!("expected Let")
-        };
-        assert_eq!(match_vars, BTreeSet::from([a.clone()]));
-
-        let action = SapicAction::Msr {
-            prems: Vec::new(),
-            acts: Vec::new(),
-            concs: Vec::new(),
-            rest: Vec::new(),
-            match_vars: BTreeSet::from([x]),
-        };
-        let SapicAction::Msr { match_vars, .. } = apply_m_action(&subst, &action).unwrap() else {
-            panic!("expected MSR")
-        };
-        assert_eq!(match_vars, BTreeSet::from([a]));
     }
 }

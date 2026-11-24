@@ -1,0 +1,12 @@
+theory SapicCallSwap begin
+
+// A process call that swaps parameters (x -> y, y -> a) must rename the
+// pattern variable of `=x` once: the input then requires the existing y,
+// so `a` stays secret.
+let P(x,y) = in(<=x,z>); out(<x,y,z>)
+
+process: new y; new a; event Secret(a); P(y,a)
+
+lemma secrecy: "All a #i. Secret(a)@i ==> not (Ex #j. K(a)@j)"
+
+end

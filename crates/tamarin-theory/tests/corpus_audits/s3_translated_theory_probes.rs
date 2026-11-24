@@ -73,6 +73,10 @@ const EXPECTED_TRANSLATION_SKIPS: &[(&str, &str)] = &[
         "sapic/not-working/fairexchange-gjm/gjm-locks-fakepcsbranch.spthy",
         SKIP_TRANSLATE,
     ),
+    (
+        "sapic/not-working/fairexchange-gjm/gjm-locks-unfairness-A.spthy",
+        SKIP_TRANSLATE,
+    ),
     ("sapic/not-working/fairexchange-km/km.spthy", SKIP_TRANSLATE),
     ("testParser/right-assoc.spthy", SKIP_TRANSLATE),
 ];

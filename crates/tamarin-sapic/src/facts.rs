@@ -7,6 +7,8 @@
 //! `AnnotatedRule` carrier, and the final `toRule` that produces a
 //! `ProtoRuleE` with HS-exact name / color / process / role attributes.
 
+use std::collections::BTreeSet;
+
 use tamarin_term::lterm::{LNTerm, LVar};
 use tamarin_term::vterm::var_term;
 use tamarin_utils::color::{hsv_to_rgb, rgb_to_hsv, Hsv, Rgb};
@@ -56,7 +58,7 @@ pub(crate) enum TransFact {
     Fr(LVar),
     In(LNTerm),
     Out(LNTerm),
-    State(StateKind, ProcessPosition, Vec<LVar>),
+    State(StateKind, ProcessPosition, BTreeSet<LVar>),
     /// A literal user MSR fact (`TamarinFact`).
     TamarinFact(LNFact),
     /// `PureCell t1 t2` (Facts.hs): `L_PureState( t1, t2 )` — the pure-state
@@ -68,8 +70,8 @@ pub(crate) enum TransFact {
     /// `FLet p t vars` (Facts.hs): `Let_<pos>( t, v1, .., vn )` — the
     /// intermediate fact a `let` combinator threads its RHS / matched LHS
     /// through (Basetranslation.hs).  `vars` are the bound variables in
-    /// scope (rendered sorted, like `State`).
-    FLet(ProcessPosition, LNTerm, Vec<LVar>),
+    /// scope.
+    FLet(ProcessPosition, LNTerm, BTreeSet<LVar>),
     /// `Message t t'` (Facts.hs): `Message( c, m )` — a message in transit
     /// on a private channel (Basetranslation.hs ChIn/ChOut with a channel).
     Message(LNTerm, LNTerm),
@@ -149,18 +151,6 @@ pub(crate) enum RulePosition {
 }
 
 // =============================================================================
-// State variable set: HS stores `tildex` as a `Set LVar`; `factToFact`
-// renders it via `S.toList` (sorted, deduplicated).  We model it as a sorted,
-// deduped `Vec<LVar>` to match the rendered order.
-// =============================================================================
-
-fn sorted_unique(mut vs: Vec<LVar>) -> Vec<LVar> {
-    vs.sort();
-    vs.dedup();
-    vs
-}
-
-// =============================================================================
 // actionToFact (Facts.hs) / factToFact
 // =============================================================================
 
@@ -177,10 +167,7 @@ pub(crate) fn fact_to_fact(f: &TransFact) -> LNFact {
                 "State"
             };
             let full = format!("{}_{}", name, pretty_position(p));
-            let ts: Vec<LNTerm> = sorted_unique(vars.clone())
-                .into_iter()
-                .map(var_term)
-                .collect();
+            let ts: Vec<LNTerm> = vars.iter().copied().map(var_term).collect();
             // multiplicity from the state kind.
             proto_fact_mult(kind.multiplicity(), &full, ts)
         }
@@ -200,11 +187,11 @@ pub(crate) fn fact_to_fact(f: &TransFact) -> LNFact {
             vec![t1.clone(), t2.clone()],
         ),
         // `factToFact (FLet p t vars) = protoFact Linear ("Let_" ++ pos) (t : vars)`
-        // (Facts.hs).  `vars` rendered as `S.toList` (sorted unique).
+        // (Facts.hs).
         TransFact::FLet(p, t, vars) => {
             let full = format!("Let_{}", pretty_position(p));
             let mut ts: Vec<LNTerm> = vec![t.clone()];
-            ts.extend(sorted_unique(vars.clone()).into_iter().map(var_term));
+            ts.extend(vars.iter().copied().map(var_term));
             proto_fact(Multiplicity::Linear, &full, ts)
         }
         // `factToFact (Message t t') = protoFact Linear "Message" [t, t']`
@@ -356,6 +343,12 @@ pub(crate) fn var_mid(p: &ProcessPosition) -> LVar {
     )
 }
 
+/// `State LState (p ++ suffix) tx`, the linear state fact Basetranslation.hs
+/// calls `def_state` (empty suffix) and `def_state'`/`def_state1`/`def_state2`.
+pub(crate) fn lstate(p: &[i64], suffix: &[i64], tx: &BTreeSet<LVar>) -> TransFact {
+    TransFact::State(StateKind::LState, [p, suffix].concat(), tx.clone())
+}
+
 /// `isNonSemiState` (Facts.hs): a non-semi `State` fact.
 pub(crate) fn is_non_semi_state(f: &TransFact) -> bool {
     matches!(f, TransFact::State(kind, _, _) if !kind.is_semi_state())
@@ -398,9 +391,7 @@ pub(crate) fn add_var_to_state(v: &LVar, f: &TransFact) -> TransFact {
     match f {
         TransFact::State(kind, pos, vs) => {
             let mut nvs = vs.clone();
-            if !nvs.contains(v) {
-                nvs.push(*v);
-            }
+            nvs.insert(*v);
             TransFact::State(*kind, pos.clone(), nvs)
         }
         other => other.clone(),
@@ -688,7 +679,7 @@ mod tests {
 
     #[test]
     fn state_fact_name_and_mult() {
-        let f = TransFact::State(StateKind::LState, vec![1], vec![]);
+        let f = TransFact::State(StateKind::LState, vec![1], BTreeSet::new());
         let lnf = fact_to_fact(&f);
         match &lnf.tag {
             tamarin_theory::fact::FactTag::Proto(m, n, _) => {
@@ -730,7 +721,7 @@ mod tests {
 
     #[test]
     fn empty_position_state_renders_state_underscore() {
-        let f = TransFact::State(StateKind::LState, vec![], vec![]);
+        let f = TransFact::State(StateKind::LState, vec![], BTreeSet::new());
         let lnf = fact_to_fact(&f);
         if let tamarin_theory::fact::FactTag::Proto(_, n, _) = &lnf.tag {
             assert_eq!(&**n, "State_");

@@ -378,7 +378,7 @@ pub fn pretty_open_theory(thy: &Theory) -> String {
 /// [`format_wf_block`] string) and the `Generated from:` version block.
 /// `prettyOpenTheoryByModule`'s `spthy` and `spthytyped` arms
 /// (TheoryLoader.hs#prettyOpenTheoryByModule) both land here; they differ only in the theory
-/// VALUE, which `tamarin_sapic::type_theory::type_theory_env` has rewritten
+/// VALUE, which `tamarin_sapic::type_theory::type_theory` has rewritten
 /// for `spthytyped`.
 pub fn pretty_open_theory_by_module(thy: &Theory, wf_block: &str, build: &BuildInfo) -> String {
     let in_file = thy.in_file.as_str();

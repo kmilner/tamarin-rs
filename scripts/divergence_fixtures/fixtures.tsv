@@ -69,3 +69,5 @@ s8_sapic_generated_rule_wf	wf	match	--derivcheck-timeout=0
 s8_acc_generated_lemma	wf	match	--lemma=acc_verif_empty --derivcheck-timeout=0
 s8_msr_lemma_filter	wf	match	-m=msr --prove=keep --derivcheck-timeout=0
 s8_lemma_arg_order	wf	match	--prove=p1 --lemma=l1 --prove=p2 --lemma=l2 --derivcheck-timeout=0
+sapic_call_swap	wf,summary	match	--prove --derivcheck-timeout=0
+dual_typed_ac_symbol	theory	match	--derivcheck-timeout=0

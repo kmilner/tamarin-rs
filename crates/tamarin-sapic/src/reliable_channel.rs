@@ -18,12 +18,12 @@ use tamarin_term::lterm::{LVar, NameTag};
 use tamarin_term::vterm::{Lit, VTerm};
 use tamarin_theory::restriction::Restriction;
 use tamarin_theory::sapic::{
-    process_contains, Process, ProcessPosition, SapicAction, SapicLVar, SapicTerm,
+    process_contains, to_ln_term, Process, ProcessPosition, SapicAction, SapicLVar, SapicTerm,
 };
 
 use crate::annotation::ProcessAnnotation;
-use crate::base_translation::{ln_term_vars as freeset, to_ln_term, RuleBody};
-use crate::facts::{StateKind, TransAction, TransFact};
+use crate::base_translation::{ln_term_vars as freeset, RuleBody};
+use crate::facts::{lstate, TransAction, TransFact};
 
 type AProc = Process<ProcessAnnotation<LVar>, SapicLVar>;
 
@@ -79,12 +79,6 @@ pub(crate) fn reliable_channel_trans_act(
     tx: &BTreeSet<LVar>,
 ) -> Result<Option<(Vec<RuleBody>, BTreeSet<LVar>)>, String> {
     // `def_state = State LState p tx`; `def_state1 tx' = State LState (p++[1]) tx'`.
-    let def_state = || TransFact::State(StateKind::LState, p.clone(), tx.iter().copied().collect());
-    let mut p1 = p.clone();
-    p1.push(1);
-    let def_state1 = |tx2: &BTreeSet<LVar>| {
-        TransFact::State(StateKind::LState, p1.clone(), tx2.iter().copied().collect())
-    };
 
     match ac {
         // ChIn (Just 'c') t — async private channel input.
@@ -100,9 +94,9 @@ pub(crate) fn reliable_channel_trans_act(
             // `ts = fAppPair (v,t)`
             let ts = tamarin_term::builtin::pair(vt.clone(), t.clone());
             let body: RuleBody = (
-                vec![def_state(), TransFact::In(ts.clone())],
+                vec![lstate(p, &[], tx), TransFact::In(ts.clone())],
                 vec![TransAction::ChannelIn(ts)],
-                vec![def_state1(&tx2)],
+                vec![lstate(p, &[1], &tx2)],
                 vec![],
             );
             Ok(Some((vec![body], tx2)))
@@ -115,9 +109,9 @@ pub(crate) fn reliable_channel_trans_act(
             tx2.extend(freeset(&vt));
             tx2.extend(freeset(&t));
             let body: RuleBody = (
-                vec![def_state(), TransFact::In(vt.clone())],
+                vec![lstate(p, &[], tx), TransFact::In(vt.clone())],
                 vec![TransAction::ChannelIn(vt)],
-                vec![def_state1(&tx2), TransFact::Out(t)],
+                vec![lstate(p, &[1], &tx2), TransFact::Out(t)],
                 vec![],
             );
             Ok(Some((vec![body], tx2)))
@@ -133,12 +127,12 @@ pub(crate) fn reliable_channel_trans_act(
             tx2.extend(freeset(&t));
             let body: RuleBody = (
                 vec![
-                    def_state(),
+                    lstate(p, &[], tx),
                     TransFact::In(t.clone()),
                     TransFact::MessageIDReceiver(p.clone()),
                 ],
                 vec![TransAction::Receive(p.clone(), t)],
-                vec![def_state1(&tx2)],
+                vec![lstate(p, &[1], &tx2)],
                 vec![],
             );
             Ok(Some((vec![body], tx2)))
@@ -151,9 +145,9 @@ pub(crate) fn reliable_channel_trans_act(
             tx2.extend(freeset(&rt));
             tx2.extend(freeset(&t));
             let body: RuleBody = (
-                vec![TransFact::MessageIDSender(p.clone()), def_state()],
+                vec![TransFact::MessageIDSender(p.clone()), lstate(p, &[], tx)],
                 vec![TransAction::Send(p.clone(), t.clone())],
-                vec![TransFact::Out(t), def_state1(&tx2)],
+                vec![TransFact::Out(t), lstate(p, &[1], &tx2)],
                 vec![],
             );
             Ok(Some((vec![body], tx2)))

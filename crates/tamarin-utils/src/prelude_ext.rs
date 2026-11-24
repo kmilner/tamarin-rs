@@ -1,10 +1,7 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! `nubOn` (Extension/Prelude.hs) and `flushRight`
-//! (Extension/Prelude.hs) from `lib/utils/src/Extension/Prelude.hs`.
-
-use std::hash::Hash;
+//! `Data.List.nub` and `flushRight` (lib/utils/src/Extension/Prelude.hs).
 
 /// Keep the first occurrence of each equal value, in input order.
 pub fn nub<T: PartialEq>(xs: impl IntoIterator<Item = T>) -> Vec<T> {
@@ -15,20 +12,6 @@ pub fn nub<T: PartialEq>(xs: impl IntoIterator<Item = T>) -> Vec<T> {
         }
     }
     unique
-}
-
-/// `nubOn proj xs`: keep the first occurrence of each projection value.
-/// Order-preserving. O(n) via a `HashSet` of seen projections, hence the
-/// `K: Eq + Hash` bound.
-pub fn nub_on<T: Clone, K: Eq + Hash, F: FnMut(&T) -> K>(xs: &[T], mut proj: F) -> Vec<T> {
-    let mut seen: crate::FastSet<K> = crate::FastSet::default();
-    let mut out = Vec::with_capacity(xs.len());
-    for x in xs {
-        if seen.insert(proj(x)) {
-            out.push(x.clone());
-        }
-    }
-    out
 }
 
 /// `flushRight n s`: pad `s` on the left with spaces so the result is at
@@ -50,13 +33,6 @@ pub fn flush_right(n: usize, s: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn nub_on_preserves_first_occurrence() {
-        let xs = vec!["aa", "bb", "ab", "bc", "ac"];
-        let got = nub_on(&xs, |s| s.chars().next().unwrap());
-        assert_eq!(got, vec!["aa", "bb"]);
-    }
 
     #[test]
     fn flush_right_pads_to_a_character_width() {
