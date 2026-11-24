@@ -725,7 +725,7 @@ fn insert_implied_formulas_pass(
 /// Try every assignment of system actions to the universal's action
 /// guards. For each consistent assignment that binds all universal
 /// vars, instantiate the body and add to `new_formulas`.
-fn try_match_all_guards(
+pub(crate) fn try_match_all_guards(
     maude: &tamarin_term::maude_proc::MaudeHandle,
     vars: &[tamarin_term::lterm::LVar],
     action_guards: &[&crate::atom::Atom<tamarin_term::lterm::LNTerm>],
@@ -1463,7 +1463,7 @@ fn terms_containing_fresh(
 /// premise `Fr(~x)` precedes every non-unifiable node whose premises or
 /// actions contain `~x` (directly or through positive subterms) outside a
 /// reducible symbol, and so does the end of its linear route.
-fn enforce_fresh_ordering_pass(
+pub(crate) fn enforce_fresh_ordering_pass(
     red: &mut Reduction,
 ) -> Result<SystemOutcome, crate::prove::ProveError> {
     use crate::constraint::constraints::{LessAtom, Reason};
@@ -1498,9 +1498,12 @@ fn enforce_fresh_ordering_pass(
         node_rules.entry(id).or_insert(rule);
     }
     let maude = red.ctx.maude.clone();
+    // HS runs the unifier purely, so a dead or cancelled backend aborts the
+    // pass rather than reading as "unifiable".
     let non_unifiable = |i: &crate::constraint::constraints::NodeId,
                          j: &crate::constraint::constraints::NodeId| {
-        non_unifiable_nodes(&maude, &node_rules, i, j).unwrap_or(false)
+        non_unifiable_nodes(&maude, &node_rules, i, j)
+            .map_err(|error| crate::prove::ProveError::maude("fresh-ordering unification", error))
     };
 
     // `getRoute` follows nodes with a single linear conclusion.
@@ -1606,7 +1609,7 @@ fn enforce_fresh_ordering_pass(
             if !direct && !transitive() {
                 continue;
             }
-            if !non_unifiable(sup_id, other_id) {
+            if !non_unifiable(sup_id, other_id)? {
                 continue;
             }
             if less_idx.is_none() {
@@ -1636,7 +1639,14 @@ fn enforce_fresh_ordering_pass(
         // `tail rs` — all nodes after the first.
         let tail = &rs[1..];
         // Side condition: `all (nonUnifiableNodes j) (tail rs)`.
-        if !tail.iter().all(|t_id| non_unifiable(j, t_id)) {
+        let mut all_non_unifiable = true;
+        for t_id in tail {
+            if !non_unifiable(j, t_id)? {
+                all_non_unifiable = false;
+                break;
+            }
+        }
+        if !all_non_unifiable {
             continue;
         }
         let last = match rs.last() {

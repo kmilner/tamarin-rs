@@ -433,39 +433,32 @@ pub fn variants_proto_rule(
             // `freshToFreeAvoidingFast sFresh (frees premiseTerms)`: a local
             // supply, so the rule's counter does not advance.
             let filter_base = tamarin_term::lterm::avoid(&premise_terms_for_filter);
-            raw_substs
-                .into_iter()
-                .filter(|pairs| {
-                    let s_fresh = LNSubstVFresh::from_list(pairs.clone());
-                    let mut fresh = filter_base.clone();
-                    let subst = s_fresh.fresh_to_free_avoiding(|n| fresh.fresh_idents(n));
-                    let premises: Vec<LNTerm> = premise_terms_for_filter
+            let mut kept = Vec::with_capacity(raw_substs.len());
+            for pairs in raw_substs {
+                let mut fresh = filter_base.clone();
+                let subst = LNSubstVFresh::from_list(pairs.clone())
+                    .fresh_to_free_avoiding(|n| fresh.fresh_idents(n));
+                let mut premises = Vec::with_capacity(premise_terms_for_filter.len());
+                for t in &premise_terms_for_filter {
+                    premises.push(maude.reduce(&apply_vterm(&subst, t.clone()))?);
+                }
+                let redundant = freshly_introduced.iter().any(|t| {
+                    let ft = apply_vterm(&subst, t.clone());
+                    premises
                         .iter()
-                        .map(|t| {
-                            let applied = apply_vterm(&subst, t.clone());
-                            maude.reduce(&applied).unwrap_or(applied)
-                        })
-                        .collect();
-                    let fresh_terms: Vec<LNTerm> = freshly_introduced
-                        .iter()
-                        .map(|t| apply_vterm(&subst, t.clone()))
-                        .collect();
-                    for ft in &fresh_terms {
-                        for p in &premises {
-                            if tamarin_term::term::is_subterm(ft, p) {
-                                return false;
-                            }
-                        }
-                    }
-                    true
-                })
-                .collect()
+                        .any(|p| tamarin_term::term::is_subterm(&ft, p))
+                });
+                if !redundant {
+                    kept.push(pairs);
+                }
+            }
+            kept
         }
     };
 
     let composed_substs: Vec<LNSubstVFresh> = raw_substs
         .into_iter()
-        .map(|pairs| {
+        .map(|pairs| -> Result<LNSubstVFresh, VariantsError> {
             let vsubst = LNSubstVFresh::from_list(pairs);
             // composeVFresh vsubst abstractionSubst
             let composed = tamarin_term::subst_vfresh::compose_vfresh(&vsubst, &abstraction_subst);
@@ -473,21 +466,18 @@ pub fn variants_proto_rule(
             let normalised_pairs: Vec<(LVar, LNTerm)> = composed
                 .to_list()
                 .into_iter()
-                .map(|(k, t)| {
-                    let n = maude.reduce(&t).unwrap_or(t);
-                    (k, n)
-                })
-                .collect();
+                .map(|(k, t)| Ok((k, maude.reduce(&t)?)))
+                .collect::<Result<_, MaudeError>>()?;
             let normalised = LNSubstVFresh::from_list(normalised_pairs);
             // removeRenamings (post-compose, HS RuleVariants.hs)
             let cleaned = normalised.remove_renamings();
             // restrictVFresh (frees abstrPsCsAs)
-            cleaned.restrict(&abstr_frees)
+            Ok(cleaned.restrict(&abstr_frees))
         })
         // `variantsProtoRule` (RuleVariants.hs) retains every composed entry,
         // including substitutions that restrict to pure renamings. Fresh
         // redundancy is filtered on the raw Maude variants before composition.
-        .collect();
+        .collect::<Result<_, _>>()?;
 
     if composed_substs.is_empty() {
         return Ok(RuleVariants::NoVariants);
