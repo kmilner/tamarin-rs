@@ -321,6 +321,84 @@ mod tests {
         assert_eq!(theory.encode(FunSym::Ac(AcSym::Union), 1), None);
     }
 
+    /// The rules `Tamarin.Theory` adds for each builtin (`dhRules`, `xorRules`,
+    /// `bpRules`), written out in the order of those lists, with Lean's
+    /// variable `i` as `x.i`. They are exactly the rules `user_rules` leaves
+    /// out, and each list is in the order of Rust's sorted rule set.
+    #[test]
+    fn lean_builtin_rules_are_the_rules_of_the_rust_builtins() {
+        use crate::builtin::{
+            bp_rules, dh_neutral, dh_rules, emap, exp, inv, msg_var, mult, one_const, pmult, xor,
+            xor_rules, zero_const,
+        };
+        use crate::rewriting::RRule;
+        let [x1, x2, x3] = [1, 2, 3].map(|i| msg_var("x", i));
+        let rule = |lhs, rhs| RRule::new(lhs, rhs);
+        let dh = vec![
+            rule(exp(x1.clone(), one_const()), x1.clone()),
+            rule(exp(dh_neutral(), x1.clone()), dh_neutral()),
+            rule(
+                exp(exp(x1.clone(), x2.clone()), x3.clone()),
+                exp(x1.clone(), mult(x2.clone(), x3.clone())),
+            ),
+            rule(inv(inv(x1.clone())), x1.clone()),
+            rule(inv(one_const()), one_const()),
+            rule(
+                inv(mult(inv(x1.clone()), x2.clone())),
+                mult(x1.clone(), inv(x2.clone())),
+            ),
+            rule(
+                mult(x1.clone(), mult(inv(x1.clone()), x2.clone())),
+                x2.clone(),
+            ),
+            rule(mult(x1.clone(), inv(x1.clone())), one_const()),
+            rule(mult(x1.clone(), one_const()), x1.clone()),
+            rule(
+                mult(
+                    inv(mult(x1.clone(), x2.clone())),
+                    mult(x2.clone(), x3.clone()),
+                ),
+                mult(inv(x1.clone()), x3.clone()),
+            ),
+            rule(
+                mult(inv(mult(x1.clone(), x2.clone())), x2.clone()),
+                inv(x1.clone()),
+            ),
+            rule(
+                mult(inv(x1.clone()), mult(inv(x2.clone()), x3.clone())),
+                mult(inv(mult(x1.clone(), x2.clone())), x3.clone()),
+            ),
+            rule(
+                mult(inv(x1.clone()), inv(x2.clone())),
+                inv(mult(x1.clone(), x2.clone())),
+            ),
+        ];
+        let xors = vec![
+            rule(xor(x1.clone(), x1.clone()), zero_const()),
+            rule(xor(x1.clone(), xor(x1.clone(), x2.clone())), x2.clone()),
+            rule(xor(x1.clone(), zero_const()), x1.clone()),
+        ];
+        let bp = vec![
+            rule(
+                pmult(x3.clone(), pmult(x2.clone(), x1.clone())),
+                pmult(mult(x3.clone(), x2.clone()), x1.clone()),
+            ),
+            rule(pmult(one_const(), x1.clone()), x1.clone()),
+            rule(
+                emap(x1.clone(), pmult(x2.clone(), x3.clone())),
+                exp(emap(x1.clone(), x3.clone()), x2.clone()),
+            ),
+        ];
+        for (name, lean, rust) in [
+            ("dh", dh, dh_rules()),
+            ("xor", xors, xor_rules()),
+            ("bp", bp, bp_rules()),
+        ] {
+            assert_eq!(lean.len(), rust.len(), "{name}");
+            assert_eq!(lean, rust.into_iter().collect::<Vec<_>>(), "{name}");
+        }
+    }
+
     #[test]
     fn signatures_outside_the_description_are_refused() {
         let mut lone = pair_maude_sig();
