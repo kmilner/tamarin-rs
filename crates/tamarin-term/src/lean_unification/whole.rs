@@ -38,6 +38,12 @@ const MAX_DEPTH: usize = 128;
 /// finds one by comparison rather than by hashing.
 pub(super) const SHORT_TABLE: usize = 16;
 
+/// The roots of applications a request has encoded, by the address and
+/// length of their argument slice and their operator's kind and id. The
+/// terms of the request stay borrowed while it is encoded, so an address
+/// names one slice throughout.
+type Shared = FxHashMap<(usize, usize, u64, u64), u64>;
+
 /// How the rows of a packet name operators.
 #[derive(Clone)]
 enum Symbols {
@@ -130,11 +136,18 @@ struct Nodes {
     words: Vec<u64>,
     /// Where each row starts in `words`; it ends where the next one starts.
     starts: Vec<usize>,
-    /// The last row added with each hash.
+    /// The hash of each row.
+    hashes: Vec<u64>,
+    /// The last row added with each hash, once there are more rows than a
+    /// scan of `hashes` finds quickly; empty before.
     last: FxHashMap<u64, u32>,
-    /// For each row, the row added before it with the same hash.
+    /// For each row, the row added before it with the same hash, kept with
+    /// `last`.
     earlier: Vec<u32>,
 }
+
+/// Up to this many rows, a row is found by a scan of the hashes.
+const SCANNED_ROWS: usize = 64;
 
 impl Nodes {
     fn len(&self) -> usize {
@@ -160,18 +173,37 @@ impl Nodes {
             hasher.write_u64(*word);
         }
         let hash = hasher.finish();
-        let mut at = self.last.get(&hash).copied().unwrap_or(u32::MAX);
-        while at != u32::MAX {
-            if self.row(at as usize) == row {
-                return u64::from(at);
+        if self.len() <= SCANNED_ROWS {
+            for (at, h) in self.hashes.iter().enumerate() {
+                if *h == hash && self.row(at) == row {
+                    return at as u64;
+                }
             }
-            at = self.earlier[at as usize];
+        } else {
+            let mut at = self.last.get(&hash).copied().unwrap_or(u32::MAX);
+            while at != u32::MAX {
+                if self.row(at as usize) == row {
+                    return u64::from(at);
+                }
+                at = self.earlier[at as usize];
+            }
         }
         let id = u32::try_from(self.len()).expect("fewer than 2^32 nodes in a packet");
-        self.earlier
-            .push(self.last.insert(hash, id).unwrap_or(u32::MAX));
+        self.hashes.push(hash);
         self.starts.push(self.words.len());
         self.words.extend_from_slice(row);
+        if self.len() > SCANNED_ROWS {
+            if self.last.is_empty() {
+                // The rows outgrew the scan: chain every row by its hash.
+                for (at, h) in self.hashes.iter().enumerate() {
+                    let earlier = self.last.insert(*h, at as u32).unwrap_or(u32::MAX);
+                    self.earlier.push(earlier);
+                }
+            } else {
+                let earlier = self.last.insert(hash, id).unwrap_or(u32::MAX);
+                self.earlier.push(earlier);
+            }
+        }
         u64::from(id)
     }
 }
@@ -228,11 +260,23 @@ impl Packet {
     /// Append one term over the operators of the packet's theory and return
     /// its root.
     fn encode_theory(&mut self, term: &LNTerm) -> Option<u64> {
+        self.encode_theory_sharing(term, &mut Shared::default())
+    }
+
+    /// [`Self::encode_theory`], with the roots of the applications that
+    /// earlier terms of the same request encoded.
+    fn encode_theory_sharing(&mut self, term: &LNTerm, shared: &mut Shared) -> Option<u64> {
         let Symbols::Theory(theory) = &self.symbols else {
             return None;
         };
         let theory = Arc::clone(theory);
-        self.encode_term(term, false, |s| theory.declares_sort(s), |_| None)
+        self.encode_term_sharing(
+            term,
+            false,
+            |s| theory.declares_sort(s),
+            |_| None,
+            Some(shared),
+        )
     }
 
     // Children precede their parents in the graph. The bounded kernels charge
@@ -244,21 +288,45 @@ impl Packet {
         declares: impl Fn(LSort) -> bool,
         declaration: impl Fn(FunSym) -> Option<(usize, LSort)>,
     ) -> Option<u64> {
+        self.encode_term_sharing(term, bounded, declares, declaration, None)
+    }
+
+    /// [`Self::encode_term`]. An application whose arguments are the very
+    /// slice of one that `shared` holds, under the same operator, has the
+    /// root that one got, and the rows, variables and names below it are
+    /// already in the packet, so it is not walked again. Only an unbounded
+    /// encoding may skip the walk, which a bounded one charges.
+    fn encode_term_sharing(
+        &mut self,
+        term: &LNTerm,
+        bounded: bool,
+        declares: impl Fn(LSort) -> bool,
+        declaration: impl Fn(FunSym) -> Option<(usize, LSort)>,
+        mut shared: Option<&mut Shared>,
+    ) -> Option<u64> {
         enum Visit<'a> {
             Term(&'a LNTerm, usize),
-            Finish(u64, u64, usize),
+            Finish(u64, u64, usize, usize),
         }
-        let mut work = vec![Visit::Term(term, 0)];
-        let mut values = Vec::new();
-        let mut node = Vec::new();
+        if bounded {
+            shared = None;
+        }
+        let mut work = Vec::with_capacity(16);
+        work.push(Visit::Term(term, 0));
+        let mut values = Vec::with_capacity(16);
+        let mut node = Vec::with_capacity(8);
         while let Some(visit) = work.pop() {
             match visit {
-                Visit::Finish(kind, symbol, count) => {
+                Visit::Finish(kind, symbol, count, at) => {
                     let start = values.len() - count;
                     node.clear();
                     node.extend([kind, symbol]);
                     node.extend(values.drain(start..));
-                    values.push(self.node(&node));
+                    let id = self.node(&node);
+                    if let Some(shared) = shared.as_deref_mut() {
+                        shared.insert((at, count, kind, symbol), id);
+                    }
+                    values.push(id);
                 }
                 Visit::Term(term, depth) => {
                     self.expanded += 1;
@@ -282,7 +350,15 @@ impl Packet {
                                 return None;
                             }
                             let (kind, id) = self.symbols.encode(*f, width, &declaration)?;
-                            work.push(Visit::Finish(kind, id, children.len()));
+                            let at = children.as_ptr() as usize;
+                            if let Some(root) = shared
+                                .as_deref()
+                                .and_then(|shared| shared.get(&(at, width, kind, id)))
+                            {
+                                values.push(*root);
+                                continue;
+                            }
+                            work.push(Visit::Finish(kind, id, width, at));
                             work.extend(children.iter().rev().map(|t| Visit::Term(t, depth + 1)));
                         }
                     }
@@ -569,6 +645,25 @@ mod tests {
             },
         ];
         assert!(!table.accepts_factor(&original, &factor, &extra).unwrap());
+    }
+
+    #[test]
+    fn node_rows_are_numbered_by_first_occurrence_on_both_sides_of_the_scan() {
+        let mut nodes = Nodes::default();
+        let mut reference: FxHashMap<Vec<u64>, u64> = FxHashMap::default();
+        let row = |i: u64| -> Vec<u64> { (0..(i % 5)).map(|k| (i * 7 + k) % 23).collect() };
+        for step in 0..600u64 {
+            let r = row((step * 13) % 211);
+            let next = reference.len() as u64;
+            let want = *reference.entry(r.clone()).or_insert(next);
+            assert_eq!(nodes.intern(&r), want, "step {step}");
+        }
+        assert!(nodes.len() > SCANNED_ROWS);
+        let mut by_id = vec![Vec::new(); reference.len()];
+        for (r, id) in reference {
+            by_id[id as usize] = r;
+        }
+        assert!(nodes.rows().eq(by_id.iter().map(|r| &r[..])));
     }
 
     #[test]

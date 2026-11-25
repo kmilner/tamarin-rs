@@ -77,6 +77,17 @@ fn family_has_member(reply: &[u64]) -> Option<bool> {
     }
 }
 
+/// A name hint. Hints are interned, so two equal hints are usually one
+/// copy, which is compared first; the comparison is by content.
+#[derive(Clone, Copy, Eq, Hash)]
+struct Hint(&'static str);
+
+impl PartialEq for Hint {
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0) || self.0 == other.0
+    }
+}
+
 /// The caller's names of the variables of a request, for the naming export.
 ///
 /// A request names a variable by the number of its row. `words` holds, for
@@ -84,14 +95,15 @@ fn family_has_member(reply: &[u64]) -> Option<bool> {
 /// index. The hint `x`, which the export gives to the variables it numbers
 /// itself, has the identifier 0.
 struct Labels {
-    hints: ShortIdentityTable<&'static str, SHORT_TABLE>,
+    hints: ShortIdentityTable<Hint, SHORT_TABLE>,
     words: Vec<u64>,
 }
 
 impl Labels {
     fn of(packet: &Packet) -> Result<Self, Error> {
         let mut hints = ShortIdentityTable::default();
-        let mut hint = |name: &'static str| hints.intern(name).ok_or(Error::InvalidStatus(255));
+        let mut hint =
+            |name: &'static str| hints.intern(Hint(name)).ok_or(Error::InvalidStatus(255));
         hint(LVar::new("x", LSort::Msg, 0).name)?;
         let mut words = Vec::with_capacity(2 * packet.variables.len());
         for v in packet.variables.values() {
@@ -283,7 +295,8 @@ fn read_named(
                             else {
                                 return Err(Error::InvalidVariable(id));
                             };
-                            let name = labels.hints.get(hint).ok_or(Error::InvalidVariable(id))?;
+                            let Hint(name) =
+                                labels.hints.get(hint).ok_or(Error::InvalidVariable(id))?;
                             if kind != 0 {
                                 return Err(Error::InvalidVariable(id));
                             }
@@ -363,7 +376,7 @@ impl Unifiers {
         for member in targets.unwrap_or_default() {
             let mut row = Vec::with_capacity(2 * member.len());
             for target in member {
-                row.push(labels.hints.intern(target.name).ok_or(malformed)?);
+                row.push(labels.hints.intern(Hint(target.name)).ok_or(malformed)?);
                 row.push(target.idx);
             }
             proposal.push(row);
@@ -874,9 +887,10 @@ impl Packet {
         terms: impl IntoIterator<Item = &'a LNTerm>,
     ) -> Result<Option<Self>, Error> {
         let mut packet = Self::over(theory);
+        let mut shared = Default::default();
         for t in terms {
             cancellation::check().map_err(|_| Error::Cancelled)?;
-            let Some(id) = packet.encode_theory(t) else {
+            let Some(id) = packet.encode_theory_sharing(t, &mut shared) else {
                 return Ok(None);
             };
             packet.equations.push(id);

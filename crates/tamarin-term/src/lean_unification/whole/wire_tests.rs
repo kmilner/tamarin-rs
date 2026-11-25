@@ -443,7 +443,7 @@ fn named_members(
         let var = packet.variables.get(*key)?;
         let (image, actual) = packet
             .read_image(tokens, nat, |kind, id, hint| {
-                let name = labels.hints.get(hint).ok_or(Error::InvalidVariable(id))?;
+                let Hint(name) = labels.hints.get(hint).ok_or(Error::InvalidVariable(id))?;
                 let sort = sort(kind.checked_sub(5).ok_or(Error::InvalidVariable(id))?)?;
                 Ok(LVar {
                     name,
@@ -586,7 +586,7 @@ fn the_reader_of_a_named_family_agrees_with_the_library() {
                     bent_replies += 1;
                 }
             }
-            let _ = labels.hints.intern("unused");
+            let _ = labels.hints.intern(Hint("unused"));
         }
     }
     assert!(

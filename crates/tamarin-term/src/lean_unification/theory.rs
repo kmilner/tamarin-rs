@@ -194,7 +194,7 @@ impl Theory {
         };
         let sort = match f {
             FunSym::Ac(AcSym::NatPlus) => LSort::Nat,
-            FunSym::NoEq(s) if s == nat_one_sym() && self.nat() => LSort::Nat,
+            FunSym::NoEq(s) if self.nat() && s == nat_one_sym() => LSort::Nat,
             _ => LSort::Msg,
         };
         Some((f, arity, sort))
