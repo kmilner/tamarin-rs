@@ -1291,11 +1291,13 @@ named in Lean. Rust walks trees in both directions and decides nothing:
   solves alone, by a test that unifies nothing (`solved_by_free_unifier`: no
   AC or C symbol, or each AC or C term faces only a variable used once), the
   proposal comes from the algebra library instead (`Unifiers::self_named`,
-  `tamarin_lean_self_name_unifiers`): a proposer in Lean reads the answer and
-  proposes the names the Maude backend composes, and the bridge passes them to
-  `tamarin_name_unifiers` in the same call. The answer is read through those
-  tables only when they are the tables of that proposal; otherwise the request
-  takes the path above (`self_named=` and `self_declined=` count the two). In
+  `tamarin_lean_self_name_unifiers`): Rust tells a proposer in Lean which
+  request variables each variable of the answer is the whole image of and how
+  often it occurs, the proposer proposes the names the Maude backend composes,
+  and the bridge passes them to `tamarin_name_unifiers` in the same call. The
+  answer is read through those tables only when they are the tables of that
+  proposal; otherwise the request takes the path above (`self_named=` and
+  `self_declined=` count the two, `spelled=` the requests of that path). In
   builds with debug assertions every such answer is compared with the answer of
   the path above.
 

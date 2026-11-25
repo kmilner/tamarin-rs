@@ -24,7 +24,8 @@ use tamarin_algebra_sys::{
 };
 
 /// The replies of the total unifier, of its existence export and of the
-/// naming export, keyed by the words of the request.
+/// naming export, alone or on the proposal of the algebra library, keyed by
+/// the words of the request.
 ///
 /// A request packet names variables and constants by the order of their
 /// first occurrence, and operators by the fixed ids of the session's theory,
@@ -40,6 +41,9 @@ pub struct UnifyReplies {
     families: std::sync::Mutex<FxHashMap<Box<[u64]>, std::sync::Arc<[u64]>>>,
     exists: std::sync::Mutex<FxHashMap<Box<[u64]>, bool>>,
     names: std::sync::Mutex<FxHashMap<Box<[u64]>, std::sync::Arc<[u64]>>>,
+    /// The tables of the naming export for the proposals of the algebra
+    /// library, or `None` where it proposed none the export took.
+    self_names: std::sync::Mutex<FxHashMap<Box<[u64]>, Option<std::sync::Arc<[u64]>>>>,
 }
 
 /// The requests of the naming export [`UnifyReplies`] keeps the tables of.
@@ -440,24 +444,23 @@ impl Unifiers {
     /// leaving an AC or C equation; whether a request is one is for the
     /// caller to decide. As with [`Self::named`], the reading is that of the
     /// export's tables, whatever was proposed.
-    pub(crate) fn self_named(&self) -> Result<Option<Substitutions>, Error> {
+    pub(crate) fn self_named(
+        &self,
+        replies: Option<&UnifyReplies>,
+    ) -> Result<Option<Substitutions>, Error> {
         let malformed = Error::InvalidStatus(255);
         if !family_has_member(&self.reply).ok_or(malformed)? {
             return Ok(Some(Vec::new()));
         }
+        let Some(arm) = OneArm::of(&self.reply, self.packet.variables.len()).ok_or(malformed)?
+        else {
+            return Ok(None);
+        };
         let labels = Labels::of(&self.packet)?;
-        let (heads, ranges) = shape(&self.reply, self.packet.variables.len()).ok_or(malformed)?;
-        let [range] = ranges.as_slice() else {
-            return Ok(None);
-        };
         let order = labels.order();
-        let (tables, proposal) = self_name(&labels, &order, &heads, range, &self.reply, self.nat)?;
-        let Some(proposal) = proposal else {
+        let Some(tables) = self_name(&labels, &order, &arm, self.nat, replies)? else {
             return Ok(None);
         };
-        if !takes(&labels, &heads, range, &tables, &proposal) {
-            return Ok(None);
-        }
         match read_named(&self.packet, &labels, &self.reply, &tables, self.nat) {
             Ok(family) => Ok(Some(family)),
             Err(Error::Cancelled) => Err(Error::Cancelled),
@@ -674,30 +677,144 @@ fn name(
     Ok(tables)
 }
 
+/// What the proposer of the algebra library is told of a reply of the
+/// unifier with one member: the identifier and sort words of the query
+/// variables as the rows list them, the range variables by identifier and
+/// sort word in the order of first occurrence, for each row the position of
+/// the range variable that is its whole image (`u64::MAX` for none), and the
+/// occurrences of each range variable.
+///
+/// Nothing depends on this being right, as with [`shape`]: the reply is read
+/// through the tables of the naming export, whatever was proposed.
+struct OneArm {
+    heads: Vec<u64>,
+    range: Vec<u64>,
+    singles: Vec<u64>,
+    counts: Vec<u64>,
+}
+
+impl OneArm {
+    /// `None` for words that are no reply with members, `Some(None)` for a
+    /// reply with more than one.
+    fn of(reply: &[u64], width: usize) -> Option<Option<Self>> {
+        let mut rows = rows_of(reply);
+        if rows.next()?? != [1] {
+            return None;
+        }
+        if !rows.next()??.is_empty() {
+            return None;
+        }
+        let mut arm = Self {
+            heads: Vec::with_capacity(2 * width),
+            range: Vec::with_capacity(2 * SHORT_TABLE),
+            singles: Vec::with_capacity(width),
+            counts: Vec::with_capacity(SHORT_TABLE),
+        };
+        // The positions of a long range, which a short one finds by a scan.
+        let mut positions: FxHashMap<(u64, u64), usize> = FxHashMap::default();
+        for row in rows {
+            let [key, sort, tokens @ ..] = row? else {
+                // A second member, or a malformed row.
+                return row?.is_empty().then_some(None);
+            };
+            arm.heads.extend([*key, *sort]);
+            let mut single = u64::MAX;
+            for &[kind, id, sort] in tokens.as_chunks::<3>().0 {
+                if kind != 0 {
+                    continue;
+                }
+                let known = if arm.counts.len() <= 2 * SHORT_TABLE {
+                    arm.range
+                        .as_chunks::<2>()
+                        .0
+                        .iter()
+                        .position(|&w| w == [id, sort])
+                } else {
+                    if positions.is_empty() {
+                        positions.extend(
+                            arm.range
+                                .as_chunks::<2>()
+                                .0
+                                .iter()
+                                .enumerate()
+                                .map(|(at, &[i, s])| ((i, s), at)),
+                        );
+                    }
+                    positions.get(&(id, sort)).copied()
+                };
+                let at = match known {
+                    Some(at) => at,
+                    None => {
+                        let at = arm.counts.len();
+                        arm.range.extend([id, sort]);
+                        arm.counts.push(0);
+                        if !positions.is_empty() {
+                            positions.insert((id, sort), at);
+                        }
+                        at
+                    }
+                };
+                arm.counts[at] += 1;
+                if tokens.len() == 3 {
+                    single = at as u64;
+                }
+            }
+            arm.singles.push(single);
+        }
+        Some(Some(arm))
+    }
+}
+
 /// The tables of the naming export for the proposal the algebra library
-/// makes from `reply`, a family with the one range `range`, and that
-/// proposal, or `None` when it made none.
+/// makes for `arm`, or `None` when it made none or the export did not take
+/// it ([`takes`]).
+///
+/// The export and the proposer are functions of the words they are sent, so
+/// `replies` answers a request it has seen with the outcome of then.
 fn self_name(
     labels: &Labels,
     order: &[u64],
-    heads: &[u64],
-    range: &[u64],
-    reply: &[u64],
+    arm: &OneArm,
     nat: bool,
-) -> Result<(Vec<u64>, Option<Vec<u64>>), Error> {
+    replies: Option<&UnifyReplies>,
+) -> Result<Option<std::sync::Arc<[u64]>>, Error> {
+    // Everything the two read, each part behind its length.
+    let request = replies.map(|memo| {
+        let parts = [
+            &labels.words[..],
+            order,
+            &arm.heads,
+            &arm.range,
+            &arm.singles,
+            &arm.counts,
+        ];
+        let mut words = Vec::with_capacity(1 + parts.iter().map(|p| p.len() + 1).sum::<usize>());
+        words.push(u64::from(nat));
+        for part in parts {
+            words.push(part.len() as u64);
+            words.extend(part);
+        }
+        (memo, words.into_boxed_slice())
+    });
+    if let Some((memo, words)) = &request
+        && let Some(tables) = memo.self_names.lock().unwrap().get(words)
+    {
+        return Ok(tables.clone());
+    }
     initialize()?;
-    let ranges = [WordSlice::new(range)];
-    LEAN_THREAD.with(|_| {
+    let ranges = [WordSlice::new(&arm.range)];
+    let (tables, proposal) = LEAN_THREAD.with(|_| {
         // SAFETY: the shim takes owned copies of all slices and transfers its
         // output, the tables and the proposal, to MatchRows.
         let named = MatchRows::new(unsafe {
             tamarin_lean_self_name_unifiers(
                 WordSlice::new(&labels.words),
-                WordSlice::new(heads),
+                WordSlice::new(&arm.heads),
                 WordSlice::new(order),
                 ranges.as_ptr(),
                 ranges.len(),
-                WordSlice::new(reply),
+                WordSlice::new(&arm.singles),
+                WordSlice::new(&arm.counts),
                 u8::from(nat),
                 0,
             )
@@ -722,7 +839,18 @@ fn self_name(
             _ => return Err(Error::InvalidStatus(255)),
         };
         Ok((tables, proposal))
-    })
+    })?;
+    let taken = proposal
+        .is_some_and(|proposal| takes(labels, &arm.heads, &arm.range, &tables, &proposal))
+        .then(|| std::sync::Arc::from(tables));
+    if let Some((memo, words)) = request {
+        let mut stored = memo.self_names.lock().unwrap();
+        if stored.len() >= NAMING_MEMO {
+            stored.clear();
+        }
+        stored.insert(words, taken.clone());
+    }
+    Ok(taken)
 }
 
 /// Whether `tables`, words of the naming export, are the tables of the

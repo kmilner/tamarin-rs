@@ -755,7 +755,13 @@ fn a_free_request_is_named_by_the_library_as_the_maude_backend_names_it() {
                     vec![crate::subst_vfresh::compose_vfresh(&empty, &factored).to_list()]
                 }
             };
-            match family.self_named().unwrap() {
+            // A stored outcome is the outcome of the call.
+            let memo = UnifyReplies::default();
+            let own = family.self_named(None).unwrap();
+            for _ in 0..2 {
+                assert_eq!(family.self_named(Some(&memo)).unwrap(), own);
+            }
+            match own {
                 Some(mut members) => {
                     for member in &mut members {
                         member.sort_unstable_by_key(|(v, _)| *v);
@@ -783,6 +789,13 @@ fn a_request_is_solved_by_the_free_unifier_only_where_no_ac_terms_meet() {
     let v = |name: &str| var(name, LSort::Msg, 1);
     let eq = Equal::new;
     let product = || mult(v("a"), v("b"));
+    let sum = || {
+        let n = |name: &str| var(name, LSort::Nat, 1);
+        crate::term::f_app(
+            FunSym::Ac(crate::function_symbols::AcSym::NatPlus),
+            vec![n("m"), n("n")],
+        )
+    };
     for (eqs, alone) in [
         // z, used once, takes the product.
         (vec![eq(v("z"), exp(v("g"), product()))], true),
@@ -813,6 +826,9 @@ fn a_request_is_solved_by_the_free_unifier_only_where_no_ac_terms_meet() {
         ),
         // z is used again: the test does not follow where.
         (vec![eq(v("z"), product()), eq(v("y"), v("z"))], false),
+        // A natural-number sum goes to the engine whole.
+        (vec![eq(v("z"), sum())], false),
+        (vec![eq(pair(v("z"), v("y")), pair(sum(), v("c")))], false),
     ] {
         assert_eq!(
             crate::maude_proc::solved_by_free_unifier(&eqs),

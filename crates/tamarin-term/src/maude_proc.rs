@@ -169,64 +169,72 @@ fn reduction_heads_indexed(sig: &MaudeSig) -> bool {
 ///
 /// The free unifier compares two AC or C terms only where the request puts
 /// them face to face, or where a variable bound to one meets another. So the
-/// test asks that no natural-number sum occurs, that walking the two sides of
-/// each equation together through the free operators they share finds no
-/// two applications of one AC or C operator face to face, and that a term
-/// with an AC or C operator faces nothing but a variable that occurs nowhere
-/// else in the request. Such a variable is bound once, to that term, and its
-/// binding never enters another comparison; every other binding is free of
-/// AC and C operators. Two other applications face to face are a clash, and
-/// the request has no unifier at all, here as modulo AC and C.
+/// test walks the two sides of each equation together through the free
+/// operators they share, and asks that it find no two applications of one AC
+/// or C operator face to face, no natural-number sum, and no term with an AC
+/// or C operator facing anything but a variable that occurs nowhere else in
+/// the request. Such a variable is bound once, to that term, and its binding
+/// never enters another comparison; every other binding is free of AC and C
+/// operators. Two other applications face to face are a clash: the request
+/// has no unifier at all, here as modulo AC and C, and the walk need not look
+/// inside them.
 #[cfg(feature = "lean-unification")]
 pub(crate) fn solved_by_free_unifier(eqs: &[Equal<LNTerm>]) -> bool {
     use crate::function_symbols::{AcSym, FunSym};
-    use crate::lterm::HasFrees;
+    use crate::lterm::{HasFrees, LVar};
     use crate::term::Term;
     use crate::vterm::Lit;
-    if eqs
-        .iter()
-        .all(|e| term_ac_c_free(&e.lhs) && term_ac_c_free(&e.rhs))
-    {
-        return true;
-    }
-    let sum = |t: &LNTerm| t.any_fun_sym(|f| *f == FunSym::Ac(AcSym::NatPlus));
-    if eqs.iter().any(|e| sum(&e.lhs) || sum(&e.rhs)) {
-        return false;
-    }
-    let mut occurrences: tamarin_utils::FastMap<crate::lterm::LVar, usize> = Default::default();
-    for e in eqs {
-        for side in [&e.lhs, &e.rhs] {
-            side.for_each_free(&mut |v| *occurrences.entry(*v).or_default() += 1);
-        }
-    }
-    let once = |v: &crate::lterm::LVar| occurrences.get(v) == Some(&1);
-    let mut pairs: Vec<(&LNTerm, &LNTerm)> = eqs.iter().map(|e| (&e.lhs, &e.rhs)).collect();
+    let sum = FunSym::Ac(AcSym::NatPlus);
+    // The variables that face a term with an AC or C operator.
+    let mut binders: Vec<LVar> = Vec::new();
+    let mut pairs: Vec<(&LNTerm, &LNTerm)> = Vec::with_capacity(2 * eqs.len());
+    pairs.extend(eqs.iter().map(|e| (&e.lhs, &e.rhs)));
     while let Some(pair) = pairs.pop() {
         match pair {
             (Term::Lit(Lit::Var(_)), Term::Lit(Lit::Var(_))) => {}
             (Term::Lit(Lit::Var(v)), t) | (t, Term::Lit(Lit::Var(v))) => {
-                if !once(v) && !term_ac_c_free(t) {
+                let mut plain = true;
+                if t.any_fun_sym(|f| match f {
+                    FunSym::Ac(_) | FunSym::C(_) => {
+                        plain = false;
+                        *f == sum
+                    }
+                    _ => false,
+                }) {
                     return false;
                 }
-            }
-            (Term::App(f, ls), Term::App(g, rs)) => {
-                if term_ac_c_free(pair.0) && term_ac_c_free(pair.1) {
-                    continue;
-                }
-                match f {
-                    FunSym::NoEq(_) | FunSym::List if f == g && ls.len() == rs.len() => {
-                        pairs.extend(ls.iter().zip(rs.iter()));
-                    }
-                    FunSym::Ac(_) | FunSym::C(_) if f == g => return false,
-                    // A clash.
-                    _ => {}
+                if !plain {
+                    binders.push(*v);
                 }
             }
+            (Term::App(f, ls), Term::App(g, rs)) => match f {
+                _ if *f == sum || *g == sum => return false,
+                FunSym::NoEq(_) | FunSym::List if f == g && ls.len() == rs.len() => {
+                    pairs.extend(ls.iter().zip(rs.iter()));
+                }
+                FunSym::Ac(_) | FunSym::C(_) if f == g => return false,
+                // A clash.
+                _ => {}
+            },
             // A constant: equal, or a clash.
             _ => {}
         }
     }
-    true
+    if binders.is_empty() {
+        return true;
+    }
+    // Each of them occurs once: where it faces that term.
+    let mut seen = vec![0usize; binders.len()];
+    for e in eqs {
+        for side in [&e.lhs, &e.rhs] {
+            side.for_each_free(&mut |v| {
+                if let Some(at) = binders.iter().position(|b| b == v) {
+                    seen[at] += 1;
+                }
+            });
+        }
+    }
+    seen.iter().all(|&n| n == 1)
 }
 
 /// True if `t` contains NO Ac- or C-headed application anywhere.  Backs
@@ -2826,7 +2834,9 @@ impl MaudeHandle {
                     "the free unifier leaves an AC or C equation of {eqs:?}",
                 );
                 let own = if free {
-                    let own = family.self_named().map_err(|e| self.lean_error(e))?;
+                    let own = family
+                        .self_named(self.shared_replies())
+                        .map_err(|e| self.lean_error(e))?;
                     let counter = match own {
                         Some(_) => &self.caches.stats.lean_unify_self_named,
                         None => &self.caches.stats.lean_unify_self_declined,
