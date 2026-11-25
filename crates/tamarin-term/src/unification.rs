@@ -17,6 +17,7 @@
 use std::collections::BTreeMap;
 use std::sync::atomic::AtomicU64;
 
+use crate::apply::Apply;
 use crate::function_symbols::FunSym;
 use crate::lterm::{sort_compare, sort_of_lterm, LSort, LTerm, LVar, Name};
 use crate::rewriting::{Equal, Match};
@@ -319,15 +320,35 @@ where
         return Err(UnifyError::NoUnifier);
     }
     // Substitute `v ~> t` through the existing accumulator in place, mutating
-    // each value rather than rebuilding the whole map with cloned keys.
-    let mut single = BTreeMap::new();
-    single.insert(v, t.clone());
+    // each value rather than rebuilding the whole map with cloned keys. A
+    // value the binding leaves unchanged is kept as it is.
+    let single = Single { var: v, image: t };
     for ts in acc.values_mut() {
-        let cur = std::mem::replace(ts, Term::Lit(Lit::Var(v)));
-        *ts = apply_vterm_map(&single, cur);
+        if let Some(changed) = ts.apply_changed(&single) {
+            *ts = changed;
+        }
     }
-    acc.insert(v, t);
+    acc.insert(v, single.image);
     Ok(())
+}
+
+/// The substitution of one variable, for [`eliminate`].
+struct Single<C> {
+    var: LVar,
+    image: LTerm<C>,
+}
+
+impl<C: Ord + Clone> crate::apply::LeafSubst for Single<C> {
+    type Const = C;
+    type Var = LVar;
+
+    fn image_of(&self, v: &LVar) -> Option<&LTerm<C>> {
+        (*v == self.var).then_some(&self.image)
+    }
+
+    fn is_empty(&self) -> bool {
+        false
+    }
 }
 
 fn sort_geq_lterm<C, F: Fn(&C) -> LSort>(sort_of_const: &F, v: &LVar, t: &LTerm<C>) -> bool {

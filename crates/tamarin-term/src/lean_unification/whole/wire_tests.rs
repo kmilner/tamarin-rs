@@ -485,7 +485,7 @@ fn the_reader_of_a_named_family_agrees_with_the_library() {
             let Ok((Some(family), _)) = unify(&self::theory(&sig), eqs, None, 200_000) else {
                 continue;
             };
-            let Some((heads, ranges)) = shape(&family.reply) else {
+            let Some((heads, ranges)) = shape(&family.reply, family.packet.variables.len()) else {
                 panic!("{theory}: a reply without a shape");
             };
             if ranges.is_empty() || ranges.len() > 64 {
@@ -652,7 +652,7 @@ fn a_reply_is_read_only_through_tables_that_name_all_of_it() {
     ];
     let family = unify(&theory(&sig), &eqs, None, 0).unwrap().0.unwrap();
     let labels = Labels::of(&family.packet).unwrap();
-    let (heads, ranges) = shape(&family.reply).unwrap();
+    let (heads, ranges) = shape(&family.reply, family.packet.variables.len()).unwrap();
     assert_eq!(heads, [0, 2, 1, 2, 2, 2]);
     assert_eq!(ranges.len(), 1);
     // The default names: `x` above the request, in the order of first occurrence.

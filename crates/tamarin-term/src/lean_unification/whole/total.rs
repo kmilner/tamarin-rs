@@ -122,12 +122,12 @@ impl Labels {
 /// Nothing depends on this being right. The export only chooses names with
 /// it, and a reply is read through the export's tables by [`read_named`],
 /// which fails on a variable the tables do not name.
-fn shape(reply: &[u64]) -> Option<(Vec<u64>, Vec<Vec<u64>>)> {
+fn shape(reply: &[u64], width: usize) -> Option<(Vec<u64>, Vec<Vec<u64>>)> {
     let mut rows = rows_of(reply);
     if rows.next()?? != [1] {
         return None;
     }
-    let mut heads = Vec::new();
+    let mut heads = Vec::with_capacity(2 * width);
     let mut ranges: Vec<Vec<u64>> = Vec::new();
     // The pairs of a long range, which a short one finds in itself.
     let mut seen = FxHashSet::default();
@@ -137,7 +137,7 @@ fn shape(reply: &[u64]) -> Option<(Vec<u64>, Vec<Vec<u64>>)> {
             if !row.is_empty() {
                 return None;
             }
-            ranges.push(Vec::new());
+            ranges.push(Vec::with_capacity(2 * SHORT_TABLE));
             seen.clear();
             continue;
         };
@@ -371,7 +371,7 @@ impl Unifiers {
             return Ok(Vec::new());
         }
         let mut labels = Labels::of(&self.packet)?;
-        let (heads, ranges) = shape(&self.reply).ok_or(malformed)?;
+        let (heads, ranges) = shape(&self.reply, self.packet.variables.len()).ok_or(malformed)?;
         let mut proposal = Vec::new();
         for member in targets.unwrap_or_default() {
             let mut row = Vec::with_capacity(2 * member.len());
@@ -441,8 +441,8 @@ impl Unifiers {
                 names.clear();
                 unused = (0..=u64::MAX).filter(free);
                 views.push(ArmView {
-                    bindings: Vec::new(),
-                    witnesses: Vec::new(),
+                    bindings: Vec::with_capacity(self.packet.variables.len()),
+                    witnesses: Vec::with_capacity(SHORT_TABLE),
                     images: Vec::new(),
                 });
                 continue;
