@@ -113,10 +113,7 @@ fn session_table(sig: &MaudeSig) -> ReductionTable {
 
 fn check_packet(sig: MaudeSig, observations: &[LNTerm], namespace: &str, fixture: &str) {
     let packet = Packet::full_table(&sig, observations).unwrap().unwrap();
-    let mut rows = vec![&[][..]; packet.nodes.len()];
-    for (words, &id) in &packet.nodes {
-        rows[id as usize] = words.as_ref();
-    }
+    let rows: Vec<&[u64]> = packet.nodes.rows().collect();
     let physical = packet.rows();
     assert_eq!(physical.len(), rows.len());
     for (row, words) in physical.iter().zip(&rows) {

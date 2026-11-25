@@ -19,7 +19,7 @@ pub(crate) use total::{
 
 use super::{initialize, sort_word, Error, RuleTable, Theory, WordSlice, LEAN_THREAD};
 use crate::function_symbols::FunSym;
-use crate::lean_identity::IdentityTable;
+use crate::lean_identity::{IdentityTable, ShortIdentityTable};
 use crate::lterm::{LNTerm, LSort, LVar, Name};
 use crate::maude_types::sort_of_name;
 use crate::rewriting::Equal;
@@ -33,6 +33,10 @@ use std::sync::Arc;
 // rows are shared. Charge the fully expanded size across the whole request.
 const MAX_NODES: usize = 4096;
 const MAX_DEPTH: usize = 128;
+
+/// A request names a few variables and constants: up to this many, a table
+/// finds one by comparison rather than by hashing.
+pub(super) const SHORT_TABLE: usize = 16;
 
 /// How the rows of a packet name operators.
 #[derive(Clone)]
@@ -110,12 +114,66 @@ impl Symbols {
 
 #[derive(Default, Clone)]
 pub(crate) struct Packet {
-    variables: IdentityTable<LVar>,
-    names: IdentityTable<Name>,
+    variables: ShortIdentityTable<LVar, SHORT_TABLE>,
+    names: ShortIdentityTable<Name, SHORT_TABLE>,
     symbols: Symbols,
-    nodes: FxHashMap<Box<[u64]>, u64>,
+    nodes: Nodes,
     equations: Vec<u64>,
     expanded: usize,
+}
+
+/// The node rows of a packet, each once, numbered in the order they were
+/// added.
+#[derive(Default, Clone)]
+struct Nodes {
+    /// The rows, one after the other.
+    words: Vec<u64>,
+    /// Where each row starts in `words`; it ends where the next one starts.
+    starts: Vec<usize>,
+    /// The last row added with each hash.
+    last: FxHashMap<u64, u32>,
+    /// For each row, the row added before it with the same hash.
+    earlier: Vec<u32>,
+}
+
+impl Nodes {
+    fn len(&self) -> usize {
+        self.starts.len()
+    }
+
+    fn row(&self, id: usize) -> &[u64] {
+        let end = self.starts.get(id + 1).copied().unwrap_or(self.words.len());
+        &self.words[self.starts[id]..end]
+    }
+
+    /// The rows in the order of their numbers.
+    fn rows(&self) -> impl Iterator<Item = &[u64]> {
+        (0..self.len()).map(|id| self.row(id))
+    }
+
+    /// The number of `row`, which is added if it is new.
+    fn intern(&mut self, row: &[u64]) -> u64 {
+        use std::hash::Hasher;
+        let mut hasher = rustc_hash::FxHasher::default();
+        hasher.write_usize(row.len());
+        for word in row {
+            hasher.write_u64(*word);
+        }
+        let hash = hasher.finish();
+        let mut at = self.last.get(&hash).copied().unwrap_or(u32::MAX);
+        while at != u32::MAX {
+            if self.row(at as usize) == row {
+                return u64::from(at);
+            }
+            at = self.earlier[at as usize];
+        }
+        let id = u32::try_from(self.len()).expect("fewer than 2^32 nodes in a packet");
+        self.earlier
+            .push(self.last.insert(hash, id).unwrap_or(u32::MAX));
+        self.starts.push(self.words.len());
+        self.words.extend_from_slice(row);
+        u64::from(id)
+    }
 }
 
 impl Packet {
@@ -155,12 +213,7 @@ impl Packet {
     }
 
     fn node(&mut self, row: &[u64]) -> u64 {
-        if let Some(&id) = self.nodes.get(row) {
-            return id;
-        }
-        let id = self.nodes.len() as u64;
-        self.nodes.insert(row.into(), id);
-        id
+        self.nodes.intern(row)
     }
 
     fn term(&mut self, table: &RuleTable, term: &LNTerm) -> Option<u64> {
@@ -197,11 +250,12 @@ impl Packet {
         }
         let mut work = vec![Visit::Term(term, 0)];
         let mut values = Vec::new();
+        let mut node = Vec::new();
         while let Some(visit) = work.pop() {
             match visit {
                 Visit::Finish(kind, symbol, count) => {
                     let start = values.len() - count;
-                    let mut node = Vec::with_capacity(count + 2);
+                    node.clear();
                     node.extend([kind, symbol]);
                     node.extend(values.drain(start..));
                     values.push(self.node(&node));
@@ -269,18 +323,15 @@ impl Packet {
     /// length.
     fn request_words(&self) -> Result<Box<[u64]>, Error> {
         let theory = self.theory()?;
-        let mut rows = vec![&[][..]; self.nodes.len()];
-        for (row, &id) in &self.nodes {
-            rows[id as usize] = row;
-        }
         let mut words = Vec::with_capacity(
             6 + theory.free().len()
-                + rows.iter().map(|r| r.len() + 1).sum::<usize>()
+                + self.nodes.words.len()
+                + self.nodes.len()
                 + self.equations.len(),
         );
         words.extend(theory.words());
-        words.push(rows.len() as u64);
-        for row in rows {
+        words.push(self.nodes.len() as u64);
+        for row in self.nodes.rows() {
             words.push(row.len() as u64);
             words.extend(row);
         }
@@ -290,11 +341,7 @@ impl Packet {
     }
 
     fn rows(&self) -> Vec<WordSlice> {
-        let mut rows = vec![WordSlice::new(&[]); self.nodes.len()];
-        for (row, &id) in &self.nodes {
-            rows[id as usize] = WordSlice::new(row);
-        }
-        rows
+        self.nodes.rows().map(WordSlice::new).collect()
     }
 }
 
@@ -539,7 +586,7 @@ mod tests {
         let equations = query(width);
         let packet = Packet::encode(&table, &equations).unwrap().unwrap();
         assert_eq!(packet.nodes.len(), 2);
-        let row = packet.nodes.keys().find(|r| r[0] == 4).unwrap();
+        let row = packet.nodes.rows().find(|r| r[0] == 4).unwrap();
         assert_eq!(row.len(), width + 2);
         assert!(row[2..].iter().all(|child| *child == 0));
         assert_eq!(packet.equations, [1, 1]);

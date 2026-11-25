@@ -1,8 +1,8 @@
 //! Shared term graph and substitution packets for the verified references.
 //! Matches retain literal input variables. Unifier and variant witnesses share
 //! a fresh namespace within each returned substitution.
-use super::Packet;
-use crate::lean_identity::IdentityTable;
+use super::{Packet, SHORT_TABLE};
+use crate::lean_identity::ShortIdentityTable;
 use crate::lean_unification::{
     initialize, sort_word, subsort, Error, MatchRows, Outcome, Substitutions, Theory, Watch,
     WordSlice, LEAN_THREAD,
@@ -84,13 +84,13 @@ fn family_has_member(reply: &[u64]) -> Option<bool> {
 /// index. The hint `x`, which the export gives to the variables it numbers
 /// itself, has the identifier 0.
 struct Labels {
-    hints: IdentityTable<&'static str>,
+    hints: ShortIdentityTable<&'static str, SHORT_TABLE>,
     words: Vec<u64>,
 }
 
 impl Labels {
     fn of(packet: &Packet) -> Result<Self, Error> {
-        let mut hints = IdentityTable::default();
+        let mut hints = ShortIdentityTable::default();
         let mut hint = |name: &'static str| hints.intern(name).ok_or(Error::InvalidStatus(255));
         hint(LVar::new("x", LSort::Msg, 0).name)?;
         let mut words = Vec::with_capacity(2 * packet.variables.len());
@@ -117,6 +117,7 @@ fn shape(reply: &[u64]) -> Option<(Vec<u64>, Vec<Vec<u64>>)> {
     }
     let mut heads = Vec::new();
     let mut ranges: Vec<Vec<u64>> = Vec::new();
+    // The pairs of a long range, which a short one finds in itself.
     let mut seen = FxHashSet::default();
     for row in rows {
         let row = row?;
@@ -133,7 +134,18 @@ fn shape(reply: &[u64]) -> Option<(Vec<u64>, Vec<Vec<u64>>)> {
         }
         let range = ranges.last_mut()?;
         for &[kind, id, sort] in tokens.as_chunks::<3>().0 {
-            if kind == 0 && seen.insert((id, sort)) {
+            if kind != 0 {
+                continue;
+            }
+            let new = if range.len() < 2 * SHORT_TABLE {
+                !range.as_chunks::<2>().0.contains(&[id, sort])
+            } else {
+                if seen.is_empty() {
+                    seen.extend(range.as_chunks::<2>().0.iter().map(|&[i, s]| (i, s)));
+                }
+                seen.insert((id, sort))
+            };
+            if new {
                 range.extend([id, sort]);
             }
         }
@@ -150,10 +162,21 @@ enum Target {
     Row(u64),
 }
 
+/// The targets of the range variables of one arm, by identifier and sort
+/// word, sorted by those words with each pair once.
+struct Table(Vec<((u64, u64), Target)>);
+
+impl Table {
+    fn get(&self, key: &(u64, u64)) -> Option<&Target> {
+        let at = self.0.binary_search_by(|(k, _)| k.cmp(key)).ok()?;
+        Some(&self.0[at].1)
+    }
+}
+
 /// The tables of the naming export: the words of the query variables, and
 /// for each arm it keeps the arm's position and the target of each of its
 /// range variables by identifier and sort word.
-type Tables<'a> = (&'a [u64], Vec<(u64, FxHashMap<(u64, u64), Target>)>);
+type Tables<'a> = (&'a [u64], Vec<(u64, Table)>);
 
 fn tables(words: &[u64]) -> Result<Tables<'_>, Error> {
     let mut rows = rows_of(words);
@@ -173,19 +196,24 @@ fn tables(words: &[u64]) -> Result<Tables<'_>, Error> {
         if !rest.is_empty() {
             return Err(Error::InvalidStatus(255));
         }
-        let mut table = FxHashMap::default();
+        let mut table = Vec::with_capacity(entries.len());
         for &[id, sort, kind, a, b] in entries {
             let target = match kind {
                 0 => Target::Name(a, b),
                 1 => Target::Row(a),
                 _ => return Err(Error::InvalidStatus(255)),
             };
-            // One target for a variable.
-            if sort > 4 || table.insert((id, sort), target).is_some() {
+            if sort > 4 {
                 return Err(Error::InvalidStatus(255));
             }
+            table.push(((id, sort), target));
         }
-        arms.push((*arm, table));
+        table.sort_unstable_by_key(|(key, _)| *key);
+        // One target for a variable.
+        if table.windows(2).any(|pair| pair[0].0 == pair[1].0) {
+            return Err(Error::InvalidStatus(255));
+        }
+        arms.push((*arm, Table(table)));
     }
     Ok((heads, arms))
 }
@@ -366,17 +394,18 @@ impl Unifiers {
         if rows.next() != Some(Some(&[1])) {
             return Err(malformed);
         }
-        let reserved: FxHashSet<u64> = self
+        let mut reserved: Vec<u64> = self
             .packet
             .variables
             .values()
             .iter()
             .map(|v| v.idx)
             .collect();
+        reserved.sort_unstable();
         let hint = LVar::new("x", LSort::Msg, 0).name;
         let mut views: Vec<ArmView> = Vec::new();
-        let mut names: FxHashMap<(u64, u64), usize> = FxHashMap::default();
-        let free = |i: &u64| !reserved.contains(i);
+        let mut names = Positions::default();
+        let free = |i: &u64| reserved.binary_search(i).is_err();
         let mut unused = (0..=u64::MAX).filter(free);
         let mut has_nat = false;
         let close = |views: &mut Vec<ArmView>, has_nat: &mut bool| {
@@ -406,11 +435,11 @@ impl Unifiers {
                 .ok_or(Error::InvalidVariable(*key))?;
             let mut witness = |id: u64, aux: u64| -> Result<LVar, Error> {
                 let at = match names.get(&(id, aux)) {
-                    Some(at) => *at,
+                    Some(at) => at,
                     None => {
                         let idx = unused.next().ok_or(Error::FreshVariableOverflow)?;
                         let sort = sort(aux)?;
-                        names.insert((id, aux), view.witnesses.len());
+                        names.push((id, aux));
                         view.witnesses.push((
                             LVar {
                                 name: hint,
@@ -441,7 +470,7 @@ impl Unifiers {
                     names
                         .get(&(id, aux))
                         .filter(|_| kind == 0)
-                        .map(|at| view.witnesses[*at].0)
+                        .map(|at| view.witnesses[at].0)
                         .ok_or(Error::InvalidVariable(id))
                 })?;
                 view.images.push((var, image));
@@ -449,6 +478,46 @@ impl Unifiers {
         }
         close(&mut views, &mut has_nat);
         Ok(views)
+    }
+}
+
+/// Pairs of words, each at the position it was pushed at: found by a scan
+/// while there are few, and through a map once there are more.
+#[derive(Default)]
+struct Positions {
+    keys: Vec<(u64, u64)>,
+    /// Empty while there are at most `2 * SHORT_TABLE` keys.
+    map: FxHashMap<(u64, u64), usize>,
+}
+
+impl Positions {
+    fn get(&self, key: &(u64, u64)) -> Option<usize> {
+        if self.keys.len() <= 2 * SHORT_TABLE {
+            return self.keys.iter().position(|k| k == key);
+        }
+        self.map.get(key).copied()
+    }
+
+    /// Add a key that is not yet held.
+    fn push(&mut self, key: (u64, u64)) {
+        self.keys.push(key);
+        if self.keys.len() > 2 * SHORT_TABLE {
+            if self.map.is_empty() {
+                self.map = self
+                    .keys
+                    .iter()
+                    .enumerate()
+                    .map(|(at, k)| (*k, at))
+                    .collect();
+            } else {
+                self.map.insert(key, self.keys.len() - 1);
+            }
+        }
+    }
+
+    fn clear(&mut self) {
+        self.keys.clear();
+        self.map.clear();
     }
 }
 

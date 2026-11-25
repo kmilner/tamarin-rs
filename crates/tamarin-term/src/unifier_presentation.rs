@@ -186,19 +186,31 @@ fn present_arm(
 /// its target aside, where it still counts for [`Self::is_witness_renaming`].
 struct Renaming<'a> {
     witnesses: &'a [(LVar, usize)],
+    /// The positions of the witnesses, unless there are few enough to scan.
     position: FastMap<LVar, usize>,
     targets: Vec<Option<LVar>>,
     others: Vec<(LVar, LVar)>,
 }
 
+/// Up to this many witnesses of an arm are found by a scan.
+const SCAN: usize = 32;
+
 impl<'a> Renaming<'a> {
     /// `None` when a witness is listed twice.
     fn new(witnesses: &'a [(LVar, usize)]) -> Option<Self> {
         let mut position = FastMap::default();
-        position.reserve(witnesses.len());
-        for (at, (w, _)) in witnesses.iter().enumerate() {
-            if position.insert(*w, at).is_some() {
-                return None;
+        if witnesses.len() <= SCAN {
+            for (at, (w, _)) in witnesses.iter().enumerate() {
+                if witnesses[..at].iter().any(|(earlier, _)| earlier == w) {
+                    return None;
+                }
+            }
+        } else {
+            position.reserve(witnesses.len());
+            for (at, (w, _)) in witnesses.iter().enumerate() {
+                if position.insert(*w, at).is_some() {
+                    return None;
+                }
             }
         }
         Some(Self {
@@ -209,10 +221,18 @@ impl<'a> Renaming<'a> {
         })
     }
 
+    /// The position of `witness` among the witnesses of the arm.
+    fn find(&self, witness: &LVar) -> Option<usize> {
+        if self.witnesses.len() <= SCAN {
+            return self.witnesses.iter().position(|(w, _)| w == witness);
+        }
+        self.position.get(witness).copied()
+    }
+
     /// Set the target of `witness`.
     fn insert(&mut self, witness: LVar, target: LVar) {
-        match self.position.get(&witness) {
-            Some(&at) => self.targets[at] = Some(target),
+        match self.find(&witness) {
+            Some(at) => self.targets[at] = Some(target),
             None => match self.others.iter_mut().find(|(w, _)| *w == witness) {
                 Some(entry) => entry.1 = target,
                 None => self.others.push((witness, target)),
@@ -222,8 +242,8 @@ impl<'a> Renaming<'a> {
 
     /// The target of `witness`, which becomes `target` if it has none.
     fn entry(&mut self, witness: LVar, target: LVar) -> LVar {
-        match self.position.get(&witness) {
-            Some(&at) => *self.targets[at].get_or_insert(target),
+        match self.find(&witness) {
+            Some(at) => *self.targets[at].get_or_insert(target),
             None => match self.others.iter().find(|(w, _)| *w == witness) {
                 Some((_, held)) => *held,
                 None => {
@@ -236,7 +256,7 @@ impl<'a> Renaming<'a> {
 
     /// The number of occurrences of `witness` in the arm.
     fn occurrences(&self, witness: &LVar) -> Option<usize> {
-        self.position.get(witness).map(|&at| self.witnesses[at].1)
+        self.find(witness).map(|at| self.witnesses[at].1)
     }
 
     /// See [`is_witness_renaming_of`].

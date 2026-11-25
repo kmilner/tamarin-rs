@@ -83,11 +83,7 @@ fn request_term(packet: &Packet, rows: &[&[u64]], node: u64) -> LNTerm {
 }
 
 fn request_rows(packet: &Packet) -> Vec<&[u64]> {
-    let mut rows = vec![&[][..]; packet.nodes.len()];
-    for (row, &id) in &packet.nodes {
-        rows[id as usize] = row;
-    }
-    rows
+    packet.nodes.rows().collect()
 }
 
 #[test]

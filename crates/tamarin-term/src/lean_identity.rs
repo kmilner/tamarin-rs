@@ -7,13 +7,23 @@
 use rustc_hash::FxHashMap;
 use std::hash::Hash;
 
+/// An identity table that finds values through a hash map.
+pub(crate) type IdentityTable<K> = Table<K, 0>;
+
+/// An identity table that finds a value by comparing it with each stored
+/// value in turn while it holds at most `LINEAR` values: for a few values
+/// with a cheap equality that is faster than hashing. The ids are those of
+/// an [`IdentityTable`], the position of the first equal value.
+pub(crate) type ShortIdentityTable<K, const LINEAR: usize> = Table<K, LINEAR>;
+
 #[derive(Clone)]
-pub(crate) struct IdentityTable<K> {
+pub(crate) struct Table<K, const LINEAR: usize> {
+    /// Empty while the table holds at most `LINEAR` values.
     ids: FxHashMap<K, u64>,
     values: Vec<K>,
 }
 
-impl<K> Default for IdentityTable<K> {
+impl<K, const LINEAR: usize> Default for Table<K, LINEAR> {
     fn default() -> Self {
         Self {
             ids: FxHashMap::default(),
@@ -22,7 +32,7 @@ impl<K> Default for IdentityTable<K> {
     }
 }
 
-impl<K: Copy + Eq + Hash> IdentityTable<K> {
+impl<K: Copy + Eq + Hash, const LINEAR: usize> Table<K, LINEAR> {
     pub(crate) fn len(&self) -> usize {
         self.values.len()
     }
@@ -31,25 +41,42 @@ impl<K: Copy + Eq + Hash> IdentityTable<K> {
         &self.values
     }
 
+    fn linear(&self) -> bool {
+        self.values.len() <= LINEAR
+    }
+
     /// IDs never truncate and remain stable for the lifetime of the request.
     pub(crate) fn intern(&mut self, value: K) -> Option<u64> {
-        if let Some(&id) = self.ids.get(&value) {
+        if let Some(id) = self.id(value) {
             return (self.get(id) == Some(value)).then_some(id);
         }
         let id = u64::try_from(self.values.len()).ok()?;
         self.values.push(value);
-        self.ids.insert(value, id);
+        if !self.linear() {
+            if self.ids.is_empty() {
+                // The table outgrew the linear search: index every value.
+                for (at, v) in self.values.iter().enumerate() {
+                    self.ids.insert(*v, u64::try_from(at).ok()?);
+                }
+            } else {
+                self.ids.insert(value, id);
+            }
+        }
         Some(id)
     }
 
     pub(crate) fn id(&self, value: K) -> Option<u64> {
+        if self.linear() {
+            let at = self.values.iter().position(|v| *v == value)?;
+            return u64::try_from(at).ok();
+        }
         self.ids.get(&value).copied()
     }
 
     /// Check both directions before interpreting a kernel's numeric answer.
     pub(crate) fn get(&self, id: u64) -> Option<K> {
         let value = *self.values.get(usize::try_from(id).ok()?)?;
-        (self.ids.get(&value) == Some(&id)).then_some(value)
+        (self.id(value) == Some(id)).then_some(value)
     }
 }
 
@@ -92,6 +119,30 @@ mod tests {
             NoEqSym::new(b"same", 2, Privacy::Public, Constructability::Constructor),
             NoEqSym::new(b"same", 1, Privacy::Private, Constructability::Constructor),
         ]);
+    }
+
+    #[test]
+    fn a_linear_table_gives_the_ids_of_a_hashed_one_on_both_sides_of_its_bound() {
+        let keys: Vec<LVar> = (0..40)
+            .map(|i| LVar::new(["a", "b", "c"][i % 3], LSort::Msg, (i / 2) as u64))
+            .collect();
+        let mut hashed = IdentityTable::<LVar>::default();
+        let mut linear = ShortIdentityTable::<LVar, 8>::default();
+        for (step, key) in keys.iter().chain(keys.iter().rev()).enumerate() {
+            assert_eq!(hashed.intern(*key), linear.intern(*key), "step {step}");
+            assert_eq!(hashed.values(), linear.values());
+            for id in 0..hashed.len() as u64 + 1 {
+                assert_eq!(hashed.get(id), linear.get(id));
+            }
+            for probe in &keys {
+                assert_eq!(hashed.id(*probe), linear.id(*probe));
+            }
+        }
+        distinct::<LVar>(&keys[..20]);
+        let mut small = ShortIdentityTable::<LVar, 8>::default();
+        for (i, key) in keys[..20].iter().enumerate() {
+            assert_eq!(small.intern(*key), Some(i as u64));
+        }
     }
 
     #[test]
