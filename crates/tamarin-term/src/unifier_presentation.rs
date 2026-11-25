@@ -32,6 +32,11 @@
 //! backend's answer. With delayed equations the engine's witnesses are
 //! numbered in the order of this module's traversal, because the order in
 //! which Maude prints a unifier is internal to its AC solver.
+//!
+//! A request without an AC or C symbol does not come here: the algebra
+//! library proposes the same names itself (`Unifiers::self_named`). Such a
+//! request takes this path only when the library's proposal is not taken, and
+//! in builds with debug assertions, which compare the two answers.
 use crate::lterm::{HasFrees, LNTerm, LVar, Name};
 use crate::rewriting::Equal;
 use crate::subst::Subst;

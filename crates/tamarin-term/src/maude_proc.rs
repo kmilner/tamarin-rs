@@ -214,6 +214,11 @@ struct MaudeCacheStats {
     /// The session's totals of the `lean_*` counters of [`MaudeStats`].
     lean_unify: AtomicU64,
     lean_unify_unspelled: AtomicU64,
+    /// Requests without an AC or C symbol read under the names the algebra
+    /// library proposed itself, and those for which it proposed none that
+    /// the naming export took.
+    lean_unify_self_named: AtomicU64,
+    lean_unify_self_declined: AtomicU64,
     lean_unify_exists: AtomicU64,
 }
 
@@ -428,7 +433,7 @@ impl Drop for SharedMaudeCaches {
             let count = |n: &AtomicU64| n.load(Ordering::Relaxed);
             let s = &self.stats;
             eprintln!(
-                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{} unspelled={} lean_exists={} lean_unify={}",
+                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{} unspelled={} self_named={} self_declined={} lean_exists={} lean_unify={}",
                 count(&s.reduce_hits),
                 count(&s.reduce_misses),
                 count(&s.unifiable_hits),
@@ -436,6 +441,8 @@ impl Drop for SharedMaudeCaches {
                 count(&s.reply_hits),
                 count(&s.reply_misses),
                 count(&s.lean_unify_unspelled),
+                count(&s.lean_unify_self_named),
+                count(&s.lean_unify_self_declined),
                 count(&s.lean_unify_exists),
                 count(&s.lean_unify),
             );
@@ -2739,48 +2746,42 @@ impl MaudeHandle {
                 .map_err(|e| self.lean_error(e))?;
                 stored = reused;
                 let family = family.ok_or_else(unsupported)?;
-                // The names the Maude backend would use are only proposed.
-                // The answer is the reply read through the tables of the
-                // naming export, and it keeps those names only if it is the
-                // answer that backend would give.
-                let spelled = match spelling_as_maude(&self.sig, eqs, &family)
-                    .map_err(|e| self.lean_error(e))?
-                {
-                    Some(mut spelling) if !spelling.is_empty() => {
-                        // Only the expected arms are looked at again.
-                        let targets: Vec<_> = spelling
-                            .iter_mut()
-                            .map(|arm| std::mem::take(&mut arm.targets))
-                            .collect();
-                        let mut spelled = family
-                            .named(Some(&targets), self.shared_replies())
-                            .map_err(|e| self.lean_error(e))?;
+                // Without an AC or C symbol the request is one the Maude
+                // backend's free unifier solves alone, and the algebra
+                // library proposes the names that backend composes itself.
+                let free = eqs
+                    .iter()
+                    .all(|e| term_ac_c_free(&e.lhs) && term_ac_c_free(&e.rhs));
+                let own = if free {
+                    let own = family.self_named().map_err(|e| self.lean_error(e))?;
+                    let counter = match own {
+                        Some(_) => &self.caches.stats.lean_unify_self_named,
+                        None => &self.caches.stats.lean_unify_self_declined,
+                    };
+                    counter.fetch_add(1, Ordering::Relaxed);
+                    own
+                } else {
+                    None
+                };
+                match own {
+                    Some(mut own) => {
                         // The Maude backend lists a unifier in the order of
                         // its variables.
-                        for arm in &mut spelled {
+                        for arm in &mut own {
                             arm.sort_unstable_by_key(|(v, _)| *v);
                         }
-                        let same = spelled.len() == spelling.len()
-                            && spelled
-                                .iter()
-                                .zip(&spelling)
-                                .all(|(arm, spelling)| spelling.expected.is(arm));
-                        same.then_some(spelled)
+                        #[cfg(debug_assertions)]
+                        {
+                            let proposed = self.spelled_as_maude(eqs, &family)?;
+                            debug_assert_eq!(
+                                own, proposed,
+                                "the names the algebra library chose for {eqs:?} are not the \
+                                 names proposed from the free unifier",
+                            );
+                        }
+                        own
                     }
-                    // No unifier: nothing to name.
-                    Some(_) => Some(Vec::new()),
-                    None => None,
-                };
-                match spelled {
-                    Some(spelled) => spelled,
-                    None => {
-                        self.bump_stats(|stats| stats.lean_unify_unspelled += 1);
-                        let unspelled = &self.caches.stats.lean_unify_unspelled;
-                        unspelled.fetch_add(1, Ordering::Relaxed);
-                        family
-                            .named(None, self.shared_replies())
-                            .map_err(|e| self.lean_error(e))?
-                    }
+                    None => self.spelled_as_maude(eqs, &family)?,
                 }
             }
         };
@@ -2799,6 +2800,60 @@ impl MaudeHandle {
                 .insert(key, &answers, origin);
         }
         Ok(answers)
+    }
+
+    /// The family read through the tables of the naming export for the
+    /// names [`spelling_as_maude`] proposes, where it proposes names and the
+    /// family read through them is the answer it expects; otherwise read
+    /// with the export's own names.
+    #[cfg(feature = "lean-unification")]
+    fn spelled_as_maude(
+        &self,
+        eqs: &[Equal<LNTerm>],
+        family: &crate::lean_unification::Unifiers,
+    ) -> Result<crate::lean_unification::Substitutions, MaudeError> {
+        // The names the Maude backend would use are only proposed. The
+        // answer is the reply read through the tables of the naming export,
+        // and it keeps those names only if it is the answer that backend
+        // would give.
+        let spelled =
+            match spelling_as_maude(&self.sig, eqs, family).map_err(|e| self.lean_error(e))? {
+                Some(mut spelling) if !spelling.is_empty() => {
+                    // Only the expected arms are looked at again.
+                    let targets: Vec<_> = spelling
+                        .iter_mut()
+                        .map(|arm| std::mem::take(&mut arm.targets))
+                        .collect();
+                    let mut spelled = family
+                        .named(Some(&targets), self.shared_replies())
+                        .map_err(|e| self.lean_error(e))?;
+                    // The Maude backend lists a unifier in the order of its
+                    // variables.
+                    for arm in &mut spelled {
+                        arm.sort_unstable_by_key(|(v, _)| *v);
+                    }
+                    let same = spelled.len() == spelling.len()
+                        && spelled
+                            .iter()
+                            .zip(&spelling)
+                            .all(|(arm, spelling)| spelling.expected.is(arm));
+                    same.then_some(spelled)
+                }
+                // No unifier: nothing to name.
+                Some(_) => Some(Vec::new()),
+                None => None,
+            };
+        match spelled {
+            Some(spelled) => Ok(spelled),
+            None => {
+                self.bump_stats(|stats| stats.lean_unify_unspelled += 1);
+                let unspelled = &self.caches.stats.lean_unify_unspelled;
+                unspelled.fetch_add(1, Ordering::Relaxed);
+                family
+                    .named(None, self.shared_replies())
+                    .map_err(|e| self.lean_error(e))
+            }
+        }
     }
 
     /// Decide through the proved existence export whether `eqs` has a

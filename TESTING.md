@@ -1287,6 +1287,15 @@ named in Lean. Rust walks trees in both directions and decides nothing:
   composition; otherwise every range variable is called `x` and numbered
   above the request (`unspelled=` in `TAM_MAUDE_CACHE_STATS=1` counts those
   families).
+- **Lean's own proposal.** For a request without an AC or C symbol the
+  proposal comes from the algebra library instead (`Unifiers::self_named`,
+  `tamarin_lean_self_name_unifiers`): a proposer in Lean reads the answer and
+  proposes the names the Maude backend composes, and the bridge passes them to
+  `tamarin_name_unifiers` in the same call. The answer is read through those
+  tables only when they are the tables of that proposal; otherwise the request
+  takes the path above (`self_named=` and `self_declined=` count the two). In
+  builds with debug assertions every such answer is compared with the answer of
+  the path above.
 
 `crates/tamarin-term/src/lean_unification/whole/wire_tests.rs` holds the
 tests, on the queries of `examples/audit_fuzz.rs` for every signature that
@@ -1298,6 +1307,7 @@ fuzzer knows (the file is included as a module, so the two cannot drift):
 | `a_term_sent_through_the_matcher_comes_back_as_itself` | request encoder, Lean reader and writer, and Rust reader compose to the identity on a term |
 | `requests_that_differ_have_different_words`, `a_changed_variable_changes_the_words_and_a_renaming_does_not` | two requests have the same words only if they differ in the choice of names of variables and constants: constants, sorts, free against AC operators, one operator against another, argument order, one variable against two, one theory against another |
 | `the_reader_of_a_named_family_agrees_with_the_library` | `read_named` returns what Lean's own `apply` returns for the same reply and tables, also for tables that were damaged, and fails where it has no reading |
+| `a_free_request_is_named_by_the_library_as_the_maude_backend_names_it` | for a request without an AC or C symbol the names Lean proposes itself give the Maude backend's answer, the composition of the empty fresh substitution with the free unifier |
 | `a_family_has_a_member_exactly_when_a_row_follows_its_status_row` | the empty family, a family of answers without bindings, and words that are no family |
 | `a_reply_is_read_only_through_tables_that_name_all_of_it` | default names, a proposed name, a request variable's own name, proposals that are not taken, and the memo of tables |
 

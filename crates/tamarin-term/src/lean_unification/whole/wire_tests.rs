@@ -722,3 +722,47 @@ fn a_reply_is_read_only_through_tables_that_name_all_of_it() {
         );
     }
 }
+
+/// The names the algebra library proposes itself, for a request without an
+/// AC or C symbol, are those of the Maude backend's answer: the composition
+/// of the empty fresh substitution with the unifier of its free unifier.
+#[test]
+fn a_free_request_is_named_by_the_library_as_the_maude_backend_names_it() {
+    let free = |eqs: &[Equal<LNTerm>]| {
+        eqs.iter().all(|e| {
+            [&e.lhs, &e.rhs]
+                .iter()
+                .all(|t| t.all_fun_syms(|f| !matches!(f, FunSym::Ac(_) | FunSym::C(_))))
+        })
+    };
+    let (mut named, mut declined) = (0, 0);
+    for (theory, sig, queries) in samples() {
+        for eqs in queries.iter().filter(|eqs| free(eqs)) {
+            let Ok((Some(family), _)) = unify(&self::theory(&sig), eqs, None, 200_000) else {
+                continue;
+            };
+            let expected = match crate::unification::unify_lterm_factored(
+                &crate::maude_types::sort_of_name,
+                eqs.clone(),
+            ) {
+                None => Vec::new(),
+                Some((factored, residual)) => {
+                    assert!(residual.is_empty(), "{theory}: {eqs:?}");
+                    let empty = crate::subst_vfresh::LNSubstVFresh::empty();
+                    vec![crate::subst_vfresh::compose_vfresh(&empty, &factored).to_list()]
+                }
+            };
+            match family.self_named().unwrap() {
+                Some(mut members) => {
+                    for member in &mut members {
+                        member.sort_unstable_by_key(|(v, _)| *v);
+                    }
+                    assert_eq!(members, expected, "{theory}: {eqs:?}");
+                    named += 1;
+                }
+                None => declined += 1,
+            }
+        }
+    }
+    assert!(named >= 600, "{named} {declined}");
+}

@@ -19,8 +19,8 @@ use tamarin_utils::cancellation;
 
 use std::sync::Arc;
 use tamarin_algebra_sys::{
-    tamarin_lean_name_unifiers, tamarin_lean_theory_match, tamarin_lean_theory_match_exists,
-    tamarin_lean_theory_unify, tamarin_lean_theory_unify_exists,
+    tamarin_lean_name_unifiers, tamarin_lean_self_name_unifiers, tamarin_lean_theory_match,
+    tamarin_lean_theory_match_exists, tamarin_lean_theory_unify, tamarin_lean_theory_unify_exists,
 };
 
 /// The replies of the total unifier, of its existence export and of the
@@ -119,6 +119,20 @@ impl Labels {
             words.push(v.idx);
         }
         Ok(Self { hints, words })
+    }
+
+    /// The rank of each hint identifier when the hints are sorted as names
+    /// are: the order in which the caller compares two variables of one sort
+    /// at one index.
+    fn order(&self) -> Vec<u64> {
+        let hints = self.hints.values();
+        let mut ids: Vec<usize> = (0..hints.len()).collect();
+        ids.sort_unstable_by(|&a, &b| hints[a].0.cmp(hints[b].0));
+        let mut order = vec![0; hints.len()];
+        for (rank, id) in ids.into_iter().enumerate() {
+            order[id] = rank as u64;
+        }
+        order
     }
 }
 
@@ -411,6 +425,46 @@ impl Unifiers {
         family
     }
 
+    /// The family, read through the tables of the naming export for the
+    /// names the algebra library proposes itself from the reply, or `None`
+    /// when it proposed none, the export did not take them, or the reply has
+    /// no reading through them. Only a family with one member is proposed
+    /// for.
+    ///
+    /// The proposal gives a range variable that is the whole image of one
+    /// request variable and occurs nowhere else that variable's name, which
+    /// leaves the variable unbound, and every other range variable the name
+    /// of a request variable it is the image of, at an index above the
+    /// request variables that are not left alone. Those are the names the
+    /// Maude backend composes for a request its free unifier solves without
+    /// leaving an AC or C equation; whether a request is one is for the
+    /// caller to decide. As with [`Self::named`], the reading is that of the
+    /// export's tables, whatever was proposed.
+    pub(crate) fn self_named(&self) -> Result<Option<Substitutions>, Error> {
+        let malformed = Error::InvalidStatus(255);
+        if !family_has_member(&self.reply).ok_or(malformed)? {
+            return Ok(Some(Vec::new()));
+        }
+        let labels = Labels::of(&self.packet)?;
+        let (heads, ranges) = shape(&self.reply, self.packet.variables.len()).ok_or(malformed)?;
+        let [range] = ranges.as_slice() else {
+            return Ok(None);
+        };
+        let order = labels.order();
+        let (tables, proposal) = self_name(&labels, &order, &heads, range, &self.reply, self.nat)?;
+        let Some(proposal) = proposal else {
+            return Ok(None);
+        };
+        if !takes(&labels, &heads, range, &tables, &proposal) {
+            return Ok(None);
+        }
+        match read_named(&self.packet, &labels, &self.reply, &tables, self.nat) {
+            Ok(family) => Ok(Some(family)),
+            Err(Error::Cancelled) => Err(Error::Cancelled),
+            Err(_) => Ok(None),
+        }
+    }
+
     /// What a proposer of names looks at in the members the caller keeps,
     /// under names of this function's own choosing for the range variables.
     /// Nothing may be answered from it: those names can coincide with
@@ -620,6 +674,95 @@ fn name(
     Ok(tables)
 }
 
+/// The tables of the naming export for the proposal the algebra library
+/// makes from `reply`, a family with the one range `range`, and that
+/// proposal, or `None` when it made none.
+fn self_name(
+    labels: &Labels,
+    order: &[u64],
+    heads: &[u64],
+    range: &[u64],
+    reply: &[u64],
+    nat: bool,
+) -> Result<(Vec<u64>, Option<Vec<u64>>), Error> {
+    initialize()?;
+    let ranges = [WordSlice::new(range)];
+    LEAN_THREAD.with(|_| {
+        // SAFETY: the shim takes owned copies of all slices and transfers its
+        // output, the tables and the proposal, to MatchRows.
+        let named = MatchRows::new(unsafe {
+            tamarin_lean_self_name_unifiers(
+                WordSlice::new(&labels.words),
+                WordSlice::new(heads),
+                WordSlice::new(order),
+                ranges.as_ptr(),
+                ranges.len(),
+                WordSlice::new(reply),
+                u8::from(nat),
+                0,
+            )
+        })?;
+        if named.count() != 2 {
+            return Err(Error::InvalidStatus(255));
+        }
+        let tables = arm_words(&named, 0)?;
+        let proposal = match named.rows(1) {
+            0 => None,
+            1 => {
+                let size = named.raw_row_size(1, 0);
+                if size == usize::MAX {
+                    return Err(Error::InvalidStatus(255));
+                }
+                let mut row = vec![0; size];
+                if size != 0 && named.copy_row(1, 0, &mut row)? != size {
+                    return Err(Error::InvalidStatus(255));
+                }
+                Some(row)
+            }
+            _ => return Err(Error::InvalidStatus(255)),
+        };
+        Ok((tables, proposal))
+    })
+}
+
+/// Whether `tables`, words of the naming export, are the tables of the
+/// proposal `proposal` for a family with the one range `range`: each range
+/// variable has the proposed label as its target, or the row of the query
+/// variable with that label at its sort. Tables of another proposal, or the
+/// export's own names, are not, unless they happen to give the same names.
+fn takes(labels: &Labels, heads: &[u64], range: &[u64], tables: &[u64], proposal: &[u64]) -> bool {
+    let Ok((listed, arms)) = self::tables(tables) else {
+        return false;
+    };
+    let [(0, table)] = arms.as_slice() else {
+        return false;
+    };
+    if listed != heads || proposal.len() != range.len() || 2 * table.0.len() != range.len() {
+        return false;
+    }
+    let label = |row: u64| -> Option<[u64; 3]> {
+        let at = usize::try_from(row).ok()?.checked_mul(2)?;
+        let [key, sort] = *heads.get(at..at + 2)? else {
+            return None;
+        };
+        let at = usize::try_from(key).ok()?.checked_mul(2)?;
+        let [hint, idx] = *labels.words.get(at..at + 2)? else {
+            return None;
+        };
+        Some([hint, idx, sort])
+    };
+    let (witnesses, _) = range.as_chunks::<2>();
+    let (labelled, _) = proposal.as_chunks::<2>();
+    witnesses
+        .iter()
+        .zip(labelled)
+        .all(|(&[id, sort], &[hint, idx])| match table.get(&(id, sort)) {
+            Some(Target::Name(a, b)) => [*a, *b] == [hint, idx],
+            Some(Target::Row(row)) => label(*row) == Some([hint, idx, sort]),
+            None => false,
+        })
+}
+
 /// The complete family of unifiers of `eqs`, and whether its reply came from
 /// `replies` instead of the export, or `None` when the request is outside the
 /// theory's operators. The export stops, with [`Error::Cancelled`] or
@@ -765,17 +908,22 @@ fn reply_words(reply: &MatchRows) -> Result<Vec<u64>, Error> {
     if reply.count() != 1 {
         return Err(Error::InvalidStatus(255));
     }
+    arm_words(reply, 0)
+}
+
+/// The rows of one arm of a reply, each behind its length.
+fn arm_words(reply: &MatchRows, arm: usize) -> Result<Vec<u64>, Error> {
     let mut words = Vec::new();
-    for i in 0..reply.rows(0) {
+    for i in 0..reply.rows(arm) {
         cancellation::check().map_err(|_| Error::Cancelled)?;
-        let size = reply.raw_row_size(0, i);
+        let size = reply.raw_row_size(arm, i);
         if size == usize::MAX {
             return Err(Error::InvalidStatus(255));
         }
         words.push(size as u64);
         let start = words.len();
         words.resize(start + size, 0);
-        if size != 0 && reply.copy_row(0, i, &mut words[start..])? != size {
+        if size != 0 && reply.copy_row(arm, i, &mut words[start..])? != size {
             return Err(Error::InvalidStatus(255));
         }
     }
