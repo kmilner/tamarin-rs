@@ -525,11 +525,33 @@ fn compose_vfresh_empty_s1<C>(s2: &crate::subst::Subst<C, LVar>) -> LSubstVFresh
 where
     C: Ord + Clone,
 {
+    // No range vars ⇒ nothing to rename: extendWithRenaming is a no-op and
+    // freshToFreeAvoidingFast is the identity, so composeVFresh collapses to
+    // `freeToFreshRaw s2` — a pure re-tag, so clone the map wholesale
+    // (`SubstVFresh::from_list` does no trivial-drop; the entries are
+    // identical to the `from_list(to_list)` round-trip).
+    if s2.range().all(crate::vterm::is_ground_vterm) {
+        return SubstVFresh {
+            map: s2.clone().into_map(),
+        };
+    }
+    SubstVFresh::from_list(compose_vfresh_empty_list(s2))
+}
+
+/// `composeVFresh ∅ s2` as the list of its bindings in the order of their
+/// variables, which is what [`SubstVFresh::to_list`] of [`compose_vfresh`]
+/// gives.
+pub fn compose_vfresh_empty_list<C>(
+    s2: &crate::subst::Subst<C, LVar>,
+) -> Vec<(LVar, VTerm<C, LVar>)>
+where
+    C: Ord + Clone,
+{
     // Distinct range vars of s2 (varsRange s2), plus the max idx over all of
     // s2's free vars (its avoid set; frees s2 walks BOTH domain and range).
     // Their order does not matter: the renaming reads their indices as a
-    // set, and the result is a map. A short list is deduplicated by a linear
-    // scan, a long one through a set.
+    // set, and the result is sorted. A short list is deduplicated by a
+    // linear scan, a long one through a set.
     let mut range_vars: Vec<LVar> = Vec::new();
     let mut seen: tamarin_utils::FastSet<LVar> = Default::default();
     let mut max_idx: Option<u64> = None;
@@ -553,20 +575,11 @@ where
             range_vars.push(*v);
         });
     }
-    // No range vars ⇒ nothing to rename: extendWithRenaming is a no-op and
-    // freshToFreeAvoidingFast is the identity, so composeVFresh collapses to
-    // `freeToFreshRaw s2` — a pure re-tag, so clone the map wholesale
-    // (`SubstVFresh::from_list` does no trivial-drop; the entries are
-    // identical to the `from_list(to_list)` round-trip).
-    if range_vars.is_empty() {
-        return SubstVFresh {
-            map: s2.clone().into_map(),
-        };
-    }
+    // Without range vars the rename below is never called.
     let indices = IndexRenaming::avoiding(&range_vars, max_idx, || {
         s2.dom().chain(range_vars.iter()).map(|v| v.idx).collect()
     });
-    let mut map: BTreeMap<LVar, VTerm<C, LVar>> = BTreeMap::new();
+    let mut out: Vec<(LVar, VTerm<C, LVar>)> = Vec::with_capacity(s2.len() + range_vars.len());
     // `s1 `compose` s2` first arm = `s2.map_range(|t| apply_vterm(s1, t))`:
     // rename every range var through the mapping, dropping trivial results
     // exactly as `map_range` does. `s1` renames every variable of every
@@ -576,19 +589,31 @@ where
     for (v, t) in s2.iter() {
         let t2 = t.clone().map_free_monotone(&mut |w| indices.rename(w));
         if !matches!(&t2, Term::Lit(Lit::Var(w)) if w == v) {
-            map.insert(*v, t2);
+            out.push((*v, t2));
         }
     }
     // `compose`'s second arm: s1's own bindings whose domain s2 does not
     // rebind, added unconditionally (w' ≠ w, so never trivial anyway).
     // Probe s2's map directly (`image_of` = `BTreeMap::get`) instead of
     // materialising a domain set for a handful of membership tests.
+    let first = out.len();
     for w in &range_vars {
         if s2.image_of(w).is_none() {
-            map.insert(*w, Term::Lit(Lit::Var(indices.rename(*w))));
+            out.push((*w, Term::Lit(Lit::Var(indices.rename(*w)))));
         }
     }
-    SubstVFresh { map }
+    // The two arms have disjoint keys; the first is in order already.
+    if out.len() > first {
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+    }
+    // Differential guard, as in `compose_vfresh`: the list is that of the
+    // general composition.
+    #[cfg(debug_assertions)]
+    debug_assert!(
+        out == compose_vfresh_general(&SubstVFresh::empty(), s2).to_list(),
+        "compose_vfresh_empty_list diverged from the general composition",
+    );
+    out
 }
 
 /// Up to this many range variables are deduplicated by a linear scan.

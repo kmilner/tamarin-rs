@@ -35,7 +35,7 @@
 use crate::lterm::{HasFrees, LNTerm, LVar, Name};
 use crate::rewriting::Equal;
 use crate::subst::Subst;
-use crate::subst_vfresh::{compose_vfresh_traced, LNSubstVFresh};
+use crate::subst_vfresh::{compose_vfresh_empty_list, compose_vfresh_traced, LNSubstVFresh};
 use crate::term::Term;
 use crate::vterm::Lit;
 use tamarin_utils::{FastMap, FastSet};
@@ -140,7 +140,19 @@ fn present_arm(
         next?;
     }
     let engine = LNSubstVFresh::from_list(engine).remove_renamings();
-    let (composed, renamed) = compose_vfresh_traced(&engine, factored);
+    // The composition, as its bindings in the order of their variables.
+    let (composed, renamed) = if engine.is_empty() {
+        (compose_vfresh_empty_list(factored), Default::default())
+    } else {
+        let (composed, renamed) = compose_vfresh_traced(&engine, factored);
+        (composed.to_list(), renamed)
+    };
+    let image_of = |v: &LVar| {
+        composed
+            .binary_search_by(|(key, _)| key.cmp(v))
+            .ok()
+            .map(|at| &composed[at].1)
+    };
 
     // How the composition spells each witness of the arm: the engine's
     // witnesses through its index shift, every other one through the query
@@ -150,7 +162,7 @@ fn present_arm(
             renaming.insert(*witness, *target);
         }
     }
-    for (v, image) in composed.iter() {
+    for (v, image) in &composed {
         let single = singles[find(v)?].1;
         if let Term::Lit(Lit::Var(target)) = image {
             let witness = single?;
@@ -166,7 +178,7 @@ fn present_arm(
     // bind it to a witness of its own that nothing else mentions, which
     // takes the variable's own name.
     for (v, single) in &arm.bindings {
-        if composed.image_of(v).is_none() {
+        if image_of(v).is_none() {
             let w = (*single)?;
             if w.sort != v.sort || renaming.occurrences(&w) != Some(1) {
                 return None;
@@ -177,7 +189,7 @@ fn present_arm(
     let targets = renaming.targets()?;
     Some(Spelling {
         targets,
-        expected: composed.to_list(),
+        expected: composed,
     })
 }
 

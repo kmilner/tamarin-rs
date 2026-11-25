@@ -242,6 +242,7 @@ fn read_named(
         return Err(malformed);
     }
     let mut answers: Substitutions = Vec::new();
+    let mut stack = Vec::new();
     let mut arm = 0u64;
     while let Some(separator) = rows.next() {
         cancellation::check().map_err(|_| Error::Cancelled)?;
@@ -249,7 +250,7 @@ fn read_named(
             return Err(malformed);
         }
         let table = tables.next_if(|(listed, _)| *listed == arm);
-        let mut member = Vec::new();
+        let mut member = Vec::with_capacity(heads.len() / 2);
         let mut has_nat = false;
         let mut row = 0u64;
         while let Some(binding) = rows.next_if(|r| r.is_some_and(|r| !r.is_empty())) {
@@ -274,20 +275,26 @@ fn read_named(
                         .variables
                         .get(*key)
                         .ok_or(Error::InvalidVariable(*key))?;
-                    let (image, actual) = packet.read_image(tokens, nat, |kind, id, aux| {
-                        let Some(Target::Name(hint, idx)) = table.get(&(id, aux)).copied() else {
-                            return Err(Error::InvalidVariable(id));
-                        };
-                        let name = labels.hints.get(hint).ok_or(Error::InvalidVariable(id))?;
-                        if kind != 0 {
-                            return Err(Error::InvalidVariable(id));
-                        }
-                        Ok(LVar {
-                            name,
-                            sort: sort(aux)?,
-                            idx,
-                        })
-                    })?;
+                    let (image, actual) = packet.read_image_on(
+                        tokens,
+                        nat,
+                        |kind, id, aux| {
+                            let Some(Target::Name(hint, idx)) = table.get(&(id, aux)).copied()
+                            else {
+                                return Err(Error::InvalidVariable(id));
+                            };
+                            let name = labels.hints.get(hint).ok_or(Error::InvalidVariable(id))?;
+                            if kind != 0 {
+                                return Err(Error::InvalidVariable(id));
+                            }
+                            Ok(LVar {
+                                name,
+                                sort: sort(aux)?,
+                                idx,
+                            })
+                        },
+                        &mut stack,
+                    )?;
                     if sort_word(var.sort) != *declared
                         || !actual.is_some_and(|s| subsort(s, var.sort))
                     {
@@ -923,13 +930,24 @@ impl Packet {
         &self,
         tokens: &[u64],
         nat: bool,
+        variable: impl FnMut(u64, u64, u64) -> Result<LVar, Error>,
+    ) -> Result<(LNTerm, Option<LSort>), Error> {
+        self.read_image_on(tokens, nat, variable, &mut Vec::new())
+    }
+
+    /// [`Self::read_image`] on a stack the caller keeps for the next image.
+    fn read_image_on(
+        &self,
+        tokens: &[u64],
+        nat: bool,
         mut variable: impl FnMut(u64, u64, u64) -> Result<LVar, Error>,
+        stack: &mut Vec<(LNTerm, Option<LSort>)>,
     ) -> Result<(LNTerm, Option<LSort>), Error> {
         let (tokens, rest) = tokens.as_chunks::<3>();
         if !rest.is_empty() {
             return Err(Error::InvalidStatus(255));
         }
-        let mut stack: Vec<(LNTerm, Option<LSort>)> = Vec::new();
+        stack.clear();
         for &[k, id, aux] in tokens {
             let value = match k {
                 0 | 5..=9 => {
