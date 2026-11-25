@@ -1518,8 +1518,10 @@ fn a_failed_job_writes_to_no_memo_of_a_native_session() {
     let below_the_entry_points = |handle: &MaudeHandle| {
         // Each decision comes before the family that would answer it.
         assert!(handle.proved_unifiable(&eqs).unwrap());
-        assert!(handle.proved_has_match(&eqs, |_| true, "matching").unwrap());
-        assert!(handle.total_match(&eqs, |_| true).unwrap().is_some());
+        assert!(handle
+            .proved_has_match(&eqs, Bindable::All, "matching")
+            .unwrap());
+        assert!(handle.total_match(&eqs, Bindable::All).unwrap().is_some());
         assert!(handle.reduction_table().unwrap().is_some());
         assert_eq!(handle.proved_reduce(&term).unwrap().0, var("a"));
     };

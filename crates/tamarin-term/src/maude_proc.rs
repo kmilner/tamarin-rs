@@ -273,16 +273,10 @@ pub struct SharedMaudeCaches {
     /// pattern variables to subterms of the subject and introduces no
     /// witness, so the answer is a pure function of this key.
     #[cfg(feature = "lean-unification")]
-    total_match: Mutex<
-        tamarin_utils::FastMap<
-            (Vec<(LNTerm, LNTerm)>, Vec<crate::lterm::LVar>),
-            Vec<Vec<(crate::lterm::LVar, LNTerm)>>,
-        >,
-    >,
+    total_match: Mutex<tamarin_utils::FastMap<MatchKey, Vec<Vec<(crate::lterm::LVar, LNTerm)>>>>,
     /// Memo for the proved existence decision, under the key of `total_match`.
     #[cfg(feature = "lean-unification")]
-    has_match:
-        Mutex<tamarin_utils::FastMap<(Vec<(LNTerm, LNTerm)>, Vec<crate::lterm::LVar>), bool>>,
+    has_match: Mutex<tamarin_utils::FastMap<MatchKey, bool>>,
     /// Memo for `reduce(...)` queries.  Maude `reduce` is a pure
     /// function of the input term modulo the (fixed-per-session) theory
     /// signature, so successful reductions can be cached across calls.
@@ -315,7 +309,7 @@ pub struct SharedMaudeCaches {
     /// Native-only stores here what the proved existence export decided; it
     /// reads a family in `proved_unify` first, and never reads an entry of
     /// this memo as a family.
-    unifiable: Mutex<tamarin_utils::FastMap<Vec<(LNTerm, LNTerm)>, (bool, Origin)>>,
+    unifiable: Mutex<tamarin_utils::FastMap<EqsKey, (bool, Origin)>>,
     /// Memo for the RAW REPLY BYTES of the witness-producing Maude commands
     /// (`unify in MSG`, `get variants in MSG`, and the
     /// two `match in MSG` matchers), keyed by the *exact command
@@ -474,14 +468,168 @@ impl Drop for SharedMaudeCaches {
     }
 }
 
+/// The key of a memo of unification requests: the equations as sent, with
+/// their hash, computed once per request. A request looks up two memos under
+/// one key, and a memo that grows rehashes its keys by the stored hash
+/// instead of walking their terms again.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) struct EqsKey {
+    hash: u64,
+    eqs: Vec<(LNTerm, LNTerm)>,
+}
+
+impl EqsKey {
+    fn new(eqs: &[Equal<LNTerm>]) -> Self {
+        let mut hash = TermHash::default();
+        hash.add(eqs.len() as u64);
+        for e in eqs {
+            hash.term(&e.lhs);
+            hash.term(&e.rhs);
+        }
+        Self {
+            hash: hash.0,
+            eqs: eqs.iter().map(|e| (e.lhs.clone(), e.rhs.clone())).collect(),
+        }
+    }
+}
+
+/// A hash of terms for memo keys, read from their content alone, so equal
+/// terms hash alike; a key is still compared in full. A name contributes its
+/// length and at most its first and last eight bytes, and an operator its
+/// name and arity or its kind, which is what tells the terms of a session
+/// apart.
+#[derive(Default)]
+struct TermHash(u64);
+
+impl TermHash {
+    #[inline]
+    fn add(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(0x517c_c1b7_2722_0a95);
+    }
+
+    #[inline]
+    fn bytes(&mut self, bytes: &[u8]) {
+        fn word(part: &[u8]) -> u64 {
+            part.iter()
+                .enumerate()
+                .fold(0, |w, (i, b)| w | (u64::from(*b) << (8 * i)))
+        }
+        let n = bytes.len();
+        self.add(n as u64);
+        self.add(word(&bytes[..n.min(8)]));
+        if n > 8 {
+            self.add(word(&bytes[n - 8..]));
+        }
+    }
+
+    fn term(&mut self, t: &LNTerm) {
+        use crate::function_symbols::{AcSym, FunSym};
+        use crate::term::Term;
+        use crate::vterm::Lit;
+        match t {
+            Term::Lit(Lit::Var(v)) => {
+                self.add(v.idx);
+                self.add(v.sort as u64);
+                self.bytes(v.name.as_bytes());
+            }
+            Term::Lit(Lit::Con(n)) => {
+                self.add(0x100 | n.tag as u64);
+                self.bytes(n.id.0.as_bytes());
+            }
+            Term::App(f, args) => {
+                match f {
+                    FunSym::NoEq(s) => {
+                        self.add(0x200 | s.arity as u64);
+                        self.bytes(s.name);
+                    }
+                    FunSym::Ac(AcSym::AcFct(s)) => {
+                        self.add(0x300);
+                        self.bytes(s.name);
+                    }
+                    FunSym::Ac(AcSym::Union) => self.add(0x301),
+                    FunSym::Ac(AcSym::Mult) => self.add(0x302),
+                    FunSym::Ac(AcSym::Xor) => self.add(0x303),
+                    FunSym::Ac(AcSym::NatPlus) => self.add(0x304),
+                    FunSym::C(_) => self.add(0x400),
+                    FunSym::List => self.add(0x500),
+                }
+                self.add(args.len() as u64);
+                for a in args.iter() {
+                    self.term(a);
+                }
+            }
+        }
+    }
+}
+
+impl std::hash::Hash for EqsKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        state.write_u64(self.hash);
+    }
+}
+
+/// The key of the match memos: the oriented equations and the variables that
+/// may be bound, `None` for all of them. When every variable may be bound the
+/// variables are a function of the equations, so they need not be listed.
+#[cfg(feature = "lean-unification")]
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct MatchKey {
+    eqs: EqsKey,
+    bindable: Option<Vec<crate::lterm::LVar>>,
+}
+
+/// Which variables of a match request may be bound.
+#[cfg(feature = "lean-unification")]
+#[derive(Clone, Copy)]
+enum Bindable<'a> {
+    /// Every variable.
+    All,
+    /// The variables with these names and indices.
+    Pattern(&'a std::collections::BTreeSet<(&'static str, u64)>),
+}
+
+#[cfg(feature = "lean-unification")]
+impl Bindable<'_> {
+    fn contains(&self, v: &crate::lterm::LVar) -> bool {
+        match self {
+            Self::All => true,
+            Self::Pattern(vars) => vars.contains(&(v.name, v.idx)),
+        }
+    }
+
+    /// The memo key of `oriented` under this scope.
+    fn key(&self, oriented: &[Equal<LNTerm>]) -> MatchKey {
+        use crate::lterm::HasFrees;
+        let bindable = match self {
+            Self::All => None,
+            Self::Pattern(_) => {
+                let mut variables = Vec::new();
+                for eq in oriented {
+                    for side in [&eq.lhs, &eq.rhs] {
+                        side.for_each_free(&mut |v| {
+                            if self.contains(v) {
+                                variables.push(*v);
+                            }
+                        });
+                    }
+                }
+                variables.sort_unstable();
+                variables.dedup();
+                Some(variables)
+            }
+        };
+        MatchKey {
+            eqs: EqsKey::new(oriented),
+            bindable,
+        }
+    }
+}
+
 /// The spelled answers of the proved unifier by the equations as sent.
 #[cfg(feature = "lean-unification")]
 #[derive(Default)]
 struct UnifyMemo {
-    answers: tamarin_utils::FastMap<
-        Vec<(LNTerm, LNTerm)>,
-        (crate::lean_unification::Substitutions, Origin),
-    >,
+    answers: tamarin_utils::FastMap<EqsKey, (crate::lean_unification::Substitutions, Origin)>,
     /// The term nodes the keys and answers hold.
     nodes: usize,
 }
@@ -496,12 +644,16 @@ const UNIFY_MEMO_NODES: usize = 1 << 20;
 impl UnifyMemo {
     fn insert(
         &mut self,
-        key: Vec<(LNTerm, LNTerm)>,
+        key: EqsKey,
         answers: &crate::lean_unification::Substitutions,
         origin: Origin,
     ) {
         use crate::term::TermSize;
-        let nodes = key.iter().map(|(l, r)| l.size() + r.size()).sum::<usize>()
+        let nodes = key
+            .eqs
+            .iter()
+            .map(|(l, r)| l.size() + r.size())
+            .sum::<usize>()
             + answers
                 .iter()
                 .flatten()
@@ -2430,8 +2582,7 @@ impl MaudeHandle {
             tally(Origin::SharedRust);
             return Ok(local.is_ok());
         }
-        let key: Vec<(LNTerm, LNTerm)> =
-            eqs.iter().map(|e| (e.lhs.clone(), e.rhs.clone())).collect();
+        let key = EqsKey::new(eqs);
         // Cache locks below are scoped to the single `get` / `insert`
         // statement and released before any Maude IPC (lock-order
         // invariant on `SharedMaudeCaches`).
@@ -2551,8 +2702,7 @@ impl MaudeHandle {
         use crate::lean_unification::{unpack_conjunction, Conjunction};
         self.check_backend_status()?;
         cancellation::check()?;
-        let key: Vec<(LNTerm, LNTerm)> =
-            eqs.iter().map(|e| (e.lhs.clone(), e.rhs.clone())).collect();
+        let key = EqsKey::new(eqs);
         let hit = self
             .caches
             .proved_unify
@@ -2663,8 +2813,7 @@ impl MaudeHandle {
     fn proved_unifiable(&self, eqs: &[Equal<LNTerm>]) -> Result<bool, MaudeError> {
         use crate::lean_unification::{unpack_conjunction, Conjunction};
         cancellation::check()?;
-        let key: Vec<(LNTerm, LNTerm)> =
-            eqs.iter().map(|e| (e.lhs.clone(), e.rhs.clone())).collect();
+        let key = EqsKey::new(eqs);
         let origin = if crate::lean_unification::is_single_export(eqs) {
             Origin::Proved
         } else {
@@ -2841,28 +2990,9 @@ impl MaudeHandle {
     fn total_match(
         &self,
         oriented: &[Equal<LNTerm>],
-        bindable: impl Fn(&crate::lterm::LVar) -> bool,
+        bindable: Bindable<'_>,
     ) -> Result<Option<crate::lean_unification::Substitutions>, MaudeError> {
-        use crate::lterm::HasFrees;
-        let mut variables = Vec::new();
-        for eq in oriented {
-            for side in [&eq.lhs, &eq.rhs] {
-                side.for_each_free(&mut |v| {
-                    if bindable(v) {
-                        variables.push(*v);
-                    }
-                });
-            }
-        }
-        variables.sort_unstable();
-        variables.dedup();
-        let key = (
-            oriented
-                .iter()
-                .map(|eq| (eq.lhs.clone(), eq.rhs.clone()))
-                .collect::<Vec<_>>(),
-            variables,
-        );
+        let key = bindable.key(oriented);
         let origin = match_origin(oriented);
         cancellation::check()?;
         let cached = self.caches.total_match.lock().unwrap().get(&key).cloned();
@@ -2873,7 +3003,7 @@ impl MaudeHandle {
         let Some(theory) = self.native_theory() else {
             return Ok(None);
         };
-        match crate::lean_unification::match_in(theory, oriented, bindable)
+        match crate::lean_unification::match_in(theory, oriented, |v| bindable.contains(v))
             .map_err(|e| self.lean_error(e))?
         {
             crate::lean_unification::Outcome::Complete(mut answers) => {
@@ -2903,29 +3033,10 @@ impl MaudeHandle {
     fn proved_has_match(
         &self,
         oriented: &[Equal<LNTerm>],
-        bindable: impl Fn(&crate::lterm::LVar) -> bool,
+        bindable: Bindable<'_>,
         operation: &'static str,
     ) -> Result<bool, MaudeError> {
-        use crate::lterm::HasFrees;
-        let mut variables = Vec::new();
-        for eq in oriented {
-            for side in [&eq.lhs, &eq.rhs] {
-                side.for_each_free(&mut |v| {
-                    if bindable(v) {
-                        variables.push(*v);
-                    }
-                });
-            }
-        }
-        variables.sort_unstable();
-        variables.dedup();
-        let key = (
-            oriented
-                .iter()
-                .map(|eq| (eq.lhs.clone(), eq.rhs.clone()))
-                .collect::<Vec<_>>(),
-            variables,
-        );
+        let key = bindable.key(oriented);
         let origin = match_origin(oriented);
         cancellation::check()?;
         let cached = {
@@ -2943,8 +3054,10 @@ impl MaudeHandle {
             return Ok(found);
         }
         let found = match self.native_theory() {
-            Some(theory) => crate::lean_unification::has_match_in(theory, oriented, bindable)
-                .map_err(|e| self.lean_error(e))?,
+            Some(theory) => {
+                crate::lean_unification::has_match_in(theory, oriented, |v| bindable.contains(v))
+                    .map_err(|e| self.lean_error(e))?
+            }
             None => None,
         }
         .ok_or_else(|| self.unsupported_native_operation(operation))?;
@@ -2959,7 +3072,7 @@ impl MaudeHandle {
     fn proved_match(
         &self,
         oriented: &[Equal<LNTerm>],
-        bindable: impl Fn(&crate::lterm::LVar) -> bool,
+        bindable: Bindable<'_>,
         operation: &'static str,
     ) -> Result<crate::lean_unification::Substitutions, MaudeError> {
         self.total_match(oriented, bindable)?
@@ -3029,7 +3142,7 @@ impl MaudeHandle {
                 .iter()
                 .map(|eq| Equal::new(eq.rhs.clone(), eq.lhs.clone()))
                 .collect();
-            return self.proved_has_match(&oriented, |_| true, "matching");
+            return self.proved_has_match(&oriented, Bindable::All, "matching");
         }
         self.match_eqs_impl(eqs).map(|answers| !answers.is_empty())
     }
@@ -3112,7 +3225,7 @@ impl MaudeHandle {
                 .iter()
                 .map(|eq| Equal::new(eq.rhs.clone(), eq.lhs.clone()))
                 .collect();
-            return self.proved_match(&oriented, |_| true, "matching");
+            return self.proved_match(&oriented, Bindable::All, "matching");
         }
         if eqs.is_empty() {
             self.caches
@@ -3190,7 +3303,7 @@ impl MaudeHandle {
         if self.backend == AlgebraBackend::NativeOnly {
             let mut answers = self.proved_match(
                 eqs,
-                |v| pattern_vars.contains(&(v.name, v.idx)),
+                Bindable::Pattern(pattern_vars),
                 "rigid-context matching",
             )?;
             self.order_native_alternatives(&mut answers);
