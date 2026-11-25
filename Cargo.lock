@@ -1416,7 +1416,7 @@ dependencies = [
 [[package]]
 name = "tamarin-algebra-sys"
 version = "0.1.0"
-source = "git+https://github.com/kmilner/tamarin-algebra.git?rev=d98b2a1ab49c0cf7f9fff703a85a1cab7a5b9d7a#d98b2a1ab49c0cf7f9fff703a85a1cab7a5b9d7a"
+source = "git+https://github.com/kmilner/tamarin-algebra.git?rev=14e4f35ac16edfd065f0ba62997b025f308a863c#14e4f35ac16edfd065f0ba62997b025f308a863c"
 
 [[package]]
 name = "tamarin-build"
