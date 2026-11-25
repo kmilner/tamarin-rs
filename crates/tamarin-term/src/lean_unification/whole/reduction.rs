@@ -88,6 +88,11 @@ pub(crate) fn user_rules(sig: &MaudeSig) -> Vec<RRule<LNTerm>> {
 
 /// Rewrite depth requested from the certifier.
 const CERTIFIER_DEPTH: u64 = 4;
+/// Rewrite depth of the second request, made for a table the certifier
+/// refused at [`CERTIFIER_DEPTH`]. The verdict is sound at every depth, and
+/// a rule whose normal forms lie deeper than the first depth (a chain of
+/// rules, or a right side that another rule rewrites) is accepted only here.
+const CERTIFIER_RETRY_DEPTH: u64 = 16;
 /// Initial rewrite depth of the single-path exports, doubled on request.
 const PATH_DEPTH: u64 = 1 << 16;
 
@@ -159,7 +164,8 @@ impl ReductionTable {
             };
             packet.equations.extend([lhs, rhs]);
         }
-        let certified = certify(&packet, CERTIFIER_DEPTH)?;
+        let certified =
+            certify(&packet, CERTIFIER_DEPTH)? || certify(&packet, CERTIFIER_RETRY_DEPTH)?;
         Ok(Some(Self { packet, certified }))
     }
 

@@ -1,9 +1,17 @@
 theory UserEquationsAndPairing
 begin
-functions: g0/1, g1/1, g2/1, g3/1, g4/1, g5/1, a/0, b/0
+functions: g0/1, g1/1, g2/1, g3/1, g4/1, g5/1, a/0, b/0,
+  commit/3, open/2, fake/4
 equations [convergent]:
   g0(x) = g1(x), g1(x) = g2(x), g2(x) = g3(x),
-  g3(x) = g4(x), g4(x) = g5(x), g5(a) = fst(<b,a>)
+  g3(x) = g4(x), g4(x) = g5(x), g5(a) = fst(<b,a>),
+  // A trapdoor commitment. The last two rules make it convergent. The
+  // certifier refuses the table at every depth, so the answers on this
+  // theory are assumed, not proved.
+  open(commit(m,r,td), r) = m,
+  commit(m2, fake(m1,r,td,m2), td) = commit(m1,r,td),
+  open(commit(m1,r,td), fake(m1,r,td,m2)) = m2,
+  fake(m1, fake(m,r,td,m1), td, m2) = fake(m,r,td,m2)
 
 rule Observe:
   [ In(x) ] --[ Seen(x,g0(x)) ]-> []
