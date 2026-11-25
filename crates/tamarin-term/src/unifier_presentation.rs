@@ -91,15 +91,18 @@ fn present_arm(
     residual: &[Equal<LNTerm>],
     arm: &ArmView,
 ) -> Option<Spelling> {
-    let singles: FastMap<LVar, Option<LVar>> = arm.bindings.iter().copied().collect();
-    if singles.len() != arm.bindings.len() {
+    // The query variables, each with its single witness, in the order of the
+    // variables: looked up by binary search.
+    let mut singles: Vec<(LVar, Option<LVar>)> = arm.bindings.clone();
+    singles.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    if singles.windows(2).any(|pair| pair[0].0 == pair[1].0) {
         return None;
     }
+    let find = |v: &LVar| singles.binary_search_by(|(key, _)| key.cmp(v)).ok();
+    let in_query = |v: &LVar| find(v).is_some();
     // The export binds every query variable, so its range holds witnesses only.
-    let occurrences: FastMap<LVar, usize> = arm.witnesses.iter().copied().collect();
-    if occurrences.len() != arm.witnesses.len()
-        || occurrences.keys().any(|w| singles.contains_key(w))
-    {
+    let mut renaming = Renaming::new(&arm.witnesses)?;
+    if arm.witnesses.iter().any(|(w, _)| in_query(w)) {
         return None;
     }
 
@@ -142,22 +145,21 @@ fn present_arm(
     // How the composition spells each witness of the arm: the engine's
     // witnesses through its index shift, every other one through the query
     // variable it is the image of.
-    let mut renaming: FastMap<LVar, LVar> = FastMap::default();
     for (witness, named) in &engine_names {
         if let Some(target) = renamed.get(named) {
             renaming.insert(*witness, *target);
         }
     }
     for (v, image) in composed.iter() {
-        let single = singles.get(v)?;
+        let single = singles[find(v)?].1;
         if let Term::Lit(Lit::Var(target)) = image {
-            let witness = (*single)?;
-            if *renaming.entry(witness).or_insert(*target) != *target {
+            let witness = single?;
+            if renaming.entry(witness, *target) != *target {
                 return None;
             }
         }
     }
-    if !is_witness_renaming(&renaming, |v| singles.contains_key(v)) {
+    if !renaming.is_witness_renaming(in_query) {
         return None;
     }
     // The composition leaves an unconstrained variable out. The arm must
@@ -166,30 +168,116 @@ fn present_arm(
     for (v, single) in &arm.bindings {
         if composed.image_of(v).is_none() {
             let w = (*single)?;
-            if w.sort != v.sort || occurrences.get(&w) != Some(&1) {
+            if w.sort != v.sort || renaming.occurrences(&w) != Some(1) {
                 return None;
             }
             renaming.insert(w, *v);
         }
     }
-    let targets = arm
-        .witnesses
-        .iter()
-        .map(|(w, _)| renaming.get(w).copied())
-        .collect::<Option<Vec<_>>>()?;
+    let targets = renaming.targets()?;
     Some(Spelling {
         targets,
         expected: composed.to_list(),
     })
 }
 
-/// Whether `renaming` sends distinct witnesses to distinct variables of the
-/// same sort, none of which is a variable of the query.
+/// A renaming of the witnesses of an arm, held by their position in
+/// [`ArmView::witnesses`]. A variable that is not a witness of the arm keeps
+/// its target aside, where it still counts for [`Self::is_witness_renaming`].
+struct Renaming<'a> {
+    witnesses: &'a [(LVar, usize)],
+    position: FastMap<LVar, usize>,
+    targets: Vec<Option<LVar>>,
+    others: Vec<(LVar, LVar)>,
+}
+
+impl<'a> Renaming<'a> {
+    /// `None` when a witness is listed twice.
+    fn new(witnesses: &'a [(LVar, usize)]) -> Option<Self> {
+        let mut position = FastMap::default();
+        position.reserve(witnesses.len());
+        for (at, (w, _)) in witnesses.iter().enumerate() {
+            if position.insert(*w, at).is_some() {
+                return None;
+            }
+        }
+        Some(Self {
+            witnesses,
+            position,
+            targets: vec![None; witnesses.len()],
+            others: Vec::new(),
+        })
+    }
+
+    /// Set the target of `witness`.
+    fn insert(&mut self, witness: LVar, target: LVar) {
+        match self.position.get(&witness) {
+            Some(&at) => self.targets[at] = Some(target),
+            None => match self.others.iter_mut().find(|(w, _)| *w == witness) {
+                Some(entry) => entry.1 = target,
+                None => self.others.push((witness, target)),
+            },
+        }
+    }
+
+    /// The target of `witness`, which becomes `target` if it has none.
+    fn entry(&mut self, witness: LVar, target: LVar) -> LVar {
+        match self.position.get(&witness) {
+            Some(&at) => *self.targets[at].get_or_insert(target),
+            None => match self.others.iter().find(|(w, _)| *w == witness) {
+                Some((_, held)) => *held,
+                None => {
+                    self.others.push((witness, target));
+                    target
+                }
+            },
+        }
+    }
+
+    /// The number of occurrences of `witness` in the arm.
+    fn occurrences(&self, witness: &LVar) -> Option<usize> {
+        self.position.get(witness).map(|&at| self.witnesses[at].1)
+    }
+
+    /// See [`is_witness_renaming_of`].
+    fn is_witness_renaming(&self, in_query: impl Fn(&LVar) -> bool) -> bool {
+        let pairs = self
+            .witnesses
+            .iter()
+            .zip(&self.targets)
+            .filter_map(|((w, _), target)| Some((*w, (*target)?)))
+            .chain(self.others.iter().copied());
+        is_witness_renaming_of(pairs, in_query)
+    }
+
+    /// A target for every witness of the arm, in their order.
+    fn targets(&self) -> Option<Vec<LVar>> {
+        self.targets.iter().copied().collect()
+    }
+}
+
+/// [`is_witness_renaming_of`] for a renaming held in a map.
+#[cfg(test)]
 fn is_witness_renaming(renaming: &FastMap<LVar, LVar>, in_query: impl Fn(&LVar) -> bool) -> bool {
-    let mut targets = FastSet::default();
-    renaming.iter().all(|(witness, target)| {
-        witness.sort == target.sort && !in_query(target) && targets.insert(*target)
-    })
+    is_witness_renaming_of(renaming.iter().map(|(w, t)| (*w, *t)), in_query)
+}
+
+/// Whether the pairs of a renaming, each witness once, send distinct
+/// witnesses to distinct variables of the same sort, none of which is a
+/// variable of the query.
+fn is_witness_renaming_of(
+    pairs: impl Iterator<Item = (LVar, LVar)>,
+    in_query: impl Fn(&LVar) -> bool,
+) -> bool {
+    let mut targets: Vec<LVar> = Vec::new();
+    for (witness, target) in pairs {
+        if witness.sort != target.sort || in_query(&target) {
+            return false;
+        }
+        targets.push(target);
+    }
+    targets.sort_unstable();
+    targets.windows(2).all(|pair| pair[0] != pair[1])
 }
 
 #[cfg(test)]
