@@ -6,12 +6,13 @@ use super::{
     commutative::{orientations, RigidHead},
     operands, sort_word, Error, LEAN_THREAD,
 };
+use crate::apply::LeafSubst;
 use crate::function_symbols::FunSym;
 use crate::lean_identity::IdentityTable;
 use crate::lterm::{sort_of_lterm, HasFrees, LNTerm, LVar, Name};
 use crate::maude_types::sort_of_name;
 use crate::rewriting::Equal;
-use crate::subst::{apply_vterm, Subst};
+use crate::subst::{apply_vterm, SingleBinding, Subst};
 use crate::term::{f_app_ac, Term};
 use crate::vterm::Lit;
 use rustc_hash::FxHashSet;
@@ -165,16 +166,30 @@ pub(super) fn charge_expansion<'a>(
     terms: impl IntoIterator<Item = &'a LNTerm>,
     bindings: Option<&Bindings>,
 ) -> Result<bool, Error> {
+    charge_expansion_by(nodes, terms, bindings)
+}
+
+/// [`charge_expansion`] for any representation of the substitution.
+fn charge_expansion_by<'a, S: LeafSubst<Const = Name, Var = LVar>>(
+    nodes: &mut usize,
+    terms: impl IntoIterator<Item = &'a LNTerm>,
+    bindings: Option<&S>,
+) -> Result<bool, Error> {
     const MAX_DEPTH: usize = 256;
 
-    fn visit(t: &LNTerm, bindings: Option<&Bindings>, remaining: &mut usize, depth: usize) -> bool {
+    fn visit<S: LeafSubst<Const = Name, Var = LVar>>(
+        t: &LNTerm,
+        bindings: Option<&S>,
+        remaining: &mut usize,
+        depth: usize,
+    ) -> bool {
         if *remaining == 0 || depth > MAX_DEPTH {
             return false;
         }
         if let Term::Lit(Lit::Var(v)) = t
             && let Some(image) = bindings.and_then(|s| s.image_of(v))
         {
-            return visit(image, None, remaining, depth);
+            return visit::<S>(image, None, remaining, depth);
         }
         *remaining -= 1;
         match t {
@@ -287,14 +302,21 @@ fn solve_with(
                     let Term::Lit(Lit::Var(v)) = key else {
                         return Err(Error::InvalidStatus(side));
                     };
-                    let binding = Bindings::from_list([(v, image)]);
-                    if !budget.charge(
-                        state.bindings.range().chain(binding.range()),
-                        Some(&binding),
-                    )? {
+                    // The charge and the composition of the one-entry
+                    // substitution `Bindings::from_list([(v, image)])`,
+                    // which is empty when `image` is `v`.
+                    let fits = match SingleBinding::new(&v, &image) {
+                        Some(binding) => charge_expansion_by(
+                            &mut budget.nodes,
+                            state.bindings.range().chain([&image]),
+                            Some(&binding),
+                        )?,
+                        None => budget.charge(state.bindings.range(), None)?,
+                    };
+                    if !fits {
                         return Ok(None);
                     }
-                    state.bindings = binding.compose(&state.bindings);
+                    state.bindings.compose_binding(v, image);
                     // A binding can make a previously open AC pair identical.
                     // Only a new binding reactivates a deferred equation.
                     state.pending.append(&mut state.deferred);

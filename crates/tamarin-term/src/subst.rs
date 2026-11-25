@@ -151,6 +151,60 @@ where
         }
         Subst { map: composed }
     }
+
+    /// `self = from_list([(v, image)]).compose(self)` without rebuilding the
+    /// map: the result, entry for entry, is the one `compose` returns.
+    /// `self`'s images are rewritten in place, an entry that becomes trivial
+    /// is dropped, and `v ↦ image` is added unless `v` was already bound.
+    pub fn compose_binding(&mut self, v: V, image: VTerm<C, V>) {
+        if equal_to_var(&image, &v) {
+            // `from_list` drops the trivial binding, and composing with the
+            // empty substitution keeps every entry of `self`.
+            return;
+        }
+        let bound = self.map.contains_key(&v);
+        let binding = SingleBinding {
+            var: &v,
+            image: &image,
+        };
+        self.map.retain(|k, t| {
+            if let Some(changed) = t.apply_changed(&binding) {
+                *t = changed;
+            }
+            !equal_to_var(t, k)
+        });
+        if !bound {
+            self.map.insert(v, image);
+        }
+    }
+}
+
+/// The substitution of one variable by a term that is not that variable,
+/// with the lookups of the one-entry [`Subst`] built from it.
+pub struct SingleBinding<'a, C, V> {
+    var: &'a V,
+    image: &'a VTerm<C, V>,
+}
+
+impl<'a, C, V: PartialEq> SingleBinding<'a, C, V> {
+    /// `None` when `image` is `var` itself, which `Subst::from_list` drops.
+    pub fn new(var: &'a V, image: &'a VTerm<C, V>) -> Option<Self> {
+        (!equal_to_var(image, var)).then_some(SingleBinding { var, image })
+    }
+}
+
+impl<C, V: Ord> crate::apply::LeafSubst for SingleBinding<'_, C, V> {
+    type Const = C;
+    type Var = V;
+
+    fn image_of(&self, v: &V) -> Option<&VTerm<C, V>> {
+        // `Ord`, as the map lookup of `Subst::image_of` compares.
+        (v.cmp(self.var) == std::cmp::Ordering::Equal).then_some(self.image)
+    }
+
+    fn is_empty(&self) -> bool {
+        false
+    }
 }
 
 /// `instance Ord c => HasFrees (LSubst c)` (SubstVFree.hs).
@@ -642,5 +696,44 @@ mod tests {
             None,
             "apply_subst must NOT add new keys"
         );
+    }
+
+    /// `compose_binding` keeps exactly the entries, in the same map, that
+    /// `compose` with the one-entry substitution returns: rewritten images,
+    /// an entry that becomes trivial dropped, the binding added only for an
+    /// unbound variable, and nothing for a trivial binding.
+    #[test]
+    fn compose_binding_is_compose_with_a_one_entry_substitution() {
+        let pair = |a, b| f_app_no_eq(pair_sym(), vec![a, b]);
+        let mult = |xs: Vec<VTerm<C, V>>| f_app_ac(AcSym::Mult, xs);
+        let others: Vec<Subst<C, V>> = vec![
+            Subst::empty(),
+            Subst::from_list(vec![("y", var_term("x"))]),
+            Subst::from_list(vec![
+                ("y", mult(vec![var_term("x"), var_term("z")])),
+                ("w", pair(var_term("x"), const_term(3))),
+                ("u", const_term(4)),
+            ]),
+            Subst::from_list(vec![("x", const_term(5)), ("y", var_term("x"))]),
+            Subst::from_list(vec![("y", var_term("z"))]),
+        ];
+        let images: Vec<VTerm<C, V>> = vec![
+            const_term(1),
+            var_term("x"),
+            var_term("y"),
+            var_term("z"),
+            mult(vec![var_term("z"), var_term("u")]),
+            pair(var_term("y"), mult(vec![var_term("y"), var_term("y")])),
+        ];
+        for other in &others {
+            for v in ["x", "y", "z"] {
+                for image in &images {
+                    let expected = Subst::from_list([(v, image.clone())]).compose(other);
+                    let mut composed = other.clone();
+                    composed.compose_binding(v, image.clone());
+                    assert_eq!(composed, expected, "{v} -> {image:?} after {other:?}");
+                }
+            }
+        }
     }
 }
