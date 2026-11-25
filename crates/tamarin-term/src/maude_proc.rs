@@ -289,6 +289,13 @@ impl MaudeProcessInner {
             let mut reaper = self.child.lock().unwrap();
             cancellation::check()?;
             if reaper.child.is_none() {
+                // An interrupted job gives the process up before a new one
+                // is started. The interrupter kills the process under this
+                // lock after marking the exchange, so a start that gets
+                // past this check is killed in its turn.
+                if self.turn.interrupted.load(Ordering::Acquire) {
+                    return Err(MaudeError::Other("Maude was interrupted".into()));
+                }
                 if !reaper.restart {
                     return Err(MaudeError::Other("Maude exited unexpectedly".into()));
                 }
@@ -514,6 +521,9 @@ struct Turn {
     /// or unlocked while any of them was.
     away: AtomicU64,
     uses: AtomicU64,
+    /// Whether the exchange in flight has been interrupted. Readable
+    /// without `state`, by a job that holds the lock on the child.
+    interrupted: std::sync::atomic::AtomicBool,
     /// Commands a test has every new process run after loading the theory.
     #[cfg(test)]
     preamble: Mutex<Vec<u8>>,
@@ -537,7 +547,7 @@ struct InFlight<'a>(&'a Turn);
 impl InFlight<'_> {
     /// End the exchange and report whether a waiter interrupted it.
     fn finish(self) -> bool {
-        let exchange = self.0.state.lock().exchange.take();
+        let exchange = self.0.end();
         std::mem::forget(self);
         exchange.is_some_and(|exchange| exchange.interrupted)
     }
@@ -545,7 +555,7 @@ impl InFlight<'_> {
 
 impl Drop for InFlight<'_> {
     fn drop(&mut self) {
-        self.0.state.lock().exchange = None;
+        self.0.end();
     }
 }
 
@@ -558,6 +568,23 @@ impl Turn {
             interrupted: false,
         });
         InFlight(self)
+    }
+
+    fn end(&self) -> Option<Exchange> {
+        let mut state = self.state.lock();
+        self.interrupted.store(false, Ordering::Release);
+        state.exchange.take()
+    }
+
+    /// Mark the exchange in flight as interrupted. The caller kills its
+    /// process next, still holding `state`.
+    fn interrupt(&self, state: &mut TurnState) {
+        let exchange = state.exchange.as_mut().expect("an exchange is in flight");
+        if tamarin_utils::env_gate!("TAM_DBG_MAUDE_INTERRUPT") {
+            eprintln!("[maude-interrupt] after {:?}", exchange.since.elapsed());
+        }
+        exchange.interrupted = true;
+        self.interrupted.store(true, Ordering::Release);
     }
 
     /// How long an exchange may run before an earlier job may interrupt it.
@@ -1139,11 +1166,7 @@ impl MaudeHandle {
         {
             return held;
         }
-        let exchange = state.exchange.as_mut().expect("an exchange is in flight");
-        if tamarin_utils::env_gate!("TAM_DBG_MAUDE_INTERRUPT") {
-            eprintln!("[maude-interrupt] after {:?}", exchange.since.elapsed());
-        }
-        exchange.interrupted = true;
+        turn.interrupt(&mut state);
         let id = if held == 0 {
             state.waiters += 1;
             turn.reserved.store(state.waiters, Ordering::Release);
