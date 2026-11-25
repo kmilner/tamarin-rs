@@ -94,7 +94,7 @@ fn present_arm(
     // The query variables, each with its single witness, in the order of the
     // variables: looked up by binary search.
     let mut singles: Vec<(LVar, Option<LVar>)> = arm.bindings.clone();
-    singles.sort_unstable_by(|a, b| a.0.cmp(&b.0));
+    singles.sort_unstable_by_key(|(v, _)| *v);
     if singles.windows(2).any(|pair| pair[0].0 == pair[1].0) {
         return None;
     }
