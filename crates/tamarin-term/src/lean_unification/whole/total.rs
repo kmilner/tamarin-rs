@@ -80,12 +80,19 @@ fn family_has_member(reply: &[u64]) -> Option<bool> {
 
 /// A name hint. Hints are interned, so two equal hints are usually one
 /// copy, which is compared first; the comparison is by content.
-#[derive(Clone, Copy, Eq, Hash)]
+#[derive(Clone, Copy, Eq)]
 struct Hint(&'static str);
 
 impl PartialEq for Hint {
     fn eq(&self, other: &Self) -> bool {
         std::ptr::eq(self.0, other.0) || self.0 == other.0
+    }
+}
+
+// By content, as equality is.
+impl std::hash::Hash for Hint {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
     }
 }
 
