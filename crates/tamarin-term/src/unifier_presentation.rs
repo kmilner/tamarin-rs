@@ -35,9 +35,10 @@
 use crate::lterm::{HasFrees, LNTerm, LVar, Name};
 use crate::rewriting::Equal;
 use crate::subst::Subst;
-use crate::subst_vfresh::{compose_vfresh_empty_list, compose_vfresh_traced, LNSubstVFresh};
+use crate::subst_vfresh::{compose_vfresh_traced, EmptyComposition, LNSubstVFresh};
 use crate::term::Term;
 use crate::vterm::Lit;
+use std::sync::Arc;
 use tamarin_utils::{FastMap, FastSet};
 
 type Arm = Vec<(LVar, LNTerm)>;
@@ -62,7 +63,46 @@ pub(crate) struct Spelling {
     /// A name for each witness of the arm, in the order of [`ArmView::witnesses`].
     pub(crate) targets: Vec<LVar>,
     /// The arm under those names, as the Maude backend would return it.
-    pub(crate) expected: Arm,
+    pub(crate) expected: Expected,
+}
+
+/// The arm the Maude backend would return.
+pub(crate) enum Expected {
+    /// The arm itself.
+    Arm(Arm),
+    /// The composition of the empty fresh substitution with the unifier of
+    /// the free part, whose images are not built.
+    Composition(Arc<EmptyComposition<Name>>),
+}
+
+impl Expected {
+    /// Whether `arm` is this arm.
+    pub(crate) fn is(&self, arm: &[(LVar, LNTerm)]) -> bool {
+        match self {
+            Expected::Arm(expected) => expected.as_slice() == arm,
+            Expected::Composition(composition) => composition.is_list(arm),
+        }
+    }
+
+    /// The arm, built.
+    pub(crate) fn to_list(&self) -> Arm {
+        match self {
+            Expected::Arm(expected) => expected.clone(),
+            Expected::Composition(composition) => composition.to_list(),
+        }
+    }
+}
+
+impl PartialEq for Expected {
+    fn eq(&self, other: &Self) -> bool {
+        self.to_list() == other.to_list()
+    }
+}
+
+impl std::fmt::Debug for Expected {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.to_list().fmt(f)
+    }
 }
 
 /// The names the Maude backend gives the witnesses of the arms of the proved
@@ -73,7 +113,7 @@ pub(crate) struct Spelling {
 /// `None` when some arm cannot be the composition that backend builds; the
 /// caller then keeps the export's names for the whole family.
 pub(crate) fn present(
-    factored: &Subst<Name, LVar>,
+    factored: Subst<Name, LVar>,
     residual: &[Equal<LNTerm>],
     arms: &[ArmView],
 ) -> Option<Vec<Spelling>> {
@@ -81,16 +121,20 @@ pub(crate) fn present(
     if residual.is_empty() && arms.len() != 1 {
         return None;
     }
+    let composition = Arc::new(EmptyComposition::new(factored));
     arms.iter()
-        .map(|arm| present_arm(factored, residual, arm))
+        .map(|arm| present_arm(&composition, residual, arm))
         .collect()
 }
 
+/// `composition` is the composition with an empty fresh substitution of
+/// `factored`, the unifier of the free part, which it holds.
 fn present_arm(
-    factored: &Subst<Name, LVar>,
+    composition: &Arc<EmptyComposition<Name>>,
     residual: &[Equal<LNTerm>],
     arm: &ArmView,
 ) -> Option<Spelling> {
+    let factored = composition.base();
     // The query variables, each with its single witness, in the order of the
     // variables: looked up by binary search.
     let mut singles: Vec<(LVar, Option<LVar>)> = arm.bindings.clone();
@@ -140,19 +184,29 @@ fn present_arm(
         next?;
     }
     let engine = LNSubstVFresh::from_list(engine).remove_renamings();
-    // The composition, as its bindings in the order of their variables.
-    let (composed, renamed) = if engine.is_empty() {
-        (compose_vfresh_empty_list(factored), Default::default())
+    // The composition, and its variables in order, each with its image
+    // where that is a variable.
+    let (expected, renamed) = if engine.is_empty() {
+        let expected = Expected::Composition(Arc::clone(composition));
+        (expected, Default::default())
     } else {
         let (composed, renamed) = compose_vfresh_traced(&engine, factored);
-        (composed.to_list(), renamed)
+        (Expected::Arm(composed.to_list()), renamed)
     };
-    let image_of = |v: &LVar| {
-        composed
-            .binary_search_by(|(key, _)| key.cmp(v))
-            .ok()
-            .map(|at| &composed[at].1)
+    let composed: Vec<(LVar, Option<LVar>)> = match &expected {
+        Expected::Arm(list) => list
+            .iter()
+            .map(|(v, image)| match image {
+                Term::Lit(Lit::Var(target)) => (*v, Some(*target)),
+                _ => (*v, None),
+            })
+            .collect(),
+        Expected::Composition(composition) => composition
+            .entries()
+            .map(|(v, image)| (v, composition.as_var(&image)))
+            .collect(),
     };
+    let binds = |v: &LVar| composed.binary_search_by(|(key, _)| key.cmp(v)).is_ok();
 
     // How the composition spells each witness of the arm: the engine's
     // witnesses through its index shift, every other one through the query
@@ -164,7 +218,7 @@ fn present_arm(
     }
     for (v, image) in &composed {
         let single = singles[find(v)?].1;
-        if let Term::Lit(Lit::Var(target)) = image {
+        if let Some(target) = image {
             let witness = single?;
             if renaming.entry(witness, *target) != *target {
                 return None;
@@ -178,7 +232,7 @@ fn present_arm(
     // bind it to a witness of its own that nothing else mentions, which
     // takes the variable's own name.
     for (v, single) in &arm.bindings {
-        if image_of(v).is_none() {
+        if !binds(v) {
             let w = (*single)?;
             if w.sort != v.sort || renaming.occurrences(&w) != Some(1) {
                 return None;
@@ -187,10 +241,7 @@ fn present_arm(
         }
     }
     let targets = renaming.targets()?;
-    Some(Spelling {
-        targets,
-        expected: composed,
-    })
+    Some(Spelling { targets, expected })
 }
 
 /// A renaming of the witnesses of an arm, held by their position in
@@ -473,18 +524,24 @@ mod tests {
             (z, mult(vec![v(x20), v(x24)])),
             (eb19, v(x24)),
         ];
-        let presented = present(&factored, &residual, &views(std::slice::from_ref(&arm))).unwrap();
+        let presented = present(
+            factored.clone(),
+            &residual,
+            &views(std::slice::from_ref(&arm)),
+        )
+        .unwrap();
         let expected =
             crate::subst_vfresh::compose_vfresh(&LNSubstVFresh::empty(), &factored).to_list();
         assert_eq!(presented.len(), 1);
-        assert_eq!(presented[0].expected, expected);
+        assert_eq!(presented[0].expected.to_list(), expected);
         // The arm under the proposed names is that answer.
         assert_eq!(read_back(&arm, &presented[0]), expected);
+        assert!(presented[0].expected.is(&read_back(&arm, &presented[0])));
         // The witnesses took the names of the variables they stand for.
         assert_eq!(presented[0].targets.len(), 2);
         let names: Vec<&str> = presented[0].targets.iter().map(|w| w.name).collect();
         assert!(names.iter().all(|n| *n == "ea" || *n == "eb"), "{names:?}");
-        assert_renaming_of(&arm, &presented[0].expected);
+        assert_renaming_of(&arm, &presented[0].expected.to_list());
     }
 
     #[test]
@@ -499,23 +556,34 @@ mod tests {
         let w1 = var("x", LSort::Msg, 3);
         let w2 = var("x", LSort::Msg, 4);
         let arm = vec![(a, v(w1)), (b, v(w2))];
-        let presented = present(&factored, &residual, &views(std::slice::from_ref(&arm))).unwrap();
+        let presented = present(
+            factored.clone(),
+            &residual,
+            &views(std::slice::from_ref(&arm)),
+        )
+        .unwrap();
         // Each witness takes the name of the variable it is the image of,
         // which leaves the arm without a binding.
         assert_eq!(
             presented,
             vec![Spelling {
                 targets: vec![a, b],
-                expected: Vec::new()
+                expected: Expected::Arm(Vec::new())
             }]
         );
         assert_eq!(read_back(&arm, &presented[0]), Vec::new());
         // A witness shared by two variables identifies them: not a renaming.
         let merged = vec![(a, v(w1)), (b, v(w1))];
-        assert_eq!(present(&factored, &residual, &views(&[merged])), None);
+        assert_eq!(
+            present(factored.clone(), &residual, &views(&[merged])),
+            None
+        );
         // Nor is a binding that narrows the variable's sort.
         let narrowed = vec![(a, v(var("x", LSort::Fresh, 3))), (b, v(w2))];
-        assert_eq!(present(&factored, &residual, &views(&[narrowed])), None);
+        assert_eq!(
+            present(factored.clone(), &residual, &views(&[narrowed])),
+            None
+        );
     }
 
     #[test]
@@ -528,23 +596,46 @@ mod tests {
         // An instance of the unifier, a second arm, and an arm whose range
         // mentions a query variable get no names.
         let instance = vec![(a, f(vec![f(vec![v(w)])])), (b, f(vec![v(w)]))];
-        assert_eq!(present(&factored, &residual, &views(&[instance])), None);
+        assert_eq!(
+            present(factored.clone(), &residual, &views(&[instance])),
+            None
+        );
         let good = vec![(a, f(vec![v(w)])), (b, v(w))];
         assert_eq!(
-            present(&factored, &residual, &views(&[good.clone(), good.clone()])),
+            present(
+                factored.clone(),
+                &residual,
+                &views(&[good.clone(), good.clone()])
+            ),
             None
         );
         let open = vec![(a, f(vec![v(b)]))];
-        assert_eq!(present(&factored, &residual, &views(&[open])), None);
-        let presented = present(&factored, &residual, &views(std::slice::from_ref(&good))).unwrap();
-        assert_eq!(read_back(&good, &presented[0]), presented[0].expected);
+        assert_eq!(present(factored.clone(), &residual, &views(&[open])), None);
+        let presented = present(
+            factored.clone(),
+            &residual,
+            &views(std::slice::from_ref(&good)),
+        )
+        .unwrap();
+        assert_eq!(
+            read_back(&good, &presented[0]),
+            presented[0].expected.to_list()
+        );
         // An arm of another shape can get names, since only the bindings to
         // one witness are looked at. It is not read back as the composition,
         // which is what the caller tests.
         let deeper = vec![(a, f(vec![f(vec![v(w)])])), (b, v(w))];
-        let presented =
-            present(&factored, &residual, &views(std::slice::from_ref(&deeper))).unwrap();
-        assert_ne!(read_back(&deeper, &presented[0]), presented[0].expected);
+        let presented = present(
+            factored.clone(),
+            &residual,
+            &views(std::slice::from_ref(&deeper)),
+        )
+        .unwrap();
+        assert_ne!(
+            read_back(&deeper, &presented[0]),
+            presented[0].expected.to_list()
+        );
+        assert!(!presented[0].expected.is(&read_back(&deeper, &presented[0])));
     }
 
     #[test]
@@ -590,10 +681,11 @@ mod tests {
                 (n, v(w(4))),
             ],
         ];
-        let presented = present(&factored, &residual, &views(&arms)).unwrap();
+        let presented = present(factored.clone(), &residual, &views(&arms)).unwrap();
         assert_eq!(presented.len(), arms.len());
         for (arm, spelling) in arms.iter().zip(&presented) {
-            let shown = &spelling.expected;
+            let shown = &spelling.expected.to_list();
+            assert!(spelling.expected.is(&read_back(arm, spelling)));
             assert_eq!(&read_back(arm, spelling), shown);
             assert_renaming_of(arm, shown);
             let image = |key: LVar| &shown.iter().find(|(k, _)| *k == key).unwrap().1;
@@ -620,13 +712,13 @@ mod tests {
             arm.images.retain(|(key, _)| [a, b, c, d].contains(key));
         }
         assert_eq!(
-            present(&factored, &residual, &partial).as_ref(),
+            present(factored.clone(), &residual, &partial).as_ref(),
             Some(&presented)
         );
         for arm in &mut partial {
             arm.images.clear();
         }
-        assert_eq!(present(&factored, &residual, &partial), None);
+        assert_eq!(present(factored.clone(), &residual, &partial), None);
     }
 
     #[test]

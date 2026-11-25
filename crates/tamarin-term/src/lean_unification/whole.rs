@@ -38,11 +38,19 @@ const MAX_DEPTH: usize = 128;
 /// finds one by comparison rather than by hashing.
 pub(super) const SHORT_TABLE: usize = 16;
 
-/// The roots of applications a request has encoded, by the address and
-/// length of their argument slice and their operator's kind and id. The
-/// terms of the request stay borrowed while it is encoded, so an address
-/// names one slice throughout.
-type Shared = FxHashMap<(usize, usize, u64, u64), u64>;
+/// A step of the walk that encodes a term.
+enum Visit<'a> {
+    Term(&'a LNTerm, usize),
+    Finish(u64, u64, usize),
+}
+
+/// The buffers of the walk that encodes a term, kept for the next one.
+#[derive(Default)]
+struct Scratch<'a> {
+    work: Vec<Visit<'a>>,
+    values: Vec<u64>,
+    node: Vec<u64>,
+}
 
 /// How the rows of a packet name operators.
 #[derive(Clone)]
@@ -211,8 +219,16 @@ impl Nodes {
 impl Packet {
     /// An empty packet whose rows name operators by the ids of `theory`.
     fn over(theory: &Arc<Theory>) -> Self {
+        // Room for a request of usual size.
         Self {
+            variables: ShortIdentityTable::with_capacity(SHORT_TABLE),
             symbols: Symbols::Theory(Arc::clone(theory)),
+            nodes: Nodes {
+                words: Vec::with_capacity(4 * SCANNED_ROWS),
+                starts: Vec::with_capacity(SCANNED_ROWS),
+                hashes: Vec::with_capacity(SCANNED_ROWS),
+                ..Nodes::default()
+            },
             ..Self::default()
         }
     }
@@ -260,27 +276,18 @@ impl Packet {
     /// Append one term over the operators of the packet's theory and return
     /// its root.
     fn encode_theory(&mut self, term: &LNTerm) -> Option<u64> {
-        self.encode_theory_sharing(term, &mut Shared::default())
+        self.encode_theory_on(term, &mut Scratch::default())
     }
 
-    /// [`Self::encode_theory`], with the roots of the applications that
-    /// earlier terms of the same request encoded.
-    fn encode_theory_sharing(&mut self, term: &LNTerm, shared: &mut Shared) -> Option<u64> {
+    /// [`Self::encode_theory`] on buffers the caller keeps for its next term.
+    fn encode_theory_on<'a>(&mut self, term: &'a LNTerm, scratch: &mut Scratch<'a>) -> Option<u64> {
         let Symbols::Theory(theory) = &self.symbols else {
             return None;
         };
         let theory = Arc::clone(theory);
-        self.encode_term_sharing(
-            term,
-            false,
-            |s| theory.declares_sort(s),
-            |_| None,
-            Some(shared),
-        )
+        self.encode_term_on(term, false, |s| theory.declares_sort(s), |_| None, scratch)
     }
 
-    // Children precede their parents in the graph. The bounded kernels charge
-    // expanded visits, while the total reference accepts the entire query.
     fn encode_term(
         &mut self,
         term: &LNTerm,
@@ -288,45 +295,37 @@ impl Packet {
         declares: impl Fn(LSort) -> bool,
         declaration: impl Fn(FunSym) -> Option<(usize, LSort)>,
     ) -> Option<u64> {
-        self.encode_term_sharing(term, bounded, declares, declaration, None)
+        self.encode_term_on(
+            term,
+            bounded,
+            declares,
+            declaration,
+            &mut Scratch::default(),
+        )
     }
 
-    /// [`Self::encode_term`]. An application whose arguments are the very
-    /// slice of one that `shared` holds, under the same operator, has the
-    /// root that one got, and the rows, variables and names below it are
-    /// already in the packet, so it is not walked again. Only an unbounded
-    /// encoding may skip the walk, which a bounded one charges.
-    fn encode_term_sharing(
+    // Children precede their parents in the graph. The bounded kernels charge
+    // expanded visits, while the total reference accepts the entire query.
+    fn encode_term_on<'a>(
         &mut self,
-        term: &LNTerm,
+        term: &'a LNTerm,
         bounded: bool,
         declares: impl Fn(LSort) -> bool,
         declaration: impl Fn(FunSym) -> Option<(usize, LSort)>,
-        mut shared: Option<&mut Shared>,
+        scratch: &mut Scratch<'a>,
     ) -> Option<u64> {
-        enum Visit<'a> {
-            Term(&'a LNTerm, usize),
-            Finish(u64, u64, usize, usize),
-        }
-        if bounded {
-            shared = None;
-        }
-        let mut work = Vec::with_capacity(16);
+        let Scratch { work, values, node } = scratch;
+        work.clear();
+        values.clear();
         work.push(Visit::Term(term, 0));
-        let mut values = Vec::with_capacity(16);
-        let mut node = Vec::with_capacity(8);
         while let Some(visit) = work.pop() {
             match visit {
-                Visit::Finish(kind, symbol, count, at) => {
+                Visit::Finish(kind, symbol, count) => {
                     let start = values.len() - count;
                     node.clear();
                     node.extend([kind, symbol]);
                     node.extend(values.drain(start..));
-                    let id = self.node(&node);
-                    if let Some(shared) = shared.as_deref_mut() {
-                        shared.insert((at, count, kind, symbol), id);
-                    }
-                    values.push(id);
+                    values.push(self.node(node));
                 }
                 Visit::Term(term, depth) => {
                     self.expanded += 1;
@@ -350,15 +349,7 @@ impl Packet {
                                 return None;
                             }
                             let (kind, id) = self.symbols.encode(*f, width, &declaration)?;
-                            let at = children.as_ptr() as usize;
-                            if let Some(root) = shared
-                                .as_deref()
-                                .and_then(|shared| shared.get(&(at, width, kind, id)))
-                            {
-                                values.push(*root);
-                                continue;
-                            }
-                            work.push(Visit::Finish(kind, id, width, at));
+                            work.push(Visit::Finish(kind, id, width));
                             work.extend(children.iter().rev().map(|t| Visit::Term(t, depth + 1)));
                         }
                     }

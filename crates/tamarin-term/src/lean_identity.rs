@@ -33,6 +33,14 @@ impl<K, const LINEAR: usize> Default for Table<K, LINEAR> {
 }
 
 impl<K: Copy + Eq + Hash, const LINEAR: usize> Table<K, LINEAR> {
+    /// An empty table with room for `n` values.
+    pub(crate) fn with_capacity(n: usize) -> Self {
+        Self {
+            ids: FxHashMap::default(),
+            values: Vec::with_capacity(n),
+        }
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.values.len()
     }
@@ -47,7 +55,12 @@ impl<K: Copy + Eq + Hash, const LINEAR: usize> Table<K, LINEAR> {
 
     /// IDs never truncate and remain stable for the lifetime of the request.
     pub(crate) fn intern(&mut self, value: K) -> Option<u64> {
-        if let Some(id) = self.id(value) {
+        if self.linear() {
+            // The first equal value, which is its own reverse lookup.
+            if let Some(at) = self.values.iter().position(|v| *v == value) {
+                return u64::try_from(at).ok();
+            }
+        } else if let Some(&id) = self.ids.get(&value) {
             return (self.get(id) == Some(value)).then_some(id);
         }
         let id = u64::try_from(self.values.len()).ok()?;

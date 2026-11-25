@@ -547,73 +547,187 @@ pub fn compose_vfresh_empty_list<C>(
 where
     C: Ord + Clone,
 {
-    // Distinct range vars of s2 (varsRange s2), plus the max idx over all of
-    // s2's free vars (its avoid set; frees s2 walks BOTH domain and range).
-    // Their order does not matter: the renaming reads their indices as a
-    // set, and the result is sorted. A short list is deduplicated by a
-    // linear scan, a long one through a set.
-    let mut range_vars: Vec<LVar> = Vec::new();
-    let mut seen: tamarin_utils::FastSet<LVar> = Default::default();
-    let mut max_idx: Option<u64> = None;
-    for v in s2.dom() {
-        max_idx = Some(max_idx.map_or(v.idx, |m| m.max(v.idx)));
-    }
-    for t in s2.range() {
-        t.for_each_free(&mut |v| {
-            if range_vars.len() < SHORT_SCAN {
-                if range_vars.contains(v) {
+    EmptyComposition::new(s2.clone()).to_list()
+}
+
+/// `composeVFresh ∅ s2`, held as `s2` and the rename of its range variables
+/// without building the renamed images: the bindings of `s2` with every
+/// range variable renamed, and a binding of each range variable outside the
+/// domain of `s2` to its new name.
+///
+/// `s1 `compose` s2` takes the images of `s2` under `s1`, which renames
+/// every variable of every image, by one map of indices that keeps their
+/// order (and the name and sort). So the stored order of AC and C
+/// arguments, which `f_app` would restore, is unchanged: an image of the
+/// composition is the image of `s2` with its variables renamed in place.
+pub struct EmptyComposition<C> {
+    s2: crate::subst::Subst<C, LVar>,
+    /// The range variables outside the domain of `s2`, in order.
+    added: Vec<LVar>,
+    indices: IndexRenaming,
+}
+
+/// An image of an [`EmptyComposition`].
+pub enum ComposedImage<'a, C> {
+    /// The image of `s2`, under the rename.
+    Renamed(&'a VTerm<C, LVar>),
+    /// The new name of a range variable.
+    Var(LVar),
+}
+
+impl<C: Ord + Clone> EmptyComposition<C> {
+    pub fn new(s2: crate::subst::Subst<C, LVar>) -> Self {
+        // Distinct range vars of s2 (varsRange s2), plus the max idx over
+        // all of s2's free vars (its avoid set; frees s2 walks BOTH domain
+        // and range). Their order does not matter: the renaming reads their
+        // indices as a set. A short list is deduplicated by a linear scan, a
+        // long one through a set.
+        let mut range_vars: Vec<LVar> = Vec::new();
+        let mut seen: tamarin_utils::FastSet<LVar> = Default::default();
+        let mut max_idx: Option<u64> = None;
+        for v in s2.dom() {
+            max_idx = Some(max_idx.map_or(v.idx, |m| m.max(v.idx)));
+        }
+        for t in s2.range() {
+            t.for_each_free(&mut |v| {
+                if range_vars.len() < SHORT_SCAN {
+                    if range_vars.contains(v) {
+                        return;
+                    }
+                    if range_vars.len() + 1 == SHORT_SCAN {
+                        seen.extend(range_vars.iter().copied());
+                        seen.insert(*v);
+                    }
+                } else if !seen.insert(*v) {
                     return;
                 }
-                if range_vars.len() + 1 == SHORT_SCAN {
-                    seen.extend(range_vars.iter().copied());
-                    seen.insert(*v);
-                }
-            } else if !seen.insert(*v) {
-                return;
-            }
-            max_idx = Some(max_idx.map_or(v.idx, |m| m.max(v.idx)));
-            range_vars.push(*v);
+                max_idx = Some(max_idx.map_or(v.idx, |m| m.max(v.idx)));
+                range_vars.push(*v);
+            });
+        }
+        // Without range vars the rename is never called.
+        let indices = IndexRenaming::avoiding(&range_vars, max_idx, || {
+            s2.dom().chain(range_vars.iter()).map(|v| v.idx).collect()
         });
+        // `compose`'s second arm: s1's own bindings whose domain s2 does
+        // not rebind.
+        let mut added: Vec<LVar> = range_vars
+            .into_iter()
+            .filter(|w| s2.image_of(w).is_none())
+            .collect();
+        added.sort_unstable();
+        Self { s2, added, indices }
     }
-    // Without range vars the rename below is never called.
-    let indices = IndexRenaming::avoiding(&range_vars, max_idx, || {
-        s2.dom().chain(range_vars.iter()).map(|v| v.idx).collect()
-    });
-    let mut out: Vec<(LVar, VTerm<C, LVar>)> = Vec::with_capacity(s2.len() + range_vars.len());
-    // `s1 `compose` s2` first arm = `s2.map_range(|t| apply_vterm(s1, t))`:
-    // rename every range var through the mapping, dropping trivial results
-    // exactly as `map_range` does. `s1` renames every variable of every
-    // image, by one map of indices that keeps their order (and the name and
-    // sort), so the stored order of AC and C arguments, which `f_app` would
-    // restore, is unchanged: the monotone rename is the application of `s1`.
-    for (v, t) in s2.iter() {
-        let t2 = t.clone().map_free_monotone(&mut |w| indices.rename(w));
-        if !matches!(&t2, Term::Lit(Lit::Var(w)) if w == v) {
-            out.push((*v, t2));
+
+    /// The substitution the composition was built from.
+    pub fn base(&self) -> &crate::subst::Subst<C, LVar> {
+        &self.s2
+    }
+
+    /// The new name of a range variable of `s2`.
+    pub fn rename(&self, w: LVar) -> LVar {
+        self.indices.rename(w)
+    }
+
+    /// The bindings in the order of their variables. `s1 `compose` s2`
+    /// drops a binding of a variable to itself, which a renamed image never
+    /// is: its variables are named above, or apart from, every variable of
+    /// `s2`. The test is kept all the same.
+    pub fn entries(&self) -> impl Iterator<Item = (LVar, ComposedImage<'_, C>)> + '_ {
+        let mut renamed = self
+            .s2
+            .iter()
+            .filter(|(v, t)| !matches!(t, Term::Lit(Lit::Var(w)) if self.rename(*w) == **v))
+            .peekable();
+        let mut added = self.added.iter().peekable();
+        std::iter::from_fn(move || {
+            let take_added = match (renamed.peek(), added.peek()) {
+                (Some((v, _)), Some(w)) => *w < *v,
+                (None, Some(_)) => true,
+                (_, None) => false,
+            };
+            if take_added {
+                let w = *added.next()?;
+                Some((w, ComposedImage::Var(self.rename(w))))
+            } else {
+                let (v, t) = renamed.next()?;
+                Some((*v, ComposedImage::Renamed(t)))
+            }
+        })
+    }
+
+    /// The variable an image is, if it is one.
+    pub fn as_var(&self, image: &ComposedImage<'_, C>) -> Option<LVar> {
+        match image {
+            ComposedImage::Renamed(Term::Lit(Lit::Var(w))) => Some(self.rename(*w)),
+            ComposedImage::Renamed(_) => None,
+            ComposedImage::Var(w) => Some(*w),
         }
     }
-    // `compose`'s second arm: s1's own bindings whose domain s2 does not
-    // rebind, added unconditionally (w' ≠ w, so never trivial anyway).
-    // Probe s2's map directly (`image_of` = `BTreeMap::get`) instead of
-    // materialising a domain set for a handful of membership tests.
-    let first = out.len();
-    for w in &range_vars {
-        if s2.image_of(w).is_none() {
-            out.push((*w, Term::Lit(Lit::Var(indices.rename(*w)))));
+
+    /// Whether `v` has a binding.
+    pub fn binds(&self, v: &LVar) -> bool {
+        match self.s2.image_of(v) {
+            Some(Term::Lit(Lit::Var(w))) => self.rename(*w) != *v,
+            Some(_) => true,
+            None => self.added.binary_search(v).is_ok(),
         }
     }
-    // The two arms have disjoint keys; the first is in order already.
-    if out.len() > first {
-        out.sort_by(|a, b| a.0.cmp(&b.0));
+
+    /// Whether `list` is the list of the bindings, compared term by term
+    /// with each image renamed on the way.
+    pub fn is_list(&self, list: &[(LVar, VTerm<C, LVar>)]) -> bool {
+        let mut rest = list.iter();
+        let same = self.entries().all(|(key, image)| {
+            rest.next().is_some_and(|(v, t)| {
+                *v == key
+                    && match image {
+                        ComposedImage::Renamed(u) => self.renamed_is(u, t),
+                        ComposedImage::Var(w) => matches!(t, Term::Lit(Lit::Var(x)) if *x == w),
+                    }
+            })
+        }) && rest.next().is_none();
+        debug_assert_eq!(same, self.to_list().as_slice() == list);
+        same
     }
-    // Differential guard, as in `compose_vfresh`: the list is that of the
-    // general composition.
-    #[cfg(debug_assertions)]
-    debug_assert!(
-        out == compose_vfresh_general(&SubstVFresh::empty(), s2).to_list(),
-        "compose_vfresh_empty_list diverged from the general composition",
-    );
-    out
+
+    /// Whether the image `u` of `s2`, renamed, is `t`.
+    fn renamed_is(&self, u: &VTerm<C, LVar>, t: &VTerm<C, LVar>) -> bool {
+        match (u, t) {
+            (Term::Lit(Lit::Var(w)), Term::Lit(Lit::Var(x))) => self.rename(*w) == *x,
+            (Term::Lit(Lit::Con(a)), Term::Lit(Lit::Con(b))) => a == b,
+            (Term::App(f, us), Term::App(g, ts)) => {
+                f == g
+                    && us.len() == ts.len()
+                    && us.iter().zip(ts.iter()).all(|(u, t)| self.renamed_is(u, t))
+            }
+            _ => false,
+        }
+    }
+
+    /// The bindings, with the images built.
+    pub fn to_list(&self) -> Vec<(LVar, VTerm<C, LVar>)> {
+        let out: Vec<_> = self
+            .entries()
+            .map(|(v, image)| {
+                let t = match image {
+                    ComposedImage::Renamed(t) => {
+                        t.clone().map_free_monotone(&mut |w| self.rename(w))
+                    }
+                    ComposedImage::Var(w) => Term::Lit(Lit::Var(w)),
+                };
+                (v, t)
+            })
+            .collect();
+        // Differential guard, as in `compose_vfresh`: the list is that of
+        // the general composition.
+        #[cfg(debug_assertions)]
+        debug_assert!(
+            out == compose_vfresh_general(&SubstVFresh::empty(), &self.s2).to_list(),
+            "EmptyComposition diverged from the general composition",
+        );
+        out
+    }
 }
 
 /// Up to this many range variables are deduplicated by a linear scan.

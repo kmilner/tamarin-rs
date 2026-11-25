@@ -2757,10 +2757,12 @@ impl MaudeHandle {
                         for arm in &mut spelled {
                             arm.sort_unstable_by_key(|(v, _)| *v);
                         }
-                        spelled
-                            .iter()
-                            .eq(spelling.iter().map(|arm| &arm.expected))
-                            .then_some(spelled)
+                        let same = spelled.len() == spelling.len()
+                            && spelled
+                                .iter()
+                                .zip(&spelling)
+                                .all(|(arm, spelling)| spelling.expected.is(arm));
+                        same.then_some(spelled)
                     }
                     // No unifier: nothing to name.
                     Some(_) => Some(Vec::new()),
@@ -3956,7 +3958,7 @@ fn spelling_as_maude(
         return Ok(Some(Vec::new()));
     }
     Ok(crate::unifier_presentation::present(
-        &factored, &residual, &views,
+        factored, &residual, &views,
     ))
 }
 

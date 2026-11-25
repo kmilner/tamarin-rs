@@ -101,7 +101,7 @@ struct Labels {
 
 impl Labels {
     fn of(packet: &Packet) -> Result<Self, Error> {
-        let mut hints = ShortIdentityTable::default();
+        let mut hints = ShortIdentityTable::with_capacity(SHORT_TABLE);
         let mut hint =
             |name: &'static str| hints.intern(Hint(name)).ok_or(Error::InvalidStatus(255));
         hint(LVar::new("x", LSort::Msg, 0).name)?;
@@ -887,10 +887,10 @@ impl Packet {
         terms: impl IntoIterator<Item = &'a LNTerm>,
     ) -> Result<Option<Self>, Error> {
         let mut packet = Self::over(theory);
-        let mut shared = Default::default();
+        let mut scratch = Default::default();
         for t in terms {
             cancellation::check().map_err(|_| Error::Cancelled)?;
-            let Some(id) = packet.encode_theory_sharing(t, &mut shared) else {
+            let Some(id) = packet.encode_theory_on(t, &mut scratch) else {
                 return Ok(None);
             };
             packet.equations.push(id);
