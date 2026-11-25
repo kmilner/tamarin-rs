@@ -662,15 +662,13 @@ fn insert_implied_formulas_pass(
     // HS `allActions` (System.hs).
     let sys_actions = red.sys.all_actions();
 
-    // Lookup-only index of `sys_actions` by fact name, ascending within a
-    // name, so matching visits the same actions in the same order.
-    let mut actions_by_name: tamarin_utils::FastMap<String, Vec<u32>> =
+    // Lookup-only index of `sys_actions` by fact tag (HS `matchFact` compares
+    // whole tags, so `!Mark` never matches `Mark`), ascending within a tag,
+    // so matching visits the same actions in the same order.
+    let mut actions_by_tag: tamarin_utils::FastMap<crate::fact::FactTag, Vec<u32>> =
         tamarin_utils::FastMap::default();
     for (ai, (_, fa)) in sys_actions.iter().enumerate() {
-        actions_by_name
-            .entry(crate::fact::fact_tag_name(&fa.tag))
-            .or_default()
-            .push(ai as u32);
+        actions_by_tag.entry(fa.tag).or_default().push(ai as u32);
     }
 
     let maude = red.ctx.maude.clone();
@@ -710,7 +708,7 @@ fn insert_implied_formulas_pass(
             vars,
             &driving_guards,
             &sys_actions,
-            &actions_by_name,
+            &actions_by_tag,
             body,
             &red.sys,
             &other_guards,
@@ -735,7 +733,7 @@ fn try_match_all_guards(
     // Pass-invariant name index over `sys_actions` (see
     // `insert_implied_formulas_pass`): the Action-guard arm iterates only the
     // name-equal group, in original `sys_actions` order.
-    actions_by_name: &tamarin_utils::FastMap<String, Vec<u32>>,
+    actions_by_tag: &tamarin_utils::FastMap<crate::fact::FactTag, Vec<u32>>,
     body: &crate::guarded::Guarded,
     sys: &crate::constraint::system::System,
     other_guards: &[&crate::atom::Atom<tamarin_term::lterm::LNTerm>],
@@ -755,7 +753,7 @@ fn try_match_all_guards(
         guards: &[&crate::atom::Atom<tamarin_term::lterm::LNTerm>],
         guard_idx: usize,
         sys_actions: &[(crate::constraint::constraints::NodeId, &crate::fact::LNFact)],
-        actions_by_name: &tamarin_utils::FastMap<String, Vec<u32>>,
+        actions_by_tag: &tamarin_utils::FastMap<crate::fact::FactTag, Vec<u32>>,
         acc: &LNSubst,
         body: &crate::guarded::Guarded,
         sys: &crate::constraint::system::System,
@@ -795,11 +793,11 @@ fn try_match_all_guards(
                 // `applySkAction subst (a, fa)` (System.hs).
                 let g_fact_subst = tamarin_term::apply::Apply::apply(g_fact.clone(), acc);
                 let g_time_subst = tamarin_term::subst::apply_vterm(acc, g_time.clone());
-                let name_group = actions_by_name
-                    .get(&crate::fact::fact_tag_name(&g_fact_subst.tag))
+                let tag_group = actions_by_tag
+                    .get(&g_fact_subst.tag)
                     .map(|v| v.as_slice())
                     .unwrap_or(&[]);
-                for &ai in name_group {
+                for &ai in tag_group {
                     let (i, fa_sys) = &sys_actions[ai as usize];
                     if g_fact_subst.terms.len() != fa_sys.terms.len() {
                         continue;
@@ -825,7 +823,7 @@ fn try_match_all_guards(
                             guards,
                             guard_idx + 1,
                             sys_actions,
-                            actions_by_name,
+                            actions_by_tag,
                             &combined,
                             body,
                             sys,
@@ -862,7 +860,7 @@ fn try_match_all_guards(
                         guards,
                         guard_idx + 1,
                         sys_actions,
-                        actions_by_name,
+                        actions_by_tag,
                         &combined,
                         body,
                         sys,
@@ -883,7 +881,7 @@ fn try_match_all_guards(
         action_guards,
         0,
         sys_actions,
-        actions_by_name,
+        actions_by_tag,
         &LNSubst::empty(),
         body,
         sys,
@@ -1771,6 +1769,10 @@ fn simp_injective_fact_eq_mon_pass(
     // HS `getPairs`: per injective tag (in set order), `behaviourTerms` maps
     // each node, in `M.toList` order, to its `trimmedPairTerms` premises
     // (`mapMaybe`: a premise whose terms do not fit the shape is dropped).
+    // A node without such premises pairs with nothing, so it is left out.
+    // So is a premise whose leaves are all `Unstable` or `Unspecified`:
+    // `simpSingle` yields nothing for those, and both sides of a pair share
+    // the tag's behaviours, so none of its pairs can contribute.
     type BehaviourTerms = Vec<(
         tamarin_term::lterm::LNTerm,
         Vec<(MonotonicBehaviour, tamarin_term::lterm::LNTerm)>,
@@ -1783,8 +1785,8 @@ fn simp_injective_fact_eq_mon_pass(
             red.sys
                 .nodes_in_map_order()
                 .into_iter()
-                .map(|(id, rule)| {
-                    let terms = rule
+                .filter_map(|(id, rule)| {
+                    let terms: BehaviourTerms = rule
                         .premises
                         .iter()
                         .filter(|prem| prem.tag == *tag)
@@ -1793,16 +1795,22 @@ fn simp_injective_fact_eq_mon_pass(
                                 prem, behaviours,
                             )
                         })
+                        .filter(|(_, pairs)| {
+                            pairs.iter().any(|(bh, _)| {
+                                !matches!(
+                                    bh,
+                                    MonotonicBehaviour::Unstable | MonotonicBehaviour::Unspecified
+                                )
+                            })
+                        })
                         .collect();
-                    (*id, terms)
+                    (!terms.is_empty()).then_some((*id, terms))
                 })
                 .collect()
         })
         .collect();
-    if per_tag
-        .iter()
-        .all(|nodes| nodes.iter().map(|(_, terms)| terms.len()).sum::<usize>() < 2)
-    {
+    // Pairs need two distinct nodes of the same tag.
+    if per_tag.iter().all(|nodes| nodes.len() < 2) {
         return Ok(SystemOutcome::Linear);
     }
 

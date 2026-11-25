@@ -895,6 +895,19 @@ fn verdict_match_suite_all_solved_against_tamarin() {
             NodeStatus::Solved,
             "verified",
         ),
+        // A restriction on linear Mark ignores a persistent !Mark action.
+        (
+            "restriction_fact_multiplicity.spthy",
+            "reachable",
+            NodeStatus::Solved,
+            "verified",
+        ),
+        (
+            "restriction_fact_multiplicity.spthy",
+            "impossible",
+            NodeStatus::Solved,
+            "falsified",
+        ),
         // All-traces lemmas → Contradictory (negation dead-ends).
         (
             "safety_unique.spthy",

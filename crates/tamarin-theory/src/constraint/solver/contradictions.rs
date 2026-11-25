@@ -782,11 +782,11 @@ fn has_forbidden_chain<'a>(
             continue;
         }
         // (3) Some KU(t_start) action precedes the chain start (HS
-        // `allKUActions`). Only a KU of exactly `t_start` counts.
+        // `allKUActions`, whose order `any` does not see). Only a KU of
+        // exactly `t_start` counts.
         if sys
-            .all_ku_actions()
-            .iter()
-            .any(|(id, _, t)| *t == t_start && sys.always_before_with(ab_adj, id, &c.0))
+            .ku_actions()
+            .any(|(id, _, t)| t == t_start && sys.always_before_with(ab_adj, &id, &c.0))
         {
             return true;
         }

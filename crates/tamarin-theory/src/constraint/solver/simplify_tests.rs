@@ -1952,8 +1952,8 @@ fn restriction_guard_matching_preserves_backend_errors() {
     ];
     let subject_fact = fact(subject);
     let actions = vec![(i, &subject_fact)];
-    let mut by_name = tamarin_utils::FastMap::default();
-    by_name.insert("A".to_string(), vec![0]);
+    let mut by_tag = tamarin_utils::FastMap::default();
+    by_tag.insert(subject_fact.tag, vec![0]);
     for guard in guards {
         for failed in [false, true] {
             // Fresh handles prevent a healthy query's memoized answer from
@@ -1971,7 +1971,7 @@ fn restriction_guard_matching_preserves_backend_errors() {
                 &[x, y, t],
                 &[&guard],
                 &actions,
-                &by_name,
+                &by_tag,
                 &crate::guarded::gfalse(),
                 &sys,
                 &[],
