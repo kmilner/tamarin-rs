@@ -143,7 +143,11 @@ fn present_arm(
         return None;
     }
     let find = |v: &LVar| singles.binary_search_by(|(key, _)| key.cmp(v)).ok();
-    let in_query = |v: &LVar| find(v).is_some();
+    // A variable of the query has the index of one: most witnesses and
+    // targets are told apart by their index alone.
+    let mut indices: Vec<u64> = singles.iter().map(|(v, _)| v.idx).collect();
+    indices.dedup();
+    let in_query = |v: &LVar| indices.binary_search(&v.idx).is_ok() && find(v).is_some();
     // The export binds every query variable, so its range holds witnesses only.
     let mut renaming = Renaming::new(&arm.witnesses)?;
     if arm.witnesses.iter().any(|(w, _)| in_query(w)) {
@@ -183,7 +187,11 @@ fn present_arm(
         // The index space above the query is exhausted.
         next?;
     }
-    let engine = LNSubstVFresh::from_list(engine).remove_renamings();
+    let engine = if engine.is_empty() {
+        LNSubstVFresh::empty()
+    } else {
+        LNSubstVFresh::from_list(engine).remove_renamings()
+    };
     // The composition, and its variables in order, each with its image
     // where that is a variable.
     let (expected, renamed) = if engine.is_empty() {
@@ -201,10 +209,15 @@ fn present_arm(
                 _ => (*v, None),
             })
             .collect(),
-        Expected::Composition(composition) => composition
-            .entries()
-            .map(|(v, image)| (v, composition.as_var(&image)))
-            .collect(),
+        Expected::Composition(composition) => {
+            let mut composed = Vec::with_capacity(arm.bindings.len());
+            composed.extend(
+                composition
+                    .entries()
+                    .map(|(v, image)| (v, composition.as_var(&image))),
+            );
+            composed
+        }
     };
     let binds = |v: &LVar| composed.binary_search_by(|(key, _)| key.cmp(v)).is_ok();
 
@@ -216,8 +229,17 @@ fn present_arm(
             renaming.insert(*witness, *target);
         }
     }
+    // Both lists are in the order of the variables: a variable of the
+    // composition is found in the query by walking the two together.
+    let mut at = 0;
     for (v, image) in &composed {
-        let single = singles[find(v)?].1;
+        while singles.get(at).is_some_and(|(key, _)| key < v) {
+            at += 1;
+        }
+        let single = match singles.get(at) {
+            Some((key, single)) if key == v => *single,
+            _ => return None,
+        };
         if let Some(target) = image {
             let witness = single?;
             if renaming.entry(witness, *target) != *target {
@@ -335,7 +357,11 @@ impl<'a> Renaming<'a> {
 
     /// A target for every witness of the arm, in their order.
     fn targets(&self) -> Option<Vec<LVar>> {
-        self.targets.iter().copied().collect()
+        let mut out = Vec::with_capacity(self.targets.len());
+        for target in &self.targets {
+            out.push((*target)?);
+        }
+        Some(out)
     }
 }
 
@@ -352,12 +378,19 @@ fn is_witness_renaming_of(
     pairs: impl Iterator<Item = (LVar, LVar)>,
     in_query: impl Fn(&LVar) -> bool,
 ) -> bool {
-    let mut targets: Vec<LVar> = Vec::new();
+    let mut targets: Vec<LVar> = Vec::with_capacity(SCAN);
     for (witness, target) in pairs {
         if witness.sort != target.sort || in_query(&target) {
             return false;
         }
         targets.push(target);
+    }
+    // A few targets are compared pairwise, more are sorted first.
+    if targets.len() <= SCAN {
+        return targets
+            .iter()
+            .enumerate()
+            .all(|(at, t)| !targets[..at].contains(t));
     }
     targets.sort_unstable();
     targets.windows(2).all(|pair| pair[0] != pair[1])

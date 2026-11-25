@@ -2746,9 +2746,12 @@ impl MaudeHandle {
                 let spelled = match spelling_as_maude(&self.sig, eqs, &family)
                     .map_err(|e| self.lean_error(e))?
                 {
-                    Some(spelling) if !spelling.is_empty() => {
-                        let targets: Vec<_> =
-                            spelling.iter().map(|arm| arm.targets.clone()).collect();
+                    Some(mut spelling) if !spelling.is_empty() => {
+                        // Only the expected arms are looked at again.
+                        let targets: Vec<_> = spelling
+                            .iter_mut()
+                            .map(|arm| std::mem::take(&mut arm.targets))
+                            .collect();
                         let mut spelled = family
                             .named(Some(&targets), self.shared_replies())
                             .map_err(|e| self.lean_error(e))?;
@@ -3953,7 +3956,11 @@ fn spelling_as_maude(
             engine.insert(*v);
         });
     }
-    let views = family.views(|v| engine.contains(v))?;
+    let views = if engine.is_empty() {
+        family.views(|_| false)?
+    } else {
+        family.views(|v| engine.contains(v))?
+    };
     if views.is_empty() {
         return Ok(Some(Vec::new()));
     }

@@ -2,6 +2,7 @@
 //! Matches retain literal input variables. Unifier and variant witnesses share
 //! a fresh namespace within each returned substitution.
 use super::{Packet, SHORT_TABLE};
+use crate::function_symbols::FunSym;
 use crate::lean_identity::ShortIdentityTable;
 use crate::lean_unification::{
     initialize, sort_word, subsort, Error, MatchRows, Outcome, Substitutions, Theory, Watch,
@@ -989,14 +990,17 @@ impl Packet {
                         .checked_sub(arity)
                         .ok_or(Error::InvalidStatus(255))?;
                     let mut sorted = true;
-                    let children = stack
-                        .drain(start..)
-                        .map(|(t, actual)| {
-                            sorted &= actual.is_some_and(|actual| subsort(actual, s));
-                            t
-                        })
-                        .collect();
-                    (f_app(f, children), sorted.then_some(s))
+                    let children = stack.drain(start..).map(|(t, actual)| {
+                        sorted &= actual.is_some_and(|actual| subsort(actual, s));
+                        t
+                    });
+                    // `f_app` keeps the arguments of a free operator as they
+                    // are: they go straight into the term's slice.
+                    let term = match f {
+                        FunSym::NoEq(_) | FunSym::List => Term::App(f, children.collect()),
+                        _ => f_app(f, children.collect()),
+                    };
+                    (term, sorted.then_some(s))
                 }
             };
             stack.push(value);
