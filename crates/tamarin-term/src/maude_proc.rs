@@ -638,7 +638,7 @@ struct UnifyMemo {
 /// earlier one misses this memo and keeps its own copy of the answer, so a
 /// long search would otherwise hold one copy for each renaming.
 #[cfg(feature = "lean-unification")]
-const UNIFY_MEMO_NODES: usize = 1 << 20;
+const UNIFY_MEMO_NODES: usize = 1 << 22;
 
 #[cfg(feature = "lean-unification")]
 impl UnifyMemo {
