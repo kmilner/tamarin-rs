@@ -82,8 +82,26 @@ pub fn sort_suffix(s: LSort) -> &'static str {
 
 /// HS `newtype NameId = NameId { getNameId :: String }` with a derived `Ord`
 /// (LTerm.hs).
-#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Copy, Clone, PartialOrd, Ord)]
 pub struct NameId(pub &'static str);
+
+// Content equality, settled at once for the one interned copy of a name.
+// `Hash` hashes the content as the derived impl does.
+impl PartialEq for NameId {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        std::ptr::eq(self.0, other.0) || self.0 == other.0
+    }
+}
+
+impl Eq for NameId {}
+
+impl std::hash::Hash for NameId {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.0.hash(state);
+    }
+}
 
 impl NameId {
     pub fn new(s: impl Into<String>) -> Self {
@@ -179,13 +197,39 @@ pub fn sort_of_name(n: &Name) -> LSort {
 /// pattern vars (small idx like t.1, t.2) are NEVER keys, so all
 /// stable-keyed bindings drop and pattern vars stay unbound for runtime
 /// `applySource` to bind cleanly.
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Copy, Clone)]
 pub struct LVar {
     /// Interned `&'static str` (see [`crate::intern`]): clone is a pointer
     /// copy — no alloc, no atomic refcount — and equal names share one copy.
     pub name: &'static str,
     pub sort: LSort,
     pub idx: u64,
+}
+
+// Equality of every field, cheapest first: the index, the sort, and the name,
+// whose interned copies are usually one and the same. The answer is the
+// content comparison of the derived impl, and `Hash` hashes the fields as the
+// derived impl does.
+impl PartialEq for LVar {
+    #[inline]
+    fn eq(&self, other: &Self) -> bool {
+        let LVar { name, sort, idx } = self;
+        *idx == other.idx
+            && *sort == other.sort
+            && (std::ptr::eq(*name, other.name) || *name == other.name)
+    }
+}
+
+impl Eq for LVar {}
+
+impl std::hash::Hash for LVar {
+    #[inline]
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        let LVar { name, sort, idx } = self;
+        name.hash(state);
+        sort.hash(state);
+        idx.hash(state);
+    }
 }
 
 impl Ord for LVar {
