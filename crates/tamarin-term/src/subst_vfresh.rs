@@ -527,7 +527,9 @@ where
 {
     // Distinct range vars of s2 (varsRange s2), plus the max idx over all of
     // s2's free vars (its avoid set; frees s2 walks BOTH domain and range).
-    // The `seen` set is membership-only (`range_vars` carries the order).
+    // Their order does not matter: the renaming reads their indices as a
+    // set, and the result is a map. A short list is deduplicated by a linear
+    // scan, a long one through a set.
     let mut range_vars: Vec<LVar> = Vec::new();
     let mut seen: tamarin_utils::FastSet<LVar> = Default::default();
     let mut max_idx: Option<u64> = None;
@@ -535,12 +537,21 @@ where
         max_idx = Some(max_idx.map_or(v.idx, |m| m.max(v.idx)));
     }
     for t in s2.range() {
-        for v in crate::vterm::vars_vterm(t) {
-            max_idx = Some(max_idx.map_or(v.idx, |m| m.max(v.idx)));
-            if seen.insert(v) {
-                range_vars.push(v);
+        t.for_each_free(&mut |v| {
+            if range_vars.len() < SHORT_SCAN {
+                if range_vars.contains(v) {
+                    return;
+                }
+                if range_vars.len() + 1 == SHORT_SCAN {
+                    seen.extend(range_vars.iter().copied());
+                    seen.insert(*v);
+                }
+            } else if !seen.insert(*v) {
+                return;
             }
-        }
+            max_idx = Some(max_idx.map_or(v.idx, |m| m.max(v.idx)));
+            range_vars.push(*v);
+        });
     }
     // No range vars ⇒ nothing to rename: extendWithRenaming is a no-op and
     // freshToFreeAvoidingFast is the identity, so composeVFresh collapses to
@@ -555,19 +566,17 @@ where
     let indices = IndexRenaming::avoiding(&range_vars, max_idx, || {
         s2.dom().chain(range_vars.iter()).map(|v| v.idx).collect()
     });
-    let mut s1_map: BTreeMap<LVar, VTerm<C, LVar>> = BTreeMap::new();
-    for w in &range_vars {
-        let w_prime = indices.rename(*w);
-        s1_map.insert(*w, Term::Lit(Lit::Var(w_prime)));
-    }
-    let mut out: Vec<(LVar, VTerm<C, LVar>)> = Vec::new();
+    let mut map: BTreeMap<LVar, VTerm<C, LVar>> = BTreeMap::new();
     // `s1 `compose` s2` first arm = `s2.map_range(|t| apply_vterm(s1, t))`:
     // rename every range var through the mapping, dropping trivial results
-    // exactly as `map_range` does.
+    // exactly as `map_range` does. `s1` renames every variable of every
+    // image, by one map of indices that keeps their order (and the name and
+    // sort), so the stored order of AC and C arguments, which `f_app` would
+    // restore, is unchanged: the monotone rename is the application of `s1`.
     for (v, t) in s2.iter() {
-        let t2 = crate::subst::apply_vterm_map(&s1_map, t.clone());
+        let t2 = t.clone().map_free_monotone(&mut |w| indices.rename(w));
         if !matches!(&t2, Term::Lit(Lit::Var(w)) if w == v) {
-            out.push((*v, t2));
+            map.insert(*v, t2);
         }
     }
     // `compose`'s second arm: s1's own bindings whose domain s2 does not
@@ -576,12 +585,14 @@ where
     // materialising a domain set for a handful of membership tests.
     for w in &range_vars {
         if s2.image_of(w).is_none() {
-            // `s1_map[w]` exists for every range var by construction.
-            out.push((*w, s1_map[w].clone()));
+            map.insert(*w, Term::Lit(Lit::Var(indices.rename(*w))));
         }
     }
-    LSubstVFresh::from_list(out)
+    SubstVFresh { map }
 }
+
+/// Up to this many range variables are deduplicated by a linear scan.
+const SHORT_SCAN: usize = 16;
 
 /// Collect all distinct range vars in first-appearance order.
 ///
