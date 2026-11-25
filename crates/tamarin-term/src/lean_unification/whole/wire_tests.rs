@@ -723,18 +723,21 @@ fn a_reply_is_read_only_through_tables_that_name_all_of_it() {
     }
 }
 
-/// The names the algebra library proposes itself, for a request without an
-/// AC or C symbol, are those of the Maude backend's answer: the composition
-/// of the empty fresh substitution with the unifier of its free unifier.
+/// The names the algebra library proposes itself, for a request the free
+/// unifier of the Maude backend solves alone, are those of that backend's
+/// answer: the composition of the empty fresh substitution with the unifier
+/// of its free unifier. Requests with AC or C operators are among them.
 #[test]
 fn a_free_request_is_named_by_the_library_as_the_maude_backend_names_it() {
-    let free = |eqs: &[Equal<LNTerm>]| {
+    let free = crate::maude_proc::solved_by_free_unifier;
+    let plain = |eqs: &[Equal<LNTerm>]| {
         eqs.iter().all(|e| {
             [&e.lhs, &e.rhs]
                 .iter()
                 .all(|t| t.all_fun_syms(|f| !matches!(f, FunSym::Ac(_) | FunSym::C(_))))
         })
     };
+    let mut operators = 0;
     let (mut named, mut declined) = (0, 0);
     for (theory, sig, queries) in samples() {
         for eqs in queries.iter().filter(|eqs| free(eqs)) {
@@ -759,10 +762,67 @@ fn a_free_request_is_named_by_the_library_as_the_maude_backend_names_it() {
                     }
                     assert_eq!(members, expected, "{theory}: {eqs:?}");
                     named += 1;
+                    operators += usize::from(!plain(eqs));
                 }
                 None => declined += 1,
             }
         }
     }
-    assert!(named >= 600, "{named} {declined}");
+    assert!(
+        named >= 600 && operators >= 80,
+        "{named} {operators} {declined}"
+    );
+}
+
+/// What the test of the requests the free unifier solves alone says of AC
+/// terms face to face, of an AC term bound by a variable used once or more,
+/// and of a clash.
+#[test]
+fn a_request_is_solved_by_the_free_unifier_only_where_no_ac_terms_meet() {
+    use crate::builtin::{exp, mult, pair};
+    let v = |name: &str| var(name, LSort::Msg, 1);
+    let eq = Equal::new;
+    let product = || mult(v("a"), v("b"));
+    for (eqs, alone) in [
+        // z, used once, takes the product.
+        (vec![eq(v("z"), exp(v("g"), product()))], true),
+        (
+            vec![eq(exp(v("g"), product()), v("z")), eq(v("y"), v("a"))],
+            true,
+        ),
+        // Under a shared free operator the product faces z alone.
+        (
+            vec![eq(pair(v("z"), v("y")), pair(product(), v("c")))],
+            true,
+        ),
+        // A product against a pair: no unifier, also modulo AC.
+        (vec![eq(pair(v("c"), v("y")), product())], true),
+        // Two products face to face.
+        (vec![eq(product(), mult(v("c"), v("d")))], false),
+        (
+            vec![eq(
+                pair(product(), v("y")),
+                pair(mult(v("c"), v("d")), v("y")),
+            )],
+            false,
+        ),
+        // z takes two products, which then meet.
+        (
+            vec![eq(v("z"), product()), eq(v("z"), mult(v("c"), v("d")))],
+            false,
+        ),
+        // z is used again: the test does not follow where.
+        (vec![eq(v("z"), product()), eq(v("y"), v("z"))], false),
+    ] {
+        assert_eq!(
+            crate::maude_proc::solved_by_free_unifier(&eqs),
+            alone,
+            "{eqs:?}"
+        );
+        if alone {
+            let factored =
+                crate::unification::unify_lterm_factored(&crate::maude_types::sort_of_name, eqs);
+            assert!(factored.is_none_or(|(_, residual)| residual.is_empty()));
+        }
+    }
 }

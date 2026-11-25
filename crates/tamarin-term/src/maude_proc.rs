@@ -162,6 +162,73 @@ fn reduction_heads_indexed(sig: &MaudeSig) -> bool {
     })
 }
 
+/// Whether the free unifier of the Maude backend ([`factor_unification`])
+/// solves `eqs` alone, leaving no AC or C equation for the engine, by a test
+/// that unifies nothing. It may say `false` of a request the free unifier
+/// solves alone, never `true` of one it does not.
+///
+/// The free unifier compares two AC or C terms only where the request puts
+/// them face to face, or where a variable bound to one meets another. So the
+/// test asks that no natural-number sum occurs, that walking the two sides of
+/// each equation together through the free operators they share finds no
+/// two applications of one AC or C operator face to face, and that a term
+/// with an AC or C operator faces nothing but a variable that occurs nowhere
+/// else in the request. Such a variable is bound once, to that term, and its
+/// binding never enters another comparison; every other binding is free of
+/// AC and C operators. Two other applications face to face are a clash, and
+/// the request has no unifier at all, here as modulo AC and C.
+#[cfg(feature = "lean-unification")]
+pub(crate) fn solved_by_free_unifier(eqs: &[Equal<LNTerm>]) -> bool {
+    use crate::function_symbols::{AcSym, FunSym};
+    use crate::lterm::HasFrees;
+    use crate::term::Term;
+    use crate::vterm::Lit;
+    if eqs
+        .iter()
+        .all(|e| term_ac_c_free(&e.lhs) && term_ac_c_free(&e.rhs))
+    {
+        return true;
+    }
+    let sum = |t: &LNTerm| t.any_fun_sym(|f| *f == FunSym::Ac(AcSym::NatPlus));
+    if eqs.iter().any(|e| sum(&e.lhs) || sum(&e.rhs)) {
+        return false;
+    }
+    let mut occurrences: tamarin_utils::FastMap<crate::lterm::LVar, usize> = Default::default();
+    for e in eqs {
+        for side in [&e.lhs, &e.rhs] {
+            side.for_each_free(&mut |v| *occurrences.entry(*v).or_default() += 1);
+        }
+    }
+    let once = |v: &crate::lterm::LVar| occurrences.get(v) == Some(&1);
+    let mut pairs: Vec<(&LNTerm, &LNTerm)> = eqs.iter().map(|e| (&e.lhs, &e.rhs)).collect();
+    while let Some(pair) = pairs.pop() {
+        match pair {
+            (Term::Lit(Lit::Var(_)), Term::Lit(Lit::Var(_))) => {}
+            (Term::Lit(Lit::Var(v)), t) | (t, Term::Lit(Lit::Var(v))) => {
+                if !once(v) && !term_ac_c_free(t) {
+                    return false;
+                }
+            }
+            (Term::App(f, ls), Term::App(g, rs)) => {
+                if term_ac_c_free(pair.0) && term_ac_c_free(pair.1) {
+                    continue;
+                }
+                match f {
+                    FunSym::NoEq(_) | FunSym::List if f == g && ls.len() == rs.len() => {
+                        pairs.extend(ls.iter().zip(rs.iter()));
+                    }
+                    FunSym::Ac(_) | FunSym::C(_) if f == g => return false,
+                    // A clash.
+                    _ => {}
+                }
+            }
+            // A constant: equal, or a clash.
+            _ => {}
+        }
+    }
+    true
+}
+
 /// True if `t` contains NO Ac- or C-headed application anywhere.  Backs
 /// the per-rule LHS flags `maude_sig::StRules` carries — behind
 /// `MaudeHandle::reduce_by_structure` and `norm::go_nf`'s per-rule
@@ -214,11 +281,14 @@ struct MaudeCacheStats {
     /// The session's totals of the `lean_*` counters of [`MaudeStats`].
     lean_unify: AtomicU64,
     lean_unify_unspelled: AtomicU64,
-    /// Requests without an AC or C symbol read under the names the algebra
-    /// library proposed itself, and those for which it proposed none that
-    /// the naming export took.
+    /// Requests the free unifier solves alone ([`solved_by_free_unifier`])
+    /// read under the names the algebra library proposed itself, and those
+    /// for which it proposed none that the naming export took.
     lean_unify_self_named: AtomicU64,
     lean_unify_self_declined: AtomicU64,
+    /// Requests named with the names [`spelling_as_maude`] proposes: all
+    /// others, and those it declined.
+    lean_unify_spelled: AtomicU64,
     lean_unify_exists: AtomicU64,
 }
 
@@ -433,13 +503,14 @@ impl Drop for SharedMaudeCaches {
             let count = |n: &AtomicU64| n.load(Ordering::Relaxed);
             let s = &self.stats;
             eprintln!(
-                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{} unspelled={} self_named={} self_declined={} lean_exists={} lean_unify={}",
+                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{} spelled={} unspelled={} self_named={} self_declined={} lean_exists={} lean_unify={}",
                 count(&s.reduce_hits),
                 count(&s.reduce_misses),
                 count(&s.unifiable_hits),
                 count(&s.unifiable_misses),
                 count(&s.reply_hits),
                 count(&s.reply_misses),
+                count(&s.lean_unify_spelled),
                 count(&s.lean_unify_unspelled),
                 count(&s.lean_unify_self_named),
                 count(&s.lean_unify_self_declined),
@@ -2746,12 +2817,14 @@ impl MaudeHandle {
                 .map_err(|e| self.lean_error(e))?;
                 stored = reused;
                 let family = family.ok_or_else(unsupported)?;
-                // Without an AC or C symbol the request is one the Maude
-                // backend's free unifier solves alone, and the algebra
-                // library proposes the names that backend composes itself.
-                let free = eqs
-                    .iter()
-                    .all(|e| term_ac_c_free(&e.lhs) && term_ac_c_free(&e.rhs));
+                // For a request the Maude backend's free unifier solves
+                // alone, the algebra library proposes the names that
+                // backend composes itself.
+                let free = solved_by_free_unifier(eqs);
+                debug_assert!(
+                    !free || factor_unification(&self.sig, eqs).is_none_or(|(_, r)| r.is_empty()),
+                    "the free unifier leaves an AC or C equation of {eqs:?}",
+                );
                 let own = if free {
                     let own = family.self_named().map_err(|e| self.lean_error(e))?;
                     let counter = match own {
@@ -2781,7 +2854,11 @@ impl MaudeHandle {
                         }
                         own
                     }
-                    None => self.spelled_as_maude(eqs, &family)?,
+                    None => {
+                        let spelled = &self.caches.stats.lean_unify_spelled;
+                        spelled.fetch_add(1, Ordering::Relaxed);
+                        self.spelled_as_maude(eqs, &family)?
+                    }
                 }
             }
         };

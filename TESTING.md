@@ -1287,7 +1287,9 @@ named in Lean. Rust walks trees in both directions and decides nothing:
   composition; otherwise every range variable is called `x` and numbered
   above the request (`unspelled=` in `TAM_MAUDE_CACHE_STATS=1` counts those
   families).
-- **Lean's own proposal.** For a request without an AC or C symbol the
+- **Lean's own proposal.** For a request the Maude backend's free unifier
+  solves alone, by a test that unifies nothing (`solved_by_free_unifier`: no
+  AC or C symbol, or each AC or C term faces only a variable used once), the
   proposal comes from the algebra library instead (`Unifiers::self_named`,
   `tamarin_lean_self_name_unifiers`): a proposer in Lean reads the answer and
   proposes the names the Maude backend composes, and the bridge passes them to
@@ -1307,7 +1309,8 @@ fuzzer knows (the file is included as a module, so the two cannot drift):
 | `a_term_sent_through_the_matcher_comes_back_as_itself` | request encoder, Lean reader and writer, and Rust reader compose to the identity on a term |
 | `requests_that_differ_have_different_words`, `a_changed_variable_changes_the_words_and_a_renaming_does_not` | two requests have the same words only if they differ in the choice of names of variables and constants: constants, sorts, free against AC operators, one operator against another, argument order, one variable against two, one theory against another |
 | `the_reader_of_a_named_family_agrees_with_the_library` | `read_named` returns what Lean's own `apply` returns for the same reply and tables, also for tables that were damaged, and fails where it has no reading |
-| `a_free_request_is_named_by_the_library_as_the_maude_backend_names_it` | for a request without an AC or C symbol the names Lean proposes itself give the Maude backend's answer, the composition of the empty fresh substitution with the free unifier |
+| `a_free_request_is_named_by_the_library_as_the_maude_backend_names_it` | for a request the free unifier solves alone, with or without AC operators, the names Lean proposes itself give the Maude backend's answer, the composition of the empty fresh substitution with the free unifier |
+| `a_request_is_solved_by_the_free_unifier_only_where_no_ac_terms_meet` | the test of those requests: AC terms face to face, a product bound by a variable used once or more, a clash |
 | `a_family_has_a_member_exactly_when_a_row_follows_its_status_row` | the empty family, a family of answers without bindings, and words that are no family |
 | `a_reply_is_read_only_through_tables_that_name_all_of_it` | default names, a proposed name, a request variable's own name, proposals that are not taken, and the memo of tables |
 
