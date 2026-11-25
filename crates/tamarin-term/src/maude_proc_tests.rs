@@ -1479,6 +1479,25 @@ fn a_cut_job_that_was_interrupted_does_not_wait_for_the_process() {
 }
 
 #[test]
+fn a_job_interrupted_before_it_reaches_maude_does_not_start_a_new_process() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let handle = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+    let mut inner = handle.inner.lock();
+    let exchange = handle.turn.begin();
+    handle.turn.interrupt(&mut handle.turn.state.lock());
+    handle.child.lock().unwrap().invalidate();
+    assert!(inner.execute(b"reduce in MSG : nil .\n", 0).is_err());
+    assert_eq!(child_pid(&handle), None);
+    assert!(exchange.finish());
+    // The job that takes the process next starts a new one.
+    let _next = handle.turn.begin();
+    inner.execute(b"reduce in MSG : nil .\n", 0).unwrap();
+    assert!(child_pid(&handle).is_some());
+}
+
+#[test]
 fn the_interrupting_job_gets_the_process_before_a_later_waiter() {
     use std::sync::{Arc, Barrier, Mutex};
     let Some(path) = require_maude_path() else {
