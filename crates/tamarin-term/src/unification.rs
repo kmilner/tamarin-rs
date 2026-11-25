@@ -114,31 +114,9 @@ fn delay_or_needs_ac<C: Clone>(
 fn unify_raw_impl<C, F>(
     sort_of_const: &F,
     acc: &mut BTreeMap<LVar, LTerm<C>>,
-    delayed: Option<&mut Vec<Equal<LTerm<C>>>>,
-    lhs: LTerm<C>,
-    rhs: LTerm<C>,
-) -> Result<(), UnifyError>
-where
-    C: Ord + Clone,
-    F: Fn(&C) -> LSort,
-{
-    unify_raw_applied(sort_of_const, acc, delayed, lhs, rhs, None)
-}
-
-/// [`unify_raw_impl`]. `applied` is the number of bindings the accumulator
-/// had when `lhs` and `rhs` were last brought under it, if they were.
-/// Bindings are only ever added, and the accumulator stays idempotent
-/// (`eliminate` binds a variable outside its domain to a term it has been
-/// applied to, and substitutes that binding through every image), so while
-/// its size is the same it is the same substitution, and applying it again
-/// gives the terms back unchanged.
-fn unify_raw_applied<C, F>(
-    sort_of_const: &F,
-    acc: &mut BTreeMap<LVar, LTerm<C>>,
     mut delayed: Option<&mut Vec<Equal<LTerm<C>>>>,
     lhs: LTerm<C>,
     rhs: LTerm<C>,
-    applied: Option<usize>,
 ) -> Result<(), UnifyError>
 where
     C: Ord + Clone,
@@ -146,17 +124,8 @@ where
 {
     // Apply the accumulator by borrowing it directly — avoids cloning
     // the whole map into a `Subst` on every recursion (hot path).
-    let (l, r) = if applied == Some(acc.len()) {
-        (lhs, rhs)
-    } else {
-        (apply_vterm_map(&*acc, lhs), apply_vterm_map(&*acc, rhs))
-    };
-    #[cfg(debug_assertions)]
-    if applied == Some(acc.len()) {
-        debug_assert!(apply_vterm_map(&*acc, l.clone()) == l);
-        debug_assert!(apply_vterm_map(&*acc, r.clone()) == r);
-    }
-    let now = Some(acc.len());
+    let l = apply_vterm_map(&*acc, lhs);
+    let r = apply_vterm_map(&*acc, rhs);
 
     match (&l, &r) {
         (Term::Lit(Lit::Var(vl)), Term::Lit(Lit::Var(vr))) if vl == vr => Ok(()),
@@ -198,13 +167,13 @@ where
             if lf == rf && la.len() == ra.len() =>
         {
             for (a, b) in la.iter().cloned().zip(ra.iter().cloned()) {
-                unify_raw_applied(sort_of_const, acc, delayed.as_deref_mut(), a, b, now)?;
+                unify_raw_impl(sort_of_const, acc, delayed.as_deref_mut(), a, b)?;
             }
             Ok(())
         }
         (Term::App(FunSym::List, la), Term::App(FunSym::List, ra)) if la.len() == ra.len() => {
             for (a, b) in la.iter().cloned().zip(ra.iter().cloned()) {
-                unify_raw_applied(sort_of_const, acc, delayed.as_deref_mut(), a, b, now)?;
+                unify_raw_impl(sort_of_const, acc, delayed.as_deref_mut(), a, b)?;
             }
             Ok(())
         }
