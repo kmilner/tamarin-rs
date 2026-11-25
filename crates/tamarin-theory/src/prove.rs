@@ -945,7 +945,11 @@ impl ProverSession {
         // Replay can consume sources too, but selecting a single lemma keeps its
         // batch demand-driven. Refined sources include the raw build.
         let selected = lemmas.iter().filter(|job| job.bound.is_some()).count();
+        // A malformed theory reports the error of its first lemma in error,
+        // which building the sources first could pre-empt.
+        let guarded_may_fail = self.guarded_lemmas_may_fail();
         if !self.source_cache_disabled
+            && !guarded_may_fail
             && selected > 1
             && rayon::current_num_threads() > 1
             && let Some(kind) = lemmas.iter().filter_map(|job| job.source_kind).max()
@@ -953,7 +957,6 @@ impl ProverSession {
             self.sources(kind, &self.template_ctx.maude)?;
         }
 
-        let guarded_may_fail = self.guarded_lemmas_may_fail();
         let pool = self.template_ctx.maude_pool.clone();
         let primary = self.template_ctx.maude.clone();
         let prove = move |job: LemmaJob, maude: &MaudeHandle| {

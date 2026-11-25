@@ -768,7 +768,7 @@ fn batch_source_phase_follows_worker_count_and_lemma_selection() {
 }
 
 #[test]
-fn only_shared_batch_sources_are_validated_before_running_lemmas() {
+fn a_malformed_source_lemma_is_reported_in_declaration_order() {
     let Some(mut session) = session_from(
         r#"theory T begin
            rule R: [] --[ A() ]-> []
@@ -796,12 +796,8 @@ fn only_shared_batch_sources_are_validated_before_running_lemmas() {
             )
         });
         assert_guarded_error(result);
-        // With no shared prepass, both trivial proofs finish before replay
-        // encounters the invalid lemma in declaration order.
-        assert_eq!(
-            rendered.load(std::sync::atomic::Ordering::Relaxed),
-            if bypass { 2 } else { 0 }
-        );
+        // Both trivial proofs finish before replay reaches the invalid lemma.
+        assert_eq!(rendered.load(std::sync::atomic::Ordering::Relaxed), 2);
     }
 }
 
