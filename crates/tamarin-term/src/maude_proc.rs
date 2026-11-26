@@ -306,6 +306,14 @@ struct MaudeCacheStats {
     maude_port: AtomicU64,
     maude_port_gave_up: AtomicU64,
     maude_port_declined: AtomicU64,
+    /// On native, the families of variants the generator of Maude's
+    /// listings proposed and the checker accepted, and the requests on which
+    /// native's own route answered instead: the generator gave up, the
+    /// checker refused its family, or a term was outside the theory.
+    maude_variants: AtomicU64,
+    maude_variants_gave_up: AtomicU64,
+    maude_variants_refused: AtomicU64,
+    maude_variants_declined: AtomicU64,
 }
 
 /// The memo caches for one theory session, shared (`Arc`) by the
@@ -392,6 +400,18 @@ pub struct SharedMaudeCaches {
     /// use.
     #[cfg(feature = "lean-unification")]
     maude_ranks: std::sync::OnceLock<crate::maude_ranks::MaudeRanks>,
+    /// The equations of the session's module as its text writes them, for
+    /// the generator of Maude's variant listings, built on first use.
+    #[cfg(feature = "lean-unification")]
+    maude_equations: std::sync::OnceLock<Vec<(MTerm, MTerm)>>,
+    /// What native made of each `get variants` command it sent the
+    /// generator of Maude's listings, keyed by the command's bytes: the
+    /// reply it read, or why native's own route answered instead.
+    /// The generator's reply is a function of the command and the module,
+    /// and the checker's verdict of the family it parses to, up to the
+    /// names of the query's variables.
+    #[cfg(feature = "lean-unification")]
+    maude_variants: Mutex<tamarin_utils::FastMap<Vec<u8>, MaudeVariants>>,
     /// Memo for the families of variants the certificate checker accepted,
     /// keyed by the query and the very family that was submitted, with the
     /// origin the answer counts under. Any other verdict fails the session.
@@ -483,6 +503,35 @@ impl SharedMaudeCaches {
     }
 }
 
+/// What native made of a `get variants` command it sent the generator of
+/// Maude's listings ([`MaudeHandle::variants_as_maude`]).
+#[cfg(feature = "lean-unification")]
+#[derive(Clone)]
+enum MaudeVariants {
+    /// The generator's reply, which the checker accepted or has yet to see.
+    Proposed(Arc<Vec<MSubst>>),
+    /// The generator gave up.
+    GaveUp,
+    /// The checker did not accept the family.
+    Refused,
+    /// A term was outside the theory.
+    Declined,
+}
+
+#[cfg(feature = "lean-unification")]
+impl MaudeVariants {
+    /// Count a request that native's own route answers.
+    fn count(&self, stats: &MaudeCacheStats) {
+        let counter = match self {
+            Self::Proposed(_) => return,
+            Self::GaveUp => &stats.maude_variants_gave_up,
+            Self::Refused => &stats.maude_variants_refused,
+            Self::Declined => &stats.maude_variants_declined,
+        };
+        counter.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// A backend failure held by the parallel job that ran into it.
 struct JobFailure {
     session: std::sync::Weak<SharedMaudeCaches>,
@@ -530,7 +579,7 @@ impl Drop for SharedMaudeCaches {
             let count = |n: &AtomicU64| n.load(Ordering::Relaxed);
             let s = &self.stats;
             eprintln!(
-                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{} spelled={} unspelled={} self_named={} self_declined={} maude_port={} maude_port_gave_up={} maude_port_declined={} lean_exists={} lean_unify={}",
+                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{} spelled={} unspelled={} self_named={} self_declined={} maude_port={} maude_port_gave_up={} maude_port_declined={} maude_variants={} maude_variants_gave_up={} maude_variants_refused={} maude_variants_declined={} lean_exists={} lean_unify={}",
                 count(&s.reduce_hits),
                 count(&s.reduce_misses),
                 count(&s.unifiable_hits),
@@ -544,6 +593,10 @@ impl Drop for SharedMaudeCaches {
                 count(&s.maude_port),
                 count(&s.maude_port_gave_up),
                 count(&s.maude_port_declined),
+                count(&s.maude_variants),
+                count(&s.maude_variants_gave_up),
+                count(&s.maude_variants_refused),
+                count(&s.maude_variants_declined),
                 count(&s.lean_unify_exists),
                 count(&s.lean_unify),
             );
@@ -844,9 +897,17 @@ struct Reference {
     variant_check_search: u64,
     /// The work bound of one interruptible search. See [`SEARCH_WORK`].
     search_work: u64,
+    /// The work bound of one call of the generator of Maude's variant
+    /// listings, past which native answers by its own route. See
+    /// [`MAUDE_VARIANTS_WORK`].
+    maude_variants_work: u64,
     /// Replaces the family a solver proposed before it is checked.
     #[cfg(test)]
     tamper_variants: Option<fn(&mut crate::lean_unification::Substitutions)>,
+    /// Replaces the family the generator of Maude's listings proposed
+    /// before it is checked.
+    #[cfg(test)]
+    tamper_maude_variants: Option<fn(&mut crate::lean_unification::Substitutions)>,
 }
 
 #[cfg(feature = "lean-unification")]
@@ -858,8 +919,11 @@ impl Default for Reference {
             variant_check_work: VARIANT_CHECK_WORK_DEFAULT,
             variant_check_search: VARIANT_CHECK_SEARCH_DEFAULT,
             search_work: SEARCH_WORK_DEFAULT,
+            maude_variants_work: MAUDE_VARIANTS_WORK_DEFAULT,
             #[cfg(test)]
             tamper_variants: None,
+            #[cfg(test)]
+            tamper_maude_variants: None,
         }
     }
 }
@@ -924,6 +988,21 @@ pub const SEARCH_WORK: &str = "TAM_RS_ALGEBRA_SEARCH_WORK";
 #[cfg(feature = "lean-unification")]
 const SEARCH_WORK_DEFAULT: u64 = 1 << 24;
 
+/// `TAM_RS_MAUDE_VARIANTS_WORK=<n>` sets the work bound of one call of the
+/// generator of Maude's variant listings on native; `0` removes the bound.
+///
+/// The generator asks before every narrowing step, every unification,
+/// every unifier and inside its matcher and its reductions whether to go
+/// on. A call that asks more than this number of times gives up, and native
+/// answers the request by its own route, as it does when the generator runs
+/// out of fuel or the checker refuses its family. The count is a function
+/// of the request alone, so the bound is deterministic.
+pub const MAUDE_VARIANTS_WORK: &str = "TAM_RS_MAUDE_VARIANTS_WORK";
+
+/// The bound without [`MAUDE_VARIANTS_WORK`].
+#[cfg(feature = "lean-unification")]
+const MAUDE_VARIANTS_WORK_DEFAULT: u64 = 1 << 28;
+
 /// The fuel of the port of Maude's unification algorithm: a bound on the
 /// depth of its recursion, far above what a protocol's unification needs.
 /// The work bound of the call ([`SEARCH_WORK`]) bounds its time.
@@ -977,6 +1056,14 @@ impl Reference {
             selected.variant_check_search = value.parse().map_err(|_| {
                 MaudeError::Other(format!(
                     "{VARIANT_CHECK_SEARCH}: expected a number of search steps, got {value:?}"
+                ))
+            })?;
+        }
+        if let Some(value) = std::env::var_os(MAUDE_VARIANTS_WORK) {
+            let value = value.to_string_lossy();
+            selected.maude_variants_work = value.parse().map_err(|_| {
+                MaudeError::Other(format!(
+                    "{MAUDE_VARIANTS_WORK}: expected a number of search steps, got {value:?}"
                 ))
             })?;
         }
@@ -1995,6 +2082,24 @@ impl MaudeHandle {
         self.reference.tamper_variants = tamper;
     }
 
+    /// Let one call of the generator of Maude's variant listings take `work`
+    /// search steps (zero for no bound) before native answers by its own
+    /// route, as [`MAUDE_VARIANTS_WORK`] does for a whole process.
+    #[cfg(feature = "lean-unification")]
+    pub fn set_maude_variants_work(&mut self, work: u64) {
+        self.reference.maude_variants_work = work;
+    }
+
+    /// Replace the family the generator of Maude's listings proposes before
+    /// it is checked.
+    #[cfg(all(test, feature = "lean-unification"))]
+    pub(crate) fn set_maude_variants_tamper(
+        &mut self,
+        tamper: Option<fn(&mut crate::lean_unification::Substitutions)>,
+    ) {
+        self.reference.tamper_maude_variants = tamper;
+    }
+
     /// Stop one interruptible Lean search after `work` steps (zero for no
     /// bound), as [`SEARCH_WORK`] does for a whole process.
     #[cfg(feature = "lean-unification")]
@@ -2696,11 +2801,32 @@ impl MaudeHandle {
         query: &LNTerm,
         family: &[Vec<(crate::lterm::LVar, LNTerm)>],
     ) -> Result<(Origin, bool), MaudeError> {
+        match self.check_family(query, family)? {
+            Ok(accepted) => Ok(accepted),
+            Err(refused) => Err(self.caches.fail(|| {
+                NativeFailure::Runtime(format!(
+                    "{refused}; query {query}, family of {} members",
+                    family.len()
+                ))
+            })),
+        }
+    }
+
+    /// The checker's verdict on a family proposed for `query`
+    /// ([`Self::checked_family`]): the origin of an accepted family and
+    /// whether the verdict came from the session memo, or why the family was
+    /// not accepted. Only a failure to run the checker is an error here.
+    #[cfg(feature = "lean-unification")]
+    fn check_family(
+        &self,
+        query: &LNTerm,
+        family: &[Vec<(crate::lterm::LVar, LNTerm)>],
+    ) -> Result<Result<(Origin, bool), crate::lean_unification::Error>, MaudeError> {
         use crate::lean_unification::{Error, FamilyCheck};
         let work = self.reference.variant_check_work;
         let key = (query.clone(), family.to_vec());
         if let Some(origin) = self.caches.variant_checks.lock().unwrap().get(&key) {
-            return Ok((*origin, true));
+            return Ok(Ok((*origin, true)));
         }
         let Some(table) = self.reduction_table()? else {
             return Err(self.unsupported_native_operation("variant generation"));
@@ -2747,7 +2873,7 @@ impl MaudeHandle {
                         .unwrap()
                         .insert(key, origin);
                 }
-                return Ok((origin, false));
+                return Ok(Ok((origin, false)));
             }
             FamilyCheck::Rejected { reason, member } => Error::RejectedVariants { reason, member },
             FamilyCheck::OutOfBudget => Error::VariantCheckBudget {
@@ -2756,12 +2882,7 @@ impl MaudeHandle {
             },
             FamilyCheck::Undecided => Error::UncertifiedVariants,
         };
-        Err(self.caches.fail(|| {
-            NativeFailure::Runtime(format!(
-                "{refused}; query {query}, family of {} members",
-                family.len()
-            ))
-        }))
+        Ok(Err(refused))
     }
 
     /// Whether *any* unifier of `eqs` exists modulo the signature's AC/C
@@ -3927,6 +4048,130 @@ impl MaudeHandle {
         }
     }
 
+    /// Native's answer to the `get variants` command the Maude backend sends
+    /// Maude for `t`: the generator of Maude's listings in the algebra
+    /// library, run on the command's term and the equations of the module the
+    /// Maude backend writes, under the ranks of Maude's term order on that
+    /// module ([`crate::maude_ranks`]). Its reply takes the form of Maude's
+    /// parsed reply and is decoded by that backend's own code, so the answer
+    /// is the one the Maude backend returns whenever the generator lists what
+    /// Maude lists. The generator is a proposer: its family is used only once
+    /// the certificate checker accepted it, as every family of native's own
+    /// route is ([`Self::checked_family`]).
+    ///
+    /// `None` when the generator gave up, the checker did not accept its
+    /// family, or a term is outside the theory: native's own route then
+    /// answers. A verdict is kept for the session by the command's bytes.
+    #[cfg(feature = "lean-unification")]
+    fn variants_as_maude(
+        &self,
+        t: &LNTerm,
+    ) -> Result<Option<Vec<Vec<(crate::lterm::LVar, LNTerm)>>>, MaudeError> {
+        use crate::lean_unification::VariantsReply;
+        cancellation::check()?;
+        let stats = &self.caches.stats;
+        let Some(theory) = self.native_theory() else {
+            stats
+                .maude_variants_declined
+                .fetch_add(1, Ordering::Relaxed);
+            return Ok(None);
+        };
+        let mut ctx = ConvCtx::new();
+        let mt = lterm_to_mterm_global(t, &mut ctx);
+        let mut cmd = Vec::new();
+        pp_mterm_into(&mt, &mut cmd);
+        let memo = self
+            .caches
+            .maude_variants
+            .lock()
+            .unwrap()
+            .get(&cmd)
+            .cloned();
+        let msubsts = match memo {
+            Some(MaudeVariants::Proposed(msubsts)) => msubsts,
+            Some(other) => {
+                other.count(stats);
+                return Ok(None);
+            }
+            None => {
+                let equations = self
+                    .caches
+                    .maude_equations
+                    .get_or_init(|| crate::lean_unification::module_equations(&self.sig));
+                let reply = crate::lean_unification::maude_variants(
+                    theory,
+                    self.maude_ranks(),
+                    equations,
+                    &mt,
+                    MAUDE_PORT_FUEL,
+                    self.reference.maude_variants_work,
+                )
+                .map_err(|e| self.lean_error(e))?;
+                let verdict = match reply {
+                    VariantsReply::Variants(msubsts) => MaudeVariants::Proposed(Arc::new(msubsts)),
+                    VariantsReply::GaveUp => MaudeVariants::GaveUp,
+                    VariantsReply::Unencodable => MaudeVariants::Declined,
+                };
+                if self.intact() {
+                    self.caches
+                        .maude_variants
+                        .lock()
+                        .unwrap()
+                        .insert(cmd.clone(), verdict.clone());
+                }
+                match verdict {
+                    MaudeVariants::Proposed(msubsts) => msubsts,
+                    other => {
+                        other.count(stats);
+                        return Ok(None);
+                    }
+                }
+            }
+        };
+        // The Maude backend's decoding of a reply: each variant on its own
+        // clone of the request's context.
+        let mut answers = Vec::with_capacity(msubsts.len());
+        for ms in msubsts.iter() {
+            let mut variant_ctx = ctx.clone();
+            answers.push(msubst_to_lnsubst_unify(ms, &mut variant_ctx)?);
+        }
+        #[cfg(test)]
+        if let Some(tamper) = self.reference.tamper_maude_variants {
+            tamper(&mut answers);
+        }
+        match self.check_family(t, &answers)? {
+            Ok((origin, cached)) => {
+                stats.maude_variants.fetch_add(1, Ordering::Relaxed);
+                self.caches
+                    .provenance
+                    .record_route(VariantRoute::MaudeListing);
+                if cached {
+                    self.caches
+                        .provenance
+                        .record_cached(Asked::Variants, origin);
+                } else {
+                    self.caches.provenance.record(Asked::Variants, origin);
+                }
+                trace_variant_family(t, &answers);
+                Ok(Some(answers))
+            }
+            Err(refused) => {
+                if tamarin_utils::env_gate!("TAM_DBG_VARIANTS") {
+                    eprintln!("[variants] Maude's listing refused: {refused}; query {t}");
+                }
+                if self.intact() {
+                    self.caches
+                        .maude_variants
+                        .lock()
+                        .unwrap()
+                        .insert(cmd, MaudeVariants::Refused);
+                }
+                MaudeVariants::Refused.count(stats);
+                Ok(None)
+            }
+        }
+    }
+
     /// Get one fresh substitution per variant. The native constructor path
     /// returns the identity as an empty substitution. Maude may spell it out
     /// with independent same-sort fresh variables. Each Maude answer has its
@@ -3939,6 +4184,12 @@ impl MaudeHandle {
         cancellation::check()?;
         // Native hands every request to the same route: the Maude backend
         // sends each one to Maude.
+        #[cfg(feature = "lean-unification")]
+        if self.backend == AlgebraBackend::Native && !self.reference.variants {
+            if let Some(answers) = self.variants_as_maude(t)? {
+                return Ok(answers);
+            }
+        }
         #[cfg(feature = "lean-unification")]
         if !self.backend.uses_maude() {
             use crate::lean_unification::Outcome;

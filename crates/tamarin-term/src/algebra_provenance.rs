@@ -52,11 +52,15 @@ pub enum VariantRoute {
     /// The folding export proposed the family and the certificate checker
     /// accepted it.
     GeneralExport,
+    /// On native, the generator of Maude's listings
+    /// (`tamarin_maude_variants`) proposed the family and the certificate
+    /// checker accepted it.
+    MaudeListing,
 }
 
 const COMMANDS: usize = 4;
 const ORIGINS: usize = 5;
-const ROUTES: usize = 3;
+const ROUTES: usize = 4;
 
 /// Fresh answers and cache hits, by command and by the origin of the answer.
 #[derive(Default)]
@@ -158,10 +162,11 @@ impl Provenance {
                     .any(|n| n.load(Ordering::Relaxed) != 0)
                     .then(|| {
                         format!(
-                            "[VARIANT_ROUTES] proposer={} checked_export={} general_export={}",
+                            "[VARIANT_ROUTES] proposer={} checked_export={} general_export={} maude_listing={}",
                             self.route(VariantRoute::Proposer),
                             self.route(VariantRoute::CheckedExport),
                             self.route(VariantRoute::GeneralExport),
+                            self.route(VariantRoute::MaudeListing),
                         )
                     }),
             )
