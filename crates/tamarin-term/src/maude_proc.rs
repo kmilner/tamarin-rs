@@ -3265,16 +3265,18 @@ impl MaudeHandle {
     }
 
     /// Native's unifier of the delayed equations `residual`, which the Maude
-    /// backend sends to Maude: the proved unifier lists their family, the
-    /// proved naming export names its witnesses, and Rust composes each
-    /// member with the free unifier `factored` as that backend composes the
-    /// members of Maude's reply.
+    /// backend sends to Maude, where the port of Maude's unification
+    /// algorithm gave up or could not take them
+    /// ([`Self::unify_residuals_as_maude`]): the proved unifier lists their
+    /// family, the proved naming export names its witnesses, and Rust
+    /// composes each member with the free unifier `factored` as that backend
+    /// composes the members of Maude's reply.
     ///
     /// The witnesses are named as the Maude reply decoder names them, `x`
     /// numbered above the variables of `residual`, in an order of first
     /// occurrence that is that of [`crate::unifier_presentation`] for the
-    /// same request on proved-only, since the order in which Maude prints a
-    /// unifier is internal to its AC solver.
+    /// same request on proved-only. The family and its order may differ from
+    /// Maude's.
     ///
     /// The reply of the unifier is kept by the words of the request, as on
     /// proved-only, and the naming and the composition run on every call
