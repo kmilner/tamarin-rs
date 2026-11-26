@@ -1109,6 +1109,7 @@ reference path whose output is byte-identical):
 | `TAM_DBG_VARIANT_CHECK=1` | proved-only: every family submitted to the Lean variant certificate checker with its member count, its charge against the work bound, the verdict and the time |
 | `TAM_RS_VARIANT_CHECK_WORK=<n>` | proved-only: work bound of the variant certificate checker (default 65536, `0` for none); see "Variant check budget" |
 | `TAM_RS_ALGEBRA_SEARCH_WORK=<n>` | proved-only: work bound of one interruptible Lean search, in questions asked (default 16777216, `0` for none); see "Search budget" |
+| `TAM_RS_MAUDE_VARIANTS_WORK=<n>` | native: work bound of one call of the generator of Maude's variant listings, in questions asked (default 16777216, `0` for none); past it native's own route answers |
 | `TAM_RS_ALGEBRA_SEARCH_REPORT=<n>` | proved-only: print to stderr every interruptible Lean call that asked at least `n` questions |
 | `TAM_SATURATION_LIMIT=<n>` | source-saturation step cap; outranks the CLI `-s=` |
 | `TAM_PROVE_DEADLINE_MS=<n>` | per-search wall-clock cap (co-operative) |
@@ -1317,6 +1318,34 @@ or cannot take a request, the total unifier above answers instead
 nonzero). `native_lists_maudes_*` in
 `crates/tamarin-term/src/lean_unification_integration_tests.rs` compare the
 answers with the Maude backend's.
+
+On the native backend a variants query, which the Maude backend sends to
+Maude as `get variants`, goes first to `tamarin_lean_maude_variants`, a Lean
+proposer that lists what Maude lists (`Tamarin.MaudeVariantsSearch`). Rust
+sends the command's term (a fact's arguments as one row), the module's
+equations in the order the module text writes them
+(`lean_unification::module_equations`) and Maude's ranks, reads the reply
+into the form of a parsed Maude reply and decodes it with the Maude backend's
+own code (`MaudeHandle::variants_as_maude`). The family is used only once
+`tamarin_theory_variant_check` accepted it. Where the generator gives up
+(its fuel, or `TAM_RS_MAUDE_VARIANTS_WORK`, default 2^24 questions, `0` for
+no bound), the checker refuses its family, or a term is outside the theory,
+native's own route answers, as on proved-only, and the session goes on;
+the verdict is kept for the session by the command's bytes. In
+`TAM_MAUDE_CACHE_STATS=1`, `maude_variants=`, `maude_variants_gave_up=`,
+`maude_variants_refused=` and `maude_variants_declined=` count the four
+outcomes per request, and `maude_listing=` in `[VARIANT_ROUTES]` the
+families taken; `TAM_DBG_VARIANTS=1` prints each listing with the time the
+generator took. On the corpus every request is taken except two of
+`native_ac_marker_trace`, whose equation is not AC-coherent: Maude's listing
+misses a variant and the checker refuses it.
+
+| test | what it holds the code to |
+| --- | --- |
+| `maude_listing::*` in `crates/tamarin-term/src/maude_proc_tests.rs` | a listing is taken once the checker accepts it; a give-up (work bound 1) and a refusal (a member dropped) are answered by native's own route without failing the session, and kept for it |
+| `maude_variants::tests` in `crates/tamarin-term/src/lean_unification/whole/maude_variants.rs` | the reply parses to the substitutions of a captured Maude reply; a term outside the theory is not sent |
+| `native_prints_what_maude_prints_on_a_bilinear_protocol_with_many_variants` in `crates/tamarin-prover/tests/lean_unification.rs` | `sp14/TAK1`, whose rule variants native used to list in another order, prints what the Maude backend prints |
+| `Tests/MaudeVariantsExport.lean` in the algebra repository | three captured Maude replies, give-up, malformed requests and interruption |
 
 `crates/tamarin-term/src/lean_unification/whole/wire_tests.rs` holds the
 tests, on the queries of `examples/audit_fuzz.rs` for every signature that

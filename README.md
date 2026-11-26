@@ -74,10 +74,15 @@ query that the Maude backend hands to Maude is answered by proved code, and
 every other query is answered exactly as on the Maude backend, by its Rust
 front ends. Its AC and C unifications run a proved port of Maude's own
 unification algorithm under Maude's term order on the theory's module, so
-they list Maude's unifiers in Maude's order. Native therefore prints what the
-Maude backend prints wherever the two differed only by unification; listings
-of rule variants can still differ in order and naming. It is faster than
-proved-only on theories with many unification queries.
+they list Maude's unifiers in Maude's order. Its variant queries go first to
+a generator of Maude's `get variants` listings in the same library, which
+lists Maude's variants in Maude's order and numbering; that family is used
+only once the proved certificate checker has accepted it, and where the
+generator gives up or the checker refuses it, native's own variant solvers
+answer. Native therefore prints what the Maude backend prints on every theory
+of the regression corpus but one, whose equation is not AC-coherent: there
+Maude's listing misses a variant and the checker refuses it. It is faster
+than proved-only on theories with many unification queries.
 
 Tamarin requires a theory's equations to be convergent and has always taken
 the author's word for it. The native backend checks instead: a proved
