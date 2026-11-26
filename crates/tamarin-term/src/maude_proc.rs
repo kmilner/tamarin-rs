@@ -1001,7 +1001,7 @@ pub const MAUDE_VARIANTS_WORK: &str = "TAM_RS_MAUDE_VARIANTS_WORK";
 
 /// The bound without [`MAUDE_VARIANTS_WORK`].
 #[cfg(feature = "lean-unification")]
-const MAUDE_VARIANTS_WORK_DEFAULT: u64 = 1 << 28;
+const MAUDE_VARIANTS_WORK_DEFAULT: u64 = 1 << 24;
 
 /// The fuel of the port of Maude's unification algorithm: a bound on the
 /// depth of its recursion, far above what a protocol's unification needs.
@@ -4098,6 +4098,7 @@ impl MaudeHandle {
                     .caches
                     .maude_equations
                     .get_or_init(|| crate::lean_unification::module_equations(&self.sig));
+                let started = std::time::Instant::now();
                 let reply = crate::lean_unification::maude_variants(
                     theory,
                     self.maude_ranks(),
@@ -4107,6 +4108,16 @@ impl MaudeHandle {
                     self.reference.maude_variants_work,
                 )
                 .map_err(|e| self.lean_error(e))?;
+                if tamarin_utils::env_gate!("TAM_DBG_VARIANTS") {
+                    let listed = match &reply {
+                        VariantsReply::Variants(msubsts) => format!("{} members", msubsts.len()),
+                        other => format!("{other:?}"),
+                    };
+                    eprintln!(
+                        "[variants] Maude's listing: {listed} after {} ms; query {t}",
+                        started.elapsed().as_millis()
+                    );
+                }
                 let verdict = match reply {
                     VariantsReply::Variants(msubsts) => MaudeVariants::Proposed(Arc::new(msubsts)),
                     VariantsReply::GaveUp => MaudeVariants::GaveUp,
