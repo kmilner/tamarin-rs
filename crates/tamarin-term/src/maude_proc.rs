@@ -300,6 +300,12 @@ struct MaudeCacheStats {
     /// others, and those it declined.
     lean_unify_spelled: AtomicU64,
     lean_unify_exists: AtomicU64,
+    /// On native, the delayed equations of a request answered by the port of
+    /// Maude's unification algorithm, and those it gave up on or could not
+    /// take, which the proved total unifier answered instead.
+    maude_port: AtomicU64,
+    maude_port_gave_up: AtomicU64,
+    maude_port_declined: AtomicU64,
 }
 
 /// The memo caches for one theory session, shared (`Arc`) by the
@@ -381,6 +387,11 @@ pub struct SharedMaudeCaches {
     /// express the signature.
     #[cfg(feature = "lean-unification")]
     native_theory: std::sync::OnceLock<Option<Arc<crate::lean_unification::Theory>>>,
+    /// Maude's ranks of the operators and variable symbols of the session's
+    /// module, for the port of Maude's unification algorithm, built on first
+    /// use.
+    #[cfg(feature = "lean-unification")]
+    maude_ranks: std::sync::OnceLock<crate::maude_ranks::MaudeRanks>,
     /// Memo for the families of variants the certificate checker accepted,
     /// keyed by the query and the very family that was submitted, with the
     /// origin the answer counts under. Any other verdict fails the session.
@@ -519,7 +530,7 @@ impl Drop for SharedMaudeCaches {
             let count = |n: &AtomicU64| n.load(Ordering::Relaxed);
             let s = &self.stats;
             eprintln!(
-                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{} spelled={} unspelled={} self_named={} self_declined={} lean_exists={} lean_unify={}",
+                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{} spelled={} unspelled={} self_named={} self_declined={} lean_exists={} lean_unify={} maude_port={} maude_port_gave_up={} maude_port_declined={}",
                 count(&s.reduce_hits),
                 count(&s.reduce_misses),
                 count(&s.unifiable_hits),
@@ -532,6 +543,9 @@ impl Drop for SharedMaudeCaches {
                 count(&s.lean_unify_self_declined),
                 count(&s.lean_unify_exists),
                 count(&s.lean_unify),
+                count(&s.maude_port),
+                count(&s.maude_port_gave_up),
+                count(&s.maude_port_declined),
             );
             for line in self.provenance.report() {
                 eprintln!("{line}");
@@ -909,6 +923,12 @@ pub const SEARCH_WORK: &str = "TAM_RS_ALGEBRA_SEARCH_WORK";
 /// for the measurements behind the value.
 #[cfg(feature = "lean-unification")]
 const SEARCH_WORK_DEFAULT: u64 = 1 << 24;
+
+/// The fuel of the port of Maude's unification algorithm: a bound on the
+/// depth of its recursion, far above what a protocol's unification needs.
+/// The work bound of the call ([`SEARCH_WORK`]) bounds its time.
+#[cfg(feature = "lean-unification")]
+const MAUDE_PORT_FUEL: u64 = 1 << 20;
 
 #[cfg(feature = "lean-unification")]
 impl Reference {
@@ -1727,6 +1747,15 @@ impl MaudeHandle {
             .native_theory
             .get_or_init(|| crate::lean_unification::Theory::new(&self.sig).map(Arc::new))
             .as_ref()
+    }
+
+    /// Maude's ranks of the session's module ([`crate::maude_ranks`]),
+    /// built once for all the handles that share the session's caches.
+    #[cfg(feature = "lean-unification")]
+    fn maude_ranks(&self) -> &crate::maude_ranks::MaudeRanks {
+        self.caches
+            .maude_ranks
+            .get_or_init(|| crate::maude_ranks::MaudeRanks::new(&self.sig))
     }
 
     /// Narrow one free application on distinct message variables and retain
@@ -3172,9 +3201,67 @@ impl MaudeHandle {
         }
         #[cfg(feature = "lean-unification")]
         if self.backend == AlgebraBackend::Native {
+            if let Some(answers) = self.unify_residuals_as_maude(&residual_eqs, &factored_m)? {
+                return Ok(answers);
+            }
             return self.unify_residuals_with_lean(&residual_eqs, &factored_m);
         }
         self.unify_residuals_with_maude(&residual_eqs, &factored_m)
+    }
+
+    /// Native's answer to the delayed equations `residual` that the Maude
+    /// backend sends to Maude: the port of Maude's unification algorithm in
+    /// the algebra library, run on the terms of the `unify` command that
+    /// backend writes, under the ranks of Maude's term order on the session's
+    /// module ([`crate::maude_ranks`]). Its reply takes the form of Maude's
+    /// parsed reply and is decoded and composed with the free unifier
+    /// `factored` by that backend's own code ([`decode_unify_reply`]), so the
+    /// answer is the one the Maude backend returns whenever the port lists
+    /// what Maude lists. The export proves that it lists a complete family of
+    /// unifiers whatever the ranks.
+    ///
+    /// `None` when the port gave up or a term is outside the theory; the
+    /// proved total unifier then answers ([`Self::unify_residuals_with_lean`]).
+    #[cfg(feature = "lean-unification")]
+    fn unify_residuals_as_maude(
+        &self,
+        residual: &[Equal<LNTerm>],
+        factored: &crate::subst::Subst<crate::lterm::Name, crate::lterm::LVar>,
+    ) -> Result<Option<Vec<Vec<(crate::lterm::LVar, LNTerm)>>>, MaudeError> {
+        use crate::lean_unification::PortReply;
+        cancellation::check()?;
+        let stats = &self.caches.stats;
+        let Some(theory) = self.native_theory() else {
+            stats.maude_port_declined.fetch_add(1, Ordering::Relaxed);
+            return Ok(None);
+        };
+        let mut ctx = ConvCtx::new();
+        let sides = conj_eqs_mterms(residual, &mut ctx);
+        let reply = crate::lean_unification::maude_unify(
+            theory,
+            self.maude_ranks(),
+            &sides,
+            MAUDE_PORT_FUEL,
+            self.reference.search_work,
+        )
+        .map_err(|e| self.lean_error(e))?;
+        match reply {
+            PortReply::Unifiers(msubsts) => {
+                trace_unify(TRACE_NATIVE);
+                self.bump_stats(|stats| stats.lean_unify_count += 1);
+                stats.lean_unify.fetch_add(1, Ordering::Relaxed);
+                stats.maude_port.fetch_add(1, Ordering::Relaxed);
+                decode_unify_reply(&msubsts, &ctx, factored).map(Some)
+            }
+            PortReply::GaveUp => {
+                stats.maude_port_gave_up.fetch_add(1, Ordering::Relaxed);
+                Ok(None)
+            }
+            PortReply::Unencodable => {
+                stats.maude_port_declined.fetch_add(1, Ordering::Relaxed);
+                Ok(None)
+            }
+        }
     }
 
     /// Native's unifier of the delayed equations `residual`, which the Maude
@@ -3298,78 +3385,7 @@ impl MaudeHandle {
             s.unify_count += 1
         })?;
         let msubsts = maude_parse::parse_unify_reply_with_sig(&reply, &self.sig)?;
-        // HS `avoid (M.elems bindings)` (`runBackConversion`,
-        // Term/Maude/Types.hs, via
-        // LTerm.hs `avoid = maybe 0 (succ . snd) . boundsVarIdx`):
-        // the witness fresh-supply floor is the max idx over ALL of the
-        // query's own binding vars — i.e. the vars of `maude_eqs`, which
-        // `lterm_to_mterm_global` has registered in `ctx`'s inverse map.
-        // This is the ONLY input to witness numbering: HS injects NO
-        // system-wide avoid (there is no HS `avoid` parameter on unify), so
-        // neither do we.  Each reply arm is converted below in this SAME
-        // local scope, never reading or advancing `self`'s session counter.
-        let mut input_max = 0u64;
-        for lit in ctx.bindings().values() {
-            if let crate::vterm::Lit::Var(lv) = lit
-                && lv.idx > input_max
-            {
-                input_max = lv.idx;
-            }
-        }
-        let mut out = Vec::with_capacity(msubsts.len());
-        // HS-faithful per-unifier conversion (Term/Maude/Process.hs
-        // + Term/Maude/Types.hs).  HS does:
-        //   map (msubstToLSubstVFresh bindings) <$> parseUnifyReply ...
-        // where each `msubstToLSubstVFresh bindings substMaude` calls
-        //   runBackConversion (traverse translate substMaude) bindings
-        // and `runBackConversion back bindings =
-        //   evalBindT back bindings `evalFreshAvoiding` M.elems bindings`.
-        //
-        // Every unifier conversion gets:
-        //   (a) the SAME initial bind-map `bindings` (the toMaude
-        //       conversion's output) — no carryover of witness/FreshVar
-        //       allocations from one unifier to the next, AND
-        //   (b) a fresh supply seeded LOCALLY at `avoid (M.elems bindings)`
-        //       = `input_max + 1` — the SAME base per unifier, drawn ONLY
-        //       from the query's own vars.  HS reads NO global fresh state
-        //       here and writes NONE back: after `evalFreshAvoiding` the
-        //       supply is discarded, so a `unifyViaMaude` call is
-        //       counter-neutral (the session `MonadFresh` state is
-        //       unchanged across it).
-        //
-        // This per-unifier same-base restart is load-bearing for arm Ord:
-        // on Resp_1 / Init_1 / generate_ltk multi-AC arms
-        // (UM_wPFS::wPFS_responder_key + JKL_TS2_2008), the Mult arm's
-        // witness gets a lower idx than the "everything-equates" arm's
-        // because it traverses fewer distinct FreshVars before the equate
-        // target, so HS sorts Mult before Equates under the SubstVFresh Ord.
-        //
-        // Faithful realisation: convert each arm on its OWN clone of the
-        // shared `ctx`, seeding the witness supply at the same local
-        // `input_max` via `msubst_to_lnsubst_with_avoid`.  The session
-        // counter (`self`) is never passed, never read, never advanced —
-        // matching HS's pure `evalFreshAvoiding` scope.  Sharing `ctx` (or
-        // the counter) across arms would collapse the per-arm idx
-        // differences and mis-order the arms (fallback to VALUE-structure
-        // Ord).
-        for ms in &msubsts {
-            let mut per_arm_ctx = ctx.clone();
-            out.push(msubst_to_lnsubst_with_avoid(
-                ms,
-                &mut per_arm_ctx,
-                input_max,
-            )?);
-        }
-        // HS-faithful `removeRenamings` (Maude/Types.hs): HS's
-        // `msubstToLSubstVFresh bindings substMaude` ends with
-        // `removeRenamings $ substFromListVFresh slist` — drops every
-        // entry whose image is just a Var with no role elsewhere in
-        // the substitution (`isRenamedVar` in SubstVFresh.hs).
-        // RS's `msubst_to_lnsubst_with_avoid` returns the raw slist without
-        // that filter, so it is applied here: left in, the trivial rename
-        // entries reach the disjunction's substs as extra node-id bindings
-        // and drive spurious `setNodes` collisions.
-        Ok(compose_residual_arms(out, factored_m))
+        decode_unify_reply(&msubsts, &ctx, factored_m)
     }
 
     #[cfg(feature = "lean-unification")]
@@ -4113,18 +4129,111 @@ fn sort_tag(s: crate::lterm::LSort) -> &'static str {
 /// `ctx`, so one wire encoding serves the whole conjunction.
 fn build_conj_eqs_cmd(prefix: &[u8], eqs: &[Equal<LNTerm>], ctx: &mut ConvCtx) -> Vec<u8> {
     let mut cmd = prefix.to_vec();
-    for (i, eq) in eqs.iter().enumerate() {
+    for (i, (lm, rm)) in conj_eqs_mterms(eqs, ctx).iter().enumerate() {
         if i > 0 {
             cmd.extend_from_slice(b" /\\ ");
         }
-        let lm = lterm_to_mterm_global(&eq.lhs, ctx);
-        let rm = lterm_to_mterm_global(&eq.rhs, ctx);
-        pp_mterm_into(&lm, &mut cmd);
+        pp_mterm_into(lm, &mut cmd);
         cmd.extend_from_slice(b" =? ");
-        pp_mterm_into(&rm, &mut cmd);
+        pp_mterm_into(rm, &mut cmd);
     }
     cmd.extend_from_slice(b" .\n");
     cmd
+}
+
+/// The terms of [`build_conj_eqs_cmd`]: each equation's sides converted in
+/// turn, left side first, with the shared `ctx`.
+fn conj_eqs_mterms(eqs: &[Equal<LNTerm>], ctx: &mut ConvCtx) -> Vec<(MTerm, MTerm)> {
+    eqs.iter()
+        .map(|eq| {
+            let lm = lterm_to_mterm_global(&eq.lhs, ctx);
+            let rm = lterm_to_mterm_global(&eq.rhs, ctx);
+            (lm, rm)
+        })
+        .collect()
+}
+
+/// Decode the parsed reply `msubsts` of a `unify` command whose terms were
+/// converted with `ctx`, and compose each unifier with the free unifier
+/// `factored`: the Maude backend's decoding of Maude's reply, which native
+/// also applies to the reply of the port of Maude's algorithm.
+fn decode_unify_reply(
+    msubsts: &[MSubst],
+    ctx: &ConvCtx,
+    factored: &crate::subst::Subst<crate::lterm::Name, crate::lterm::LVar>,
+) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
+    // HS `avoid (M.elems bindings)` (`runBackConversion`,
+    // Term/Maude/Types.hs, via
+    // LTerm.hs `avoid = maybe 0 (succ . snd) . boundsVarIdx`):
+    // the witness fresh-supply floor is the max idx over ALL of the
+    // query's own binding vars — i.e. the vars of `maude_eqs`, which
+    // `lterm_to_mterm_global` has registered in `ctx`'s inverse map.
+    // This is the ONLY input to witness numbering: HS injects NO
+    // system-wide avoid (there is no HS `avoid` parameter on unify), so
+    // neither do we.  Each reply arm is converted below in this SAME
+    // local scope, never reading or advancing `self`'s session counter.
+    let mut input_max = 0u64;
+    for lit in ctx.bindings().values() {
+        if let crate::vterm::Lit::Var(lv) = lit
+            && lv.idx > input_max
+        {
+            input_max = lv.idx;
+        }
+    }
+    let mut out = Vec::with_capacity(msubsts.len());
+    // HS-faithful per-unifier conversion (Term/Maude/Process.hs
+    // + Term/Maude/Types.hs).  HS does:
+    //   map (msubstToLSubstVFresh bindings) <$> parseUnifyReply ...
+    // where each `msubstToLSubstVFresh bindings substMaude` calls
+    //   runBackConversion (traverse translate substMaude) bindings
+    // and `runBackConversion back bindings =
+    //   evalBindT back bindings `evalFreshAvoiding` M.elems bindings`.
+    //
+    // Every unifier conversion gets:
+    //   (a) the SAME initial bind-map `bindings` (the toMaude
+    //       conversion's output) — no carryover of witness/FreshVar
+    //       allocations from one unifier to the next, AND
+    //   (b) a fresh supply seeded LOCALLY at `avoid (M.elems bindings)`
+    //       = `input_max + 1` — the SAME base per unifier, drawn ONLY
+    //       from the query's own vars.  HS reads NO global fresh state
+    //       here and writes NONE back: after `evalFreshAvoiding` the
+    //       supply is discarded, so a `unifyViaMaude` call is
+    //       counter-neutral (the session `MonadFresh` state is
+    //       unchanged across it).
+    //
+    // This per-unifier same-base restart is load-bearing for arm Ord:
+    // on Resp_1 / Init_1 / generate_ltk multi-AC arms
+    // (UM_wPFS::wPFS_responder_key + JKL_TS2_2008), the Mult arm's
+    // witness gets a lower idx than the "everything-equates" arm's
+    // because it traverses fewer distinct FreshVars before the equate
+    // target, so HS sorts Mult before Equates under the SubstVFresh Ord.
+    //
+    // Faithful realisation: convert each arm on its OWN clone of the
+    // shared `ctx`, seeding the witness supply at the same local
+    // `input_max` via `msubst_to_lnsubst_with_avoid`.  The session
+    // counter (`self`) is never passed, never read, never advanced —
+    // matching HS's pure `evalFreshAvoiding` scope.  Sharing `ctx` (or
+    // the counter) across arms would collapse the per-arm idx
+    // differences and mis-order the arms (fallback to VALUE-structure
+    // Ord).
+    for ms in msubsts {
+        let mut per_arm_ctx = ctx.clone();
+        out.push(msubst_to_lnsubst_with_avoid(
+            ms,
+            &mut per_arm_ctx,
+            input_max,
+        )?);
+    }
+    // HS-faithful `removeRenamings` (Maude/Types.hs): HS's
+    // `msubstToLSubstVFresh bindings substMaude` ends with
+    // `removeRenamings $ substFromListVFresh slist` — drops every
+    // entry whose image is just a Var with no role elsewhere in
+    // the substitution (`isRenamedVar` in SubstVFresh.hs).
+    // RS's `msubst_to_lnsubst_with_avoid` returns the raw slist without
+    // that filter, so it is applied here: left in, the trivial rename
+    // entries reach the disjunction's substs as extra node-id bindings
+    // and drive spurious `setNodes` collisions.
+    Ok(compose_residual_arms(out, factored))
 }
 
 /// Build a `match in MSG : <pats> <=? <subjs> .\n` command.  Pattern list on the

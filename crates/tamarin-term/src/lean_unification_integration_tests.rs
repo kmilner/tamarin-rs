@@ -9,6 +9,7 @@ use crate::maude_sig::{mset_maude_sig, MaudeSig};
 use crate::rewriting::Equal;
 use crate::term::{f_app_ac, Term};
 use crate::vterm::Lit;
+use std::sync::atomic::Ordering;
 use tamarin_test_support::require_maude_path;
 
 fn native_session(sig: MaudeSig) -> MaudeHandle {
@@ -7888,13 +7889,17 @@ fn native_answers_a_free_request_without_handing_it_off() {
     assert_eq!(native.stats().unify_count, 0);
 }
 
-/// A request with delayed AC equations hands them to the proved unifier,
-/// and Rust composes its answer with the free unifier's. The answer is
-/// proved-only's, witness names included, and a repeat reads the memo.
+/// A request with delayed AC equations hands them to the port of Maude's
+/// unification algorithm, and Rust composes its answer with the free
+/// unifier's as the Maude backend composes Maude's. The answer is the Maude
+/// backend's, witness names included, and a repeat reads the memo.
 #[test]
-fn native_hands_the_delayed_equations_to_the_proved_unifier() {
+fn native_hands_the_delayed_equations_to_the_port_of_maude() {
     use crate::builtin::pair;
-    let (native, only) = native_pair(dh_pair_sig());
+    let (native, _) = native_pair(dh_pair_sig());
+    let maude = require_maude_path().map(|path| {
+        MaudeHandle::start_with_backend(&path, dh_pair_sig(), AlgebraBackend::Maude).unwrap()
+    });
     let var = |name, idx| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, idx)));
     let mult = |l, r| f_app_ac(AcSym::Mult, vec![l, r]);
     let requests = [
@@ -7913,9 +7918,12 @@ fn native_hands_the_delayed_equations_to_the_proved_unifier() {
     for eqs in &requests {
         let answers = native.unify(eqs).unwrap();
         assert!(answers.len() > 1, "{answers:?}");
-        assert_eq!(answers, only.unify(eqs).unwrap());
+        if let Some(maude) = &maude {
+            assert_eq!(answers, maude.unify(eqs).unwrap());
+        }
         assert_eq!(native.unify(eqs).unwrap(), answers);
     }
+    assert_eq!(native.caches.stats.maude_port.load(Ordering::Relaxed), 2);
     assert_eq!(unify_tally(&native, Origin::NativeRust), (2, 2));
     assert_eq!(unify_tally(&native, Origin::Proved), (0, 0));
     assert_eq!(unify_tally(&native, Origin::SharedRust), (0, 0));
@@ -8002,4 +8010,164 @@ fn native_hands_off_matching_normalization_and_variants() {
     assert_eq!(native.stats().match_count, 0);
     assert_eq!(native.stats().norm_count, 0);
     assert_eq!(native.stats().var_count, 0);
+}
+
+/// The variables and names of the requests below.
+fn msg(idx: u64) -> LNTerm {
+    Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, idx)))
+}
+
+fn fresh(idx: u64) -> LNTerm {
+    Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, idx)))
+}
+
+fn public(idx: u64) -> LNTerm {
+    Term::Lit(Lit::Var(LVar::new("p", LSort::Pub, idx)))
+}
+
+/// Requests with delayed AC and C equations, on native and on the Maude
+/// backend: the answers are the same, in the same order and with the same
+/// witnesses. The port answered every one of them on native.
+fn assert_native_answers_as_maude(sig: MaudeSig, requests: &[Vec<Equal<LNTerm>>]) {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::Native)
+            .unwrap();
+    let maude = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
+    for eqs in requests {
+        assert_eq!(
+            native.unify(eqs).unwrap(),
+            maude.unify(eqs).unwrap(),
+            "{eqs:?}"
+        );
+    }
+    let stats = &native.caches.stats;
+    assert_eq!(
+        stats.maude_port.load(Ordering::Relaxed),
+        requests.len() as u64
+    );
+    assert_eq!(stats.maude_port_gave_up.load(Ordering::Relaxed), 0);
+    assert_eq!(stats.maude_port_declined.load(Ordering::Relaxed), 0);
+}
+
+#[test]
+fn native_lists_maudes_exclusive_or_unifiers() {
+    use crate::builtin::{pair, xor};
+    let sig = crate::maude_sig::minimal_maude_sig(false)
+        .merge(crate::maude_sig::xor_maude_sig())
+        .refresh();
+    let zero = || {
+        Term::App(
+            FunSym::NoEq(crate::function_symbols::zero_sym()),
+            Vec::new().into(),
+        )
+    };
+    let requests = vec![
+        vec![Equal::new(xor(fresh(0), fresh(1)), xor(msg(2), msg(3)))],
+        vec![Equal::new(xor(msg(0), msg(1)), xor(msg(2), msg(3)))],
+        vec![Equal::new(
+            xor(xor(msg(4), pub_term("a")), fresh(1)),
+            xor(msg(2), pair(msg(3), msg(4))),
+        )],
+        vec![
+            Equal::new(xor(msg(0), public(1)), xor(msg(2), pub_term("b"))),
+            Equal::new(xor(msg(0), msg(2)), xor(zero(), msg(5))),
+        ],
+        vec![Equal::new(
+            xor(xor(msg(9), msg(3)), xor(msg(1), fresh(7))),
+            xor(pub_term("c"), xor(msg(8), msg(2))),
+        )],
+    ];
+    assert_native_answers_as_maude(sig, &requests);
+}
+
+#[test]
+fn native_lists_maudes_bilinear_unifiers() {
+    use crate::builtin::{exp, pmult};
+    let sig = crate::maude_sig::minimal_maude_sig(false)
+        .merge(crate::maude_sig::dh_maude_sig())
+        .merge(crate::maude_sig::bp_maude_sig())
+        .refresh();
+    let mult = |l, r| f_app_ac(AcSym::Mult, vec![l, r]);
+    let em = |l, r| crate::term::f_app_c(crate::function_symbols::CSym::EMap, vec![l, r]);
+    let requests = vec![
+        vec![Equal::new(
+            em(pmult(fresh(1), pub_term("P")), msg(2)),
+            em(msg(3), pmult(fresh(4), pub_term("Q"))),
+        )],
+        vec![Equal::new(
+            mult(mult(fresh(1), fresh(2)), msg(3)),
+            mult(msg(4), mult(fresh(5), msg(6))),
+        )],
+        vec![
+            Equal::new(
+                em(msg(1), msg(2)),
+                em(pmult(fresh(3), msg(4)), pub_term("R")),
+            ),
+            Equal::new(mult(msg(1), fresh(5)), mult(fresh(3), msg(6))),
+        ],
+        vec![Equal::new(
+            exp(pub_term("g"), mult(msg(0), mult(fresh(1), public(2)))),
+            exp(pub_term("g"), mult(msg(3), msg(4))),
+        )],
+    ];
+    assert_native_answers_as_maude(sig, &requests);
+}
+
+#[test]
+fn native_lists_maudes_multiset_and_user_ac_unifiers() {
+    use crate::function_symbols::{AcFctSym, Constructability, NdcState, Privacy};
+    let mut sig = mset_maude_sig().merge(crate::maude_sig::pair_maude_sig());
+    let op = AcFctSym::new(
+        "combine",
+        Privacy::Public,
+        Constructability::Constructor,
+        NdcState::NotNdc,
+    );
+    sig.st_ac_fun_syms.insert(op);
+    let sig = sig.refresh();
+    let union = |l, r| f_app_ac(AcSym::Union, vec![l, r]);
+    let combine = |l, r| f_app_ac(AcSym::AcFct(op), vec![l, r]);
+    let requests = vec![
+        vec![Equal::new(
+            union(union(msg(0), pub_term("a")), msg(1)),
+            union(msg(2), union(pub_term("a"), pub_term("b"))),
+        )],
+        vec![Equal::new(
+            combine(msg(0), fresh(1)),
+            combine(combine(msg(2), msg(3)), fresh(4)),
+        )],
+        vec![
+            Equal::new(union(msg(0), msg(1)), union(msg(2), msg(3))),
+            Equal::new(combine(msg(0), msg(2)), combine(msg(4), msg(5))),
+        ],
+    ];
+    assert_native_answers_as_maude(sig, &requests);
+}
+
+/// A request the port cannot take goes to the proved total unifier: here
+/// the whole request, fact wrapper included, because a sum of natural
+/// numbers has a message variable.
+#[test]
+fn native_falls_back_when_the_port_declines() {
+    use crate::function_symbols::nat_one_sym;
+    let sig = crate::maude_sig::minimal_maude_sig(false)
+        .merge(crate::maude_sig::nat_maude_sig())
+        .refresh();
+    let (native, only) = native_pair(sig);
+    let one = || Term::App(FunSym::NoEq(nat_one_sym()), Vec::new().into());
+    let plus = |l, r| f_app_ac(AcSym::NatPlus, vec![l, r]);
+    let list = |args: Vec<LNTerm>| Term::App(FunSym::List, args.into());
+    let eqs = [Equal::new(
+        list(vec![plus(msg(0), one()), msg(1)]),
+        list(vec![plus(one(), one()), msg(2)]),
+    )];
+    let answers = native.unify(&eqs).unwrap();
+    assert_eq!(answers.len(), only.unify(&eqs).unwrap().len());
+    let stats = &native.caches.stats;
+    assert_eq!(stats.maude_port.load(Ordering::Relaxed), 0);
+    assert_eq!(stats.maude_port_declined.load(Ordering::Relaxed), 1);
+    assert_eq!(native.stats().lean_unify_count, 1);
 }
