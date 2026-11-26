@@ -468,7 +468,7 @@ pub fn validate_cli_heuristic(
     Ok(())
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct SourceCache {
     raw: Arc<SourceSlot>,
     refined: Arc<SourceSlot>,
@@ -523,7 +523,7 @@ pub struct ProverSession {
     /// Used as the `ensure_above` floor on the per-lemma counter clone.
     setup_counter_before: u64,
     /// Raw and refined results are published once per successful build.
-    source_cache: std::sync::Arc<SourceCache>,
+    source_cache: SourceCache,
     /// Snapshot the process-wide diagnostic gate when the session is built so
     /// all contexts in one session follow the same cache policy.
     source_cache_disabled: bool,
@@ -539,6 +539,7 @@ struct LemmaJob {
     source_kind: Option<SourceKind>,
 }
 
+#[derive(Clone)]
 struct PreparedLemma {
     guarded: Result<std::sync::Arc<Guarded>, ProveError>,
     heuristic: Option<Vec<crate::constraint::solver::goals::GoalRanking>>,
@@ -602,28 +603,6 @@ impl crate::constraint::solver::context::SourceProvider for SessionSourceProvide
     }
 }
 
-/// Per-lemma source kind, mirroring HS `lemmaSourceKind`
-/// (lib/theory/src/Lemma.hs):
-///   lemmaSourceKind lem
-///     | SourceLemma `elem` lAttributes lem = RawSource
-///     | otherwise                          = RefinedSource
-/// HS sets `pcSourceKind = lemmaSourceKind l` (ClosedTheory.hs) and
-/// `mkSystem` stamps it onto the initial system's `sSourceKind`
-/// (CloseRule.hs).  In RS `SourceKind`, `RawSources < RefinedSources`,
-/// matching HS's `RawSource < RefinedSource` Ord (System.hs), so it
-/// can be used directly as the `lemmaSourceKind lem <= kind` bound below.
-pub(crate) fn lemma_source_kind(lemma: &crate::theory::Lemma) -> SourceKind {
-    if lemma
-        .attributes
-        .iter()
-        .any(|a| matches!(a, crate::theory::LemmaAttr::Sources))
-    {
-        SourceKind::RawSources
-    } else {
-        SourceKind::RefinedSources
-    }
-}
-
 /// HS `inductionHint` (ClosedTheory.hs): a lemma tagged
 /// `[use_induction]` (`InvariantLemma`) or `[sources]` (`SourceLemma`) is
 /// proved with `pcUseInduction = UseInduction`, so its first proof method is
@@ -644,68 +623,19 @@ pub(crate) fn induction_hint(
     }
 }
 
-/// Gather the `[reuse]` lemmas declared BEFORE `lemma_name`, mirroring HS
-/// `gatherReusableLemmas $ L.get sSourceKind sys` (CloseRule.hs):
-///
-///   guard $ lemmaSourceKind lem <= kind
-///        && ReuseLemma `elem` lAttributes lem
-///        && AllTraces == lTraceQuantifier lem
-///        && lName lem `notElem` pcHiddenLemmas ctxt
-///        && "ALL"     `notElem` pcHiddenLemmas ctxt
-///
-/// `kind` is the source kind of the system being built (= the proved
-/// lemma's `lemmaSourceKind`).  `pcHiddenLemmas` is populated from the
-/// PROVED lemma's own `[hide_lemma=..]` attributes (ClosedTheory.hs),
-/// so the hidden set is computed here from `lemma_name`'s attributes.
-/// HS uses `formulaToGuarded_` (fail-loud) on each reuse formula, so a
-/// non-guardable reuse formula propagates a `ProveError` rather than being
-/// silently dropped.
-///
-/// Both batch and interactive entry points reach this one implementation
-/// through their shared [`ProverSession`].
+/// Gather the visible reusable assumptions in declaration order.
 fn gather_reusable_lemmas(
     theory: &crate::theory::Theory,
     prepared_lemmas: &[PreparedLemma],
     lemma: &crate::theory::Lemma,
-    kind: SourceKind,
 ) -> Result<Vec<std::sync::Arc<Guarded>>, ProveError> {
-    // HS `pcHiddenLemmas` = the proved lemma's `[hide_lemma=h]` names.
-    let hidden: Vec<&str> = lemma
-        .attributes
-        .iter()
-        .filter_map(|a| match a {
-            crate::theory::LemmaAttr::HideLemma(h) => Some(h.as_str()),
-            _ => None,
-        })
-        .collect();
-    let hide_all = hidden.contains(&"ALL");
-    let mut reuse_lemmas = Vec::new();
-    for (prior, prepared) in theory.lemmas().zip(prepared_lemmas) {
-        if prior.name == lemma.name {
-            break;
-        }
-        if lemma_source_kind(prior) > kind {
-            continue;
-        }
-        if !prior
-            .attributes
-            .iter()
-            .any(|a| matches!(a, crate::theory::LemmaAttr::Reuse))
-        {
-            continue;
-        }
-        if !matches!(
-            prior.trace_quantifier,
-            crate::theory::TraceQuantifier::AllTraces
-        ) {
-            continue;
-        }
-        if hide_all || hidden.contains(&prior.name.as_str()) {
-            continue;
-        }
-        reuse_lemmas.push(prepared.guarded.clone()?);
-    }
-    Ok(reuse_lemmas)
+    theory
+        .lemmas()
+        .zip(prepared_lemmas)
+        .take_while(|(prior, _)| prior.name != lemma.name)
+        .filter(|(prior, _)| lemma.can_reuse(prior))
+        .map(|(_, prepared)| prepared.guarded.clone())
+        .collect()
 }
 
 /// Refined sources use every all-traces `[sources]` assumption in the theory,
@@ -804,6 +734,38 @@ impl ProverSession {
         &self.theory
     }
 
+    /// The first remaining lemma whose formula cannot be guarded.
+    pub fn first_lemma_error(&self) -> Option<&ProveError> {
+        self.prepared_lemmas
+            .iter()
+            .find_map(|prepared| prepared.guarded.as_ref().err())
+    }
+
+    /// Remove a lemma. Raw sources depend only on the rules and restrictions,
+    /// while refined sources also depend on the surviving source assumptions.
+    pub fn without_lemma(&self, name: &str) -> Option<Self> {
+        let (index, removed) = self
+            .theory
+            .lemmas()
+            .enumerate()
+            .find(|(_, lemma)| lemma.name == name)?;
+        let mut prepared_lemmas = self.prepared_lemmas.to_vec();
+        prepared_lemmas.remove(index);
+        let mut edited = Self {
+            theory: self.theory.without_lemma(name)?,
+            prepared_lemmas: prepared_lemmas.into(),
+            ..self.clone()
+        };
+        if removed.is_source_assumption() {
+            edited.source_assumptions = Arc::new(gather_typing_assumptions(
+                &edited.theory,
+                &edited.prepared_lemmas,
+            ));
+            edited.source_cache.refined = Arc::default();
+        }
+        Some(edited)
+    }
+
     /// Read the theory-wide, unspecialised context built by this session.
     ///
     /// This is intended for web views which only inspect immutable
@@ -857,7 +819,7 @@ impl ProverSession {
                     item_index,
                     bound,
                     source_kind: (bound.is_some() || lemma.proof.is_some())
-                        .then(|| lemma_source_kind(lemma)),
+                        .then(|| lemma.source_kind()),
                 }
             })
             .collect()
@@ -1117,7 +1079,7 @@ impl ProverSession {
             cut,
             template_ctx: std::sync::Arc::new(template_ctx),
             setup_counter_before,
-            source_cache: std::sync::Arc::new(SourceCache::default()),
+            source_cache: SourceCache::default(),
             source_cache_disabled: tamarin_utils::env_gate!("TAM_RS_NO_SOURCE_CACHE"),
         })
     }
@@ -1131,7 +1093,7 @@ impl ProverSession {
         prepared: &PreparedLemma,
         maude: &MaudeHandle,
     ) -> ProofContext {
-        let source_kind = lemma_source_kind(lemma);
+        let source_kind = lemma.source_kind();
         let mut ctx = self.fresh_context(maude);
         ctx.use_induction = induction_hint(lemma);
         ctx.is_exists_trace = matches!(
@@ -1167,7 +1129,7 @@ impl ProverSession {
     fn source_session(&self) -> Self {
         let mut session = self.clone();
         if self.source_cache_disabled {
-            session.source_cache = Arc::default();
+            session.source_cache = SourceCache::default();
         }
         session
     }
@@ -1330,23 +1292,12 @@ fn lemma_context_and_system(
     let theory = &session.theory;
     let g = prepared.guarded.clone()?;
 
-    // Per-lemma source kind, mirroring HS `lemmaSourceKind`
-    // (lib/theory/src/Lemma.hs):
-    // `[sources]`-tagged lemmas get RawSource, all others RefinedSource.
-    // HS sets `pcSourceKind = lemmaSourceKind l` (ClosedTheory.hs)
-    // and `formulaToSystem` stamps it onto the initial system's
-    // `sSourceKind` (CloseRule.hs).
-    let lemma_source_kind = lemma_source_kind(lemma);
-
-    // `[reuse]` lemmas declared BEFORE this one.  Same gather logic as
-    // the one-shot and shared-session entry points.
-    let reuse_lemmas =
-        gather_reusable_lemmas(theory, &session.prepared_lemmas, lemma, lemma_source_kind)?;
+    let reuse_lemmas = gather_reusable_lemmas(theory, &session.prepared_lemmas, lemma)?;
 
     let mut sys = crate::constraint::system::formula_to_system_partitioned(
         &session.template_ctx.safety_restrictions,
         &session.template_ctx.other_restrictions,
-        lemma_source_kind,
+        lemma.source_kind(),
         lemma.trace_quantifier,
         &g,
     );

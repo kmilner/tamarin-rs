@@ -1012,9 +1012,7 @@ fn build_prover_session(
 ) -> Result<tamarin_theory::prove::ProverSession, RunError> {
     let in_file = &st.theory.in_file;
     let maude = st.require_maude().map_err(|e| RunError::load(e, in_file))?;
-    let theory = st
-        .require_closed()
-        .map_err(|e| RunError::load(e, in_file))?;
+    let theory = st.theory.closed().expect("close mode closes the theory");
     Ok(tamarin_theory::prove::ProverSession::build(
         theory,
         maude,
@@ -1265,13 +1263,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             })?;
             let body = tamarin_theory::pretty_theory::pretty_open_theory(&elaborated);
             parse_only_docs.push(body);
-            file_results.push(FileResult {
-                in_file: in_file.clone(),
-                out_file: None,
-                results: Vec::new(),
-                elapsed_ms: t0.elapsed().as_millis(),
-                wf_count: 0,
-            });
             continue;
         }
 
@@ -1286,8 +1277,8 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         st.check_translated_theory()
             .map_err(|e| RunError::load(e, in_file))?;
 
-        // Per-file summary rows for `file_results`.  Translate mode records
-        // skipped rows too, though its output phase never prints a summary.
+        // Per-file summary rows for `file_results`, which only the final
+        // close-and-prove output phase prints.
         let results: Vec<LemmaResult> = match translate_module {
             Some(module) => {
                 // `finalizeTheory`'s `--quit-on-warning` raise
@@ -1295,13 +1286,6 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                 if opts.quit_on_warning && !st.wf_report.is_empty() {
                     return Err(RunError::Warning(std::mem::take(&mut st.wf_report)));
                 }
-
-                // HS `translateAndCheckTheory` never closes, never proves
-                // and never replays stored skeletons — it skips
-                // `closeTranslatedTheory`'s `proveTheory` entirely
-                // (TheoryLoader.hs) — so every lemma is a skipped
-                // summary row.
-                let results = skipped_results(&st.theory);
 
                 // Translate-only render (`prettyOpenTheoryByModule`,
                 // TheoryLoader.hs#prettyOpenTheoryByModule, followed by `withVersionAndReport`'s
@@ -1330,7 +1314,7 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
                     }
                 };
                 translate_docs.push(body);
-                results
+                continue;
             }
             None => {
                 let pe_trace = st

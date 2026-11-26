@@ -1,7 +1,8 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Parse + elaborate a `.spthy` file into a [`TheoryEntry`].
+//! Load and close a `.spthy` file (HS `loadTheory` + `closeTheory`) into a
+//! [`TheoryEntry`].
 
 use chrono::Local;
 use std::path::{Path, PathBuf};
@@ -68,17 +69,18 @@ pub(crate) fn load_from_source(
         .map_err(LoadError::Close)?;
     pipeline.closed_marker(&pe_trace);
 
-    let errors_html = make_wf_errors_html(&pipeline.wf_report);
+    let crate::theory_loader::LoadedTheory::Closed(typed_theory) = pipeline.theory else {
+        unreachable!("close mode closes the theory")
+    };
     Ok(TheoryEntry {
         idx: 0,
-        typed_theory: pipeline.theory,
+        typed_theory,
         prover_maude_sig: Arc::new(pipeline.maude_sig),
         cut: pipeline.cut,
         origin,
         loaded_at: Local::now(),
         primary: true,
         wf_report: pipeline.wf_report.into(),
-        errors_html: errors_html.into(),
         ndc_cache: pipeline.ndc_cache,
         proof_state: None,
     })
@@ -94,8 +96,9 @@ pub(crate) fn wf_report_html(report: &[WfError]) -> String {
 
 /// HS `makeWfErrorsHtml` (src/Web/Handler.hs): the report in a
 /// `<div class="wf-warning">` under a literal WARNING line; empty for an
-/// empty report.
-fn make_wf_errors_html(report: &[WfError]) -> String {
+/// empty report.  HS stores this as `errorsHtml`; the help page renders it
+/// from the entry's report instead.
+pub fn make_wf_errors_html(report: &[WfError]) -> String {
     if report.is_empty() {
         return String::new();
     }

@@ -142,7 +142,7 @@ async fn interactive_graph_def_renders_source_cases() {
     }
 }
 
-/// Match both failing (!!) sites, including negative-index precedence and
+/// Match both failing (!!) sites, the source index failing first, and
 /// wrapping Int subtraction, without crashing the server. Each callstack is
 /// captured from the pinned Haskell oracle, not assembled by the test.
 #[tokio::test]
@@ -158,10 +158,10 @@ async fn graph_routes_invalid_case_indices_match_haskell() {
                 ("-9223372036854775808/1", "source_large"),
                 ("1/0", "case_negative"),
                 ("1/-1", "case_negative"),
-                ("0/0", "case_negative"),
-                ("-1/-1", "case_negative"),
-                ("9999/0", "case_negative"),
-                ("-9223372036854775808/-1", "case_negative"),
+                ("0/0", "source_negative"),
+                ("-1/-1", "source_negative"),
+                ("9999/0", "source_large"),
+                ("-9223372036854775808/-1", "source_large"),
                 ("1/9999", "case_large"),
                 ("1/-9223372036854775808", "case_large"),
             ] {

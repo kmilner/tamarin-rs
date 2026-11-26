@@ -1,0 +1,6 @@
+theory UnguardedLemma
+begin
+rule R: [] --[ A() ]-> []
+lemma unused: exists-trace "Ex #i. A() @ #i"
+lemma typing [sources]: "All x #i. A() @ #i ==> x = x"
+end

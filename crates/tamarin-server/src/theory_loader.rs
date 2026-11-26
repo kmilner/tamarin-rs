@@ -238,20 +238,6 @@ impl LoadedTheory {
         }
     }
 
-    /// HS `removeLemma`: the theory without the named lemma, or `None` when
-    /// there is no such lemma.
-    pub fn without_lemma(&self, name: &str) -> Option<Self> {
-        match self {
-            Self::Open(theory) => {
-                let mut theory = (**theory).clone();
-                theory
-                    .remove_lemma(name)
-                    .then(|| Self::Open(Arc::new(theory)))
-            }
-            Self::Closed(theory) => theory.without_lemma(name).map(Self::Closed),
-        }
-    }
-
     fn open_mut(&mut self) -> &mut Theory {
         match self {
             Self::Open(theory) => Arc::make_mut(theory),
@@ -259,10 +245,10 @@ impl LoadedTheory {
         }
     }
 
-    fn closed_mut(&mut self) -> Option<&mut ClosedTheory> {
+    fn closed_mut(&mut self) -> &mut ClosedTheory {
         match self {
-            Self::Open(_) => None,
-            Self::Closed(theory) => Some(theory),
+            Self::Open(_) => unreachable!("close mode closes the theory"),
+            Self::Closed(theory) => theory,
         }
     }
 }
@@ -402,12 +388,6 @@ impl<'a> TheoryPipeline<'a> {
         })
     }
 
-    /// The theory close mode closed.
-    pub fn require_closed(&self) -> Result<&ClosedTheory, LoadError> {
-        self.require_maude()?;
-        Ok(self.theory.closed().expect("close mode closes the theory"))
-    }
-
     fn theory_mut(&mut self) -> &mut Theory {
         self.theory.open_mut()
     }
@@ -453,9 +433,7 @@ impl<'a> TheoryPipeline<'a> {
         if module == Some(TranslateModule::Msr) {
             let lemma_names = &self.opts.lemma_names;
             self.theory_mut().items.retain(|i| match i {
-                tamarin_theory::theory::TheoryItem::Lemma(l) => {
-                    crate::theory_loader::lemma_matches(lemma_names, &l.name)
-                }
+                tamarin_theory::theory::TheoryItem::Lemma(l) => lemma_matches(lemma_names, &l.name),
                 _ => true,
             });
         }
@@ -590,10 +568,7 @@ impl<'a> TheoryPipeline<'a> {
         }
 
         let ndc_funs = std::mem::take(&mut self.ndc_funs);
-        let theory = self
-            .theory
-            .closed_mut()
-            .expect("close mode closes the theory");
+        let theory = self.theory.closed_mut();
         for f in ndc_funs {
             theory.join_ndc_in_sig(f, tamarin_term::function_symbols::NdcState::IsNdc);
         }
@@ -606,10 +581,7 @@ impl<'a> TheoryPipeline<'a> {
         if let (Some(style), Some(maude)) = (self.opts.partial_evaluation, self.maude.clone()) {
             let in_file = self.theory.in_file.clone();
             let pool = self.maude_pool.clone();
-            let theory = self
-                .theory
-                .closed_mut()
-                .expect("close mode closes the theory");
+            let theory = self.theory.closed_mut();
             // The refined rules are closed again before auto-sources.
             pe_trace = theory
                 .apply_partial_evaluation(&maude, pool.as_deref(), style)
@@ -628,10 +600,7 @@ impl<'a> TheoryPipeline<'a> {
         let pool = self.maude_pool.clone();
         let ndc_cache = self.ndc_cache.clone();
         let parameters = self.opts.parameters;
-        let theory = self
-            .theory
-            .closed_mut()
-            .expect("close mode closes the theory");
+        let theory = self.theory.closed_mut();
         theory.apply_auto_sources(maude, pool, ndc_cache.as_ref(), parameters)?;
         Ok(())
     }

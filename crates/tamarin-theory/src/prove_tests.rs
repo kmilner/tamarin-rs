@@ -365,14 +365,9 @@ fn gather_reusable_lemmas_matches_hs_guards() {
         })
         .collect();
     let gathered = |name: &str| {
-        gather_reusable_lemmas(
-            &thy,
-            &prepared,
-            thy.lookup_lemma(name).unwrap(),
-            SourceKind::RefinedSources,
-        )
-        .expect("gather")
-        .len()
+        gather_reusable_lemmas(&thy, &prepared, thy.lookup_lemma(name).unwrap())
+            .expect("gather")
+            .len()
     };
     // All three of `reusable`, `existential` and `unflagged` precede `plain`.
     // Only `reusable` passes every guard.  A result of 1, rather than 3,

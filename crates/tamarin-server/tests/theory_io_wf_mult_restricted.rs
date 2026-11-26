@@ -95,7 +95,7 @@ fn web_load_reports_multiplication_restriction_unescaped_in_the_banner() {
 
     // `makeWfErrorsHtml`'s banner keeps the body's characters as they are —
     // only leading spaces (`&nbsp;`) and line breaks (`<br/>`) are rewritten.
-    let banner = &entry.errors_html;
+    let banner = tamarin_server::theory_io::make_wf_errors_html(&entry.wf_report);
     assert!(
         banner.contains("[ Out( <x, ~a^~b> ) ]"),
         "banner must carry the pair term's angle brackets raw: {banner}"

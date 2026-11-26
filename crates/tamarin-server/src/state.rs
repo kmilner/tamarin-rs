@@ -7,7 +7,7 @@
 //! frontend reads/writes these indices in URLs like
 //! `/thy/trace/<idx>/main/...`.
 //!
-//! The elaborated typed theory is what [`ProofState::new`] builds the
+//! The closed theory is what [`ProofState::new`] builds the
 //! live prover session from, what the web renderers print, and what the
 //! accessor helpers (lemma list, restriction count, …) read.
 //!
@@ -32,10 +32,10 @@ use crate::handlers::proof_tree::ProofState;
 pub struct TheoryEntry {
     /// Stable index used in URLs.  Set by `TheoryStore::insert`.
     pub idx: usize,
-    /// Elaborated, typed theory — the accessor helpers' source and, once
-    /// closed, the theory the lazily built [`ProofState`] proves. Shared, so
-    /// the entry clones cheaply.
-    pub typed_theory: crate::theory_loader::LoadedTheory,
+    /// The closed theory (HS `closeThy`, which every web load runs) — the
+    /// accessor helpers' source and the theory the lazily built
+    /// [`ProofState`] proves. Shared, so the entry clones cheaply.
+    pub typed_theory: tamarin_theory::closed_theory::ClosedTheory,
     /// The signature every Maude process for this theory loads its module
     /// from, taken before the load joins `check_close_intr_rule`'s verdicts
     /// into [`typed_theory`](Self::typed_theory)'s signature.  A symbol's NDC
@@ -58,17 +58,9 @@ pub struct TheoryEntry {
     /// for both wellformedness renderings: the `/* WARNING: ... */` comment in
     /// the `source`/`message` routes (`format_wf_block`) and the
     /// `<div class="wf-warning">` header banner in the `help`/`overview` routes
-    /// (`errors_html`).  Empty ⇒ no warnings (theory is well-formed).
+    /// (`theory_io::make_wf_errors_html`, HS `errorsHtml`).  Empty ⇒ no
+    /// warnings (theory is well-formed).
     pub wf_report: Arc<[tamarin_theory::wellformedness::WfError]>,
-    /// HTML for the wellformedness warning banner shown in the theory
-    /// page header (HS `errorsHtml`, rendered raw via
-    /// `preEscapedToMarkup info.errorsHtml` at `src/Web/Theory.hs`).
-    /// Populated from [`wf_report`](Self::wf_report) at load time,
-    /// mirroring HS `makeWfErrorsHtml` (`src/Web/Handler.hs`), which wraps
-    /// `renderHtmlDoc (htmlDoc $ prettyWfErrorReport report)` of the
-    /// *closed* theory's wellformedness report in a `<div class="wf-warning">`.
-    /// Empty string when the report is empty (HS `makeWfErrorsHtml [] = ""`).
-    pub errors_html: Arc<str>,
     /// The theory's once-per-load NDC-checked intruder cache
     /// (`close_rule::check_close_intr_rule`, run in `theory_io` before
     /// the derivation checks). Injected into the lazily built prover session,
@@ -80,6 +72,17 @@ pub struct TheoryEntry {
     /// Materialized snapshots attach that generation's state here so existing
     /// rendering and detached-edit code can consume one self-contained value.
     pub proof_state: Option<Arc<ProofState>>,
+}
+
+impl TheoryEntry {
+    /// The materialized proof state. Every route that renders or edits a
+    /// proof reads an entry from [`TheoryStore::materialized_snapshot`] or
+    /// [`TheoryStore::detached_fork`], which always attach one.
+    pub fn proof(&self) -> &Arc<ProofState> {
+        self.proof_state
+            .as_ref()
+            .expect("materialized entries always have a proof state")
+    }
 }
 
 /// Lightweight data needed by the theory index page.
@@ -163,13 +166,12 @@ impl std::error::Error for StoreError {}
 #[derive(Clone)]
 pub struct TheorySnapshot {
     pub entry: TheoryEntry,
-    idx: usize,
     generation: Arc<StoredGeneration>,
 }
 
-struct StoredGeneration {
-    proof: RetryCell<Arc<ProofState>, StoreError>,
-}
+/// A generation's proof state. Each store write allocates a fresh `Arc`, so
+/// `Arc::ptr_eq` on it is the generation token.
+type StoredGeneration = RetryCell<Arc<ProofState>, StoreError>;
 
 /// One single-flight attempt at a time. Callers that joined the same attempt
 /// share its result, including a failure; a failed attempt is then replaced,
@@ -235,7 +237,6 @@ impl TheoryStore {
         let stored = inner.by_idx.get(&idx).ok_or(StoreError::NotFound(idx))?;
         Ok(TheorySnapshot {
             entry: stored.entry.clone(),
-            idx,
             generation: stored.generation.clone(),
         })
     }
@@ -255,8 +256,6 @@ impl TheoryStore {
     /// The stored theory's name at `idx`, or `None` when no theory is stored
     /// there. This avoids cloning the rest of the entry when only its label is
     /// needed.
-    ///
-    /// [`get`]: Self::get
     pub fn name(&self, idx: usize) -> Option<String> {
         self.inner
             .lock()
@@ -296,11 +295,8 @@ impl TheoryStore {
         cfg: &crate::ServerConfig,
     ) -> Result<TheoryEntry, StoreError> {
         let mut clone = self.materialized_snapshot(src_idx, cfg)?;
-        let proof = clone
-            .proof_state
-            .clone()
-            .expect("materialized_snapshot always has a proof state");
-        clone.proof_state = Some(Arc::new(proof.fork().map_err(StoreError::Build)?));
+        let proof = clone.proof().fork().map_err(StoreError::Build)?;
+        clone.proof_state = Some(Arc::new(proof));
         clone.idx = 0;
         clone.primary = false;
         Ok(clone)
@@ -338,7 +334,7 @@ impl TheoryStore {
         snapshot: &TheorySnapshot,
         mut entry: TheoryEntry,
     ) -> Result<usize, StoreError> {
-        let idx = snapshot.idx;
+        let idx = snapshot.entry.idx;
         let mut inner = self.inner.lock();
         let is_current = inner
             .by_idx
@@ -371,9 +367,9 @@ impl TheoryStore {
         snapshot: &TheorySnapshot,
         cfg: &crate::ServerConfig,
     ) -> Result<Arc<ProofState>, StoreError> {
-        let idx = snapshot.idx;
+        let idx = snapshot.entry.idx;
         let generation = snapshot.generation.clone();
-        generation.proof.get_or_try_init(|| {
+        generation.get_or_try_init(|| {
             // A waiter may reach this closure after an earlier builder
             // discovered that reload/removal made the generation stale.
             // Reject it before booting another Maude process; the caller
@@ -392,14 +388,6 @@ impl TheoryStore {
             let proof = Arc::new(built.map_err(StoreError::Build)?);
             Ok(proof)
         })
-    }
-}
-
-impl StoredGeneration {
-    fn new(proof: Option<Arc<ProofState>>) -> Self {
-        Self {
-            proof: RetryCell::new(proof),
-        }
     }
 }
 
@@ -426,26 +414,37 @@ mod tests {
         cell.get_or_try_init(build)
     }
 
-    fn entry(name: &str) -> TheoryEntry {
+    /// A builder of entries holding a closed empty theory, or `None` (the
+    /// test skips) when no Maude is available to close it.
+    fn entries() -> Option<impl Fn(&str) -> TheoryEntry> {
         let prover_maude_sig = minimal_maude_sig(false);
-        let typed_theory = TypedTheory::<OpenProtoRule>::new(name, prover_maude_sig.clone());
-        TheoryEntry {
-            idx: 0,
-            typed_theory: crate::theory_loader::LoadedTheory::Open(Arc::new(typed_theory)),
-            prover_maude_sig: Arc::new(prover_maude_sig),
-            cut: tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
-            origin: TheoryOrigin::Interactive,
-            loaded_at: Local::now(),
-            primary: true,
-            wf_report: Arc::default(),
-            errors_html: Arc::default(),
-            ndc_cache: None,
-            proof_state: None,
-        }
+        let maude_path = tamarin_test_support::require_maude_path()?;
+        let maude =
+            tamarin_term::maude_proc::MaudeHandle::start(&maude_path, prover_maude_sig.clone())
+                .expect("start maude");
+        Some(move |name: &str| {
+            let typed_theory = TypedTheory::<OpenProtoRule>::new(name, prover_maude_sig.clone());
+            let (typed_theory, _) =
+                tamarin_theory::closed_theory::close_theory(typed_theory, &maude, None)
+                    .expect("close an empty theory");
+            TheoryEntry {
+                idx: 0,
+                typed_theory,
+                prover_maude_sig: Arc::new(prover_maude_sig.clone()),
+                cut: tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
+                origin: TheoryOrigin::Interactive,
+                loaded_at: Local::now(),
+                primary: true,
+                wf_report: Arc::default(),
+                ndc_cache: None,
+                proof_state: None,
+            }
+        })
     }
 
     #[test]
     fn stale_snapshot_cannot_replace_reused_index() {
+        let Some(entry) = entries() else { return };
         let store = TheoryStore::default();
         let idx = store.insert(entry("first"));
         let snapshot = store.snapshot(idx).unwrap();
@@ -466,6 +465,7 @@ mod tests {
 
     #[test]
     fn current_snapshot_replaces_in_place_as_modified() {
+        let Some(entry) = entries() else { return };
         let store = TheoryStore::default();
         let idx = store.insert(entry("first"));
         let snapshot = store.snapshot(idx).unwrap();

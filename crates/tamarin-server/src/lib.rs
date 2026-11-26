@@ -13,9 +13,8 @@
 //! Wiring:
 //!
 //!   `tamarin-prover interactive theory.spthy`  →
-//!     - load theory via `tamarin_parser::parse_theory`
-//!     - elaborate via `tamarin_theory::elaborate::elaborate`
-//!     - boot Maude (`tamarin_term::maude_proc::MaudeHandle`)
+//!     - load and close the theory (`theory_io::load_from_path`, which runs
+//!       `theory_loader::load_theory` and the `TheoryPipeline` close stages)
 //!     - register the theory in a `TheoryStore`
 //!     - serve the bundled `frontend/dist/` (+ `data/`) on a TCP port
 //!

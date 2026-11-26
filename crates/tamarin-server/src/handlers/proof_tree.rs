@@ -17,9 +17,9 @@ use tamarin_theory::constraint::solver::proof_method::{
     exec_proof_method, is_finished, is_finished_or_stuck, ProofMethod,
 };
 use tamarin_theory::constraint::solver::search::{
-    candidate_methods_with_expl, rollup_status, NodeStatus, ProofNode, ProofStatus,
+    candidate_methods_with_expl, node_status_of, rollup_status, NodeStatus, ProofNode, ProofStatus,
 };
-use tamarin_theory::constraint::system::System;
+use tamarin_theory::constraint::system::{SourceKind, System};
 use tamarin_theory::pretty_system::pretty_non_graph_system;
 
 use crate::handlers::path_parse::{theory_url, TheoryPath};
@@ -173,11 +173,13 @@ impl ProofState {
             (*entry.prover_maude_sig).clone(),
         )
         .map_err(|e| format!("maude start: {:?}", e))?;
-        let theory = entry
-            .typed_theory
-            .closed()
-            .ok_or("prover session: the theory was not closed")?;
-        Self::new_with_maude(theory, maude, entry.ndc_cache.as_ref(), entry.cut, cfg)
+        Self::new_with_maude(
+            &entry.typed_theory,
+            maude,
+            entry.ndc_cache.as_ref(),
+            entry.cut,
+            cfg,
+        )
     }
 
     fn new_with_maude(
@@ -256,17 +258,7 @@ impl ProofState {
                 let (status, leaf_method) = match is_finished(&ctx, &sys)
                     .map_err(|error| format!("proof context: {error}"))?
                 {
-                    Some(r) => {
-                        let s = match &r {
-                            tamarin_theory::constraint::solver::proof_method::Result::Solved =>
-                                NodeStatus::Solved,
-                            tamarin_theory::constraint::solver::proof_method::Result::Contradictory(_) =>
-                                NodeStatus::Contradictory,
-                            tamarin_theory::constraint::solver::proof_method::Result::Unfinishable =>
-                                NodeStatus::Unfinishable,
-                        };
-                        (s, ProofMethod::Finished(r))
-                    }
+                    Some(r) => (node_status_of(&r), ProofMethod::Finished(r)),
                     None => (NodeStatus::Sorry, ProofMethod::Sorry(None)),
                 };
                 let child = ProofNode {
@@ -386,87 +378,61 @@ impl ProofState {
         })
     }
 
-    /// Build a session for a modified theory while preserving the proof roots
-    /// of every surviving lemma. Proofs after a removed `[reuse]` lemma are
-    /// replayed against fresh systems so no deleted assumption survives in an
-    /// interactive proof path.
-    pub(crate) fn rebase_onto(
-        &self,
-        typed: &tamarin_theory::closed_theory::ClosedTheory,
-        ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
-        cut: tamarin_theory::constraint::solver::context::CutStrategy,
-        cfg: &crate::ServerConfig,
-        invalidated: &std::collections::BTreeSet<String>,
-    ) -> Result<Self, String> {
-        // The edited theory has the same signature and rules. Share the
-        // existing transport instead of retaining one Maude child per theory
-        // version created by repeated edits.
-        let rebased = Self::new_with_maude(
-            typed,
-            self.session
-                .template_context()
-                .maude
-                .with_fresh_counter_next(0),
-            ndc_cache,
-            cut,
-            cfg,
-        )?;
-        for lemma in typed.lemmas() {
-            let Some(slot) = self.by_lemma.get(&lemma.name) else {
-                continue;
-            };
-            // Do not block readers of the published theory while a stale
-            // proof is reconstructed and replayed into the edited version.
-            let state = crate::cancellation::lock(slot)?.clone();
-            if !invalidated.contains(&lemma.name) {
-                *rebased.by_lemma[&lemma.name].lock() = state;
+    /// Recheck live proofs that depended on the removed assumption. Stored
+    /// proofs replay from the edited theory on their next use.
+    pub(crate) fn without_lemma(&self, name: &str) -> Result<Option<Self>, String> {
+        let Some(session) = self.session.without_lemma(name) else {
+            return Ok(None);
+        };
+        let mut rebased = self.fork()?;
+        rebased.by_lemma.remove(name);
+        rebased.session = Arc::new(session);
+
+        let (removed_index, removed) = self
+            .session
+            .theory()
+            .lemmas()
+            .enumerate()
+            .find(|(_, lemma)| lemma.name == name)
+            .expect("session contained lemma");
+        let refines_sources = removed.is_source_assumption();
+        for (index, lemma) in rebased.session.theory().lemmas().enumerate() {
+            let used_refined_sources =
+                refines_sources && lemma.source_kind() == SourceKind::RefinedSources;
+            let used_reuse = index >= removed_index && lemma.can_reuse(removed);
+            if !used_refined_sources && !used_reuse {
                 continue;
             }
-            let root = match &state {
-                LemmaProofState::Live(root) => root.clone(),
-                LemmaProofState::Lazy | LemmaProofState::Snapshot(_) => {
-                    let Some(root) = self.replay_interactive_root(&lemma.name)? else {
-                        continue;
-                    };
-                    Arc::new(Mutex::new(root))
-                }
+            let state = rebased
+                .by_lemma
+                .get_mut(&lemma.name)
+                .expect("surviving lemma")
+                .get_mut();
+            let LemmaProofState::Live(root) = state else {
+                *state = LemmaProofState::Lazy;
+                continue;
             };
-            let old = crate::cancellation::lock(&root)?;
-            let wrap_invalidated = !matches!(old.method, ProofMethod::Sorry(None));
-            let payload = if matches!(old.method, ProofMethod::Invalidated) {
-                old.children.get("").unwrap_or(&old)
-            } else {
-                &old
-            };
-            let skeleton = proof_tree_from_node(payload);
-            drop(old);
-            let replayed = tamarin_theory::prove::check_and_extend_proof_in_session(
+            let root = crate::cancellation::lock(root)?;
+            let was_open = root.status == NodeStatus::Open;
+            let steps = proof_tree_from_node(&root);
+            drop(root);
+            let mut replayed = tamarin_theory::prove::check_and_extend_proof_in_session(
                 &rebased.session,
                 &lemma.name,
-                &skeleton,
+                &steps,
                 usize::MAX,
             )
-            .map_err(|error| format!("initial proof for {}: {error}", lemma.name))?;
-            let root = if wrap_invalidated {
-                ProofNode {
-                    method: ProofMethod::Invalidated,
-                    sys: replayed.sys.clone(),
-                    children: BTreeMap::from([(String::new(), replayed)]),
-                    status: NodeStatus::Open,
-                    annotated: true,
-                }
-            } else {
-                replayed
-            };
-            *rebased.by_lemma[&lemma.name].lock() =
-                LemmaProofState::Live(Arc::new(Mutex::new(root)));
+            .map_err(|error| format!("rechecking {}: {error}", lemma.name))?;
+            if was_open && matches!(steps.method, ProofMethod::Sorry(_)) {
+                prepare_interactive_root(&mut replayed, lemma.proof.is_some());
+            }
+            *state = LemmaProofState::Live(Arc::new(Mutex::new(replayed)));
         }
-        Ok(rebased)
+        Ok(Some(rebased))
     }
 
     /// Read a root without causing stored-proof replay or allocating its
-    /// initial system. Used by overview panes so opening a rules/source page
-    /// does not retain every lemma's proof system.
+    /// initial system.
     #[cfg(test)]
     pub(crate) fn peek_root(&self, lemma: &str) -> Option<ProofNode> {
         let state = self.by_lemma.get(lemma)?.lock();
@@ -709,6 +675,17 @@ impl ProofState {
     }
 }
 
+fn proof_tree_from_node(node: &ProofNode) -> tamarin_theory::theory::ProofTree {
+    tamarin_theory::theory::ProofTree {
+        method: node.method.clone(),
+        cases: node
+            .children
+            .iter()
+            .map(|(name, child)| (name.clone(), proof_tree_from_node(child)))
+            .collect(),
+    }
+}
+
 fn prepare_interactive_root(root: &mut ProofNode, has_stored_proof: bool) {
     if !has_stored_proof && matches!(root.method, ProofMethod::Sorry(_)) && root.children.is_empty()
     {
@@ -724,20 +701,6 @@ pub(crate) fn navigate_at<'a>(node: &'a ProofNode, path: &[String]) -> Option<&'
         cur = cur.children.get(seg)?;
     }
     Some(cur)
-}
-
-/// Discard solver annotations while retaining the user-visible proof steps.
-/// Replaying this skeleton against a new initial system is the only safe way
-/// to carry a live proof across a theory edit that changes its assumptions.
-fn proof_tree_from_node(node: &ProofNode) -> tamarin_theory::theory::ProofTree {
-    tamarin_theory::theory::ProofTree {
-        method: node.method.clone(),
-        cases: node
-            .children
-            .iter()
-            .map(|(name, child)| (name.clone(), proof_tree_from_node(child)))
-            .collect(),
-    }
 }
 
 /// Port of HS `getProofPaths` (`Web/Theory.hs`):
@@ -810,9 +773,7 @@ fn recompute_ancestor_statuses(root: &mut ProofNode, path: &[String]) {
 fn empty_case_status(method: &ProofMethod) -> NodeStatus {
     match method {
         ProofMethod::Sorry(_) => NodeStatus::Sorry,
-        ProofMethod::Finished(result) => {
-            tamarin_theory::constraint::solver::search::node_status_of(result)
-        }
+        ProofMethod::Finished(result) => node_status_of(result),
         ProofMethod::Simplify | ProofMethod::SolveGoal(_) | ProofMethod::Induction => {
             NodeStatus::Contradictory
         }
@@ -1487,22 +1448,12 @@ end
     }
 
     #[test]
-    fn rebase_keeps_unvisited_surviving_proofs_lazy() {
+    fn removing_a_lemma_keeps_unvisited_surviving_proofs_lazy() {
         let Some(mp) = require_maude_path() else {
             return;
         };
         let state = trivial_proof_state(&mp);
-        let typed = state.session.theory().without_lemma("second").unwrap();
-
-        let rebased = state
-            .rebase_onto(
-                &typed,
-                None,
-                tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
-                &test_config(&mp),
-                &std::collections::BTreeSet::new(),
-            )
-            .expect("rebase");
+        let rebased = state.without_lemma("second").unwrap().unwrap();
 
         assert!(state.peek_root("stored").is_none());
         assert!(rebased.peek_root("trivial").is_none());
@@ -1513,87 +1464,65 @@ end
             .is_some());
         assert!(rebased.peek_root("stored").is_none());
         assert!(rebased.peek_root("second").is_none());
+        assert!(state.without_lemma("missing").unwrap().is_none());
     }
 
     #[test]
-    fn rebase_replays_proofs_after_a_removed_reuse_lemma() {
+    fn removing_an_assumption_rechecks_dependent_proofs() {
         let Some(mp) = require_maude_path() else {
             return;
         };
-        let state = proof_state_from_source(
-            r#"theory T begin
-rule R: [ Fr(~k) ] --[ A(~k) ]-> []
-lemma reusable [reuse]: all-traces
-  "All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j"
-lemma consumer: all-traces
-  "All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j"
-end"#,
-            &mp,
-        );
-        let old = state
-            .get_system_at("consumer", &[])
-            .expect("old proof")
-            .expect("old root system");
-        assert_eq!(old.lemmas.len(), 1);
-
-        let typed = state.session.theory().without_lemma("reusable").unwrap();
-        let rebased = state
-            .rebase_onto(
-                &typed,
-                None,
-                tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
-                &test_config(&mp),
-                &std::collections::BTreeSet::from(["consumer".to_string()]),
+        let prove = |state: &ProofState| {
+            let sys = state.get_system_at("consumer", &[]).unwrap().unwrap();
+            tamarin_theory::prove::prove_system_in_session_with_options(
+                &state.session,
+                "consumer",
+                sys,
+                tamarin_theory::prove::SearchOptions {
+                    proof_bound: 100,
+                    ranking_depth_offset: 0,
+                    cut: tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
+                    oracle_only: false,
+                },
             )
-            .expect("rebase");
-
-        assert!(matches!(
-            rebased.get_method_at("consumer", &[]).expect("new proof"),
-            Some(ProofMethod::Sorry(None))
-        ));
-        let fresh = rebased
-            .get_system_at("consumer", &[])
-            .expect("new proof")
-            .expect("new system");
-        assert!(fresh.lemmas.is_empty());
-    }
-
-    #[test]
-    fn rebase_replays_a_snapshotted_proof() {
-        let Some(mp) = require_maude_path() else {
-            return;
+            .unwrap()
         };
-        let state = proof_state_from_source(
-            r#"theory T begin
-rule R: [ Fr(~k) ] --[ A(~k) ]-> []
-lemma reusable [reuse]: all-traces
-  "All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j"
-lemma consumer: all-traces
-  "All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j"
-end"#,
-            &mp,
-        );
-        assert!(state.proof_body("consumer").unwrap().is_some());
-        assert_eq!(
-            state.state_count(|s| matches!(s, LemmaProofState::Snapshot(_))),
-            1
-        );
 
-        let typed = state.session.theory().without_lemma("reusable").unwrap();
-        let rebased = state
-            .rebase_onto(
-                &typed,
-                None,
-                tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
-                &test_config(&mp),
-                &std::collections::BTreeSet::from(["consumer".to_string()]),
-            )
-            .expect("rebase");
+        for source in [
+            r#"theory Reuse begin
+                rule Emit: [] --[ Used() ]-> []
+                lemma assumption [reuse]: "All #i. Used() @ i ==> F"
+                lemma consumer: "All #i. Used() @ i ==> F"
+            end"#,
+            r#"theory Sources begin
+                rule Make: [] --[ Created() ]-> [Seed()]
+                rule Use: [Seed()] --[ Used() ]-> []
+                lemma consumer: "All #i. Used() @ i ==> F"
+                lemma assumption [sources]: "All #i. Created() @ i ==> F"
+            end"#,
+        ] {
+            let state = proof_state_from_source(source, &mp);
+            state.proof_body("consumer").unwrap();
+            let from_snapshot = state.without_lemma("assumption").unwrap().unwrap();
+            assert!(from_snapshot.peek_root("consumer").is_none());
+            assert_eq!(prove(&from_snapshot).status, NodeStatus::Solved);
 
-        assert!(matches!(
-            rebased.get_method_at("consumer", &[]).expect("new proof"),
-            Some(ProofMethod::Sorry(None))
-        ));
+            let old = prove(&state);
+            assert_eq!(old.status, NodeStatus::Contradictory);
+            state.graft_at_path("consumer", &[], old).unwrap();
+            let edited = state.without_lemma("assumption").unwrap().unwrap();
+            let root = edited.get_root("consumer").unwrap().unwrap();
+            assert!(
+                !root.children.is_empty(),
+                "the live proof steps were discarded"
+            );
+            assert_ne!(root.status, NodeStatus::Contradictory);
+            assert_eq!(prove(&edited).status, NodeStatus::Solved);
+            assert_eq!(
+                state.get_root("consumer").unwrap().unwrap().status,
+                NodeStatus::Contradictory
+            );
+        }
     }
 
     #[test]

@@ -59,7 +59,10 @@ pub async fn post(State(state): State<Arc<AppState>>, mut mp: Multipart) -> Resp
             }
         };
         match theory_io::load_from_source(src, TheoryOrigin::Upload(filename.clone()), &state.cfg) {
-            Ok(entry) => {
+            Ok(mut entry) => {
+                // HS `putTheory` stores every theory it adds as not primary,
+                // so the index lists an upload as "Modified".
+                entry.primary = false;
                 let idx = state.store.insert(entry);
                 tracing::info!(idx, file = %filename, "uploaded theory");
                 // Haskell appends a ` WARNING: ignoring the following
@@ -168,11 +171,12 @@ fn render_index(state: &AppState) -> String {
         for t in &theories {
             let link = format!("/thy/trace/{}/overview/help", t.idx);
             let time = t.loaded_at.format("%T");
-            // `$if getEitherTheoryPrimary` → `<td>Original`, else `<td><em>Modified`.
+            // `$if getEitherTheoryPrimary` → `<td>Original`, else `<td><em>Modified`
+            // (`$newline never` hamlet closes the `<td>` but leaves `<em>` open).
             let primary = if t.primary {
                 "<td>Original</td>"
             } else {
-                "<td><em>Modified</em></td>"
+                "<td><em>Modified</td>"
             };
             rows.push_str(&format!(
                 "<tr><td><a href=\"{link}\">{name}</a></td><td>{time}</td>{primary}<td>{origin}</td></tr>",

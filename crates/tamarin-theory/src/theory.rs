@@ -14,6 +14,7 @@
 use tamarin_term::maude_sig::MaudeSig;
 pub use tamarin_term::tags::{LemmaAttr, TraceQuantifier};
 
+use crate::constraint::system::SourceKind;
 use crate::formula::{LNFormula, SyntacticLNFormula};
 use crate::predicate::Predicate;
 use crate::restriction::Restriction;
@@ -203,13 +204,27 @@ pub struct Lemma {
 }
 
 impl Lemma {
+    /// HS `lemmaSourceKind`: source lemmas are proved from raw cases.
+    pub fn source_kind(&self) -> SourceKind {
+        if self.attributes.contains(&LemmaAttr::Sources) {
+            SourceKind::RawSources
+        } else {
+            SourceKind::RefinedSources
+        }
+    }
+
     /// Only universal source lemmas can refine source cases.
-    pub(crate) fn is_source_assumption(&self) -> bool {
+    pub fn is_source_assumption(&self) -> bool {
         self.trace_quantifier == TraceQuantifier::AllTraces
-            && self
-                .attributes
-                .iter()
-                .any(|attr| matches!(attr, LemmaAttr::Sources))
+            && self.source_kind() == SourceKind::RawSources
+    }
+
+    /// HS `gatherReusableLemmas`: can this proof assume the given earlier lemma?
+    pub fn can_reuse(&self, prior: &Lemma) -> bool {
+        prior.trace_quantifier == TraceQuantifier::AllTraces
+            && prior.attributes.contains(&LemmaAttr::Reuse)
+            && prior.source_kind() <= self.source_kind()
+            && !self.attributes.iter().any(|attr| matches!(attr, LemmaAttr::HideLemma(name) if name == "ALL" || name == &prior.name))
     }
 }
 

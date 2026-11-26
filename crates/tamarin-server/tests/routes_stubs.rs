@@ -112,11 +112,14 @@ async fn test_del_path_lemma_returns_redirect_envelope() {
         .text()
         .await
         .expect("source body");
+    assert!(source.contains("theory RevealingSignatures"), "{source}");
     assert!(!source.contains("lemma debug"), "lemma must be removed");
 }
 
+/// HS `getDeleteStepR` calls plain `removeLemma`; only the editor's
+/// `deleteLemma` invalidates later proofs or refuses source lemmas.
 #[tokio::test]
-async fn deleting_a_reuse_lemma_invalidates_later_live_proofs() {
+async fn deleting_a_reuse_lemma_keeps_later_proofs() {
     let s = start_server_with_theory("hide_reuse_lemma.spthy").await;
     let removed_step: serde_json::Value = s
         .get("/thy/trace/1/del/path/proof/keeps_helper")
@@ -139,20 +142,54 @@ async fn deleting_a_reuse_lemma_invalidates_later_live_proofs() {
         .text()
         .await
         .expect("source body");
+    assert!(source.contains("lemma keeps_helper"), "{source}");
     assert!(!source.contains("lemma helper [reuse]"));
-    assert!(source.contains("proof may have been invalidated by editing a reuse lemma above"));
+    assert!(!source.contains("invalidated"));
     assert!(source.contains("sorry /* removed */"));
 }
 
 #[tokio::test]
-async fn deleting_a_source_lemma_is_rejected() {
+async fn deleting_a_source_lemma_succeeds() {
     let s = start_server_with_theory("source_lemma.spthy").await;
-    let response = s.get("/thy/trace/1/del/path/lemma/typing").await;
-    assert_eq!(response.status(), 200);
-    assert_eq!(
-        response.json::<serde_json::Value>().await.unwrap(),
-        serde_json::json!({"alert": "Can't edit or remove source lemmas for now"})
-    );
+    let deleted: serde_json::Value = s
+        .get("/thy/trace/1/del/path/lemma/typing")
+        .await
+        .json()
+        .await
+        .expect("lemma redirect");
+    let idx = redirect_idx(&deleted, "overview/lemma/typing");
+    let source = s
+        .get(&format!("/thy/trace/{idx}/source"))
+        .await
+        .text()
+        .await
+        .expect("source body");
+    assert!(source.contains("lemma goal"), "{source}");
+    assert!(!source.contains("lemma typing"));
+}
+
+#[tokio::test]
+async fn an_edit_leaving_an_error_in_the_closed_theory_fails() {
+    let s = start_server_with_theory("unguarded_lemma.spthy").await;
+    let failed: serde_json::Value = s
+        .get("/thy/trace/1/del/path/lemma/unused")
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert!(failed["alert"]
+        .as_str()
+        .unwrap()
+        .contains("unguarded variable"));
+    assert_eq!(s.get("/thy/trace/2/overview/help").await.status(), 404);
+
+    let deleted: serde_json::Value = s
+        .get("/thy/trace/1/del/path/lemma/typing")
+        .await
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(redirect_idx(&deleted, "overview/lemma/typing"), 2);
 }
 
 #[tokio::test]
