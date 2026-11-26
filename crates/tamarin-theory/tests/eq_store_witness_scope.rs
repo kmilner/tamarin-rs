@@ -1,7 +1,7 @@
 //! A unifier witness must stay distinct from the variables a disjunction
 //! already binds.
 //!
-//! The store below is the step at which native-only proof search on
+//! The store below is the step at which proved-only proof search on
 //! `ake/dh/UM_one_pass_attack` stopped terminating. The applied substitution
 //! is an instance of the stored variant, so the only unifier renames the three
 //! variables of the new images. The native solver named its witnesses `x.0`
@@ -93,11 +93,11 @@ fn maude_witnesses_do_not_bind_the_variables_a_variant_replaced() {
 
 #[test]
 fn native_witnesses_do_not_bind_the_variables_a_variant_replaced() {
-    if AlgebraBackend::NativeOnly.validate().is_err() {
+    if AlgebraBackend::ProvedOnly.validate().is_err() {
         return;
     }
     let handle =
-        MaudeHandle::start_with_backend(MISSING, dh_maude_sig(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend(MISSING, dh_maude_sig(), AlgebraBackend::ProvedOnly)
             .unwrap();
     check(&handle);
     handle.check_backend_status().unwrap();

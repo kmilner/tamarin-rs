@@ -1,4 +1,4 @@
-//! Process-boundary tests: native-only must not even probe a Maude executable.
+//! Process-boundary tests: proved-only must not even probe a Maude executable.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
@@ -34,7 +34,7 @@ impl Fixture {
     }
 
     fn command(&self) -> Command {
-        self.command_on("native-only")
+        self.command_on("proved-only")
     }
 
     fn command_on(&self, backend: &str) -> Command {
@@ -60,7 +60,7 @@ impl Fixture {
             .unwrap();
         assert!(
             !self.dir.join("called").exists(),
-            "native-only invoked Maude"
+            "proved-only invoked Maude"
         );
         output
     }
@@ -130,7 +130,7 @@ fn user_equation_chain_and_pairing_prove_both_traces_without_maude() {
     }
 }
 
-/// Native-only uses the families of the Rust variant solvers only after the
+/// Proved-only uses the families of the Rust variant solvers only after the
 /// Lean certificate checker accepted them: they count as proved on a table
 /// the certifier accepts and as assumed on any other table, and never as
 /// native Rust. A family that does not fit in the checker's work bound fails
@@ -244,7 +244,7 @@ fn ac_marker_variant_preserves_the_reachable_trace() {
 
 /// Rules whose variants no specialised solver covers: a destructor or an
 /// inverse above an exponentiation or an exclusive-or of two received
-/// messages. Native-only used to hand these to a Lean search that did not
+/// messages. Proved-only used to hand these to a Lean search that did not
 /// return. Folding variant narrowing proposes the families, the certificate
 /// checker accepts them, and the proofs are those of the Maude backend.
 #[cfg(feature = "lean-unification")]
@@ -333,7 +333,7 @@ fn pairing_and_bilinear_proofs_complete_without_probing_or_starting_maude() {
             "{stdout}"
         );
         assert!(
-            stdout.contains("Maude version not used (native-only)"),
+            stdout.contains("Maude version not used (proved-only)"),
             "{stdout}"
         );
         assert!(!stderr.contains("Maude tool:"), "{stderr}");
@@ -354,7 +354,7 @@ fn unsupported_theory_fails_without_publishing_proofs_or_output_files() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "{stdout}\n{stderr}");
     assert!(
-        stderr.contains("native-only backend does not support"),
+        stderr.contains("the proved algebra exports do not support"),
         "{stderr}"
     );
     assert!(!stdout.contains("verified"), "{stdout}");
@@ -381,7 +381,7 @@ fn conflicting_oracle_switch_fails_before_any_tool_probe() {
 }
 
 /// The installation self-test compares against a Maude installation, so
-/// native-only refuses it before probing anything. Interactive mode is
+/// proved-only refuses it before probing anything. Interactive mode is
 /// supported: `crates/tamarin-server/tests/routes_native_backend.rs` and
 /// `scripts/interactive_backend_check.sh` drive it.
 #[cfg(feature = "lean-unification")]
@@ -422,7 +422,7 @@ fn multiset_proof_and_output_complete_without_any_maude_process() {
     }
     let theory = std::fs::read_to_string(out_path).unwrap();
     assert!(
-        theory.contains("Maude version not used (native-only)"),
+        theory.contains("Maude version not used (proved-only)"),
         "{theory}"
     );
     assert!(!stderr.contains("Maude tool:"), "{stderr}");
@@ -587,10 +587,10 @@ fn a_failure_on_the_path_of_the_search_fails_every_number_of_workers() {
 
 /// The native backend hands what the Maude backend sends to Maude to the
 /// proved exports. It never probes or starts Maude, and prints what
-/// native-only prints, but for the line that names the backend.
+/// proved-only prints, but for the line that names the backend.
 #[cfg(feature = "lean-unification")]
 #[test]
-fn native_prints_what_native_only_prints_without_maude() {
+fn native_prints_what_proved_only_prints_without_maude() {
     for theory in [
         include_str!("fixtures/native_dh_agreement.spthy"),
         include_str!("fixtures/native_shared_exponent.spthy"),
@@ -614,16 +614,16 @@ fn native_prints_what_native_only_prints_without_maude() {
             stdout
                 .lines()
                 .filter(|line| !line.contains("processing time"))
-                .map(|line| line.replace("not used (native)", "not used (native-only)"))
+                .map(|line| line.replace("not used (native)", "not used (proved-only)"))
                 .collect::<Vec<_>>()
         };
         let native = prove("native");
         assert!(native.iter().any(|line| line.contains("verified")));
-        assert_eq!(native, prove("native-only"));
+        assert_eq!(native, prove("proved-only"));
     }
 }
 
-/// Native is refused for the installation self-test, as native-only is.
+/// Native is refused for the installation self-test, as proved-only is.
 #[cfg(feature = "lean-unification")]
 #[test]
 fn native_installation_self_test_is_rejected_without_probing() {

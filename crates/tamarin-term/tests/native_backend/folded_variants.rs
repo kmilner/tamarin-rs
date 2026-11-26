@@ -50,7 +50,7 @@ fn folding_proposes_the_variants_no_specialised_solver_covers() {
         ),
     ];
     for (label, sig, query, members) in cases {
-        let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+        let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
         let family = h.variants(&query).unwrap();
         assert_eq!(family.len(), members, "{label}");
         // Maude lists the variant of the normalized query first.

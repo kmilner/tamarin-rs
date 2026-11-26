@@ -178,7 +178,7 @@ pub(crate) fn load_from_source(
     let prover_maude_sig = typed.signature.clone();
     // A protocol theory, so the session runs under Tamarin's contract for
     // the equations, as the batch pipeline's does. On Maude this is the plain
-    // session; on native-only it lets a table the certifier did not accept
+    // session; on proved-only it lets a table the certifier did not accept
     // answer under the author's convergence premise instead of failing.
     let started_maude = MaudeHandle::start_for_tamarin_theory(
         &cfg.maude_path,
@@ -186,7 +186,7 @@ pub(crate) fn load_from_source(
         cfg.algebra_backend,
         Default::default(),
     );
-    // Best-effort loading is for a Maude that cannot be started. Native-only
+    // Best-effort loading is for a Maude that cannot be started. Proved-only
     // has no process to miss, so its start failure is an error, never a
     // theory silently loaded without its variants.
     if !cfg.algebra_backend.uses_maude() {
@@ -375,27 +375,27 @@ mod tests {
         cfg
     }
 
-    /// A native-only web load never takes the best-effort path that a
+    /// A proved-only web load never takes the best-effort path that a
     /// missing Maude opens: a build without the Lean library refuses the
     /// backend, and a build with it closes the theory without any Maude.
     #[test]
-    fn native_only_web_load_does_not_silently_use_best_effort_fallback() {
+    fn proved_only_web_load_does_not_silently_use_best_effort_fallback() {
         use tamarin_term::algebra_backend::AlgebraBackend;
         let mut cfg = test_config("/nonexistent/maude-for-test");
-        cfg.algebra_backend = AlgebraBackend::NativeOnly;
+        cfg.algebra_backend = AlgebraBackend::ProvedOnly;
         let loaded = load_from_source(
             "theory T begin builtins: diffie-hellman rule R: [ In(x), Fr(~k) ] --> [ Out(x^~k) ] end",
             TheoryOrigin::Upload("t.spthy".into()),
             &cfg,
         );
-        match AlgebraBackend::NativeOnly.validate() {
+        match AlgebraBackend::ProvedOnly.validate() {
             Err(reason) => {
-                let error = loaded.err().expect("native-only web load must fail");
+                let error = loaded.err().expect("proved-only web load must fail");
                 assert!(error.to_string().contains(&reason), "{error}");
             }
             Ok(()) => {
                 let entry =
-                    loaded.unwrap_or_else(|error| panic!("native-only web load failed: {error}"));
+                    loaded.unwrap_or_else(|error| panic!("proved-only web load failed: {error}"));
                 // The variants block is what the best-effort path leaves out.
                 let rule = entry.typed_theory.rules().next().unwrap();
                 assert!(!rule.variant_substs.is_empty());

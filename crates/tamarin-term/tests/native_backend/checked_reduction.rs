@@ -31,13 +31,13 @@ fn complete_table_reduction_certifies_the_whole_kind_level_context() {
         MaudeHandle::start_for_tamarin_theory(
             MISSING,
             sig,
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
             Default::default(),
         )
         .unwrap()
     };
     let raw =
-        |sig| MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+        |sig| MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let uncertified = |h: &MaudeHandle| {
         assert!(matches!(
             h.reduce(&input),
@@ -136,7 +136,7 @@ fn certified_mixed_table_retries_reduction_past_the_checked_depth() {
     let expected = wrap(ok);
     let sig = sig.refresh();
     let h =
-        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::NativeOnly).unwrap();
+        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::ProvedOnly).unwrap();
     assert_eq!(h.reduce(&input).unwrap(), expected);
     assert_eq!(h.stats().norm_count, 0);
     if let Some(path) = tamarin_test_support::require_maude_path() {
@@ -174,7 +174,7 @@ fn full_table_checks_macro_expansion_at_the_term_boundary() {
     let handle = MaudeHandle::start_for_tamarin_theory(
         MISSING,
         sig.clone(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
         Default::default(),
     )
     .unwrap()
@@ -229,7 +229,7 @@ fn certified_constant_definition_expands_in_a_wide_kind_level_product() {
             positions: vec![],
         },
     ));
-    let h = MaudeHandle::start_with_backend(MISSING, sig.refresh(), AlgebraBackend::NativeOnly)
+    let h = MaudeHandle::start_with_backend(MISSING, sig.refresh(), AlgebraBackend::ProvedOnly)
         .unwrap();
     // The Node child forces the general kind-level path. Its bounded search
     // cannot preflight the 64 other factors, but the table certificate is total.
@@ -260,7 +260,7 @@ fn projection_tables_reduce_inside_wide_kind_level_contexts() {
         .merge(mset_maude_sig())
         .merge(sym_enc_maude_sig());
     let h =
-        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::NativeOnly).unwrap();
+        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::ProvedOnly).unwrap();
     let node = Term::Lit(Lit::Var(LVar::new("outside", LSort::Node, 0)));
     let a = pub_term("a");
     let b = pub_term("b");

@@ -30,7 +30,7 @@ fn boxed(input: LNTerm) -> LNTerm {
 }
 
 fn handle(rules: Vec<(LNTerm, LNTerm)>) -> MaudeHandle {
-    MaudeHandle::start_with_backend(MISSING, signature(rules), AlgebraBackend::NativeOnly).unwrap()
+    MaudeHandle::start_with_backend(MISSING, signature(rules), AlgebraBackend::ProvedOnly).unwrap()
 }
 
 /// A session whose theory author asserts convergence. Its `reduce` relies on
@@ -40,7 +40,7 @@ fn theory(rules: Vec<(LNTerm, LNTerm)>) -> MaudeHandle {
     MaudeHandle::start_for_tamarin_theory(
         MISSING,
         signature(rules),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
         Arc::new(SharedMaudeCaches::default()),
     )
     .unwrap()

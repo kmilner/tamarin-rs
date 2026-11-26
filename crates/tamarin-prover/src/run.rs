@@ -858,7 +858,7 @@ fn ensure_maude(args: &Args, maude_path: &str) -> (bool, String) {
 /// for both the version check and every later maude spawn (Console.hs), so the reported version is always the invoked binary's.
 fn maude_invocation_path(args: &Args) -> String {
     if !args.algebra_backend.uses_maude() {
-        // Do not even resolve/probe a default binary in native-only mode.
+        // Do not even resolve/probe a default binary in proved-only mode.
         return args.maude_path.clone().unwrap_or_default();
     }
     args.maude_path.clone().unwrap_or_else(default_maude_path)
@@ -1364,7 +1364,7 @@ impl Drop for TheoryPipeline<'_> {
 }
 
 impl TheoryPipeline<'_> {
-    /// Tell the user, once per theory and on stderr only, that a native-only
+    /// Tell the user, once per theory and on stderr only, that a proved-only
     /// run rests on the premise that the theory's equations are convergent:
     /// the Lean certifier did not accept the session's rewrite table (see
     /// `MaudeHandle::convergence_assumed`). The three built-in tables are

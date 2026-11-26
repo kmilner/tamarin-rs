@@ -96,7 +96,7 @@ mod tests {
         assert!(!refutes(&flexible));
         let sig = mset_maude_sig().merge(hash_maude_sig());
         let native =
-            MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly)
+            MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::ProvedOnly)
                 .unwrap();
         assert!(native.unify(std::slice::from_ref(&eq)).unwrap().is_empty());
         assert!(!native

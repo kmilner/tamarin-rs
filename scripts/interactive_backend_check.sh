@@ -2,7 +2,7 @@
 # interactive_backend_check.sh — drive interactive mode over HTTP on both
 # algebra backends and compare what the server answers.
 #
-# For each backend (maude, native-only) the script starts
+# For each backend (maude, proved-only) the script starts
 # `tamarin-rs interactive --algebra-backend=<backend>` on a free localhost
 # port with a small Diffie-Hellman theory and a small XOR theory, and then,
 # for one lemma of each theory:
@@ -25,7 +25,7 @@
 # Env:    RS_PATH   prover binary built with --features lean-unification
 #                   (default: target/ci/tamarin-rs, then target/release/tamarin-rs)
 #         OUT       output directory (default: scripts/results/interactive_backend)
-#         BACKENDS  backends to drive (default: "maude native-only")
+#         BACKENDS  backends to drive (default: "maude proved-only")
 #         MEM_MAX   cgroup memory cap per server via systemd-run, when
 #                   available (default 4G; empty for none)
 #         LIFETIME  hard limit on one server's life in seconds (default 300)
@@ -35,7 +35,7 @@ set -euo pipefail
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 examples=$root/tamarin-prover/examples
 OUT=${OUT:-$root/scripts/results/interactive_backend}
-BACKENDS=${BACKENDS:-maude native-only}
+BACKENDS=${BACKENDS:-maude proved-only}
 MEM_MAX=${MEM_MAX-4G}
 LIFETIME=${LIFETIME:-300}
 

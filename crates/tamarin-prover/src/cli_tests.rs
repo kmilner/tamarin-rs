@@ -1018,7 +1018,7 @@ fn algebra_backend_selection_is_explicit_and_global() {
     );
     for (name, expected) in [
         ("maude", AlgebraBackend::Maude),
-        ("native-only", AlgebraBackend::NativeOnly),
+        ("proved-only", AlgebraBackend::ProvedOnly),
         ("native", AlgebraBackend::Native),
     ] {
         assert_eq!(
@@ -1030,8 +1030,9 @@ fn algebra_backend_selection_is_explicit_and_global() {
             expected
         );
     }
-    // The removed hybrid backend is no longer a value.
-    for removed in ["unknown", "hybrid"] {
+    // The removed hybrid backend is no longer a value, and proved-only has
+    // no alias under its former name.
+    for removed in ["unknown", "hybrid", "native-only"] {
         assert_eq!(
             parse_err(&[&format!("--algebra-backend={removed}"), "x.spthy"]).kind(),
             clap::error::ErrorKind::InvalidValue

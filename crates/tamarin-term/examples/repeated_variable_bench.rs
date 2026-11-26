@@ -9,7 +9,7 @@
 //! lists the variants of their tuple. The line printed is
 //! `backend,sig,op,query,milliseconds,answers`. Process start, one warming
 //! unification and, for `variants`, one warming variant query (which builds
-//! and, on native-only, certifies the session's rule table) are outside the
+//! and, on proved-only, certifies the session's rule table) are outside the
 //! time. Run every query in a process of its own under a timeout and a memory
 //! cap: a query can run for a long time, and a second call of the same query
 //! is answered from the session's memo.
@@ -57,8 +57,8 @@ fn main() {
         other => panic!("unknown signature {other}"),
     };
     let handle = if args[1] == "native" {
-        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly)
-            .expect("native-only handle")
+        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::ProvedOnly)
+            .expect("proved-only handle")
     } else {
         let path = tamarin_test_support::maude_path().unwrap_or_else(|| "maude".into());
         MaudeHandle::start(&path, sig).expect("Maude handle")
@@ -70,7 +70,7 @@ fn main() {
     handle.unify(&warm).expect("warming query");
     if args[3] == "variants" {
         // The first variant query of a session builds its rule table, and
-        // native-only certifies the table.
+        // proved-only certifies the table.
         handle
             .variants(&product(&sym, "WA*WB"))
             .expect("warming variant query");

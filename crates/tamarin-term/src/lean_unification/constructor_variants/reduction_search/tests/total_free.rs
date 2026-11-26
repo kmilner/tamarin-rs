@@ -9,7 +9,7 @@ fn total_free_rule_contracts_before_independent_erased_redexes() {
     let mut sig = signature([(at(var("left"), var("right")), var("right"))]);
     sig.st_fun_syms.insert(select);
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.refresh(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.refresh(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let mut erased = pub_term("end");
     for i in 0..14 {
@@ -42,7 +42,7 @@ fn native_oracle_total_contraction_handles_duplicated_and_reordered_inputs() {
     let native = MaudeHandle::start_for_tamarin_theory(
         "/nonexistent",
         sig.clone(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
         Default::default(),
     )
     .unwrap();
@@ -98,7 +98,7 @@ fn unsorted_or_constrained_rules_cannot_claim_a_total_root() {
         (fst(pair(x.clone(), y.clone())), y),
     ]);
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", competing, AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", competing, AlgebraBackend::ProvedOnly)
             .unwrap();
     assert!(matches!(
         native.reduce(&at(pair(pub_term("one"), pub_term("two")), x)),

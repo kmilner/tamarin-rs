@@ -134,7 +134,7 @@ Diagnostics on standard error can differ:
 
 A failure of the algebra backend follows the same rule (on Maude an exchange
 that fails for good in a simplifier pass without an error channel; on
-`--algebra-backend=native-only` a request the backend does not support or one
+`--algebra-backend=proved-only` a request the backend does not support or one
 that exhausts its search budget). The failure belongs to the case that ran
 into it. That case publishes nothing from then on and ends in the failure,
 which fails the run only if a serial run would have used the case's result.
@@ -160,7 +160,7 @@ is longer. The later branch repeats the call on a new Maude process, after
 waiting longer each time this happens. With `--maude-processes=1`, branches
 are searched in parallel and only their Maude calls queue.
 
-`--algebra-backend=native-only` has no processes to share. Its branches call
+`--algebra-backend=proved-only` has no processes to share. Its branches call
 the Lean library on their own workers at the same time and share only the
 session's memoized answers, so nothing queues and nothing is interrupted on
 behalf of an earlier branch; `--maude-processes` has no effect.

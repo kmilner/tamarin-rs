@@ -30,7 +30,7 @@ fn projected_rule_reduction_skips_shared_erased_ac_allocations() {
     let (x, y, z, w) = (var("x"), var("y"), var("z"), var("w"));
     let sig = with_rules([(select(bag([x, y, z]), w.clone()), w)]);
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
+        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::ProvedOnly).unwrap();
     let frozen = var("x"); // A matching key in the rule, a frozen name in the query.
     assert_eq!(
         native.reduce(&select(wide(), frozen.clone())).unwrap(),
@@ -65,7 +65,7 @@ fn projected_existence_keeps_connected_patterns_and_rhs_choices() {
         let native = MaudeHandle::start_with_backend(
             "/nonexistent",
             sig.clone(),
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
         )
         .unwrap();
         assert!(matches!(
@@ -88,7 +88,7 @@ fn native_oracle_projected_ground_rhs_preserves_the_ac_subproduct_complement() {
     let native = MaudeHandle::start_for_tamarin_theory(
         "/nonexistent",
         sig.clone(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
         Default::default(),
     )
     .unwrap();
@@ -153,7 +153,7 @@ fn allocation_connected_to_a_returned_key_keeps_its_full_matching_constraints() 
         .unwrap()
         .is_none());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
+        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::ProvedOnly).unwrap();
     assert_eq!(native.reduce(&good).unwrap(), a);
     let miss = app(pub_term("missing"));
     assert_eq!(native.reduce(&miss).unwrap(), miss);

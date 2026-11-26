@@ -1,4 +1,4 @@
-//! Query-level differential fuzzer: native-only algebra backend vs Maude.
+//! Query-level differential fuzzer: proved-only algebra backend vs Maude.
 //!
 //! Untracked audit tool. Build (from the tamarin-rs root):
 //!   cargo --config 'patch."https://github.com/kmilner/tamarin-algebra.git".tamarin-algebra-sys.path="../tamarin-algebra"' \
@@ -2089,7 +2089,7 @@ pub(crate) mod imp {
         maude_only: bool,
     }
 
-    const MISSING: &str = "/nonexistent/audit-fuzz-native-only-must-not-start-maude";
+    const MISSING: &str = "/nonexistent/audit-fuzz-proved-only-must-not-start-maude";
 
     impl Ctx {
         fn new(cfg: Cfg, theory: bool) -> Ctx {
@@ -2124,7 +2124,7 @@ pub(crate) mod imp {
                 );
             }
             if self.subject[si].is_none() {
-                let (path, backend) = (MISSING, AlgebraBackend::NativeOnly);
+                let (path, backend) = (MISSING, AlgebraBackend::ProvedOnly);
                 let sig = self.sigs[si].sig.clone();
                 self.subject[si] = Some(if self.theory {
                     MaudeHandle::start_for_tamarin_theory(path, sig, backend, Default::default())
@@ -2531,7 +2531,7 @@ pub(crate) mod imp {
                             .iter()
                             .any(|(c, _)| c == "maude-witness-not-above-query")
                     {
-                        out.find("unify-witness-not-above-query(native-only)", d);
+                        out.find("unify-witness-not-above-query(proved-only)", d);
                     }
                 }
                 if let Ok(n) = &rn {

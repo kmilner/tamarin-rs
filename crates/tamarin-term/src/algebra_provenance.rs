@@ -25,7 +25,7 @@ pub enum Origin {
     /// with the finite variant property, on a table the certifier did not
     /// accept. Maude makes the same assumption.
     Assumed,
-    /// Native-only answers that no single theorem covers: Rust that combines
+    /// Proved-only answers that no single theorem covers: Rust that combines
     /// several checked kernels (the tuple unpacker with a total export). On
     /// native, a unification whose delayed equations the proved unifier
     /// answered, composed in Rust with the Maude backend's free unifier.
@@ -39,7 +39,7 @@ pub enum Origin {
     Maude,
 }
 
-/// How native-only obtained a family of variants.
+/// How proved-only obtained a family of variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VariantRoute {
     /// A specialised Rust solver proposed the family and the certificate
@@ -103,7 +103,7 @@ impl Provenance {
         self.routes[route as usize].fetch_add(1, Ordering::Relaxed);
     }
 
-    /// The families of variants native-only obtained by `route`.
+    /// The families of variants proved-only obtained by `route`.
     pub fn route(&self, route: VariantRoute) -> u64 {
         self.routes[route as usize].load(Ordering::Relaxed)
     }

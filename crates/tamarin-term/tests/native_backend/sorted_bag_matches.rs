@@ -46,7 +46,7 @@ impl Case {
     fn check(&self, mut expected: Vec<Arm>) {
         let sig = mset_maude_sig().merge(nat_maude_sig());
         let native =
-            MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+            MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
         for arm in &mut expected {
             arm.sort();
         }

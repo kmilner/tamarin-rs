@@ -1,6 +1,6 @@
 //! Selection of the algebra backend: Maude, or the in-process Lean library.
 //!
-//! Native-only starts no Maude process. Its unifier, matcher and normalizer
+//! Proved-only starts no Maude process. Its unifier, matcher and normalizer
 //! are Lean exports that carry whole-command theorems, and it uses a family
 //! of variants only after the Lean certificate checker accepted it. The Rust
 //! encoding of requests and replies and the C/Lean runtime boundary remain
@@ -9,18 +9,18 @@
 //! Native starts no Maude process either. It runs the code of the Maude
 //! backend, whose Rust front ends answer most requests, and hands each
 //! request that backend would send to Maude to the Lean library instead:
-//! the unifier, matcher, normalizer and variant checker native-only uses.
+//! the unifier, matcher, normalizer and variant checker proved-only uses.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlgebraBackend {
     Maude,
-    NativeOnly,
+    ProvedOnly,
     /// The Maude backend's code with every Maude request handed to the
     /// proved Lean exports.
     Native,
 }
 
-/// Maude is the default in every build. Native-only does not yet finish every
+/// Maude is the default in every build. Proved-only does not yet finish every
 /// theory, so it remains an explicit opt-in.
 impl Default for AlgebraBackend {
     fn default() -> Self {
@@ -37,7 +37,7 @@ impl AlgebraBackend {
     pub fn name(self) -> &'static str {
         match self {
             Self::Maude => "maude",
-            Self::NativeOnly => "native-only",
+            Self::ProvedOnly => "proved-only",
             Self::Native => "native",
         }
     }
@@ -67,7 +67,7 @@ impl std::str::FromStr for AlgebraBackend {
     fn from_str(value: &str) -> Result<Self, Self::Err> {
         match value {
             "maude" => Ok(Self::Maude),
-            "native-only" => Ok(Self::NativeOnly),
+            "proved-only" => Ok(Self::ProvedOnly),
             "native" => Ok(Self::Native),
             _ => Err(format!("unknown algebra backend: {value}")),
         }

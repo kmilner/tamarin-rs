@@ -6,7 +6,7 @@
 //! Spawns `maude -interactive -no-tecla -no-banner -no-wrap -batch`,
 //! feeds it a `fmod MSG ... endfm` module describing the term algebra,
 //! and exposes `unify`, `match`, `variants`, and `reduce` operations.
-//! Native-only sessions create no process: they answer through the Lean
+//! Proved-only sessions create no process: they answer through the Lean
 //! library and fail explicitly when a request is outside what it supports.
 //! Native sessions create none either: they run the Maude backend's code and
 //! hand each request that backend sends to Maude to the Lean library.
@@ -48,7 +48,7 @@ pub struct ApplicationVariant {
 #[derive(Debug)]
 pub enum MaudeError {
     Cancelled,
-    /// Experimental native-only mode cannot complete this operation.
+    /// The proved exports cannot complete this operation (proved-only or native).
     UnsupportedOperation(&'static str),
     /// A native runtime/packet error invalidated this session.
     NativeFailure(String),
@@ -66,7 +66,7 @@ impl std::fmt::Display for MaudeError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             MaudeError::UnsupportedOperation(op) => {
-                write!(f, "native-only backend does not support {op}")
+                write!(f, "the proved algebra exports do not support {op}")
             }
             MaudeError::NativeFailure(reason) => {
                 write!(f, "native algebra backend failed: {reason}")
@@ -336,7 +336,7 @@ struct MaudeCacheStats {
 pub struct SharedMaudeCaches {
     /// Latch failures across workers: legacy callers sometimes recover from errors.
     /// Every consumer must check this before publishing any result. It holds the
-    /// first native-only runtime failure and the first backend error that a
+    /// first proved-only runtime failure and the first backend error that a
     /// caller without an error channel had to absorb, among those of work
     /// whose result is used: a parallel job holds its own failure until
     /// then (see [`SharedMaudeCaches::fail`]).
@@ -391,7 +391,7 @@ pub struct SharedMaudeCaches {
     provenance: Provenance,
     /// Memo for `unifiable(...)` queries — see `MaudeHandle::unifiable`.
     /// Caches the *boolean* outcome (true = at least one unifier exists).
-    /// Native-only stores here what the proved existence export decided; it
+    /// Proved-only stores here what the proved existence export decided; it
     /// reads a family in `proved_unify` first, and never reads an entry of
     /// this memo as a family.
     unifiable: Mutex<tamarin_utils::FastMap<EqsKey, (bool, Origin)>>,
@@ -756,12 +756,12 @@ impl UnifyMemo {
     }
 }
 
-/// The operation a raw native-only session reports when the certifier did not
+/// The operation a raw proved-only session reports when the certifier did not
 /// accept its rewrite table.
 pub const UNCERTIFIED_TABLE: &str =
     "normalization over a rewrite table the certifier did not accept";
 
-/// `TAM_RS_NATIVE_REFERENCE` selects the operations native-only answers from
+/// `TAM_RS_NATIVE_REFERENCE` selects the operations proved-only answers from
 /// the whole-command exports alone, where it otherwise does more: `1` for
 /// both, `0` for neither, or a comma separated list of `reduce` and
 /// `variants`. `TAM_RS_NATIVE_REFERENCE_VARIANTS=1` adds `variants`.
@@ -812,7 +812,7 @@ const VARIANT_CHECK_DEPTH: u64 = 1 << 16;
 /// `TAM_RS_VARIANT_CHECK_WORK=<n>` sets the work bound of the variant
 /// certificate checker, for experiments; `0` removes the bound.
 ///
-/// Native-only uses a family of variants that a Rust solver proposed only
+/// Proved-only uses a family of variants that a Rust solver proposed only
 /// after the Lean certificate checker has accepted it. The checker cannot be
 /// interrupted. Its work bound limits the number of positions that are not
 /// variables at which it looks for narrowing steps, added up over the
@@ -939,7 +939,7 @@ enum NativeFailure {
 /// Map a native runtime error. Cancellation stays a clean cancellation and
 /// is never latched. Any other error invalidates the session: a caller that
 /// recovers from the returned error still cannot publish a result, see
-/// [`MaudeHandle::check_backend_status`]. Only native-only reaches Lean.
+/// [`MaudeHandle::check_backend_status`]. Only proved-only reaches Lean.
 #[cfg(feature = "lean-unification")]
 fn native_runtime_error(
     caches: &Arc<SharedMaudeCaches>,
@@ -981,7 +981,7 @@ struct MaudeProcessInner {
     /// the owning `MaudeHandle` so reads via `MaudeHandle::maude_sig()` are a
     /// refcount bump rather than a deep clone taken under this IPC mutex.
     sig: Arc<MaudeSig>,
-    /// The session's caches, for the failure latch alone: a native-only
+    /// The session's caches, for the failure latch alone: a proved-only
     /// session asked for a Maude exchange records that here.
     caches: Arc<SharedMaudeCaches>,
 }
@@ -1585,17 +1585,17 @@ fn check_name_registration(reply: &[u8]) -> Result<(), MaudeError> {
     }
 }
 
-/// Handle to an algebra session (no subprocess in native-only mode).
+/// Handle to an algebra session (no subprocess in proved-only mode).
 /// Cloneable; uses an `Arc<Mutex<...>>`
 /// internally to serialize exchanges with the Maude subprocess.
 ///
 /// Parallel jobs may share one handle. On the Maude backend they take turns
-/// on the process (see [`Turn`]). A native-only session has no transport to
+/// on the process (see [`Turn`]). A proved-only session has no transport to
 /// take turns on: every answer is computed on the calling thread from the
 /// request and the immutable signature, the session memos and the failure
 /// latch are behind their own short locks, and `inner` is locked only to
 /// bump a counter. No call into the Lean library is made with a lock held,
-/// so jobs that share a native-only handle run their searches concurrently
+/// so jobs that share a proved-only handle run their searches concurrently
 /// and one that is cancelled inside a search holds nothing up.
 /// The `Child` reaper sits in its OWN mutex so a watchdog can
 /// `kill_subprocess()` even while a reader thread is blocked on Maude
@@ -1648,9 +1648,9 @@ pub struct MaudeHandle {
     /// at `start_with_caches` (the signature is immutable afterwards).
     reduce_by_symbol: bool,
     reduce_by_structure: bool,
-    /// Operators printed by this native-only session, derived from source declarations.
+    /// Operators printed by this proved-only session, derived from source declarations.
     native_declarations: Option<Arc<crate::function_symbols::FunSig>>,
-    /// Where native-only normalizes or lists variants through the
+    /// Where proved-only normalizes or lists variants through the
     /// whole-command exports alone, and the budget of its variant checker.
     #[cfg(feature = "lean-unification")]
     reference: Reference,
@@ -1687,7 +1687,7 @@ impl MaudeHandle {
     /// Narrow one free application on distinct message variables and retain
     /// its normal result. Unsupported inputs use the caller's ordinary path.
     ///
-    /// Native-only uses the proposed bindings only after the Lean
+    /// Proved-only uses the proposed bindings only after the Lean
     /// certificate checker accepted them as a complete set of variants of
     /// the application, and takes each value from the proved reducer.
     pub fn observed_application_variants(
@@ -1697,7 +1697,7 @@ impl MaudeHandle {
         self.check_backend_status()?;
         cancellation::check()?;
         // The Maude backend lists these variants with `get variants`, which
-        // native hands to the same checked route as native-only.
+        // native hands to the same checked route as proved-only.
         #[cfg(feature = "lean-unification")]
         if !self.backend.uses_maude()
             && let Some(table) = self.native_rules()
@@ -1804,7 +1804,7 @@ impl MaudeHandle {
         Ok(session)
     }
 
-    /// Start a backend session. Native-only creates no subprocess or pipes.
+    /// Start a backend session. Proved-only creates no subprocess or pipes.
     /// All handles sharing caches must use the same signature, backend and theory assumptions.
     pub fn start_with_backend_and_caches(
         maude_path: &str,
@@ -1874,13 +1874,13 @@ impl MaudeHandle {
             fresh_counter: Arc::new(AtomicU64::new(0)),
             native_declarations: (!backend.uses_maude()).then(|| Arc::new(sig.declared_fun_syms())),
             // The two normal-form shortcuts of `reduce` save a round trip to
-            // Maude. Native-only has none to save: every reduction is the
+            // Maude. Proved-only has none to save: every reduction is the
             // proved export's, at no measurable cost. Native keeps them, as
             // it keeps every front end of the Maude backend.
-            reduce_by_symbol: backend != AlgebraBackend::NativeOnly
+            reduce_by_symbol: backend != AlgebraBackend::ProvedOnly
                 && indexed
                 && sig.has_no_ac_operators(),
-            reduce_by_structure: backend != AlgebraBackend::NativeOnly
+            reduce_by_structure: backend != AlgebraBackend::ProvedOnly
                 && indexed
                 && sig.st_lhs_all_ac_c_free(),
             sig,
@@ -1941,7 +1941,7 @@ impl MaudeHandle {
         self.caches.provenance.snapshot()
     }
 
-    /// Whether this native-only session rests on the theory author's premise
+    /// Whether this proved-only session rests on the theory author's premise
     /// that the equations are convergent: its rewrite table has been built
     /// and the Lean certifier did not accept it, or an answer was already
     /// counted as [`Origin::Assumed`]. The table is built by the first
@@ -2169,13 +2169,13 @@ impl MaudeHandle {
         }
     }
 
-    /// Latch that this native-only session was asked for something it
+    /// Latch that this proved-only session was asked for something it
     /// cannot answer, and return the session's failure.
     fn unsupported_native_operation(&self, operation: &'static str) -> MaudeError {
         self.caches.fail(|| NativeFailure::Unsupported(operation))
     }
 
-    /// Fail a native-only session that reaches a Maude exchange.
+    /// Fail a proved-only session that reaches a Maude exchange.
     fn require_maude(&self, operation: &'static str) -> Result<(), MaudeError> {
         if !self.backend.uses_maude() {
             return Err(self.unsupported_native_operation(operation));
@@ -2183,8 +2183,8 @@ impl MaudeHandle {
         Ok(())
     }
 
-    /// Bump a per-handle counter of a native-only answer. Nothing holds the
-    /// lock of a native-only session for longer than such a bump.
+    /// Bump a per-handle counter of a proved-only answer. Nothing holds the
+    /// lock of a proved-only session for longer than such a bump.
     #[cfg(feature = "lean-unification")]
     fn bump_stats(&self, bump: impl FnOnce(&mut MaudeStats)) {
         bump(&mut self.inner.lock().stats);
@@ -2371,7 +2371,7 @@ impl MaudeHandle {
         // module. Native runs the Maude backend's front end on the term as
         // sent, and checks it where it would go to Maude.
         let canonical;
-        let t = if self.backend == AlgebraBackend::NativeOnly {
+        let t = if self.backend == AlgebraBackend::ProvedOnly {
             match self.canonical_command_term(t, "normalization")? {
                 Some(rebuilt) => {
                     canonical = rebuilt;
@@ -2457,7 +2457,7 @@ impl MaudeHandle {
                     .record(Asked::Reduce, Origin::SharedRust);
                 return Ok(t.clone());
             }
-            // Native-only normalizes through the proved exports alone: the two
+            // Proved-only normalizes through the proved exports alone: the two
             // shortcuts above are off for it. Native hands the term the Maude
             // backend would send to Maude to the same export.
             #[cfg(feature = "lean-unification")]
@@ -2666,7 +2666,7 @@ impl MaudeHandle {
     /// Whether *any* unifier of `eqs` exists modulo the signature's AC/C
     /// attributes. Ordinary `unify` ignores the signature's rewrite equations.
     ///
-    /// Native-only answers from the proved existence export and the memos
+    /// Proved-only answers from the proved existence export and the memos
     /// ([`Self::proved_unifiable`]); it lists no family. The Maude
     /// backend first tries the syntactic checks and, on a module without
     /// AC/C operators, the local free unifier; any other query goes to Maude
@@ -2676,7 +2676,7 @@ impl MaudeHandle {
     pub fn unifiable(&self, eqs: &[Equal<LNTerm>]) -> Result<bool, MaudeError> {
         self.check_backend_status()?;
         #[cfg(feature = "lean-unification")]
-        if self.backend == AlgebraBackend::NativeOnly {
+        if self.backend == AlgebraBackend::ProvedOnly {
             return self.proved_unifiable(eqs);
         }
         let tally = |origin| self.caches.provenance.record(Asked::Unify, origin);
@@ -2753,13 +2753,13 @@ impl MaudeHandle {
         eqs: &[Equal<LNTerm>],
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         #[cfg(feature = "lean-unification")]
-        if self.backend == AlgebraBackend::NativeOnly {
+        if self.backend == AlgebraBackend::ProvedOnly {
             let answers = self.proved_unify(eqs)?;
             trace_unifiers(eqs, &answers);
             return Ok(answers);
         }
         // Native keeps every answer under the request as sent, as
-        // native-only does: the answer of the Maude backend's code is a
+        // proved-only does: the answer of the Maude backend's code is a
         // function of the request alone.
         #[cfg(feature = "lean-unification")]
         let key = (self.backend == AlgebraBackend::Native).then(|| EqsKey::new(eqs));
@@ -2811,7 +2811,7 @@ impl MaudeHandle {
     }
 
     /// Unify through the proved exports alone: the only unifier of a
-    /// native-only session. The existence question has its own export
+    /// proved-only session. The existence question has its own export
     /// ([`Self::proved_unifiable`]) and reads this method's memo.
     ///
     /// The total export answers a conjunction of algebraic terms with a
@@ -3114,11 +3114,11 @@ impl MaudeHandle {
     /// The witnesses are named as the Maude reply decoder names them, `x`
     /// numbered above the variables of `residual`, in an order of first
     /// occurrence that is that of [`crate::unifier_presentation`] for the
-    /// same request on native-only, since the order in which Maude prints a
+    /// same request on proved-only, since the order in which Maude prints a
     /// unifier is internal to its AC solver.
     ///
     /// The reply of the unifier is kept by the words of the request, as on
-    /// native-only, and the naming and the composition run on every call
+    /// proved-only, and the naming and the composition run on every call
     /// that reaches here, as the decoding of a stored Maude reply does.
     /// [`Self::unify`] keeps the composed answers.
     #[cfg(feature = "lean-unification")]
@@ -3583,7 +3583,7 @@ impl MaudeHandle {
         eqs: &[Equal<LNTerm>],
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         self.check_backend_status()?;
-        // Native-only answers every match through the proved total matcher.
+        // Proved-only answers every match through the proved total matcher.
         // Native runs the Maude backend's front end first, and hands the
         // match that backend would send to Maude to the same matcher.
         #[cfg(feature = "lean-unification")]
@@ -3659,10 +3659,10 @@ impl MaudeHandle {
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         self.check_backend_status()?;
         use crate::lterm::LVar;
-        // Native-only answers every match through the proved total matcher,
+        // Proved-only answers every match through the proved total matcher,
         // which takes the scope of bindable variables directly.
         #[cfg(feature = "lean-unification")]
-        if self.backend == AlgebraBackend::NativeOnly {
+        if self.backend == AlgebraBackend::ProvedOnly {
             let mut answers = self.proved_match(
                 eqs,
                 Bindable::Pattern(pattern_vars),
@@ -4438,7 +4438,7 @@ struct PoolState {
 impl PoolState {
     /// Pop the most recently returned member. One that exited while idle, or
     /// whose last borrower lost it, restarts on its next exchange.
-    /// A native-only member has no process and is always ready.
+    /// A proved-only member has no process and is always ready.
     fn pop(&mut self) -> Option<MaudeHandle> {
         let handle = self.free.pop()?;
         if handle.backend.uses_maude() {
@@ -4716,7 +4716,7 @@ impl MaudePool {
             pool: self.clone(),
             inner: borrowed.inner.take(),
         };
-        // A native-only member has no process to start.
+        // A proved-only member has no process to start.
         if !self.backend.uses_maude() {
             return Some(lease);
         }
@@ -4737,7 +4737,7 @@ impl MaudePool {
     }
 
     /// Number of backend members created so far (≤ `size`), not subprocesses
-    /// in native-only mode. Grows lazily
+    /// in proved-only mode. Grows lazily
     /// as `acquire`/`try_acquire` demand members beyond the eager first one.
     pub fn spawned(&self) -> usize {
         self.state.lock().unwrap().spawned

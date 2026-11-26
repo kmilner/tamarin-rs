@@ -36,7 +36,7 @@
 //! The native backend sends the proved export only the delayed equations,
 //! as the Maude backend sends them to Maude, and composes in Rust. It names
 //! the engine's witnesses by [`engine_part`], the numbering used here, so
-//! that its answers are native-only's.
+//! that its answers are proved-only's.
 //!
 //! A request the free unifier solves alone, as far as a test that unifies
 //! nothing can tell (`maude_proc::solved_by_free_unifier`), does not come

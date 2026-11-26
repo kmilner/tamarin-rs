@@ -9,7 +9,7 @@ fn handle() -> MaudeHandle {
     MaudeHandle::start_with_backend(
         MISSING,
         mset_maude_sig().merge(hash_maude_sig()),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap()
 }

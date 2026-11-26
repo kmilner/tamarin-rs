@@ -55,7 +55,7 @@ fn bilinear_variants_preserve_open_scalars_and_kind_level_pairing() {
     if let Some(path) = tamarin_test_support::require_maude_path() {
         check(&MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap());
     }
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     check(&h);
     assert_eq!(h.stats().var_count, 0);
     assert_eq!(h.stats().norm_count, 0);
@@ -87,7 +87,7 @@ fn bilinear_extraction_on_both_sides_cancels_under_xor_and_user_equations() {
             MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
         assert_eq!(oracle.reduce(&input).unwrap(), expected);
     }
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     assert_eq!(h.reduce(&input).unwrap(), expected);
     assert_eq!(h.stats().norm_count, 0);
 }

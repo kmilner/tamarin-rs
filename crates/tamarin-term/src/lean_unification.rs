@@ -1,10 +1,10 @@
 //! In-process interface to the verified Lean algebra library.
 //!
-//! Native-only unifies, matches and normalizes through whole-command exports
+//! Proved-only unifies, matches and normalizes through whole-command exports
 //! alone: one total unifier for mixed free/C/AC conjunctions, one total scoped
 //! matcher with its existence decision, and the checked reducers. The Rust
 //! solvers that remain here only propose families of variants, which
-//! native-only uses after the Lean certificate checker accepted them. Protocol
+//! proved-only uses after the Lean certificate checker accepted them. Protocol
 //! sessions fall back to the full table under Tamarin's canonical,
 //! finite-variant presentation assumptions for reduction and variants.
 //! The Rust encoding and C/Lean runtime boundary remain trusted code.

@@ -14,7 +14,7 @@ fn handle() -> MaudeHandle {
     MaudeHandle::start_with_backend(
         "/nonexistent",
         mset_maude_sig().merge(pair_maude_sig()),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap()
 }

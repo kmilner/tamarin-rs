@@ -50,7 +50,7 @@ fn certified_dh_xor_reduction_crosses_both_groups_and_the_checked_depth() {
             MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
         assert_eq!(maude.reduce(&input).unwrap(), want);
     }
-    let native = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let native = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     assert_eq!(native.reduce(&input).unwrap(), want);
     assert_eq!(native.stats().norm_count, 0);
 }
@@ -87,7 +87,7 @@ fn certified_dh_xor_joint_variants_keep_the_sorted_zero_beside_a_node() {
     if let Some(path) = tamarin_test_support::require_maude_path() {
         check(&MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap());
     }
-    let native = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let native = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     check(&native);
     assert_eq!(native.stats().var_count, 0);
     assert_eq!(native.stats().norm_count, 0);

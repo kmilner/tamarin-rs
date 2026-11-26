@@ -15,7 +15,7 @@ fn native_matching_and_reduction_check_declarations_before_returning_an_identity
         let mut h = MaudeHandle::start_with_backend(
             "/nonexistent/maude",
             pair_maude_sig(),
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
         )
         .unwrap();
         h.set_reference(reference);
@@ -1282,19 +1282,19 @@ fn panicking_exchange_cannot_leave_a_reply_for_the_next_request() {
 }
 
 /// Proof search leases pool members with the calls that never wait
-/// (`try_take_idle_owned`, `try_acquire_ready`). A native-only member has
+/// (`try_take_idle_owned`, `try_acquire_ready`). A proved-only member has
 /// no process to find running or to start: it is ready as it is, and
 /// leasing it must not ask the session for a Maude exchange.
 #[cfg(feature = "lean-unification")]
 #[test]
-fn a_native_only_pool_leases_ready_members_without_a_process() {
+fn a_proved_only_pool_leases_ready_members_without_a_process() {
     let pool = Arc::new(
         MaudePool::new_with_backend(
             "/nonexistent/maude",
             pair_maude_sig(),
             2,
             Arc::new(SharedMaudeCaches::default()),
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
         )
         .unwrap(),
     );
@@ -1481,7 +1481,7 @@ fn a_failed_job_writes_to_no_memo_of_a_maude_session() {
     assert!(latched.contains("boom"), "{latched}");
 }
 
-/// The same for the memos of a native-only session: the helpers below the
+/// The same for the memos of a proved-only session: the helpers below the
 /// entry points answer a failed job and keep the answer out of the session.
 #[cfg(feature = "lean-unification")]
 #[test]
@@ -1489,7 +1489,7 @@ fn a_failed_job_writes_to_no_memo_of_a_native_session() {
     use tamarin_utils::cancellation::{CancellationGuard, CancellationScope};
     let sig = crate::maude_sig::xor_maude_sig();
     let handle =
-        MaudeHandle::start_with_backend("/nonexistent/maude", sig, AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent/maude", sig, AlgebraBackend::ProvedOnly)
             .unwrap();
     let peer = handle.clone();
     let var = |name: &'static str| crate::term::Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)));
@@ -1616,7 +1616,7 @@ fn a_failed_normal_form_match_latches_the_session() {
     assert!(handle.check_backend_status().is_err());
 }
 
-/// Native-only uses a family of a Rust variant solver only after the Lean
+/// Proved-only uses a family of a Rust variant solver only after the Lean
 /// certificate checker accepted it.
 #[cfg(feature = "lean-unification")]
 mod variant_check {
@@ -1631,7 +1631,7 @@ mod variant_check {
     }
 
     fn native(sig: MaudeSig) -> MaudeHandle {
-        MaudeHandle::start_with_backend("/nonexistent/maude", sig, AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent/maude", sig, AlgebraBackend::ProvedOnly)
             .unwrap()
     }
 
@@ -1795,7 +1795,7 @@ mod variant_check {
         let h = MaudeHandle::start_for_tamarin_theory(
             "/nonexistent/maude",
             sig.clone(),
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
             Arc::new(SharedMaudeCaches::default()),
         )
         .unwrap();

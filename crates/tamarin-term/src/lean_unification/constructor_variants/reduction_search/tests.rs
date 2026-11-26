@@ -19,7 +19,7 @@ fn var(name: &str) -> LNTerm {
     Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)))
 }
 
-/// A native-only session whose theory author asserts convergence. Reduction
+/// A proved-only session whose theory author asserts convergence. Reduction
 /// no longer consults the specialised Rust reducer: a table the certifier
 /// does not accept is normalized along one rewrite path under that premise,
 /// and a raw session reports the table instead.
@@ -27,7 +27,7 @@ fn theory_session(sig: &MaudeSig) -> MaudeHandle {
     MaudeHandle::start_for_tamarin_theory(
         "/nonexistent",
         sig.clone(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
         Default::default(),
     )
     .unwrap()
@@ -64,7 +64,7 @@ fn native_oracle_proper_subproducts_and_converging_branches() {
     let native = MaudeHandle::start_for_tamarin_theory(
         "/nonexistent",
         sig.clone(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
         Default::default(),
     )
     .unwrap();
@@ -136,7 +136,7 @@ fn native_oracle_idempotence_on_all_small_bags() {
     let native = MaudeHandle::start_for_tamarin_theory(
         "/nonexistent",
         sig.clone(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
         Default::default(),
     )
     .unwrap();

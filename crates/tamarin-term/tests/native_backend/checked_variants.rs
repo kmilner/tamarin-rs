@@ -37,11 +37,11 @@ fn checked_variant_frontier_preserves_shared_inputs_under_a_kind_level_ac_rewrit
     // The table has a rule at an AC root, which the certifier does not
     // accept: the session of a theory reduces along one path.
     let new =
-        |sig| MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+        |sig| MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let h = MaudeHandle::start_for_tamarin_theory(
         MISSING,
         sig.clone().refresh(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
         Default::default(),
     )
     .unwrap();
@@ -121,7 +121,7 @@ fn user_equations_followed_by_pairing_compute_both_open_variants() {
     let handle = MaudeHandle::start_for_tamarin_theory(
         MISSING,
         sig.refresh(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
         Default::default(),
     )
     .unwrap();
@@ -238,7 +238,7 @@ fn certified_ground_rule_beyond_frontier_returns_open_and_specialized_variants()
     let product = (0..5).fold(node, |acc, _| sum(acc, marker.clone()));
     let query = f_app_list(vec![call(var.clone()), var.clone(), product]);
     let native =
-        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::NativeOnly).unwrap();
+        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::ProvedOnly).unwrap();
     let check = |backend: &MaudeHandle| {
         let rows = backend.variants(&query).unwrap();
         let (mut open, mut specialized) = (false, false);
@@ -313,7 +313,7 @@ fn certified_xor_decryption_variants_preserve_the_kind_level_residual() {
         assert!(open && specialized);
     };
     let native =
-        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::NativeOnly).unwrap();
+        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::ProvedOnly).unwrap();
     check(&native);
     assert_eq!(native.stats().var_count, 0);
     assert_eq!(native.stats().norm_count, 0);

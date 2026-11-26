@@ -1,15 +1,15 @@
-# Lemmas whose verdict on the native-only backend is known to differ from
+# Lemmas whose verdict on the proved-only backend is known to differ from
 # Maude's, with the reason. scripts/backend_gate.py accepts exactly the listed
 # pair of verdicts for the listed lemma; any other difference fails the gate,
 # and so does an entry whose lemma no longer differs (STALE_EXCEPTION).
 #
-# Format: <theory, as in the list><TAB><lemma><TAB><Maude verdict><TAB><native-only verdict><TAB><reason>
+# Format: <theory, as in the list><TAB><lemma><TAB><Maude verdict><TAB><proved-only verdict><TAB><reason>
 #
 # native_ac_marker_trace: merge is AC with merge(red,red) = red, so
 # merge(red, merge(red, blue)) equals merge(red, blue) modulo the equations
-# and Initial, Combine, Observe is a trace. Native-only finds it and Maude's
-# run does not, so here native-only is right; the fixture's own test pins
+# and Initial, Combine, Observe is a trace. Proved-only finds it and Maude's
+# run does not, so here proved-only is right; the fixture's own test pins
 # the native verdicts (crates/tamarin-prover/tests/native_backend.rs,
 # ac_marker_variant_preserves_the_reachable_trace).
-../../crates/tamarin-prover/tests/fixtures/native_ac_marker_trace.spthy	possible	falsified	verified	native-only finds the trace Initial, Combine, Observe; the Maude run does not
+../../crates/tamarin-prover/tests/fixtures/native_ac_marker_trace.spthy	possible	falsified	verified	proved-only finds the trace Initial, Combine, Observe; the Maude run does not
 ../../crates/tamarin-prover/tests/fixtures/native_ac_marker_trace.spthy	impossible	verified	falsified	the same trace refutes the all-traces lemma

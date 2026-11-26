@@ -1,6 +1,6 @@
 /*
  * Backend gate regression: a projection applied to an exponentiation of two
- * received terms, in a rule action. The native-only backend must list the
+ * received terms, in a rule action. The proved-only backend must list the
  * variants of fst(x^z) and finish.
  */
 theory DhPowerUnderFst

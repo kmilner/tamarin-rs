@@ -17,7 +17,7 @@ tamarin-prover.
 ## Quick start
 
 Build prerequisites: Rust, Node.js (22.12+ or 24+), npm, Git, Bash, and Make.
-The default build uses Maude. The experimental native-only backend can run supported theories
+The default build uses Maude. The experimental proved-only and native backends can run supported theories
 without a Maude executable. See the [backend coverage table](https://github.com/kmilner/tamarin-algebra/blob/main/lean/README.md#coverage-and-remaining-work)
 and [Algebra backends](#algebra-backends) below.
 Server-rendered graphs require Graphviz. See the [Tamarin installation instructions](https://tamarin-prover.com/manual/master/book/002_installation.html).
@@ -58,22 +58,22 @@ proofs are lost. See [memory-limit behavior and limitations](docs/PERFORMANCE.md
 
 `--algebra-backend=maude` (the default) answers unification, matching,
 normalization and variant queries with a Maude subprocess.
-`--algebra-backend=native-only`, in a build with
+`--algebra-backend=proved-only`, in a build with
 `--features lean-unification`, answers them in-process from a Lean library
 whose exports are proved correct, and starts no Maude. It works in batch mode,
 in `interactive` mode and in `variants` mode:
 
 ```bash
 cargo build --release --features lean-unification
-tamarin-rs --algebra-backend=native-only --prove theory.spthy
-tamarin-rs interactive --algebra-backend=native-only /path/to/theories
+tamarin-rs --algebra-backend=proved-only --prove theory.spthy
+tamarin-rs interactive --algebra-backend=proved-only /path/to/theories
 ```
 
 `--algebra-backend=native`, in the same build, also starts no Maude. Every
 query that the Maude backend hands to Maude is answered by proved code, and
 every other query is answered exactly as on the Maude backend, by its Rust
-front ends. It prints the same proofs as native-only and is faster than
-native-only on theories with many unification queries.
+front ends. It prints the same proofs as proved-only and is faster than
+proved-only on theories with many unification queries.
 
 Tamarin requires a theory's equations to be convergent and has always taken
 the author's word for it. The native backend checks instead: a proved
@@ -90,7 +90,7 @@ as every Maude run does, and says so once per theory on stderr:
 The line never appears on the Maude backend, which has no certifier, and
 `--quiet` drops it. Standard output is the same with and without it.
 Parallel proof search (`--processors`) runs on both backends and prints the
-same proofs for every worker count; a native-only run shares one in-process
+same proofs for every worker count; a proved-only run shares one in-process
 session among its workers instead of a pool of Maude processes (see
 [parallel proof search](docs/PERFORMANCE.md#parallel-proof-search)).
 [TESTING.md](TESTING.md#algebra-backends) describes the tests and the

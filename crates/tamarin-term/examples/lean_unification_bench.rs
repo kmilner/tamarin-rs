@@ -1,4 +1,4 @@
-//! Compare the proved unifier of native-only with the memoized Maude path.
+//! Compare the proved unifier of proved-only with the memoized Maude path.
 #![allow(clippy::disallowed_macros)]
 
 use std::hint::black_box;
@@ -76,9 +76,9 @@ fn main() {
         let lean = MaudeHandle::start_with_backend(
             "/nonexistent",
             mset_maude_sig(),
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
         )
-        .expect("native-only handle");
+        .expect("proved-only handle");
         let oracle =
             MaudeHandle::start(&maude_path, mset_maude_sig()).expect("Maude oracle handle");
         // Initialize the Lean runtime before timing. Inputs and process startup

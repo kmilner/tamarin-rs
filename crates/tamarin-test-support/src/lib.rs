@@ -65,7 +65,7 @@ fn maude_on_path() -> Option<String> {
         .map(|c| c.to_string_lossy().into_owned())
 }
 
-/// Explicit oracle opt-in for tests that also run in a native-only CI job.
+/// Explicit oracle opt-in for tests that also run in a proved-only CI job.
 pub fn configured_maude_path() -> Option<String> {
     let path = std::env::var("MAUDE_PATH").ok()?;
     assert!(

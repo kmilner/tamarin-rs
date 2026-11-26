@@ -24,7 +24,7 @@ fn add_rule(sig: &mut MaudeSig, lhs: LNTerm, rhs: LNTerm) {
 fn handles(sig: MaudeSig) -> Option<(MaudeHandle, MaudeHandle)> {
     let path = require_maude_path()?;
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let maude = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     Some((native, maude))
@@ -180,7 +180,7 @@ fn native_oracle_finite_ac_variants_include_proper_subproducts() {
     let native = MaudeHandle::start_for_tamarin_theory(
         "/nonexistent",
         sig.clone(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
         Default::default(),
     )
     .unwrap();
@@ -262,7 +262,7 @@ fn native_oracle_finite_commutative_frontier_keeps_both_orientations() {
     let native = MaudeHandle::start_for_tamarin_theory(
         "/nonexistent",
         sig,
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
         Default::default(),
     )
     .unwrap();
@@ -403,7 +403,7 @@ fn native_oracle_frontier_compares_normal_results_on_overlapping_specializations
     let query = f_app_list(vec![choose(x.clone(), y.clone()), x, y]);
     assert_eq!(table.joined_variants(&query).unwrap(), Outcome::Unsupported);
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
+        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::ProvedOnly).unwrap();
     assert!(matches!(
         native.variants(&query),
         Err(crate::maude_proc::MaudeError::UnsupportedOperation(
@@ -422,7 +422,7 @@ fn native_oracle_stale_free_rule_head_cannot_certify_a_false_normal_form() {
     let mut sig = hash_maude_sig();
     add_rule(&mut sig, t.clone(), x.clone());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     assert_eq!(native.reduce(&t).unwrap(), x);
     if let Some(path) = tamarin_test_support::maude_path() {
@@ -538,7 +538,7 @@ fn total_free_variants_preserve_erased_keys_and_retained_narrowing_choices() {
     add_rule(&mut sig, at(x.clone(), y.clone()), y.clone());
     let sig = sig.refresh();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let erased = (0..10).fold(x.clone(), |t, _| unbox(t));
     let expected = valued_variant_rows(&native, &[unbox(y.clone()), x.clone(), y.clone()]);

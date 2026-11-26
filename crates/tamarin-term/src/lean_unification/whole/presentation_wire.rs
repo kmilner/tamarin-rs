@@ -241,7 +241,7 @@ fn native_oracle_declared_ac_group_composes_with_builtin_groups() {
     let h = MaudeHandle::start_with_backend(
         "/nonexistent/maude",
         sig.clone(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     assert_eq!(h.reduce(&input).unwrap(), zero_const());
@@ -299,7 +299,7 @@ fn native_oracle_ac_unit_reduces_only_with_a_message_partner() {
         let native = MaudeHandle::start_with_backend(
             "/nonexistent/maude",
             sig.clone(),
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
         )
         .unwrap();
         let oracle = tamarin_test_support::require_maude_path().map(|path| {
@@ -400,7 +400,7 @@ fn native_oracle_constructor_results_rebuild_the_open_capture() {
         let h = MaudeHandle::start_with_backend(
             "/nonexistent/maude",
             sig.clone(),
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
         )
         .unwrap();
         check_rows(&h, oracle.as_ref());
@@ -496,7 +496,7 @@ fn native_oracle_defined_patterns_and_results_join_on_specialization() {
     let h = MaudeHandle::start_with_backend(
         "/nonexistent/maude",
         sig.clone(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     check_rows(&h);
@@ -523,7 +523,7 @@ fn native_oracle_defined_patterns_and_results_join_on_specialization() {
     let mixed_handle = MaudeHandle::start_with_backend(
         "/nonexistent/maude",
         sig.clone(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     assert_eq!(mixed_handle.reduce(&mixed).unwrap(), b);

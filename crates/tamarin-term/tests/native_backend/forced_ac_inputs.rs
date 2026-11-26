@@ -29,7 +29,7 @@ fn rows(p: LNTerm, s: LNTerm, q: LNTerm, t: LNTerm) -> [Equal<LNTerm>; 2] {
 type Family = BTreeSet<Vec<Vec<usize>>>;
 
 fn handle(sig: &MaudeSig) -> MaudeHandle {
-    MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::NativeOnly).unwrap()
+    MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::ProvedOnly).unwrap()
 }
 
 /// The family the native backend lists, after asking a second handle the

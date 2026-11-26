@@ -29,16 +29,16 @@ done
 name=$(basename "$theory" .spthy)
 verdict="verified (3 steps)"
 case "$name:$backend" in
-    differs:native-only) verdict="falsified - found trace (4 steps)" ;;
-    steps:native-only) verdict="verified (5 steps)" ;;
-    hangs:native-only) sleep 60 ;;
-    crashes:native-only) echo "error: native-only backend does not support this" >&2; exit 1 ;;
+    differs:proved-only) verdict="falsified - found trace (4 steps)" ;;
+    steps:proved-only) verdict="verified (5 steps)" ;;
+    hangs:proved-only) sleep 60 ;;
+    crashes:proved-only) echo "error: proved-only backend does not support this" >&2; exit 1 ;;
     slow:maude) sleep 1.2 ;;
-    slow:native-only) sleep 3.2 ;;
+    slow:proved-only) sleep 3.2 ;;
     refdead:maude) echo "error: maude died" >&2; exit 1 ;;
 esac
 warning=
-[ "$name:$backend" = warns:native-only ] && warning="  WARNING: 1 wellformedness check failed!"
+[ "$name:$backend" = warns:proved-only ] && warning="  WARNING: 1 wellformedness check failed!"
 cat <<EOF
 theory T begin
   lemma (all-traces): verified (99 steps)
@@ -120,7 +120,7 @@ class BackendGate(unittest.TestCase):
         code, statuses, output = self.gate(["differs", "warns"])
         self.assertEqual(code, 1, output)
         self.assertEqual(statuses, {"differs": "VERDICT_DIFF", "warns": "VERDICT_DIFF"})
-        self.assertIn("lemma_a: Maude verified, native-only falsified", output)
+        self.assertIn("lemma_a: Maude verified, proved-only falsified", output)
         self.assertIn("DONE_BACKEND_GATE verdict=FAIL", output)
 
         listed = ["differs.spthy\tlemma_a\tverified\tfalsified\tnative is right"]
@@ -188,7 +188,7 @@ class BackendGate(unittest.TestCase):
     def test_resume_reuses_recorded_runs(self):
         out = os.path.join(self.tmp.name, "resumed")
         first = self.gate(["fine"], extra=["--out", out])
-        record = os.path.join(out, "fine", "native-only.run0.json")
+        record = os.path.join(out, "fine", "proved-only.run0.json")
         before = os.stat(record).st_mtime_ns
         second = self.gate(["fine"], extra=["--out", out, "--resume"])
         self.assertEqual((first[0], second[0]), (0, 0), second[2])

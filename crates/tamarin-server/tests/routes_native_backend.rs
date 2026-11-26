@@ -1,6 +1,6 @@
 // Currently GPL 3.0; see README.md for licensing details.
 
-//! Interactive mode on the native-only algebra backend.
+//! Interactive mode on the proved-only algebra backend.
 //!
 //! Each test drives the routes a user's session touches (the theory page,
 //! opening a lemma, one manual proof step, autoprove from the state that
@@ -10,7 +10,7 @@
 //!
 //! The native backend exists only in a build with `lean-unification`
 //! (`cargo test -p tamarin-server --features tamarin-term/lean-unification`).
-//! Without it these tests check that a native-only load is refused, which is
+//! Without it these tests check that a proved-only load is refused, which is
 //! all such a build can do. `scripts/interactive_backend_check.sh` runs the
 //! same session against the real binary.
 
@@ -32,16 +32,16 @@ fn corpus_theory(relative: &str) -> String {
 async fn server(theory: &str, backend: AlgebraBackend) -> TestServer {
     start_server_with_theory_and(theory, |cfg| {
         cfg.algebra_backend = backend;
-        if backend == AlgebraBackend::NativeOnly {
+        if backend == AlgebraBackend::ProvedOnly {
             // A native session must never reach for a Maude binary.
-            cfg.maude_path = "/nonexistent/maude-for-native-only".into();
+            cfg.maude_path = "/nonexistent/maude-for-proved-only".into();
         }
     })
     .await
 }
 
 fn native_backend_is_built() -> bool {
-    AlgebraBackend::NativeOnly.validate().is_ok()
+    AlgebraBackend::ProvedOnly.validate().is_ok()
 }
 
 async fn body(s: &TestServer, path: &str) -> String {
@@ -154,7 +154,7 @@ async fn compare_backends(theory: &str, lemma: &str, exact: bool) {
     if !native_backend_is_built() {
         return;
     }
-    let native = session(&server(theory, AlgebraBackend::NativeOnly).await, lemma).await;
+    let native = session(&server(theory, AlgebraBackend::ProvedOnly).await, lemma).await;
     let finished = &native.last().expect("responses").1;
     assert!(proved_lemmas(finished) > 0, "{finished}");
     assert!(!finished.contains("by sorry"), "{finished}");
@@ -199,7 +199,7 @@ async fn concurrent_native_requests_each_complete() {
         return;
     }
     let theory = corpus_theory("features/xor/CRxor.spthy");
-    let s = server(&theory, AlgebraBackend::NativeOnly).await;
+    let s = server(&theory, AlgebraBackend::ProvedOnly).await;
     let lemmas = ["alive", "recentalive_tag", "executable"];
     let paths: Vec<String> = lemmas
         .iter()
@@ -261,17 +261,17 @@ async fn native_session_proves_under_uncertified_user_equations() {
         .join("../tamarin-prover/tests/fixtures/native_user_equations_pairing.spthy")
         .canonicalize()
         .expect("prover fixture");
-    let s = server(&theory.display().to_string(), AlgebraBackend::NativeOnly).await;
+    let s = server(&theory.display().to_string(), AlgebraBackend::ProvedOnly).await;
     let all = redirect(&s, "/thy/trace/1/autoproveAll/idfs/0/proof/specialized").await;
     assert!(all.starts_with("/thy/trace/2/overview/"), "{all}");
     let proved = body(&s, "/thy/trace/2/download/all.spthy").await;
     assert_eq!(proved.matches("\nSOLVED").count(), 2, "{proved}");
 }
 
-/// Without the Lean library a native-only server refuses to load a theory
+/// Without the Lean library a proved-only server refuses to load a theory
 /// instead of answering from a best-effort session.
 #[test]
-fn native_only_needs_the_lean_library() {
+fn proved_only_needs_the_lean_library() {
     if native_backend_is_built() {
         return;
     }
@@ -281,13 +281,13 @@ fn native_only_needs_the_lean_library() {
             None,
             "/nonexistent/maude".to_string(),
         );
-        cfg.algebra_backend = AlgebraBackend::NativeOnly;
+        cfg.algebra_backend = AlgebraBackend::ProvedOnly;
         cfg
     };
     let loaded = tamarin_server::theory_io::load_from_path(&fixture_path("issue193.spthy"), &cfg);
     let error = loaded
         .err()
-        .expect("native-only load without Lean")
+        .expect("proved-only load without Lean")
         .to_string();
     assert!(error.contains("lean-unification"), "{error}");
 }

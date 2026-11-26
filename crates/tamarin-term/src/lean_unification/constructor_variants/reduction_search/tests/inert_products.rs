@@ -12,7 +12,7 @@ fn union() -> AcFctSym {
 }
 
 #[test]
-fn native_only_independent_reductions_under_an_inert_user_ac() {
+fn proved_only_independent_reductions_under_an_inert_user_ac() {
     let u = var("u");
     let k = var("k");
     let product = |args| f_app_acfct(union(), args);
@@ -23,7 +23,7 @@ fn native_only_independent_reductions_under_an_inert_user_ac() {
     sig.st_ac_fun_syms.insert(union());
     let sig = sig.refresh();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
+        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::ProvedOnly).unwrap();
     // Each factor exposes a product with the outer head. Independent choices
     // of the first redex would create at least 2^14 distinct whole states.
     let mut args = Vec::new();
@@ -51,7 +51,7 @@ fn native_oracle_inert_product_preserves_open_factors_and_multiplicities() {
     let expected = bag([x.clone(), y.clone(), y.clone(), x.clone(), x.clone()]);
     let sig = signature([(hash(pair(x.clone(), y.clone())), bag([x, y]))]);
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     assert_eq!(native.reduce(&input).unwrap(), expected);
     if let Some(path) = tamarin_test_support::require_maude_path() {
@@ -80,7 +80,7 @@ fn active_product_and_ambiguous_operand_still_defer() {
     ] {
         let sig = signature([changed.clone(), other]);
         let handle =
-            MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly)
+            MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::ProvedOnly)
                 .unwrap();
         assert!(matches!(
             handle.reduce(&input),
@@ -114,7 +114,7 @@ fn wider_product_slot_preserves_the_sort_of_a_changing_nat_operand() {
         let raw = MaudeHandle::start_with_backend(
             "/nonexistent",
             sig.clone(),
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
         )
         .unwrap();
         assert!(matches!(

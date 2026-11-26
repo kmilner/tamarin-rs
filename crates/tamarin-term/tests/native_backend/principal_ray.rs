@@ -39,7 +39,7 @@ fn check_shared_ratio(width: u64, factored: bool) {
         let handle = MaudeHandle::start_with_backend(
             MISSING,
             mset_maude_sig().merge(hash_maude_sig()),
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
         )
         .unwrap();
         let answers = handle.unify(&equations).unwrap();

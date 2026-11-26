@@ -1,6 +1,6 @@
 /*
  * Backend gate regression: a group inverse applied to an XOR of two received
- * terms, in a rule action. The native-only backend must list the variants of
+ * terms, in a rule action. The proved-only backend must list the variants of
  * inv(x XOR z) and finish.
  */
 theory XorUnderInv

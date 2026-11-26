@@ -1,6 +1,6 @@
-//! Existence of unifiers for homogeneous AC systems on native-only.
+//! Existence of unifiers for homogeneous AC systems on proved-only.
 //!
-//! Native-only has one unifier, the proved total export, and answers the
+//! Proved-only has one unifier, the proved total export, and answers the
 //! existence question through that export's proved existence decision,
 //! which lists no family. A wide system has far too many unifiers to list,
 //! so the wide shapes below ask for existence alone.
@@ -30,7 +30,7 @@ fn equation(left: &[u64], right: &[u64]) -> Equal<LNTerm> {
 }
 
 fn native() -> MaudeHandle {
-    MaudeHandle::start_with_backend("/nonexistent", mset_maude_sig(), AlgebraBackend::NativeOnly)
+    MaudeHandle::start_with_backend("/nonexistent", mset_maude_sig(), AlgebraBackend::ProvedOnly)
         .unwrap()
 }
 
@@ -140,7 +140,7 @@ fn native_oracle_mixed_size_clash_is_empty_and_the_open_row_keeps_its_family() {
     };
     let sig = mset_maude_sig().merge(hash_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let row = |t| Equal {

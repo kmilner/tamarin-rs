@@ -15,7 +15,7 @@ fn native() -> MaudeHandle {
         .merge(nat_maude_sig())
         .merge(bp_maude_sig())
         .merge(pair_maude_sig());
-    MaudeHandle::start_with_backend("/nonexistent/maude", sig, AlgebraBackend::NativeOnly).unwrap()
+    MaudeHandle::start_with_backend("/nonexistent/maude", sig, AlgebraBackend::ProvedOnly).unwrap()
 }
 
 fn sum(args: Vec<LNTerm>) -> LNTerm {
@@ -214,7 +214,7 @@ fn first_match_agrees_with_maude_on_shared_identities_and_ambiguous_orientations
         }
         rows.reverse();
     }
-    // Native-only answered every request through the proved matcher.
+    // Proved-only answered every request through the proved matcher.
     use tamarin_term::algebra_provenance::{Command, Origin};
     let tally = native.provenance();
     assert_eq!(

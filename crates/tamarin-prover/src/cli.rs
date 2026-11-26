@@ -190,7 +190,7 @@ pub struct Args {
     pub trace_json: Option<String>,
     pub trace_dot: Option<String>,
 
-    /// Algebra dispatch; native-only and native are experimental and never
+    /// Algebra dispatch; proved-only and native are experimental and never
     /// start Maude.
     pub algebra_backend: tamarin_term::algebra_backend::AlgebraBackend,
 
@@ -337,12 +337,12 @@ struct LoadOpts {
 /// loader flags (Maude-backed modes probe maude; interactive also renders graphs).
 #[derive(Debug, Clone, ClapArgs)]
 struct ToolOpts {
-    /// Algebra backend (default: maude). native-only answers every query with
-    /// proved code. native answers each query the Maude backend hands to Maude
-    /// with proved code, and every other query exactly as the Maude backend
-    /// does. Both need lean-unification and never start Maude.
+    /// Algebra backend (default: maude). proved-only answers every algebra
+    /// query with proved code. native answers each query the Maude backend
+    /// hands to Maude with proved code, and every other query exactly as the
+    /// Maude backend does. Both need lean-unification and never start Maude.
     #[arg(long = "algebra-backend", global = true, value_name = "BACKEND",
-          value_parser = ["maude", "native-only", "native"])]
+          value_parser = ["maude", "proved-only", "native"])]
     algebra_backend: Option<String>,
 
     /// Path to the maude binary (default: `maude` on $PATH)

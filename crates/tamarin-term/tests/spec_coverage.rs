@@ -1,5 +1,5 @@
 //! Exercise specification-generated requests through the public backend. A fresh
-//! native-only session isolates each request from earlier latched deferrals.
+//! proved-only session isolates each request from earlier latched deferrals.
 #![cfg(feature = "lean-unification")]
 #![allow(clippy::disallowed_macros)] // Print the coverage report with --nocapture.
 
@@ -467,11 +467,11 @@ fn public_backend_meets_generated_coverage_floor() {
             MaudeHandle::start_for_tamarin_theory(
                 "/nonexistent",
                 sig.clone(),
-                AlgebraBackend::NativeOnly,
+                AlgebraBackend::ProvedOnly,
                 Default::default(),
             )
         } else {
-            MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+            MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
         }
         .unwrap();
         let coverage = report.entry((theory, op)).or_insert_with(Coverage::default);

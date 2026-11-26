@@ -883,7 +883,7 @@ python3 scripts/test_web_harness.py
 
 The binary has three algebra backends. `--algebra-backend=maude`, the default,
 is the oracle-compatible one every gate above measures.
-`--algebra-backend=native-only` exists in a build with
+`--algebra-backend=proved-only` exists in a build with
 `--features lean-unification` and answers from the Lean library in-process;
 it starts no Maude. `--algebra-backend=native`, in the same build, runs the Maude
 backend's code and answers each query that backend hands to Maude from the
@@ -898,10 +898,10 @@ MAUDE_PATH="$(command -v maude)" cargo test --profile ci --workspace \
 The CI job `lean-spec` runs the native suites; without the feature the
 native tests compile to nothing or check only that the backend is refused.
 
-### Parallel search on native-only
+### Parallel search on proved-only
 
 Parallel proof search (`--processors=N`) runs on both backends. A
-native-only session has no process to lease, so the batch pipeline builds no
+proved-only session has no process to lease, so the batch pipeline builds no
 pool for it and every job of a search shares the session's one handle. Jobs
 do not take turns on it: each answer is computed on the calling Rayon worker
 (Lean's per-thread state is set up on a worker's first call; the workers have
@@ -953,7 +953,7 @@ speculative jobs, vary with the number of workers and between runs.
 
 ### The "assumed convergent" line
 
-On native-only a proved certifier examines the session's rewrite table. The
+On proved-only a proved certifier examines the session's rewrite table. The
 three built-in tables are certified; a table with user equations may not be,
 and then normalization and variant answers are counted under the origin
 `assumed` (`TAM_MAUDE_CACHE_STATS=1` prints the counts as
@@ -980,9 +980,9 @@ prints, once per theory, on stderr:
 uncertified user-equation theory prints the line exactly once, a theory of
 built-ins prints none, and the Maude backend prints none.
 
-### Interactive mode on native-only
+### Interactive mode on proved-only
 
-`tamarin-rs interactive --algebra-backend=native-only <theories>` serves the
+`tamarin-rs interactive --algebra-backend=proved-only <theories>` serves the
 web UI from native sessions. `crates/tamarin-server/tests/routes_native_backend.rs`
 drives a session over HTTP on both backends (theory page, open a lemma, one
 manual proof step, autoprove from the state it reached, the finished proof,
@@ -1003,7 +1003,7 @@ the server by PID and ends in `INTERACTIVE_BACKEND_CHECK verdict=OK|FAIL`.
 
 ### Backend gate
 
-That native-only answers correctly is proved. That it answers at all, and in
+That proved-only answers correctly is proved. That it answers at all, and in
 reasonable time, is not, so `scripts/backend_gate.py` measures both against
 the Maude backend of the same binary. It proves each theory of a list on
 both backends (`--processors=1 --derivcheck-timeout=30`), every prover
@@ -1012,8 +1012,8 @@ process under its own memory cap and timeout, and fails when
 | Status | Meaning |
 |---|---|
 | `VERDICT_DIFF` | a lemma's verdict, or the number of wellformedness warnings, differs from Maude's and the pair is not listed in `scripts/backend_gate/verdict_exceptions.tsv` |
-| `NATIVE_FAIL` | the theory finishes on Maude but not on native-only (nonzero exit, memory cap or timeout) and is not listed in `scripts/backend_gate/pending.tsv` |
-| `SLOW` | Maude takes more than `--min-ref-seconds` (1 s) and native-only more than `--max-ratio` (2) times Maude, by the minimum over `--runs` runs of each backend, and the theory is not pending |
+| `NATIVE_FAIL` | the theory finishes on Maude but not on proved-only (nonzero exit, memory cap or timeout) and is not listed in `scripts/backend_gate/pending.tsv` |
+| `SLOW` | Maude takes more than `--min-ref-seconds` (1 s) and proved-only more than `--max-ratio` (2) times Maude, by the minimum over `--runs` runs of each backend, and the theory is not pending |
 | `REF_FAIL` | Maude itself does not finish (`--allow-ref-failures` reports it as `REF_FAIL_OK` instead) |
 | `XPASS` | a pending theory now finishes within the limits: remove its line |
 | `STALE_EXCEPTION` | a listed verdict exception no longer differs: remove its line |
@@ -1058,7 +1058,7 @@ scripts/backend_gate.py --list my.tsv --timeout 300 --runs 3
   reported as `OK_STEPS` and do not fail the gate.
 
 `pending.tsv` is currently empty. `verdict_exceptions.tsv` lists the two lemmas of
-the fixture `native_ac_marker_trace`, where native-only finds a trace that
+the fixture `native_ac_marker_trace`, where proved-only finds a trace that
 the Maude run does not and is right.
 
 ## Debugging a divergence
@@ -1106,10 +1106,10 @@ reference path whose output is byte-identical):
 | `TAM_MAUDE_CACHE_STATS=1` | one reduce/unify/reply cache hit-rate line per theory session at teardown, with the session's `[ALGEBRA_PROVENANCE]` tally |
 | `TAM_DBG_VARIANTS=1` | every variant family as handed to the caller, one member per line, and the native solver that proposed it; compare the two backends' dumps to find a family listed differently |
 | `TAM_DBG_UNIFY=1` | every unification request with its answers as handed to the caller, on either backend |
-| `TAM_DBG_VARIANT_CHECK=1` | native-only: every family submitted to the Lean variant certificate checker with its member count, its charge against the work bound, the verdict and the time |
-| `TAM_RS_VARIANT_CHECK_WORK=<n>` | native-only: work bound of the variant certificate checker (default 65536, `0` for none); see "Variant check budget" |
-| `TAM_RS_ALGEBRA_SEARCH_WORK=<n>` | native-only: work bound of one interruptible Lean search, in questions asked (default 16777216, `0` for none); see "Search budget" |
-| `TAM_RS_ALGEBRA_SEARCH_REPORT=<n>` | native-only: print to stderr every interruptible Lean call that asked at least `n` questions |
+| `TAM_DBG_VARIANT_CHECK=1` | proved-only: every family submitted to the Lean variant certificate checker with its member count, its charge against the work bound, the verdict and the time |
+| `TAM_RS_VARIANT_CHECK_WORK=<n>` | proved-only: work bound of the variant certificate checker (default 65536, `0` for none); see "Variant check budget" |
+| `TAM_RS_ALGEBRA_SEARCH_WORK=<n>` | proved-only: work bound of one interruptible Lean search, in questions asked (default 16777216, `0` for none); see "Search budget" |
+| `TAM_RS_ALGEBRA_SEARCH_REPORT=<n>` | proved-only: print to stderr every interruptible Lean call that asked at least `n` questions |
 | `TAM_SATURATION_LIMIT=<n>` | source-saturation step cap; outranks the CLI `-s=` |
 | `TAM_PROVE_DEADLINE_MS=<n>` | per-search wall-clock cap (co-operative) |
 
@@ -1128,7 +1128,7 @@ that external dependency is unavailable. They should not be set for a gate.
 
 ### Variant check budget
 
-On the native-only backend a family of variants is used only after the Lean
+On the proved-only backend a family of variants is used only after the Lean
 certificate checker accepted it, whoever proposed it: a specialised Rust
 solver, the folding export, or the bounded narrowing search of the Lean
 library (`tamarin_checked_variants`, which answers kind-level queries and
@@ -1211,7 +1211,7 @@ sites. Regressions: `folding_proposes_the_variants_no_specialised_solver_covers`
 
 ### Search budget
 
-On the native-only backend ordinary unification, its existence decision and
+On the proved-only backend ordinary unification, its existence decision and
 the single-path reducers are Lean exports whose searches can take time, and
 for unification memory, exponential in the width of an AC product. One such
 call used to be uninterruptible. Each of these exports now asks its caller
@@ -1261,7 +1261,7 @@ The tests are `interruption::*` in `crates/tamarin-term/tests/native_backend`.
 
 ### What Rust does with a unifier
 
-On the native-only backend the answer to a unification request is computed and
+On the proved-only backend the answer to a unification request is computed and
 named in Lean. Rust walks trees in both directions and decides nothing:
 
 - **The request** (`Packet::encode_total`) lists the rows of the term graph,
@@ -1359,7 +1359,7 @@ exits 2 rather than running with a private fallback.
 | `web_parity.sh` (+ `web_crawl.py`, `web_normalize.py`, `web_diff.py`) | interactive-mode gate |
 | `pane_byte_check.sh` | byte-exact pane HTML vs the web cache; file list required |
 | `rs_vs_rs_diff.sh` / `triage_diff_vs_hs.sh` | refactor-inertness sweep + 3-way triage |
-| `backend_gate.py` (+ `test_backend_gate.py`) | native-only against Maude: verdicts, liveness and time, under per-process caps |
+| `backend_gate.py` (+ `test_backend_gate.py`) | proved-only against Maude: verdicts, liveness and time, under per-process caps |
 | `interactive_backend_check.sh` | one interactive session over HTTP on both algebra backends |
 
 **Data files**
@@ -1376,7 +1376,7 @@ exits 2 rather than running with a private fallback.
 | `websweep_residual.txt` | the web milestone crawl list (residue itself is ledgered below) |
 | `websweep_ledger.tsv` | the web gate's residue ledger (applied mechanically) |
 | `backend_gate/smoke.tsv` / `backend_gate/corpus.tsv` | the backend gate's CI list and its full list, with per-file flags |
-| `backend_gate/pending.tsv` | theories native-only is known not to finish yet (expected failures the gate honours and reports) |
+| `backend_gate/pending.tsv` | theories proved-only is known not to finish yet (expected failures the gate honours and reports) |
 | `backend_gate/verdict_exceptions.tsv` | documented verdict differences between the backends |
 | `backend_gate/theories/` | regression theories that live only in the backend gate |
 | `crates/tamarin-prover/tests/fixtures/cli_refs/cases.tsv` | the argv table both `capture_cli_refs.sh` and `cli_e2e.rs` read |

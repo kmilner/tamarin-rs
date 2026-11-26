@@ -10,10 +10,10 @@ use tamarin_term::rewriting::Equal;
 use tamarin_term::term::{f_app_ac, Term};
 use tamarin_term::vterm::Lit;
 
-const MISSING: &str = "/nonexistent/tamarin-native-only-must-not-start-maude";
+const MISSING: &str = "/nonexistent/tamarin-proved-only-must-not-start-maude";
 
 fn native() -> MaudeHandle {
-    MaudeHandle::start_with_backend(MISSING, mset_maude_sig(), AlgebraBackend::NativeOnly).unwrap()
+    MaudeHandle::start_with_backend(MISSING, mset_maude_sig(), AlgebraBackend::ProvedOnly).unwrap()
 }
 
 fn sum(a: LNTerm, b: LNTerm) -> LNTerm {
@@ -66,7 +66,7 @@ fn renames(arm: &[(LVar, LNTerm)]) -> bool {
 }
 
 #[test]
-fn native_only_solves_supported_ac_without_any_binary() {
+fn proved_only_solves_supported_ac_without_any_binary() {
     let h = native();
     let x = LVar::new("x", LSort::Msg, 0);
     let rhs = sum(pub_term("a"), sum(pub_term("b"), pub_term("b")));
@@ -138,7 +138,7 @@ fn an_unencodable_factoring_failure_is_reported_as_unsupported() {
 #[test]
 fn an_unencodable_successful_factor_cannot_answer_an_ac_free_query() {
     let handle = || {
-        MaudeHandle::start_with_backend(MISSING, Default::default(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend(MISSING, Default::default(), AlgebraBackend::ProvedOnly)
             .unwrap()
     };
     // Rust can eliminate x immediately; the proposed image has no declaration.
@@ -176,7 +176,7 @@ fn missing_operations_return_explicit_errors() {
 #[test]
 fn native_unify_keeps_independent_and_shared_witnesses_at_max_index() {
     let handle =
-        MaudeHandle::start_with_backend(MISSING, pair_maude_sig(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend(MISSING, pair_maude_sig(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let x = LVar::new("w", LSort::Msg, 0);
     let y = LVar::new("w", LSort::Msg, 1);
@@ -214,7 +214,7 @@ fn native_unify_keeps_independent_and_shared_witnesses_at_max_index() {
 
 #[test]
 fn native_handles_keep_existing_free_fast_paths() {
-    let h = MaudeHandle::start_with_backend(MISSING, pair_maude_sig(), AlgebraBackend::NativeOnly)
+    let h = MaudeHandle::start_with_backend(MISSING, pair_maude_sig(), AlgebraBackend::ProvedOnly)
         .unwrap();
     assert_eq!(h.reduce(&pub_term("a")).unwrap(), pub_term("a"));
     assert_eq!(h.unify(&[]).unwrap(), vec![vec![]]);
@@ -235,7 +235,7 @@ fn pool_members_preserve_selection_and_share_failure_latch() {
     let h = MaudeHandle::start_with_backend_and_caches(
         MISSING,
         mset_maude_sig(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
         caches.clone(),
     )
     .unwrap();
@@ -244,13 +244,13 @@ fn pool_members_preserve_selection_and_share_failure_latch() {
         mset_maude_sig(),
         2,
         caches,
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let first = pool.acquire();
     let second = pool.try_acquire().unwrap();
-    assert_eq!(first.backend(), AlgebraBackend::NativeOnly);
-    assert_eq!(second.backend(), AlgebraBackend::NativeOnly);
+    assert_eq!(first.backend(), AlgebraBackend::ProvedOnly);
+    assert_eq!(second.backend(), AlgebraBackend::ProvedOnly);
     assert!(second
         .variants(&tamarin_term::builtin::fst(variable("x")))
         .is_err());
@@ -260,7 +260,7 @@ fn pool_members_preserve_selection_and_share_failure_latch() {
 
 #[test]
 fn pairing_normalization_and_rigid_literal_binding_are_native() {
-    let h = MaudeHandle::start_with_backend(MISSING, pair_maude_sig(), AlgebraBackend::NativeOnly)
+    let h = MaudeHandle::start_with_backend(MISSING, pair_maude_sig(), AlgebraBackend::ProvedOnly)
         .unwrap();
     let term =
         tamarin_term::builtin::fst(tamarin_term::builtin::pair(pub_term("a"), pub_term("b")));
@@ -286,7 +286,7 @@ fn pairing_normalization_and_rigid_literal_binding_are_native() {
 fn pairing_variants_preserve_correlations_and_freshness_without_maude() {
     use tamarin_term::builtin::{fst, pair, snd};
     use tamarin_term::term::f_app_list;
-    let h = MaudeHandle::start_with_backend(MISSING, pair_maude_sig(), AlgebraBackend::NativeOnly)
+    let h = MaudeHandle::start_with_backend(MISSING, pair_maude_sig(), AlgebraBackend::ProvedOnly)
         .unwrap();
     let x = LVar::new("original_name", LSort::Msg, 17);
     let vx = Term::Lit(Lit::Var(x));
@@ -379,7 +379,7 @@ fn pairing_adapter_rejects_queries_outside_the_proven_fragment() {
         pairing_variants(&sig, &too_large),
         Err(Error::FreshVariableOverflow)
     );
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     assert!(matches!(
         h.variants(&too_large),
         Err(MaudeError::NativeFailure(_))
@@ -397,7 +397,7 @@ fn native_runtime_failures_latch_across_handles_and_cancellation_does_not() {
         MaudeHandle::start_with_backend_and_caches(
             MISSING,
             pair_maude_sig(),
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
             caches.clone(),
         )
         .unwrap()
@@ -440,7 +440,7 @@ fn pairing_multiset_variants_cover_constructor_queries_without_maude() {
     use tamarin_term::builtin::{fst, pair};
     use tamarin_term::term::f_app_list;
     let sig = pair_maude_sig().merge(mset_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let x = variable("x");
     let nested = pair(sum(x.clone(), pub_term("a")), sum(pub_term("b"), x.clone()));
     let query = f_app_list(vec![
@@ -569,7 +569,7 @@ fn declared_free_and_ac_extensions_use_the_generic_constructor_contract() {
         Outcome::Complete(vec![vec![]])
     );
     let h =
-        MaudeHandle::start_with_backend(MISSING, sig.clone().refresh(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend(MISSING, sig.clone().refresh(), AlgebraBackend::ProvedOnly)
             .unwrap();
     assert_eq!(h.reduce(&fst(pair(term.clone(), child))).unwrap(), term);
     for bad in [
@@ -790,7 +790,7 @@ fn repeated_ac_collectors_count_whole_factors_after_structural_selection() {
     let handle = MaudeHandle::start_with_backend(
         MISSING,
         mset_maude_sig().merge(hash_maude_sig()),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let pattern = f_app_ac(
@@ -944,7 +944,7 @@ fn multi_branch_matching_conjunctions_join_every_compatible_assignment() {
 fn nested_free_matching_preserves_correlations_and_validates_declarations() {
     use tamarin_term::builtin::pair;
     let sig = pair_maude_sig().merge(mset_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let a = pub_term("a");
     let b = pub_term("b");
     let c = pub_term("c");
@@ -1220,7 +1220,7 @@ fn partially_grounded_constraint_is_solved_by_propagating_each_ground_match() {
     let with_pairs = MaudeHandle::start_with_backend(
         MISSING,
         mset_maude_sig().merge(pair_maude_sig()),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let mut nested_answer = with_pairs.unify(&[nested]).unwrap();
@@ -1238,7 +1238,7 @@ fn offset_witness_is_shared_after_factoring_and_scoped_to_the_answer() {
     let h = MaudeHandle::start_with_backend(
         MISSING,
         mset_maude_sig().merge(pair_maude_sig()),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap()
     .with_fresh_counter_next(2000);
@@ -1373,7 +1373,7 @@ fn constructor_variants_check_declared_operators_and_all_rule_heads() {
     ]);
     let open = f_app_list(vec![x.clone(), hash(sdec(x.clone(), k.clone()))]);
     let h =
-        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::NativeOnly).unwrap();
+        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::ProvedOnly).unwrap();
     assert_eq!(h.variants(&safe).unwrap(), vec![vec![]]);
     let narrowed = h.variants(&sdec(x.clone(), variable("y"))).unwrap();
     let left = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 1)));
@@ -1403,7 +1403,7 @@ fn constructor_variants_check_declared_operators_and_all_rule_heads() {
         },
     ));
     let h =
-        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::NativeOnly).unwrap();
+        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::ProvedOnly).unwrap();
     let rows = h
         .variants(&f_app_list(vec![x.clone(), pk(hash(x.clone()))]))
         .unwrap();
@@ -1436,7 +1436,7 @@ fn constructor_variants_check_declared_operators_and_all_rule_heads() {
             term: k.clone(),
         },
     ));
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     assert!(matches!(
         h.variants(&k),
         Err(MaudeError::UnsupportedOperation("variant generation"))
@@ -1470,7 +1470,7 @@ fn constructor_variants_decline_aliases_for_a_defined_operator() {
             term: x.clone(),
         },
     ));
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     assert!(matches!(
         h.variants(&apply(alias)),
         Err(MaudeError::UnsupportedOperation("variant generation"))
@@ -1485,7 +1485,7 @@ fn common_compound_children_keep_contextual_witnesses_and_check_declarations() {
     let sig = mset_maude_sig()
         .merge(pair_maude_sig())
         .merge(hash_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let x = LVar::new("x", LSort::Msg, 1);
     let y = LVar::new("y", LSort::Msg, 1);
     let k = LVar::new("k", LSort::Msg, 0);
@@ -1538,7 +1538,7 @@ fn compound_ac_matching_tracks_full_factors_and_restores_rigid_sorts() {
     use tamarin_term::maude_sig::hash_maude_sig;
 
     let sig = mset_maude_sig().merge(hash_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let a = pub_term("a");
     let b = pub_term("b");
     let rigid = LVar::new("rigid", LSort::Msg, 8);
@@ -1596,7 +1596,7 @@ fn open_constructor_ac_matching_shares_bindings_across_selected_and_remaining_fa
     let sig = mset_maude_sig()
         .merge(hash_maude_sig())
         .merge(pair_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let (x, y) = (LVar::new("x", LSort::Msg, 0), LVar::new("y", LSort::Msg, 0));
     let var = |v| Term::Lit(Lit::Var(v));
     let a = pub_term("a");
@@ -1629,7 +1629,7 @@ fn open_match_cancels_closed_siblings_and_restores_contextual_subjects() {
     let h = MaudeHandle::start_with_backend(
         MISSING,
         mset_maude_sig().merge(hash_maude_sig()),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let x = LVar::new("x", LSort::Pub, 0);
@@ -1667,7 +1667,7 @@ fn native_alternative_order_uses_bindings_in_the_callers_scope() {
     let h = MaudeHandle::start_with_backend(
         MISSING,
         mset_maude_sig().merge(hash_maude_sig()),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let (x, y) = (LVar::new("x", LSort::Msg, 0), LVar::new("y", LSort::Msg, 1));
@@ -1710,7 +1710,7 @@ fn open_match_joins_whole_compound_images_across_equations() {
     let h = MaudeHandle::start_with_backend(
         MISSING,
         mset_maude_sig().merge(hash_maude_sig()),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let p = sum(hash(variable("x")), variable("y"));
@@ -1736,7 +1736,7 @@ fn rigid_allocation_preserves_fresh_variables_after_common_child_cancellation() 
         mset_maude_sig()
             .merge(hash_maude_sig())
             .merge(pair_maude_sig()),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let (x, y, z, erased, alias) = (
@@ -1809,7 +1809,7 @@ fn compound_offsets_reconcile_equalizable_heads_and_check_declarations() {
         MaudeHandle::start_with_backend(
             MISSING,
             mset_maude_sig().merge(hash_maude_sig()),
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
         )
         .unwrap()
     };
@@ -1850,7 +1850,7 @@ fn commutative_branch_witnesses_preserve_full_query_aliases_without_a_process() 
     use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig};
     use tamarin_term::subst_vfresh::LNSubstVFresh;
     let sig = bp_maude_sig().merge(dh_maude_sig()).merge(pair_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly)
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly)
         .unwrap()
         .with_fresh_counter_next(1000);
     let (x, y, z, u, alias, ambient) = (
@@ -1900,7 +1900,7 @@ fn commutative_search_keeps_live_siblings_and_checks_sorted_ranges() {
     use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig};
     let sig = bp_maude_sig().merge(dh_maude_sig()).merge(mset_maude_sig());
     let h = || {
-        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::NativeOnly).unwrap()
+        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::ProvedOnly).unwrap()
     };
     let eq = |lhs, rhs| Equal { lhs, rhs };
     // One orientation binds p and q to ordinary terms. The other requires
@@ -1950,7 +1950,7 @@ fn commutative_cancellation_discards_incomplete_searches() {
     use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig};
     use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
     let sig = bp_maude_sig().merge(dh_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let qs: Vec<_> = (0..13)
         .map(|i| {
             let v = |name| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, i)));
@@ -1981,7 +1981,7 @@ fn repeated_commutative_operand_keeps_independent_equations_in_one_branch() {
     use tamarin_term::subst_vfresh::LNSubstVFresh;
 
     let sig = bp_maude_sig().merge(dh_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let var = |name, index| LVar::new(name, LSort::Msg, index);
     // Keeping both equivalent orientations visits 8,191 search nodes before
     // deduplication. With either single orientation the whole query needs 13.
@@ -2027,7 +2027,7 @@ fn mixed_commutative_and_free_equations_use_skolem_message_sorts_in_every_order(
     let h = MaudeHandle::start_with_backend(
         MISSING,
         bp_maude_sig().merge(dh_maude_sig()),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let c = Equal {
@@ -2055,7 +2055,7 @@ fn alternating_ac_cancellation_and_commutative_splits_share_one_search_budget() 
     use tamarin_term::builtin::emap;
     use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig};
     let sig = mset_maude_sig().merge(dh_maude_sig()).merge(bp_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     // Each level contributes one independent two-way C equation. The next
     // level is visible only after cancelling the AC factor under its parent.
     let query = |depth: u64| {
@@ -2091,7 +2091,7 @@ fn natural_kind_queries_preserve_variable_sorts_before_factoring() {
         MaudeHandle::start_with_backend(
             MISSING,
             nat_maude_sig().merge(pair_maude_sig()),
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
         )
         .unwrap()
     };
@@ -2209,7 +2209,7 @@ fn reduction_lifts_through_declared_free_constructors() {
         }
     };
     let native =
-        |s| MaudeHandle::start_with_backend(MISSING, s, AlgebraBackend::NativeOnly).unwrap();
+        |s| MaudeHandle::start_with_backend(MISSING, s, AlgebraBackend::ProvedOnly).unwrap();
     let h = native(sig.clone());
     test(&h);
     assert_eq!(h.stats().norm_count, 0);
@@ -2250,7 +2250,7 @@ fn fresh_xor_variants_share_a_fresh_witness_and_require_the_exact_live_rules() {
     use tamarin_term::subterm_rule::{CtxtStRule, StRhs};
     use tamarin_term::term::f_app_list;
     let sig = xor_maude_sig();
-    let new = |s| MaudeHandle::start_with_backend(MISSING, s, AlgebraBackend::NativeOnly).unwrap();
+    let new = |s| MaudeHandle::start_with_backend(MISSING, s, AlgebraBackend::ProvedOnly).unwrap();
     let (x, y) = (
         LVar::new("x", LSort::Fresh, 6),
         LVar::new("y", LSort::Fresh, 9),
@@ -2359,7 +2359,7 @@ fn dh_stable_variants_respect_the_active_equations_and_variable_sorts() {
     use tamarin_term::term::f_app_list;
 
     let native =
-        |sig| MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+        |sig| MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let sig = dh_maude_sig();
     let r = Term::Lit(Lit::Var(LVar::new("r", LSort::Fresh, 0)));
     let s = Term::Lit(Lit::Var(LVar::new("s", LSort::Fresh, 0)));
@@ -2412,7 +2412,7 @@ fn received_dh_variants_share_the_exponent_and_defer_uncertified_tuples() {
         MaudeHandle::start_for_tamarin_theory(
             MISSING,
             sig,
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
             Default::default(),
         )
         .unwrap()
@@ -2514,7 +2514,7 @@ fn received_dh_variants_share_the_exponent_and_defer_uncertified_tuples() {
 fn native_dh_powers_cancel_inside_products_and_nested_towers() {
     use tamarin_term::builtin::{dh_neutral, exp, inv, mult, one_const};
     use tamarin_term::maude_sig::dh_maude_sig;
-    let h = MaudeHandle::start_with_backend(MISSING, dh_maude_sig(), AlgebraBackend::NativeOnly)
+    let h = MaudeHandle::start_with_backend(MISSING, dh_maude_sig(), AlgebraBackend::ProvedOnly)
         .unwrap();
     let g = pub_term("g");
     let r = Term::Lit(Lit::Var(LVar::new("r", LSort::Fresh, 0)));
@@ -2550,7 +2550,7 @@ fn native_dh_powers_cancel_inside_products_and_nested_towers() {
 fn dh_positive_product_matches_only_the_compatible_intruder_rule_heads() {
     use tamarin_term::builtin::{inv, mult};
     use tamarin_term::maude_sig::dh_maude_sig;
-    let h = MaudeHandle::start_with_backend(MISSING, dh_maude_sig(), AlgebraBackend::NativeOnly)
+    let h = MaudeHandle::start_with_backend(MISSING, dh_maude_sig(), AlgebraBackend::ProvedOnly)
         .unwrap();
     let fresh = |s| Term::Lit(Lit::Var(LVar::new(s, LSort::Fresh, 0)));
     let subject = mult(fresh("r"), fresh("s"));
@@ -2583,7 +2583,7 @@ fn whole_unification_on_original_equations_can_complete_or_defer_without_maude()
     let sig = mset_maude_sig()
         .merge(pair_maude_sig())
         .merge(hash_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let (x, y) = (variable("x"), variable("y"));
     let free = Equal {
         lhs: hash(x.clone()),
@@ -2856,7 +2856,7 @@ fn indivisible_hash_operands_enumerate_every_bijection() {
     use tamarin_term::maude_sig::hash_maude_sig;
 
     let sig = mset_maude_sig().merge(hash_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let vars = ["a", "b", "c", "d", "w", "x", "y", "z"].map(|s| LVar::new(s, LSort::Msg, 0));
     let hashes = |keys: &[LVar]| {
         f_app_ac(
@@ -2896,7 +2896,7 @@ fn native_ac_operands_preserve_both_commutative_orientations() {
     use tamarin_term::builtin::emap;
     use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig};
     let sig = mset_maude_sig().merge(dh_maude_sig()).merge(bp_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let [x, y, a, b, c, d] =
         ["x", "y", "a", "b", "c", "d"].map(|s| LVar::new(s, LSort::Msg, u64::MAX));
     let v = |k| Term::Lit(Lit::Var(k));
@@ -2929,7 +2929,7 @@ fn nested_ac_witnesses_keep_an_independent_outer_binding() {
     use tamarin_term::lterm::HasFrees;
     use tamarin_term::maude_sig::hash_maude_sig;
     let sig = mset_maude_sig().merge(hash_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let x = LVar::new("x", LSort::Msg, u64::MAX);
     let z = LVar::new("z", LSort::Msg, 0);
     let v = |v| Term::Lit(Lit::Var(v));
@@ -2999,7 +2999,7 @@ fn factored_ac_matrix_answers_solve_the_original_conjunction() {
     let h = MaudeHandle::start_with_backend(
         MISSING,
         mset_maude_sig().merge(pair_maude_sig()),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let [a, b, c, d, e, f] = ["a", "b", "c", "d", "e", "f"].map(variable);
@@ -3044,7 +3044,7 @@ fn open_ac_match_visits_both_nested_commutative_alignments() {
         .merge(hash_maude_sig())
         .merge(bp_maude_sig())
         .merge(dh_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let x = LVar::new("x", LSort::Msg, 0);
     let y = LVar::new("y", LSort::Msg, 0);
     let a = pub_term("a");
@@ -3079,7 +3079,7 @@ fn open_ac_match_counts_equivalent_ground_c_factors_in_both_orders() {
     use tamarin_term::function_symbols::{CSym, FunSym};
     use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig};
     let sig = mset_maude_sig().merge(bp_maude_sig()).merge(dh_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let (a, b) = (pub_term("a"), pub_term("b"));
     let canonical = emap(a.clone(), b.clone());
     let raw = Term::App(FunSym::C(CSym::EMap), vec![b, a].into());
@@ -3106,7 +3106,7 @@ fn nested_ac_under_a_commutative_factor_returns_both_bindings() {
     use tamarin_term::builtin::emap;
     use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig};
     let sig = mset_maude_sig().merge(bp_maude_sig()).merge(dh_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let nested = |a| emap(sum(a, pub_term("fixed")), pub_term("other"));
     let q = Equal {
         lhs: sum(nested(pub_term("a")), pub_term("tail")),
@@ -3129,7 +3129,7 @@ fn nested_ac_matches_share_a_product_across_levels_and_equations() {
     let h = MaudeHandle::start_with_backend(
         MISSING,
         mset_maude_sig().merge(hash_maude_sig()),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let (a, b, c) = (pub_term("a"), pub_term("b"), pub_term("c"));
@@ -3191,7 +3191,7 @@ fn nested_ac_cancels_closed_siblings_before_selecting() {
     let h = MaudeHandle::start_with_backend(
         MISSING,
         mset_maude_sig().merge(hash_maude_sig()),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let fixed = pub_term("repeated");
@@ -3222,7 +3222,7 @@ fn rigid_ground_match_checks_raw_c_and_ac_forms_in_both_public_apis() {
     use tamarin_term::function_symbols::{CSym, FunSym};
     use tamarin_term::maude_sig::{bp_maude_sig, dh_maude_sig};
     let sig = mset_maude_sig().merge(bp_maude_sig()).merge(dh_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let raw_c = |x, y| Term::App(FunSym::C(CSym::EMap), vec![x, y].into());
     let raw_ac = |xs: Vec<LNTerm>| Term::App(FunSym::Ac(AcSym::Union), xs.into());
     let (a, b, c) = (pub_term("a"), pub_term("b"), pub_term("c"));
@@ -3268,7 +3268,7 @@ fn rigid_match_accepts_kind_level_raw_terms_and_defers_invalid_declarations() {
     let nat = MaudeHandle::start_with_backend(
         MISSING,
         tamarin_term::maude_sig::nat_maude_sig(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let raw_nat = |xs: Vec<LNTerm>| Term::App(FunSym::Ac(AcSym::NatPlus), xs.into());
@@ -3404,7 +3404,7 @@ fn boolean_linear_ac_matches_wide_frozen_subjects_without_enumerating() {
     sig.st_ac_fun_syms.insert(declared);
     let sig = sig.refresh();
     let backend = || {
-        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::NativeOnly).unwrap()
+        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::ProvedOnly).unwrap()
     };
     let h = backend();
     for outer in [AcSym::Union, AcSym::AcFct(declared)] {
@@ -3665,7 +3665,7 @@ fn total_mixed_unification_uses_original_slots_without_a_rule_table_or_process()
     // Rewrite preparation declines macro signatures. Ordinary unification
     // needs only declarations, and the unused macro never enters the graph.
     sig.macro_names.insert(fst_sym());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let a = pub_term("a");
     let b = pub_term("b");
     let x = LVar::new("x", LSort::Msg, 1);
@@ -3713,7 +3713,7 @@ fn ordinary_unification_uses_module_sorts_before_rust_factoring() {
     // This is a distinct user declaration with the same spelling as Nat one.
     let shadow = nat_one_sym().with_destructor();
     sig.st_fun_syms.insert(shadow);
-    let h = MaudeHandle::start_with_backend(MISSING, sig.refresh(), AlgebraBackend::NativeOnly)
+    let h = MaudeHandle::start_with_backend(MISSING, sig.refresh(), AlgebraBackend::ProvedOnly)
         .unwrap();
     for (sort, rhs) in [
         (LSort::Pub, pub_term(format!("{SKOLEM_MSG_PREFIX}fixture"))),
@@ -3738,7 +3738,7 @@ fn total_match_preserves_rigid_subject_ids_and_scoped_pattern_variables() {
         .merge(bp_maude_sig())
         .merge(hash_maude_sig());
     sig.macro_names.insert(fst_sym());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let key = |name| LVar::new(name, LSort::Msg, 7);
     let v = |name| Term::Lit(Lit::Var(key(name)));
     let node = Term::Lit(Lit::Var(LVar::new("n", LSort::Node, 7)));
@@ -3784,7 +3784,7 @@ fn native_witnesses_are_numbered_above_every_query_variable() {
     use tamarin_term::builtin::{exp, inv, mult};
     use tamarin_term::lterm::HasFrees;
     use tamarin_term::maude_sig::dh_maude_sig;
-    let h = MaudeHandle::start_with_backend(MISSING, dh_maude_sig(), AlgebraBackend::NativeOnly)
+    let h = MaudeHandle::start_with_backend(MISSING, dh_maude_sig(), AlgebraBackend::ProvedOnly)
         .unwrap();
     let v = |v| Term::Lit(Lit::Var(v));
     let side = |a: LVar, b: LVar, c: LVar| {
@@ -3841,7 +3841,7 @@ fn native_reduce_answers_through_the_certified_export_only() {
     use tamarin_term::algebra_provenance::{Command, Origin};
     use tamarin_term::builtin::{exp, fst, inv, mult, pair};
     let sig = tamarin_term::maude_sig::dh_maude_sig().merge(pair_maude_sig());
-    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::NativeOnly).unwrap();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::ProvedOnly).unwrap();
     let (g, a, b) = (pub_term("g"), variable("a"), variable("b"));
     // ((g^a)^b)^inv(a) = g^b, below a projection.
     let tower = exp(exp(exp(g.clone(), a.clone()), b.clone()), inv(a.clone()));
@@ -3888,7 +3888,7 @@ fn an_uncertified_table_is_reported_or_marked_assumed_never_silently_trusted() {
     let decided = app(g, vec![app(a, vec![])]);
 
     let raw =
-        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::NativeOnly).unwrap();
+        MaudeHandle::start_with_backend(MISSING, sig.clone(), AlgebraBackend::ProvedOnly).unwrap();
     // Every path of g(a) ends in b, but no export proves that for a table
     // without a certificate: the raw session reports the table for both.
     for term in [&decided, &ambiguous] {
@@ -3903,7 +3903,7 @@ fn an_uncertified_table_is_reported_or_marked_assumed_never_silently_trusted() {
     let theory = MaudeHandle::start_for_tamarin_theory(
         MISSING,
         sig,
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
         Arc::new(SharedMaudeCaches::default()),
     )
     .unwrap();

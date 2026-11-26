@@ -30,7 +30,7 @@ jobs:
         run: |
           lake build TamarinCI
           lake env leanchecker TamarinCI
-      - name: Native-only operations without a Maude binary
+      - name: Proved-only operations without a Maude binary
         run: cargo test --profile ci -p tamarin-term --features lean-unification --test native_backend --test native_match_components -- --test-threads=1
       - name: Measure the public native backend against Lean-generated algebra queries
         run: cargo test --profile ci -p tamarin-term --features lean-unification --test spec_coverage -- --nocapture
@@ -40,7 +40,7 @@ jobs:
           sudo mkdir -p /opt/maude
           sudo unzip -q /tmp/maude.zip -d /opt/maude
           sudo chmod +x /opt/maude/maude
-      - name: Compare explicit native-only sessions with a separate Maude oracle
+      - name: Compare explicit proved-only sessions with a separate Maude oracle
         run: |
           cargo test --profile ci -p tamarin-term --features lean-unification --lib native_oracle_
           cargo test --profile ci -p tamarin-term --features lean-unification --test native_match_components first_match_agrees_with_maude
@@ -69,12 +69,12 @@ jobs:
       # how fast is not. The gate proves the smoke list on both backends of
       # the binary the step above built, each prover process under a memory
       # cap and a timeout, and fails on a verdict that differs from Maude's,
-      # on a theory only Maude finishes, and on one that takes native-only
+      # on a theory only Maude finishes, and on one that takes proved-only
       # more than twice Maude's time. scripts/backend_gate/pending.tsv holds
       # the expected failures; see TESTING.md, "Backend gate".
       - name: Backend gate self-test
         run: python3 scripts/test_backend_gate.py
-      - name: Backend gate (native-only against Maude, smoke list)
+      - name: Backend gate (proved-only against Maude, smoke list)
         run: |
           cargo build --profile ci -p tamarin-prover --features lean-unification --bin tamarin-rs
           python3 scripts/backend_gate.py --smoke --bin target/ci/tamarin-rs

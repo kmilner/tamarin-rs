@@ -37,7 +37,7 @@ fn wide_sums() -> Equal<LNTerm> {
 }
 
 fn naturals() -> MaudeHandle {
-    MaudeHandle::start_with_backend(MISSING, nat_maude_sig(), AlgebraBackend::NativeOnly).unwrap()
+    MaudeHandle::start_with_backend(MISSING, nat_maude_sig(), AlgebraBackend::ProvedOnly).unwrap()
 }
 
 /// Run `call` under a token that is cancelled after [`HEAD_START`], and
@@ -152,7 +152,7 @@ fn selecting() -> MaudeHandle {
     MaudeHandle::start_for_tamarin_theory(
         MISSING,
         sig.refresh(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
         Arc::new(SharedMaudeCaches::default()),
     )
     .unwrap()
@@ -218,7 +218,7 @@ fn exponents() -> MaudeHandle {
     MaudeHandle::start_with_backend(
         MISSING,
         tamarin_term::maude_sig::dh_maude_sig(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap()
 }
@@ -336,7 +336,7 @@ fn a_search_under_a_scope_stops_when_the_enclosing_request_is_cancelled() {
     assert_eq!(h.unify(&[small_sums()]).unwrap().len(), 7);
 }
 
-/// Two cases of one ordered search share a native-only handle. The first is
+/// Two cases of one ordered search share a proved-only handle. The first is
 /// solved while the second, which a sequential search would never start, is
 /// inside a runaway unification. The search returns the first case alone and
 /// promptly; the cancelled call is neither stored nor a failure of the
@@ -408,7 +408,7 @@ fn a_cancelled_job_does_not_fail_the_session() {
     assert!(h.check_backend_status().is_err());
 }
 
-/// Jobs that share one native-only handle get the answers a sequential run
+/// Jobs that share one proved-only handle get the answers a sequential run
 /// gets from a session of its own, whoever asks first and whichever of them
 /// finds the memo filled.
 #[test]

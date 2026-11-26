@@ -10,7 +10,7 @@ fn native_oracle_pairing_power_preserves_joint_witnesses() {
     };
     let sig = bp_maude_sig();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let x = msg_var("x", 0);
@@ -40,7 +40,7 @@ fn native_oracle_power_over_changing_point_spines() {
     };
     let sig = bp_maude_sig();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let x = msg_var("x", 0);

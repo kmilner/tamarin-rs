@@ -55,7 +55,7 @@ fn projection_family(handle: &MaudeHandle, width: usize, repeated: bool) {
 fn native_oracle_inert_product_matches_all_32_symbolic_projection_rows() {
     let sig = mset_maude_sig().merge(pair_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
+        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::ProvedOnly).unwrap();
     // The ordinary whole-term frontier defers at five inputs. The first
     // and second projections share one input and one choice at each index.
     projection_family(&native, 5, false);
@@ -67,7 +67,7 @@ fn native_oracle_inert_product_matches_all_32_symbolic_projection_rows() {
 fn native_oracle_inert_product_variants_keep_joint_images_and_multiplicities() {
     let sig = mset_maude_sig().merge(pair_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     for repeat in [false, true] {
         projection_family(&native, 2, repeat);
@@ -122,7 +122,7 @@ fn native_oracle_user_ac_product_keeps_the_other_observations() {
         msg_var("held", 2),
     ];
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let family = valued_variant_rows(&native, &slots);
     assert_eq!(family.len(), 4);
@@ -151,7 +151,7 @@ fn inert_product_cannot_share_an_operand_with_two_possible_normal_values() {
             .insert(rrule_to_ctxt_st_rule(&RRule::new(choose.clone(), output)).unwrap());
     }
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.refresh(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.refresh(), AlgebraBackend::ProvedOnly)
             .unwrap();
     // Distinct normal ground values for the two fields can expose three
     // different products. Repeated slots do not justify choosing one value.

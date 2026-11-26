@@ -662,7 +662,7 @@ impl Cfg {
     }
 }
 
-const MISSING: &str = "/nonexistent/audit-eqstore-fuzz-native-only-must-not-start-maude";
+const MISSING: &str = "/nonexistent/audit-eqstore-fuzz-proved-only-must-not-start-maude";
 
 struct Ctx {
     cfg: Cfg,
@@ -700,7 +700,7 @@ impl Ctx {
         }
         if self.subject[si].is_none() {
             let (path, backend) = match self.cfg {
-                Cfg::Native => (MISSING, AlgebraBackend::NativeOnly),
+                Cfg::Native => (MISSING, AlgebraBackend::ProvedOnly),
                 Cfg::Maude => (self.maude_path.as_str(), AlgebraBackend::Maude),
             };
             self.subject[si] = Some(

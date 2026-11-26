@@ -9,7 +9,7 @@ disjunction. The twin is the same theory with the lemma variables renamed to nam
 witness uses.
 
 usage: audit_scope_theories.py --bin PATH/tamarin-rs --out DIR [--seed S] [--count N]
-                               [--backends maude,native-only] [--timeout SECS] [--jobs J]
+                               [--backends maude,proved-only] [--timeout SECS] [--jobs J]
                                [--families xor,diffie-hellman,multiset,bilinear-pairing]
 
 Without --families the theories use xor and diffie-hellman, as they always did; with it
@@ -116,7 +116,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--seed", type=int, default=1)
     ap.add_argument("--count", type=int, default=40)
-    ap.add_argument("--backends", default="maude,native-only")
+    ap.add_argument("--backends", default="maude,proved-only")
     ap.add_argument("--timeout", type=int, default=60)
     ap.add_argument("--jobs", type=int, default=4)
     ap.add_argument("--families", default="")

@@ -452,7 +452,7 @@ mod tests {
         let native = MaudeHandle::start_with_backend(
             "/nonexistent",
             sig.clone(),
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
         )
         .unwrap();
         let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();

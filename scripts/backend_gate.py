@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""backend_gate.py — regression gate for the native-only algebra backend.
+"""backend_gate.py — regression gate for the proved-only algebra backend.
 
 That the native backend answers correctly is a theorem. That it answers at
 all, and how fast, is not, so this gate measures both against the Maude
 backend of the same binary. It proves every theory of a list on both backends
-(`--algebra-backend=maude` and `=native-only`), each prover process under its
+(`--algebra-backend=maude` and `=proved-only`), each prover process under its
 own memory cap and timeout, and fails when
 
-  * a lemma's verdict on native-only differs from Maude's (or the number of
+  * a lemma's verdict on proved-only differs from Maude's (or the number of
     wellformedness warnings does), unless the row is listed in the verdict
     exceptions file with exactly that pair of verdicts;
-  * a theory finishes on Maude but not on native-only (nonzero exit, memory
+  * a theory finishes on Maude but not on proved-only (nonzero exit, memory
     cap or timeout), unless it is listed in the pending file;
   * a theory that takes Maude longer than --min-ref-seconds (default 1 s)
-    takes native-only more than --max-ratio (default 2) times as long, taking
+    takes proved-only more than --max-ratio (default 2) times as long, taking
     the minimum over --runs runs of each backend, unless it is listed in the
     pending file;
   * a listed exception or pending entry no longer applies (so both files
@@ -53,8 +53,8 @@ import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GATE_DIR = os.path.join(REPO, "scripts", "backend_gate")
-BACKENDS = ("maude", "native-only")
-NATIVE = "native-only"
+BACKENDS = ("maude", "proved-only")
+NATIVE = "proved-only"
 
 # `  name (all-traces): verified (12 steps)` in the summary of summaries.
 LEMMA = re.compile(
@@ -370,7 +370,7 @@ class Gate:
             if ref["rc"] != 0:
                 status = "REF_FAIL_OK" if self.args.allow_ref_failures else "REF_FAIL"
                 native_end = "finished" if native["rc"] == 0 else self.failure_of(native)
-                row(status, f"Maude: {self.failure_of(ref)}; native-only: {native_end}")
+                row(status, f"Maude: {self.failure_of(ref)}; proved-only: {native_end}")
                 continue
             if native["rc"] != 0:
                 reason = self.failure_of(native)
@@ -386,7 +386,7 @@ class Gate:
             if ref_verdicts != native_verdicts:
                 differing = self.differences(ref_verdicts, native_verdicts)
                 unexplained = [
-                    f"{name}: Maude {a}, native-only {b}"
+                    f"{name}: Maude {a}, proved-only {b}"
                     for name, a, b in differing
                     if excepted.get(name) != (a, b)
                 ]
@@ -453,7 +453,7 @@ class Gate:
 
 FAILING = {
     "VERDICT_DIFF": "verdict differs from Maude",
-    "NATIVE_FAIL": "finishes on Maude but not on native-only",
+    "NATIVE_FAIL": "finishes on Maude but not on proved-only",
     "SLOW": "slower than the allowed ratio",
     "REF_FAIL": "Maude did not finish",
     "XPASS": "pending entry that now passes",
@@ -479,7 +479,7 @@ def report(gate, rows, elapsed):
             ratio = f"{native_s / ref_s:.2f}" if ref_s and native_s else "-"
             handle.write(f"{status}\t{name}\t{seconds(ref_s)}\t{seconds(native_s)}\t{ratio}\t{detail}\n")
 
-    print(f"\n=== backend gate: {len(gate.theories)} theories, native-only against Maude ===")
+    print(f"\n=== backend gate: {len(gate.theories)} theories, proved-only against Maude ===")
     print(f"{'status':<16}{'maude':>8}{'native':>8}{'ratio':>7}  theory")
     shown = rows if args.verbose else [r for r in rows if r[0] not in ("OK", "OK_STEPS")]
     for status, name, ref_s, native_s, detail in sorted(shown, key=lambda r: order.index(r[0])):
@@ -494,11 +494,11 @@ def report(gate, rows, elapsed):
     native_total = sum(n for _, _, r, n, _ in rows if r and n)
     print("\n=== SUMMARY ===")
     print(f"both finished: {sum(1 for _, _, r, n, _ in rows if r and n)}"
-          f"   Maude total {ref_total:.1f}s   native-only total {native_total:.1f}s")
+          f"   Maude total {ref_total:.1f}s   proved-only total {native_total:.1f}s")
     print(f"timing rule: native <= {args.max_ratio:g}x Maude where Maude > "
           f"{args.min_ref_seconds:g}s, minimum of {args.runs} run(s); it applied to {len(timed)} theories")
     for ratio, name, ref_s, native_s in sorted(timed, reverse=True)[:5]:
-        print(f"  {ratio:5.2f}x  Maude {ref_s:.2f}s  native-only {native_s:.2f}s  {name}")
+        print(f"  {ratio:5.2f}x  Maude {ref_s:.2f}s  proved-only {native_s:.2f}s  {name}")
     print("  ".join(f"{status}={counts[status]}" for status in order if counts[status]))
     failed = {status: counts[status] for status in FAILING if counts[status]}
     for status, count in failed.items():
@@ -550,7 +550,7 @@ def main():
     parser.add_argument("--jobs", type=int, default=2, help="prover processes at a time (default 2)")
     parser.add_argument("--timeout", type=float, help="seconds per prover process")
     parser.add_argument("--pending-timeout", type=float, default=20,
-                        help="native-only timeout for a pending theory (default 20)")
+                        help="proved-only timeout for a pending theory (default 20)")
     parser.add_argument("--mem", default="6G", help="memory cap per prover process (default 6G)")
     parser.add_argument("--mem-cap", choices=["auto", "cgroup", "rlimit"], default="auto",
                         help="how the cap is enforced: a systemd scope (resident memory) or "
@@ -559,7 +559,7 @@ def main():
     parser.add_argument("--min-ref-seconds", type=float, default=1.0,
                         help="the timing rule applies above this Maude time (default 1)")
     parser.add_argument("--max-ratio", type=float, default=2.0,
-                        help="allowed native-only / Maude time (default 2)")
+                        help="allowed proved-only / Maude time (default 2)")
     parser.add_argument("--exceptions", default=os.path.join(GATE_DIR, "verdict_exceptions.tsv"))
     parser.add_argument("--pending", default=os.path.join(GATE_DIR, "pending.tsv"))
     parser.add_argument("--allow-ref-failures", action="store_true", default=None,

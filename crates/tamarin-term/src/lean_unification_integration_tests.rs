@@ -1,4 +1,4 @@
-//! Differential coverage of the proved native-only dispatch against a Maude oracle.
+//! Differential coverage of the proved proved-only dispatch against a Maude oracle.
 
 use crate::algebra_backend::AlgebraBackend;
 use crate::algebra_provenance::{Command, Origin};
@@ -12,10 +12,10 @@ use crate::vterm::Lit;
 use tamarin_test_support::require_maude_path;
 
 fn native_session(sig: MaudeSig) -> MaudeHandle {
-    MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap()
+    MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::ProvedOnly).unwrap()
 }
 
-// The native-only multiset session under test and its Maude oracle.
+// The proved-only multiset session under test and its Maude oracle.
 fn handles() -> Option<(MaudeHandle, MaudeHandle)> {
     let path = require_maude_path()?;
     let oracle =
@@ -52,7 +52,7 @@ fn checked_factor_clashes_match_unfactored_maude_queries() {
     sig.st_fun_syms.insert(g);
     let sig = sig.refresh();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle =
         MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
@@ -90,7 +90,7 @@ fn checked_factor_clashes_match_unfactored_maude_queries() {
 
     let sig = sig.merge(mset_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let ac = |terms| f_app_ac(AcSym::Union, terms);
@@ -132,7 +132,7 @@ fn successful_factor_preserves_the_original_family() {
     };
     let sig = hash_maude_sig().merge(mset_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let table = native.native_rules().unwrap();
@@ -214,7 +214,7 @@ fn packed_unification_uses_one_substitution_across_nested_coordinates() {
     };
     let sig = MaudeSig::default();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let x = LVar::new("x", LSort::Msg, 0);
@@ -254,7 +254,7 @@ fn packed_shape_clashes_preserve_the_full_query_for_both_operations() {
         let mut h = MaudeHandle::start_with_backend(
             "/nonexistent",
             sig.clone(),
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
         )
         .unwrap();
         h.set_reference(reference);
@@ -518,7 +518,7 @@ fn minimal_rows(
     kept
 }
 
-// Native-only and Maude return the same unifiers once the instances of other
+// Proved-only and Maude return the same unifiers once the instances of other
 // arms are dropped. Returns the number of the remaining ones.
 fn assert_same_minimal_unifiers(
     native: &MaudeHandle,
@@ -531,7 +531,7 @@ fn assert_same_minimal_unifiers(
     actual.len()
 }
 
-// Native-only and Maude return the same unifiers up to witness names and arm
+// Proved-only and Maude return the same unifiers up to witness names and arm
 // order. Returns their number.
 fn assert_same_unifiers(
     native: &MaudeHandle,
@@ -850,7 +850,7 @@ fn pairing_recipes_match_maude_modulo_fresh_witness_names() {
     let native = MaudeHandle::start_with_backend(
         "/nonexistent",
         pair_maude_sig(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let oracle =
@@ -906,7 +906,7 @@ fn reflexive_fresh_union_matches_maude_with_shared_variables_and_free_rows() {
     let native = MaudeHandle::start_with_backend(
         "/nonexistent",
         mset_maude_sig(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let oracle =
@@ -965,7 +965,7 @@ fn combined_pairing_multiset_variants_and_reductions_match_maude() {
     sig.st_ac_fun_syms.insert(combine);
     let sig = sig.refresh();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 7)));
@@ -1029,7 +1029,7 @@ fn directional_ac_matching_matches_maude_with_shared_variables_and_rigid_context
     let native = MaudeHandle::start_with_backend(
         "/nonexistent",
         mset_maude_sig(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let oracle =
@@ -1085,7 +1085,7 @@ fn native_oracle_rigid_ground_comparisons_and_bare_captures_match_without_rewrit
     };
     let sig = dh_maude_sig().merge(pair_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let maude = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let x = LVar::new("x", LSort::Msg, 0);
@@ -1127,7 +1127,7 @@ fn native_oracle_shared_captures_constrain_ground_structural_matches() {
     use crate::maude_sig::pair_maude_sig;
     let sig = mset_maude_sig().merge(pair_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = require_maude_path()
         .map(|p| MaudeHandle::start_with_backend(&p, sig, AlgebraBackend::Maude).unwrap());
@@ -1202,7 +1202,7 @@ fn native_oracle_ground_captures_specialize_repeated_ac_occurrences_before_parti
     use crate::algebra_backend::AlgebraBackend;
     let sig = mset_maude_sig();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = require_maude_path()
         .map(|p| MaudeHandle::start_with_backend(&p, sig, AlgebraBackend::Maude).unwrap());
@@ -1254,7 +1254,7 @@ fn mixed_sort_matches_agree_with_maude() {
     };
     let sig = mset_maude_sig().merge(nat_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let atoms = [
@@ -1312,7 +1312,7 @@ fn open_compound_matches_agree_with_maude_for_shared_and_repeated_occurrences() 
     let oracle =
         MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
+        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::ProvedOnly).unwrap();
     let x = LVar::new("x", LSort::Msg, 7);
     let y = LVar::new("y", LSort::Msg, 7);
     let narrow = LVar::new("p", LSort::Pub, 7);
@@ -1374,7 +1374,7 @@ fn open_matching_agrees_with_maude_in_both_entry_points() {
     };
     let sig = mset_maude_sig().merge(hash_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let v = |s| Term::Lit(Lit::Var(LVar::new(s, LSort::Msg, 7)));
@@ -1414,7 +1414,7 @@ fn open_matching_agrees_with_maude_in_both_entry_points() {
         native.match_eqs_skolemize_both(&rigid, &bindable).unwrap(),
         expected
     );
-    // Native-only lists the two arms in the order of their binding maps,
+    // Proved-only lists the two arms in the order of their binding maps,
     // Maude in its own. The first match is the least one on both.
     let ambiguous = [Equal {
         lhs: u(hash(a), hash(pub_term("b"))),
@@ -1486,7 +1486,7 @@ fn ambiguous_sorted_matches_agree_with_maude_as_sets() {
     let native = MaudeHandle::start_with_backend(
         "/nonexistent",
         mset_maude_sig(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let oracle =
@@ -1544,7 +1544,7 @@ fn mixed_literal_and_compound_leaves_under_free_heads_agree_with_maude() {
         .merge(hash_maude_sig())
         .merge(pair_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let x = LVar::new("x", LSort::Fresh, 0);
@@ -1597,7 +1597,7 @@ fn native_oracle_repeated_subjects_match_at_their_distinct_image_cost() {
     };
     let sig = nat_maude_sig().merge(mset_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     for (symbol, sort, constant) in [
@@ -1692,7 +1692,7 @@ fn multi_variable_flat_matching_matches_maude_exhaustively() {
     let native = MaudeHandle::start_with_backend(
         "/nonexistent",
         mset_maude_sig(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let oracle =
@@ -1767,7 +1767,7 @@ fn nested_constructor_matches_and_ground_side_unifiers_agree_with_maude() {
     };
     let sig = pair_maude_sig().merge(mset_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 7)));
@@ -1824,7 +1824,7 @@ fn sorted_residuals_agree_with_independent_assignments_and_maude() {
     };
     let sig = mset_maude_sig().merge(nat_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let maude = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
 
@@ -2081,7 +2081,7 @@ fn constructor_variants_follow_the_active_rule_table_and_agree_with_maude() {
     let theory = RuleTable::new(&sig).unwrap();
     let maude = MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
+        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::ProvedOnly).unwrap();
     let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 8)));
     let y = Term::Lit(Lit::Var(LVar::new("y", LSort::Msg, 8)));
     let k = pub_term("key");
@@ -2177,7 +2177,7 @@ fn single_rule_narrowing_matches_maude_and_preserves_shared_parameters() {
     let oracle =
         MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
+        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::ProvedOnly).unwrap();
     for idx in [0, 49, 65535] {
         let x = variable("x", idx);
         let y = variable("y", idx);
@@ -2332,7 +2332,7 @@ fn native_oracle_joint_destructors_preserve_normal_values_and_ambient_names() {
     };
     let sig = pair_maude_sig().merge(sym_enc_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
 
@@ -2414,7 +2414,7 @@ fn fixed_message_variants_preserve_tls_observers_and_nested_captures() {
     let oracle =
         MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
+        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::ProvedOnly).unwrap();
     let var = |name, sort| Term::Lit(Lit::Var(LVar::new(name, sort, 5)));
     let signature = var("sig", LSort::Msg);
     let public_key = var("pk", LSort::Msg);
@@ -2619,7 +2619,7 @@ fn native_oracle_repeated_product_unifies_shared_alien_factors() {
     use crate::term::f_app_list;
     let sig = mset_maude_sig().merge(hash_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let (x, a, b, r) = (
         msg_var("x", 0),
@@ -3044,7 +3044,7 @@ fn natural_kind_probes_agree_with_maude_before_free_elimination() {
     let sig = nat_maude_sig();
     let table = RuleTable::new(&sig).unwrap();
     let native =
-        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::NativeOnly).unwrap();
+        MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::ProvedOnly).unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let var = |name, sort| Term::Lit(Lit::Var(LVar::new(name, sort, 0)));
     let one = f_app_no_eq(nat_one_sym(), vec![]);
@@ -3162,7 +3162,7 @@ fn native_oracle_received_base_towers_cover_all_cancellation_subsets() {
     };
     let sig = dh_maude_sig().merge(hash_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let var = |name, sort| Term::Lit(Lit::Var(LVar::new(name, sort, 1)));
@@ -3246,7 +3246,7 @@ fn native_oracle_free_exponent_preserves_joint_gdh_observations() {
         .merge(pair_maude_sig());
     let table = RuleTable::new(&sig).unwrap();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let var = |name, sort| Term::Lit(Lit::Var(LVar::new(name, sort, 1)));
@@ -3380,7 +3380,7 @@ fn native_oracle_mixed_uniform_reductions_and_dh_powers_preserve_all_query_bindi
     let sig = dh_maude_sig().merge(pair_maude_sig());
     let table = RuleTable::new(&sig).unwrap();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle =
         MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
@@ -3455,7 +3455,7 @@ fn dh_public_values_and_fresh_products_agree_with_maude_as_one_variant_tuple() {
     };
     let sig = dh_maude_sig().merge(hash_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let fresh = |s| Term::Lit(Lit::Var(LVar::new(s, LSort::Fresh, 0)));
@@ -3738,7 +3738,7 @@ fn native_oracle_joint_fresh_xors_cover_shared_inputs_and_triangle() {
 
     let sig = xor_maude_sig();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let vars = [4, 5, 6].map(|i| LVar::new("x", LSort::Fresh, i));
     let [a, b, c] = vars.map(|v| Term::Lit(Lit::Var(v)));
@@ -3843,7 +3843,7 @@ fn native_oracle_joint_fresh_xor_and_dh_variants_preserve_the_shared_exponent() 
 
     let sig = dh_maude_sig().merge(xor_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = require_maude_path()
         .map(|path| MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap());
@@ -4243,7 +4243,7 @@ fn native_oracle_compact_nonunit_plane_preserves_all_five_substitutions() {
     };
     let sig = mset_maude_sig();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let vars = ["x", "y", "z"].map(|n| Term::Lit(Lit::Var(LVar::new(n, LSort::Msg, 0))));
@@ -4507,7 +4507,7 @@ fn native_oracle_disjoint_atomic_sorts_exclude_declared_ac_rules() {
     let native = MaudeHandle::start_for_tamarin_theory(
         "/nonexistent",
         sig.clone(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
         Default::default(),
     )
     .unwrap();
@@ -4575,7 +4575,7 @@ fn native_oracle_disjoint_atomic_sorts_exclude_declared_ac_rules() {
     let native_binary = MaudeHandle::start_for_tamarin_theory(
         "/nonexistent",
         binary_rules.clone(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
         Default::default(),
     )
     .unwrap();
@@ -4772,7 +4772,7 @@ fn root_exclusion_checks_every_equation_and_every_child() {
         let theory = MaudeHandle::start_for_tamarin_theory(
             "/nonexistent",
             sig.clone(),
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
             Default::default(),
         )
         .unwrap();
@@ -4783,7 +4783,7 @@ fn root_exclusion_checks_every_equation_and_every_child() {
         }
         assert_eq!(theory.stats().norm_count, 0);
         // The AC rule returns either summand here, and Maude picks one. The
-        // certifier does not accept such a table, and a raw native-only
+        // certifier does not accept such a table, and a raw proved-only
         // session reports that instead of choosing.
         assert_ne!(maude.reduce(&possible).unwrap(), possible);
         assert!(matches!(
@@ -4920,10 +4920,10 @@ fn projection_of_raw_nested_ac_captures_matches_maudes_structural_result() {
     let expected = pair(a.clone(), f_app_ac(AcSym::Union, vec![a, b.clone(), b]));
     let pairing = pair_maude_sig().merge(mset_maude_sig());
     for sig in [pairing.clone(), pairing.merge(sym_enc_maude_sig())] {
-        for backend in [AlgebraBackend::Maude, AlgebraBackend::NativeOnly] {
+        for backend in [AlgebraBackend::Maude, AlgebraBackend::ProvedOnly] {
             let handle = MaudeHandle::start_with_backend(&path, sig.clone(), backend).unwrap();
             assert_eq!(handle.reduce(&input).unwrap(), expected);
-            if backend == AlgebraBackend::NativeOnly {
+            if backend == AlgebraBackend::ProvedOnly {
                 assert_eq!(handle.stats().norm_count, 0);
             }
         }
@@ -5151,7 +5151,7 @@ fn nested_commutative_ac_matching_agrees_with_maude() {
     let oracle =
         MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::NativeOnly).unwrap();
+        MaudeHandle::start_with_backend("/nonexistent", sig, AlgebraBackend::ProvedOnly).unwrap();
     let v = |name| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)));
     let narrow = Term::Lit(Lit::Var(LVar::new("p", LSort::Pub, 0)));
     let (a, b) = (pub_term("a"), pub_term("b"));
@@ -5242,7 +5242,7 @@ fn recursive_ac_matching_agrees_with_maude_on_multisets() {
     sig.st_ac_fun_syms.insert(combine);
     let sig = sig.refresh();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let (a, b) = (pub_term("a"), pub_term("b"));
@@ -5409,7 +5409,7 @@ fn reflexive_products_of_strict_subsort_operands_preserve_maude_identity_arm() {
         .merge(mset_maude_sig())
         .merge(xor_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let alphabet = [
@@ -5748,7 +5748,7 @@ fn native_oracle_gdh_unification_selects_product_rows_and_keeps_the_original_sco
     };
     let sig = dh_maude_sig().merge(mset_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let var = |idx, sort| Term::Lit(Lit::Var(LVar::new("x", sort, idx)));
@@ -5806,7 +5806,7 @@ fn native_oracle_coupled_gdh_products_preserve_all_84_unifiers() {
 
     let sig = dh_maude_sig().merge(mset_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let sorts = [
         LSort::Fresh,
@@ -5955,7 +5955,7 @@ fn native_oracle_public_unify_keeps_a_correlated_equation_across_a_wide_pivot() 
 
     let sig = mset_maude_sig().merge(hash_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let var = |name| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, 0)));
     let x = var("x");
@@ -6012,7 +6012,7 @@ fn native_oracle_indivisible_ac_pivot_preserves_occurrences_and_shared_tail() {
     use crate::maude_sig::{dh_maude_sig, hash_maude_sig};
     let sig = dh_maude_sig().merge(hash_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = require_maude_path()
         .map(|p| MaudeHandle::start_with_backend(&p, sig, AlgebraBackend::Maude).unwrap());
@@ -6113,7 +6113,7 @@ fn native_oracle_specializes_variant_families_to_caller_operands() {
         .merge(hash_maude_sig())
         .merge(sym_enc_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let v = |i, sort| Term::Lit(Lit::Var(LVar::new("x", sort, i)));
@@ -6189,7 +6189,7 @@ fn native_oracle_free_variant_contexts_preserve_every_observation() {
     sig.st_fun_syms.insert(wrap);
     let sig = sig.refresh();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 0)));
@@ -6282,7 +6282,7 @@ fn native_oracle_packed_variants_keep_shared_variables_beside_unique_ground_obse
         MaudeHandle::start_for_tamarin_theory(
             "/nonexistent",
             s,
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
             Default::default(),
         )
         .unwrap()
@@ -6362,7 +6362,7 @@ fn native_oracle_binary_ac_reduction_agrees_with_maude_for_every_rule_and_alignm
     let native = MaudeHandle::start_for_tamarin_theory(
         "/nonexistent",
         sig.clone(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
         Default::default(),
     )
     .unwrap();
@@ -6452,7 +6452,7 @@ fn native_oracle_binary_ac_reduction_agrees_with_maude_for_every_rule_and_alignm
     let native = MaudeHandle::start_for_tamarin_theory(
         "/nonexistent",
         sig.clone(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
         Default::default(),
     )
     .unwrap();
@@ -6533,7 +6533,7 @@ fn native_oracle_binary_msg_cancellation_recognizes_renamed_rules_and_checks_par
     let var = |name, id| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, id)));
     let rule = |lhs, rhs| rrule_to_ctxt_st_rule(&RRule::new(lhs, rhs)).unwrap();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle =
         MaudeHandle::start_with_backend(&path, sig.clone(), AlgebraBackend::Maude).unwrap();
@@ -6591,7 +6591,7 @@ fn native_oracle_binary_msg_cancellation_recognizes_renamed_rules_and_checks_par
     let changed_native = MaudeHandle::start_with_backend(
         "/nonexistent",
         changed.clone(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     assert!(matches!(
@@ -6626,7 +6626,7 @@ fn native_oracle_binary_msg_cancellation_packed_seven_preserve_ambient_values() 
     };
     let sig = xor_maude_sig().merge(pair_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     // x.6 is the first witness the isolated x.4 XOR x.5 family would allocate.
@@ -6681,7 +6681,7 @@ fn native_oracle_open_subject_matching_preserves_joint_rigid_images() {
         .merge(dh_maude_sig())
         .merge(pair_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let maude = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let x = LVar::new("x", LSort::Msg, 2);
@@ -6815,7 +6815,7 @@ fn check_mixed_cancellation_rows(
     let native = MaudeHandle::start_with_backend(
         "/nonexistent",
         signature.clone(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, signature, AlgebraBackend::Maude).unwrap();
@@ -7118,7 +7118,7 @@ fn native_oracle_positional_parents_stage_normal_values_and_repeated_keys() {
         .merge(hash_maude_sig())
         .merge(sym_enc_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let reference = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let x = Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 7)));
@@ -7186,7 +7186,7 @@ fn native_oracle_wide_nested_cancellation_with_fresh_variables() {
         .merge(hash_maude_sig())
         .merge(pair_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let (x, y, z) = (msg_var("m", 0), msg_var("m", 1), fresh_var("f", 0));
@@ -7221,7 +7221,7 @@ fn native_oracle_signed_graph_compares_all_caller_and_observation_coordinates() 
     let sig = dh_maude_sig();
     let table = RuleTable::new(&sig).unwrap();
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     let x = msg_var("caller", 0);
@@ -7280,7 +7280,7 @@ fn native_oracle_narrowing_preserves_signed_dh_products_and_powers() {
         return;
     };
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", dh_maude_sig(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", dh_maude_sig(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle =
         MaudeHandle::start_with_backend(&path, dh_maude_sig(), AlgebraBackend::Maude).unwrap();
@@ -7324,7 +7324,7 @@ fn native_oracle_scalar_action_rows_share_inputs_and_outputs() {
     };
     let sig = bp_maude_sig().merge(hash_maude_sig());
     let native =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     let oracle = MaudeHandle::start_with_backend(&path, sig, AlgebraBackend::Maude).unwrap();
     // Names deliberately overlap the implementation's fresh point and scalar
@@ -7408,7 +7408,7 @@ fn native_point_reduction_uses_changed_rules_even_without_refresh() {
         let h = MaudeHandle::start_for_tamarin_theory(
             "/nonexistent",
             sig,
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
             Default::default(),
         )
         .unwrap();
@@ -7505,7 +7505,7 @@ fn public_full_unifiers_distribute_a_mixed_weight_column_class() {
     let native = MaudeHandle::start_with_backend(
         "/nonexistent",
         mset_maude_sig(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let vars: Vec<_> = (0..8)
@@ -7545,7 +7545,7 @@ fn public_full_unifiers_keep_all_five_covering_distributions() {
     let native = MaudeHandle::start_with_backend(
         "/nonexistent",
         mset_maude_sig(),
-        AlgebraBackend::NativeOnly,
+        AlgebraBackend::ProvedOnly,
     )
     .unwrap();
     let vars: Vec<_> = (0..4)
@@ -7628,7 +7628,7 @@ fn independent_commutative_rows_list_every_combination_of_orientations() {
     }
 }
 
-// Native-only lists every match. Each family below is too large for a prefix
+// Proved-only lists every match. Each family below is too large for a prefix
 // of it to stand for the whole.
 #[cfg(test)]
 mod large_match {
@@ -7641,7 +7641,7 @@ mod large_match {
     fn sum(a: LNTerm, b: LNTerm) -> LNTerm {
         f_app_ac(AcSym::Union, vec![a, b])
     }
-    // The number of distinct answers; native-only returns them without repeats.
+    // The number of distinct answers; proved-only returns them without repeats.
     fn matches(h: &MaudeHandle, eq: Equal<LNTerm>) -> usize {
         let query = [eq];
         assert!(h.has_match_eqs(&query).unwrap());
@@ -7746,7 +7746,7 @@ fn reference_unification_preserves_joint_orientations_and_aliases() {
         .merge(mset_maude_sig())
         .merge(pair_maude_sig());
     let mut handle =
-        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::NativeOnly)
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::ProvedOnly)
             .unwrap();
     handle.set_reference(true);
     let [x, y, z, w] = ["x", "y", "z", "w"].map(|s| LVar::new(s, LSort::Msg, 0));
@@ -7832,7 +7832,7 @@ fn reference_unifiability_validates_even_reflexive_roots() {
         let mut handle = MaudeHandle::start_with_backend(
             "/nonexistent",
             sig.clone(),
-            AlgebraBackend::NativeOnly,
+            AlgebraBackend::ProvedOnly,
         )
         .unwrap();
         handle.set_reference(reference);
@@ -7849,7 +7849,7 @@ fn dh_pair_sig() -> MaudeSig {
     crate::maude_sig::dh_maude_sig().merge(crate::maude_sig::pair_maude_sig())
 }
 
-/// A native session and a native-only one, on one signature.
+/// A native session and a proved-only one, on one signature.
 fn native_pair(sig: MaudeSig) -> (MaudeHandle, MaudeHandle) {
     let native =
         MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::Native)
@@ -7890,7 +7890,7 @@ fn native_answers_a_free_request_without_handing_it_off() {
 
 /// A request with delayed AC equations hands them to the proved unifier,
 /// and Rust composes its answer with the free unifier's. The answer is
-/// native-only's, witness names included, and a repeat reads the memo.
+/// proved-only's, witness names included, and a repeat reads the memo.
 #[test]
 fn native_hands_the_delayed_equations_to_the_proved_unifier() {
     use crate::builtin::pair;
@@ -7953,7 +7953,7 @@ fn native_answers_a_free_clash_without_handing_it_off() {
 
 /// Matching, normalization and variants: the Maude backend's front ends
 /// answer what they answer, and what it sends to Maude goes to the proved
-/// exports. The answers are native-only's.
+/// exports. The answers are proved-only's.
 #[test]
 fn native_hands_off_matching_normalization_and_variants() {
     use crate::builtin::{exp, pair};
