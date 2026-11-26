@@ -26,12 +26,15 @@ pub enum Origin {
     /// accept. Maude makes the same assumption.
     Assumed,
     /// Native-only answers that no single theorem covers: Rust that combines
-    /// several checked kernels (the tuple unpacker with a total export).
+    /// several checked kernels (the tuple unpacker with a total export). On
+    /// native, a unification whose delayed equations the proved unifier
+    /// answered, composed in Rust with the Maude backend's free unifier.
     /// No family of variants has this origin: one that a Rust solver
     /// proposed is used only after the certificate checker accepted it.
     NativeRust,
-    /// Rust that every backend runs before consulting an algebra engine:
-    /// free unification, the normal-form check and syntactic shortcuts.
+    /// Rust that the Maude backend and native run before consulting an
+    /// algebra engine: free unification, the normal-form check and
+    /// syntactic shortcuts.
     SharedRust,
     Maude,
 }

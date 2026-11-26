@@ -72,8 +72,8 @@ tamarin-rs interactive --algebra-backend=native-only /path/to/theories
 `--algebra-backend=native`, in the same build, also starts no Maude. Every
 query that the Maude backend hands to Maude is answered by proved code, and
 every other query is answered exactly as on the Maude backend, by its Rust
-front ends. It prints the same proofs as native-only and is faster on
-theories with many unification queries.
+front ends. It prints the same proofs as native-only and is faster than
+native-only on theories with many unification queries.
 
 Tamarin requires a theory's equations to be convergent and has always taken
 the author's word for it. The native backend checks instead: a proved
