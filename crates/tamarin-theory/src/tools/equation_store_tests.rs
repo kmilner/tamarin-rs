@@ -372,6 +372,312 @@ fn remove_permutations_drops_renamed_variants() {
     assert_eq!(kept, &vec![keep, wider]);
 }
 
+// -------------------------------------------------------------------------
+// `remove_permutations` against the pairwise procedure it replaced.
+// -------------------------------------------------------------------------
+
+/// A small deterministic generator (xorshift64) for the comparisons below.
+struct PermRng(u64);
+
+impl PermRng {
+    fn below(&mut self, n: usize) -> usize {
+        self.0 ^= self.0 << 13;
+        self.0 ^= self.0 >> 7;
+        self.0 ^= self.0 << 17;
+        (self.0 % n as u64) as usize
+    }
+}
+
+/// The signature of the comparisons: xor (AC), `em` (C), `pmult` and
+/// `pair` (free), and the zero-arity `one`.
+fn perm_test_sig() -> tamarin_term::maude_sig::MaudeSig {
+    use tamarin_term::maude_sig::{bp_maude_sig, pair_maude_sig, xor_maude_sig};
+    xor_maude_sig()
+        .merge(bp_maude_sig())
+        .merge(pair_maude_sig())
+}
+
+/// The backends this build can start, each in a session of its own.
+fn perm_test_handles(path: &str) -> Vec<tamarin_term::maude_proc::MaudeHandle> {
+    use tamarin_term::algebra_backend::AlgebraBackend;
+    [
+        AlgebraBackend::Maude,
+        AlgebraBackend::Native,
+        AlgebraBackend::ProvedOnly,
+    ]
+    .into_iter()
+    .filter(|backend| backend.validate().is_ok())
+    .map(|backend| {
+        tamarin_term::maude_proc::MaudeHandle::start_with_backend(path, perm_test_sig(), backend)
+            .expect("start")
+    })
+    .collect()
+}
+
+/// A random term over the test signature whose variables are `vars` and
+/// whose names are a few public and fresh constants. The arguments of an
+/// xor are distinct and none is an xor.
+fn perm_test_term(rng: &mut PermRng, vars: &[LVar], depth: usize) -> LNTerm {
+    use tamarin_term::function_symbols::{one_sym, pair_sym, pmult_sym, AcSym, CSym, FunSym};
+    use tamarin_term::lterm::{fresh_term, pub_term};
+    use tamarin_term::term::{f_app, f_app_ac, f_app_c};
+    use tamarin_term::vterm::var_term;
+    let leaf = |rng: &mut PermRng| -> LNTerm {
+        match rng.below(8) {
+            0 => pub_term("a"),
+            1 => pub_term("b"),
+            2 => fresh_term("n"),
+            3 => f_app(FunSym::NoEq(one_sym()), vec![]),
+            _ => var_term(vars[rng.below(vars.len())]),
+        }
+    };
+    if depth == 0 || rng.below(3) == 0 {
+        return leaf(rng);
+    }
+    match rng.below(6) {
+        0 => f_app(
+            FunSym::NoEq(pair_sym()),
+            vec![
+                perm_test_term(rng, vars, depth - 1),
+                perm_test_term(rng, vars, depth - 1),
+            ],
+        ),
+        1 => f_app(
+            FunSym::NoEq(pmult_sym()),
+            vec![
+                perm_test_term(rng, vars, depth - 1),
+                perm_test_term(rng, vars, depth - 1),
+            ],
+        ),
+        2 => f_app_c(
+            CSym::EMap,
+            vec![
+                perm_test_term(rng, vars, depth - 1),
+                perm_test_term(rng, vars, depth - 1),
+            ],
+        ),
+        _ => {
+            let mut args: Vec<LNTerm> = Vec::new();
+            for _ in 0..2 + rng.below(3) {
+                let arg = perm_test_term(rng, vars, depth - 1);
+                let nested = matches!(&arg, tamarin_term::term::Term::App(FunSym::Ac(_), _));
+                if !nested && !args.contains(&arg) {
+                    args.push(arg);
+                }
+            }
+            match args.len() {
+                0 => return leaf(rng),
+                1 => return args.pop().expect("one argument"),
+                _ => {}
+            }
+            f_app_ac(AcSym::Xor, args)
+        }
+    }
+}
+
+/// `removePermutations` as it was before the per-substitution precomputing
+/// and the `may_match` filter: every pair goes through both
+/// `equalUpToRenaming` calls.
+fn reference_remove_permutations(
+    maude: &tamarin_term::maude_proc::MaudeHandle,
+    substs: &[LNSubstVFresh],
+    v1: &LVar,
+    v2: &LVar,
+) -> Vec<LNSubstVFresh> {
+    use tamarin_term::lterm::rename_avoiding_ignoring;
+    use tamarin_term::subst::apply_vterm;
+    use tamarin_term::term::{f_app_list, Term};
+    use tamarin_term::vterm::var_term;
+
+    let is_perm = |s1: &LNSubstVFresh, s2: &LNSubstVFresh| -> bool {
+        if s1.len() != s2.len() {
+            return false;
+        }
+        let others_shared = s1
+            .iter()
+            .all(|(x, t)| x == v1 || x == v2 || s2.image_of(x).is_some_and(|u| u == t));
+        if others_shared && s1.image_of(v1) == s2.image_of(v2) && s1.image_of(v2) == s2.image_of(v1)
+        {
+            return true;
+        }
+        let fixing1 = subst_fixing(s1.range());
+        let subst1_fixed: Vec<(LVar, LNTerm)> = s1
+            .to_list()
+            .into_iter()
+            .map(|(v, t)| (v, apply_vterm(&fixing1, t)))
+            .collect();
+        let subst1_permuted: Vec<(LVar, LNTerm)> =
+            LNSubstVFresh::from_list(subst1_fixed.iter().map(|(v, t)| {
+                let key = if v == v1 {
+                    *v2
+                } else if v == v2 {
+                    *v1
+                } else {
+                    *v
+                };
+                (key, t.clone())
+            }))
+            .to_list();
+        let avoid_ctx: LNTerm = f_app_list(
+            [var_term(*v1), var_term(*v2)]
+                .into_iter()
+                .chain(subst1_fixed.iter().map(|(v, _)| var_term(*v)))
+                .chain(subst1_fixed.iter().map(|(_, t)| t.clone()))
+                .collect(),
+        );
+        let fixing2 = subst_fixing(s2.range());
+        let keys2: Vec<LVar> = s2.dom().copied().collect();
+        let packed2: LNTerm = f_app_list(
+            s2.range()
+                .map(|t| apply_vterm(&fixing2, t.clone()))
+                .collect(),
+        );
+        let renamed2 = match rename_avoiding_ignoring(packed2, &avoid_ctx, &keys2) {
+            Term::App(tamarin_term::function_symbols::FunSym::List, args) => args.to_vec(),
+            other => vec![other],
+        };
+        equal_subst_up_to_renaming(maude, &subst1_permuted, &renamed2).expect("match")
+            || equal_subst_up_to_renaming(maude, &subst1_fixed, &renamed2).expect("match")
+    };
+
+    let mut rest: Vec<LNSubstVFresh> = substs.to_vec();
+    rest.sort();
+    rest.dedup();
+    let mut kept: Vec<LNSubstVFresh> = Vec::new();
+    while !rest.is_empty() {
+        let s = rest.remove(0);
+        kept.retain(|x| !is_perm(&s, x));
+        rest.retain(|x| !is_perm(&s, x));
+        kept.push(s);
+    }
+    kept.sort();
+    kept.dedup();
+    kept
+}
+
+/// A random disjunction over the domain `{v1, v2, k, m}` (`k` fresh, the
+/// rest msg), seeded with literal swaps, renamings and swapped renamings of
+/// its members so that every branch of `isPerm` is taken.
+fn perm_test_disjunction(rng: &mut PermRng, v1: LVar, v2: LVar) -> Vec<LNSubstVFresh> {
+    use tamarin_term::vterm::var_term;
+    let k = LVar::new("k", LSort::Fresh, 0);
+    let m = LVar::new("m", LSort::Msg, 0);
+    let range_vars: Vec<LVar> = (10..13)
+        .map(|i| LVar::new("x", LSort::Msg, i))
+        .chain((13..15).map(|i| LVar::new("f", LSort::Fresh, i)))
+        .collect();
+    let mut out: Vec<LNSubstVFresh> = Vec::new();
+    for _ in 0..3 + rng.below(4) {
+        let mut binds = vec![
+            (v1, perm_test_term(rng, &range_vars, 2)),
+            (v2, perm_test_term(rng, &range_vars, 2)),
+            (k, var_term(range_vars[3 + rng.below(2)])),
+        ];
+        if rng.below(4) != 0 {
+            binds.push((m, perm_test_term(rng, &range_vars, 1)));
+        }
+        let base = LNSubstVFresh::from_list(binds.clone());
+        out.push(base.clone());
+        // The images of `v1` and `v2` exchanged.
+        if rng.below(2) == 0 {
+            let swapped = binds
+                .iter()
+                .map(|(v, t)| {
+                    let key = if *v == v1 {
+                        v2
+                    } else if *v == v2 {
+                        v1
+                    } else {
+                        *v
+                    };
+                    (key, t.clone())
+                })
+                .collect::<Vec<_>>();
+            out.push(LNSubstVFresh::from_list(swapped));
+        }
+        // The msg range variables renamed, optionally with the swap.
+        if rng.below(2) == 0 {
+            let shift = 20 + rng.below(3) as u64;
+            let renamed = binds
+                .iter()
+                .map(|(v, t)| {
+                    let t = tamarin_term::term::map_lits(t, &mut |lit| match lit {
+                        tamarin_term::vterm::Lit::Var(x) if x.sort == LSort::Msg => {
+                            tamarin_term::vterm::Lit::Var(LVar::new(x.name, x.sort, x.idx + shift))
+                        }
+                        other => *other,
+                    });
+                    let key = if rng.below(2) == 0 && *v == v1 {
+                        v2
+                    } else if *v == v2 && rng.below(2) == 0 {
+                        v1
+                    } else {
+                        *v
+                    };
+                    (key, t)
+                })
+                .collect::<Vec<_>>();
+            if renamed
+                .iter()
+                .map(|(v, _)| *v)
+                .collect::<BTreeSet<_>>()
+                .len()
+                == renamed.len()
+            {
+                out.push(LNSubstVFresh::from_list(renamed));
+            }
+        }
+        // A generalisation or an instance of a member.
+        if rng.below(3) == 0 {
+            let image = perm_test_term(rng, &range_vars, 1);
+            let narrowed = binds
+                .iter()
+                .map(|(v, t)| (*v, if *v == m { image.clone() } else { t.clone() }))
+                .collect::<Vec<_>>();
+            out.push(LNSubstVFresh::from_list(narrowed));
+        }
+    }
+    out
+}
+
+/// `remove_permutations` keeps exactly what the pairwise procedure keeps,
+/// on the first call and on a repeat, on every backend the build can start.
+#[test]
+fn remove_permutations_matches_the_pairwise_reference() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let v1 = LVar::new("x", LSort::Msg, 1);
+    let v2 = LVar::new("x", LSort::Msg, 2);
+    for h in perm_test_handles(&path) {
+        let mut rng = PermRng(0x2545_f491_4f6c_dd1d);
+        let mut dropped = 0;
+        for _ in 0..200 {
+            let substs = perm_test_disjunction(&mut rng, v1, v2);
+            let want = reference_remove_permutations(&h, &substs, &v1, &v2);
+            for _repeat in 0..2 {
+                let mut store = EquationStore::empty();
+                let id = store.add_disj(substs.clone());
+                let store = store
+                    .remove_permutations(&h, id, &v1, &v2)
+                    .expect("remove_permutations");
+                let got = &store
+                    .conj
+                    .iter()
+                    .find(|d| d.split_id == id)
+                    .expect("split survives")
+                    .substs;
+                assert_eq!(got, &want, "{substs:?}");
+            }
+            let mut distinct = substs.clone();
+            distinct.sort();
+            distinct.dedup();
+            dropped += distinct.len() - want.len();
+        }
+        assert!(dropped > 100, "only {dropped} substitutions dropped");
+    }
+}
+
 // =========================================================================
 // Haskell-faithfulness invariants for `add_eqs`.
 //
