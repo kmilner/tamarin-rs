@@ -425,6 +425,12 @@ pub struct SharedMaudeCaches {
     /// DUPLICATION of those few), so peak residency stays bounded even
     /// though — like `reduce` — no per-entry eviction is performed.
     reply: Mutex<tamarin_utils::FastMap<Vec<u8>, Vec<u8>>>,
+    /// Memo for `EquationStore::remove_permutations` (tamarin-theory). What
+    /// it keeps is a function of [`PermutationKey`] and of this session's
+    /// theory, because it decides each pair from the substitutions and
+    /// the existence of AC matchers alone. Emptied when it outgrows
+    /// [`PERMUTATION_MEMO_NODES`].
+    permutations: Mutex<PermutationMemo>,
     stats: MaudeCacheStats,
 }
 
@@ -753,6 +759,45 @@ impl UnifyMemo {
         }
         self.nodes += nodes;
         self.answers.insert(key, (answers.clone(), origin));
+    }
+}
+
+/// The key of the session's memo for `EquationStore::remove_permutations`
+/// (tamarin-theory): the two interchangeable premise variables and the
+/// sorted, deduplicated substitutions of the disjunction.
+pub type PermutationKey = (
+    crate::lterm::LVar,
+    crate::lterm::LVar,
+    Vec<crate::subst_vfresh::LNSubstVFresh>,
+);
+
+/// The substitutions `remove_permutations` kept, by [`PermutationKey`].
+#[derive(Default)]
+struct PermutationMemo {
+    kept: tamarin_utils::FastMap<PermutationKey, Vec<crate::subst_vfresh::LNSubstVFresh>>,
+    /// The term nodes of the images the keys and answers hold.
+    nodes: usize,
+}
+
+/// The term nodes [`PermutationMemo`] may hold before it is emptied.
+const PERMUTATION_MEMO_NODES: usize = 1 << 22;
+
+impl PermutationMemo {
+    fn insert(&mut self, key: PermutationKey, kept: Vec<crate::subst_vfresh::LNSubstVFresh>) {
+        use crate::term::TermSize;
+        let nodes = key
+            .2
+            .iter()
+            .chain(&kept)
+            .flat_map(|subst| subst.range())
+            .map(|image| image.size())
+            .sum::<usize>();
+        if self.nodes.saturating_add(nodes) > PERMUTATION_MEMO_NODES {
+            self.kept.clear();
+            self.nodes = 0;
+        }
+        self.nodes += nodes;
+        self.kept.insert(key, kept);
     }
 }
 
@@ -1934,6 +1979,33 @@ impl MaudeHandle {
     #[cfg(feature = "lean-unification")]
     pub fn set_variant_check_search(&mut self, work: u64) {
         self.reference.variant_check_search = work;
+    }
+
+    /// What `EquationStore::remove_permutations` kept for `key` earlier in
+    /// this session.
+    pub fn remembered_permutations(
+        &self,
+        key: &PermutationKey,
+    ) -> Option<Vec<crate::subst_vfresh::LNSubstVFresh>> {
+        self.caches
+            .permutations
+            .lock()
+            .unwrap()
+            .kept
+            .get(key)
+            .cloned()
+    }
+
+    /// Remember what `EquationStore::remove_permutations` kept for `key`,
+    /// unless this work may not write to stores other jobs read.
+    pub fn remember_permutations(
+        &self,
+        key: PermutationKey,
+        kept: Vec<crate::subst_vfresh::LNSubstVFresh>,
+    ) {
+        if self.intact() {
+            self.caches.permutations.lock().unwrap().insert(key, kept);
+        }
     }
 
     /// Which component has answered each command of this session so far.

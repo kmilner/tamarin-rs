@@ -389,10 +389,21 @@ impl EquationStore {
             let mut substs: Vec<LNSubstVFresh> = std::mem::take(&mut disj.substs);
             substs.sort();
             substs.dedup();
+            // The result is a function of `v1`, `v2`, the sorted substitutions
+            // and the session's theory, so the session memo answers a repeat.
+            let key = (*v1, *v2, substs);
+            if let Some(kept) = maude.remembered_permutations(&key) {
+                // A repeat reports the backend failure each query reports.
+                maude
+                    .check_backend_status()
+                    .map_err(remove_permutations_error)?;
+                disj.substs = kept;
+                continue;
+            }
             // Everything `isPerm` derives from one substitution alone is
             // computed once per substitution, not once per pair.
             let mut rest: std::collections::VecDeque<PermCandidate> =
-                substs.into_iter().map(PermCandidate::new).collect();
+                key.2.iter().cloned().map(PermCandidate::new).collect();
             // `removePerm r (s:rest) = removePerm (s : filter (not . isPerm s) r)
             //                                     (filter (not . isPerm s) rest)`
             let mut kept: Vec<PermCandidate> = Vec::new();
@@ -407,6 +418,7 @@ impl EquationStore {
             let mut kept: Vec<LNSubstVFresh> = kept.into_iter().map(|c| c.subst).collect();
             kept.sort();
             kept.dedup();
+            maude.remember_permutations(key, kept.clone());
             disj.substs = kept;
         }
         Ok(self)

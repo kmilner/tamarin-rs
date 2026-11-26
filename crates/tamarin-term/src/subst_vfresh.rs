@@ -23,7 +23,7 @@ use crate::vterm::{Lit, VTerm};
 // ordering so split-case enumeration matches Haskell (e.g. KAS2_eCK
 // Resp_1 variant `c1 = aenc(x, pk(~lkR))` comes before the trivial
 // one, giving `split_case_1` = the meaningful variant).
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct SubstVFresh<C, V> {
     map: BTreeMap<V, VTerm<C, V>>,
 }

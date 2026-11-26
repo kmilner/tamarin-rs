@@ -543,9 +543,9 @@ fn may_match_rejects_only_pairs_the_matcher_rejects() {
     }
 }
 
-/// `removePermutations` as it was before the per-substitution precomputing
-/// and the `may_match` filter: every pair goes through both
-/// `equalUpToRenaming` calls.
+/// `removePermutations` as it was before the per-substitution precomputing,
+/// the `may_match` filter and the session memo: every pair goes through
+/// both `equalUpToRenaming` calls.
 fn reference_remove_permutations(
     maude: &tamarin_term::maude_proc::MaudeHandle,
     substs: &[LNSubstVFresh],
@@ -709,12 +709,14 @@ fn perm_test_disjunction(rng: &mut PermRng, v1: LVar, v2: LVar) -> Vec<LNSubstVF
 }
 
 /// `remove_permutations` keeps exactly what the pairwise procedure keeps,
-/// on the first call and on a repeat, on every backend the build can start.
+/// on the first call and on a repeat that the session memo answers, on
+/// every backend the build can start.
 #[test]
 fn remove_permutations_matches_the_pairwise_reference() {
     let Some(path) = require_maude_path() else {
         return;
     };
+    use tamarin_term::algebra_provenance::Command;
     let v1 = LVar::new("x", LSort::Msg, 1);
     let v2 = LVar::new("x", LSort::Msg, 2);
     for h in perm_test_handles(&path) {
@@ -723,7 +725,8 @@ fn remove_permutations_matches_the_pairwise_reference() {
         for _ in 0..200 {
             let substs = perm_test_disjunction(&mut rng, v1, v2);
             let want = reference_remove_permutations(&h, &substs, &v1, &v2);
-            for _repeat in 0..2 {
+            for repeat in 0..2 {
+                let asked = h.provenance().total(Command::Match);
                 let mut store = EquationStore::empty();
                 let id = store.add_disj(substs.clone());
                 let store = store
@@ -736,6 +739,10 @@ fn remove_permutations_matches_the_pairwise_reference() {
                     .expect("split survives")
                     .substs;
                 assert_eq!(got, &want, "{substs:?}");
+                if repeat == 1 {
+                    let asked_again = h.provenance().total(Command::Match);
+                    assert_eq!(asked_again, asked, "the memo answers the repeat");
+                }
             }
             let mut distinct = substs.clone();
             distinct.sort();
