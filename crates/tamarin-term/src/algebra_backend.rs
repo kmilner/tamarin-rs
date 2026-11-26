@@ -33,6 +33,13 @@ impl AlgebraBackend {
         self == Self::Maude
     }
 
+    /// Whether a trusted Rust shortcut may decide that a match does not
+    /// exist without asking the matcher. Proved-only promises that proved
+    /// code answers every algebra query, so only Maude and native may.
+    pub fn may_settle_matches_in_rust(self) -> bool {
+        self != Self::ProvedOnly
+    }
+
     /// The value of `--algebra-backend` that selects this backend.
     pub fn name(self) -> &'static str {
         match self {

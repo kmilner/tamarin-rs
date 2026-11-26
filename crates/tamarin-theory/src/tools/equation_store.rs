@@ -2359,11 +2359,13 @@ fn is_perm_subst(
         }
     }
     // A joint problem that `may_match` shows to have no matcher is settled
-    // without the matcher. Renaming the patterns maps variables to
-    // variables, and `may_match` never reads which variable a pattern holds,
-    // so the unrenamed images give its answer for the renamed ones.
-    let permuted_possible = may_match_all(&lhs.subst1_permuted, &candidate.fixed);
-    let fixed_possible = may_match_all(&lhs.subst1_fixed, &candidate.fixed);
+    // without the matcher, on the backends that allow a Rust shortcut to
+    // settle a match. Renaming the patterns maps variables to variables, and
+    // `may_match` never reads which variable a pattern holds, so the
+    // unrenamed images give its answer for the renamed ones.
+    let shortcut = maude.backend().may_settle_matches_in_rust();
+    let permuted_possible = !shortcut || may_match_all(&lhs.subst1_permuted, &candidate.fixed);
+    let fixed_possible = !shortcut || may_match_all(&lhs.subst1_fixed, &candidate.fixed);
     if !permuted_possible && !fixed_possible {
         return Ok(false);
     }
@@ -2384,10 +2386,18 @@ fn may_match_all(subjects: &[(LVar, LNTerm)], patterns: &[LNTerm]) -> bool {
 }
 
 /// A necessary condition for a substitution `σ` of the pattern's variables
-/// with `σ(pattern) = subject` modulo the module's axioms, which are
-/// associativity with commutativity and commutativity alone (`[comm assoc]`
-/// and `[comm]`, no identity): `false` means no such matcher exists. It
-/// never reads which variable a pattern holds.
+/// with `σ(pattern) = subject` modulo the module's axioms: `false` means no
+/// such matcher exists. It never reads which variable a pattern holds.
+///
+/// This is a trusted Rust shortcut, not proved code, used only on the
+/// Maude and native backends (`AlgebraBackend::may_settle_matches_in_rust`);
+/// proved-only asks the matcher for every pair. It relies on the module's
+/// only axioms being associativity with commutativity and commutativity
+/// (`[comm assoc]` and `[comm]`, no identity, as `maude_print` declares
+/// them). `may_match_rejects_only_pairs_the_matcher_rejects` checks every
+/// rejection against the matcher of each backend on random xor, `em`,
+/// `pmult` and `pair` terms, and `remove_permutations_matches_the_pairwise_reference`
+/// checks the filtered procedure against the unfiltered one.
 ///
 /// Exactness: the axioms keep the head symbol of an application, the arity
 /// of a free one and every constant, so a constant matches only itself and

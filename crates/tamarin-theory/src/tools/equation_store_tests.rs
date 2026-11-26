@@ -710,7 +710,9 @@ fn perm_test_disjunction(rng: &mut PermRng, v1: LVar, v2: LVar) -> Vec<LNSubstVF
 
 /// `remove_permutations` keeps exactly what the pairwise procedure keeps,
 /// on the first call and on a repeat that the session memo answers, on
-/// every backend the build can start.
+/// every backend the build can start. A first call asks the matcher once
+/// for every query the pairwise procedure asks on proved-only, where no
+/// Rust shortcut may settle a match, and for fewer of them elsewhere.
 #[test]
 fn remove_permutations_matches_the_pairwise_reference() {
     let Some(path) = require_maude_path() else {
@@ -720,13 +722,23 @@ fn remove_permutations_matches_the_pairwise_reference() {
     let v1 = LVar::new("x", LSort::Msg, 1);
     let v2 = LVar::new("x", LSort::Msg, 2);
     for h in perm_test_handles(&path) {
+        let asked = || h.provenance().total(Command::Match);
+        let proved_only = h.backend() == tamarin_term::algebra_backend::AlgebraBackend::ProvedOnly;
         let mut rng = PermRng(0x2545_f491_4f6c_dd1d);
-        let mut dropped = 0;
+        let mut seen: BTreeSet<Vec<LNSubstVFresh>> = BTreeSet::new();
+        let (mut dropped, mut reference_queries, mut first_queries) = (0, 0, 0);
         for _ in 0..200 {
             let substs = perm_test_disjunction(&mut rng, v1, v2);
+            let mut distinct = substs.clone();
+            distinct.sort();
+            distinct.dedup();
+            // A disjunction drawn before is a repeat for the memo.
+            let fresh_key = seen.insert(distinct.clone());
+            let before = asked();
             let want = reference_remove_permutations(&h, &substs, &v1, &v2);
+            let by_reference = asked() - before;
             for repeat in 0..2 {
-                let asked = h.provenance().total(Command::Match);
+                let before = asked();
                 let mut store = EquationStore::empty();
                 let id = store.add_disj(substs.clone());
                 let store = store
@@ -739,17 +751,28 @@ fn remove_permutations_matches_the_pairwise_reference() {
                     .expect("split survives")
                     .substs;
                 assert_eq!(got, &want, "{substs:?}");
-                if repeat == 1 {
-                    let asked_again = h.provenance().total(Command::Match);
-                    assert_eq!(asked_again, asked, "the memo answers the repeat");
+                let by_call = asked() - before;
+                if repeat == 1 || !fresh_key {
+                    assert_eq!(by_call, 0, "the memo answers the repeat");
+                } else if proved_only {
+                    assert_eq!(by_call, by_reference, "a pair settled without the matcher");
+                } else {
+                    assert!(by_call <= by_reference, "{by_call} > {by_reference}");
+                }
+                if repeat == 0 && fresh_key {
+                    reference_queries += by_reference;
+                    first_queries += by_call;
                 }
             }
-            let mut distinct = substs.clone();
-            distinct.sort();
-            distinct.dedup();
             dropped += distinct.len() - want.len();
         }
         assert!(dropped > 100, "only {dropped} substitutions dropped");
+        if !proved_only {
+            assert!(
+                first_queries < reference_queries,
+                "the shortcut settled nothing: {first_queries} of {reference_queries}"
+            );
+        }
     }
 }
 
