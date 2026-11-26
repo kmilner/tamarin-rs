@@ -325,6 +325,30 @@ fn run_model(example: &std::path::Path, backend: &str, args: &[&str]) -> (String
     (stdout, stderr)
 }
 
+/// On native, the unifications the Maude backend sends to Maude go to the
+/// port of Maude's unification algorithm under Maude's ranks, and its reply
+/// is decoded by that backend's code. On a theory whose only difference from
+/// the Maude backend came from those unifications, native prints what the
+/// Maude backend prints: one with exclusive or, one with bilinear pairing.
+#[test]
+fn native_prints_what_maude_prints_on_xor_and_bilinear_protocols() {
+    if !common::maude_available() {
+        return;
+    }
+    for (example, verdict) in [
+        ("features/xor/CRxor.spthy", "alive (all-traces): verified"),
+        (
+            "ake/bilinear/Scott.spthy",
+            "key_agreement_reachable (exists-trace): verified",
+        ),
+    ] {
+        let (reference, _) = run_corpus(example, "maude", &["--prove"]);
+        let (native, _) = run_corpus(example, "native", &["--prove"]);
+        assert!(reference.contains(verdict), "{reference}");
+        assert_parity(Parity::Output, &native, &reference, example);
+    }
+}
+
 #[test]
 fn dh_message_deduction_preserves_sources_and_the_full_proof_without_maude() {
     assert_corpus_proof(
