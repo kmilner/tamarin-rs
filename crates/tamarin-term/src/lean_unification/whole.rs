@@ -4,6 +4,8 @@
 mod checked_variants;
 pub(crate) use checked_variants::kind_level;
 pub use checked_variants::variants_for_convergent_theory;
+mod maude_unify;
+pub(crate) use maude_unify::{maude_unify, PortReply};
 mod packed;
 pub(crate) use packed::{unpack_conjunction, Conjunction};
 mod reduction;

@@ -1032,7 +1032,7 @@ pub(crate) fn unify_exists(
 }
 
 /// The rows of a reply's single arm, each behind its length.
-fn reply_words(reply: &MatchRows) -> Result<Vec<u64>, Error> {
+pub(super) fn reply_words(reply: &MatchRows) -> Result<Vec<u64>, Error> {
     if reply.count() != 1 {
         return Err(Error::InvalidStatus(255));
     }
@@ -1059,7 +1059,7 @@ fn arm_words(reply: &MatchRows, arm: usize) -> Result<Vec<u64>, Error> {
 }
 
 /// The rows of [`reply_words`], or `None` at a length that overruns them.
-fn rows_of(mut words: &[u64]) -> impl Iterator<Item = Option<&[u64]>> {
+pub(super) fn rows_of(mut words: &[u64]) -> impl Iterator<Item = Option<&[u64]>> {
     std::iter::from_fn(move || {
         let (&size, rest) = words.split_first()?;
         let Some((row, rest)) = usize::try_from(size)

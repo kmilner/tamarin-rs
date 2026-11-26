@@ -16,8 +16,8 @@ mod theory;
 pub(crate) use theory::Theory;
 mod whole;
 pub(crate) use whole::{
-    kind_level, total_unify, total_unify_exists, unpack_conjunction, Conjunction, FamilyCheck,
-    Reduced, ReductionTable, Unifiers, UnifyReplies,
+    kind_level, maude_unify, total_unify, total_unify_exists, unpack_conjunction, Conjunction,
+    FamilyCheck, PortReply, Reduced, ReductionTable, Unifiers, UnifyReplies,
 };
 pub use whole::{reduction_for_convergent_theory, variants_for_convergent_theory};
 mod constructor_variants;
