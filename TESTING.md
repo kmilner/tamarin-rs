@@ -881,11 +881,13 @@ python3 scripts/test_web_harness.py
 
 ## Algebra backends
 
-The binary has two algebra backends. `--algebra-backend=maude`, the default,
+The binary has three algebra backends. `--algebra-backend=maude`, the default,
 is the oracle-compatible one every gate above measures.
 `--algebra-backend=native-only` exists in a build with
 `--features lean-unification` and answers from the Lean library in-process;
-it starts no Maude. Build and test it with the feature on:
+it starts no Maude. `--algebra-backend=native`, in the same build, runs the Maude
+backend's code and answers each query that backend hands to Maude from the
+Lean library instead; it starts no Maude either. Build and test it with the feature on:
 
 ```bash
 cargo build --profile ci -p tamarin-prover --features lean-unification

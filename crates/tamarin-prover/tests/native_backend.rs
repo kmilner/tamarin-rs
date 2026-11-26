@@ -34,8 +34,12 @@ impl Fixture {
     }
 
     fn command(&self) -> Command {
+        self.command_on("native-only")
+    }
+
+    fn command_on(&self, backend: &str) -> Command {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
-        cmd.arg("--algebra-backend=native-only")
+        cmd.arg(format!("--algebra-backend={backend}"))
             .arg(format!("--with-maude={}", self.dir.join("maude").display()))
             .arg("--processors=2")
             .arg("--maude-processes=4")
@@ -579,4 +583,53 @@ fn a_failure_on_the_path_of_the_search_fails_every_number_of_workers() {
             assert_eq!(prove("8"), serial, "budget {budget}");
         }
     }
+}
+
+/// The native backend hands what the Maude backend sends to Maude to the
+/// proved exports. It never probes or starts Maude, and prints what
+/// native-only prints, but for the line that names the backend.
+#[cfg(feature = "lean-unification")]
+#[test]
+fn native_prints_what_native_only_prints_without_maude() {
+    for theory in [
+        include_str!("fixtures/native_dh_agreement.spthy"),
+        include_str!("fixtures/native_shared_exponent.spthy"),
+        include_str!("fixtures/native_cancellation.spthy"),
+        SIMPLE,
+    ] {
+        let fixture = Fixture::new(theory);
+        let prove = |backend: &str| {
+            let output = fixture
+                .command_on(backend)
+                .args(["--processors=1", "--prove"])
+                .arg(fixture.dir.join("input.spthy"))
+                .output()
+                .unwrap();
+            assert!(
+                !fixture.dir.join("called").exists(),
+                "{backend} invoked Maude"
+            );
+            let (code, stdout, stderr) = outcome(&output);
+            assert_eq!(code, Some(0), "{backend}: {stdout}\n{stderr}");
+            stdout
+                .lines()
+                .filter(|line| !line.contains("processing time"))
+                .map(|line| line.replace("not used (native)", "not used (native-only)"))
+                .collect::<Vec<_>>()
+        };
+        let native = prove("native");
+        assert!(native.iter().any(|line| line.contains("verified")));
+        assert_eq!(native, prove("native-only"));
+    }
+}
+
+/// Native is refused for the installation self-test, as native-only is.
+#[cfg(feature = "lean-unification")]
+#[test]
+fn native_installation_self_test_is_rejected_without_probing() {
+    let fixture = Fixture::new(SIMPLE);
+    let output = fixture.command_on("native").arg("test").output().unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("native supports batch"));
+    assert!(!fixture.dir.join("called").exists());
 }

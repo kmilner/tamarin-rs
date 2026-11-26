@@ -8,6 +8,8 @@
 //! and exposes `unify`, `match`, `variants`, and `reduce` operations.
 //! Native-only sessions create no process: they answer through the Lean
 //! library and fail explicitly when a request is outside what it supports.
+//! Native sessions create none either: they run the Maude backend's code and
+//! hand each request that backend sends to Maude to the Lean library.
 //!
 //! The protocol is line-oriented: every command ends with `.\n` and
 //! Maude's response ends with the prompt `Maude> `.
@@ -1007,7 +1009,7 @@ impl MaudeProcessInner {
     }
 
     fn require_maude(&self, operation: &'static str) -> Result<(), MaudeError> {
-        if self.backend == AlgebraBackend::NativeOnly {
+        if !self.backend.uses_maude() {
             return Err(self.unsupported_native_operation(operation));
         }
         Ok(())
@@ -1694,8 +1696,10 @@ impl MaudeHandle {
     ) -> Result<Option<Vec<ApplicationVariant>>, MaudeError> {
         self.check_backend_status()?;
         cancellation::check()?;
+        // The Maude backend lists these variants with `get variants`, which
+        // native hands to the same checked route as native-only.
         #[cfg(feature = "lean-unification")]
-        if self.backend == AlgebraBackend::NativeOnly
+        if !self.backend.uses_maude()
             && let Some(table) = self.native_rules()
         {
             let arms = table
@@ -1795,7 +1799,7 @@ impl MaudeHandle {
         let mut session = Self::start_with_backend_and_caches(maude_path, sig, backend, caches)?;
         #[cfg(feature = "lean-unification")]
         {
-            session.theory_fallback = backend == AlgebraBackend::NativeOnly;
+            session.theory_fallback = !backend.uses_maude();
         }
         Ok(session)
     }
@@ -1868,11 +1872,11 @@ impl MaudeHandle {
             // The global fresh counter starts at 0 (HS-faithful: HS's
             // `MonadFresh` global counter starts at 0).
             fresh_counter: Arc::new(AtomicU64::new(0)),
-            native_declarations: (backend == AlgebraBackend::NativeOnly)
-                .then(|| Arc::new(sig.declared_fun_syms())),
+            native_declarations: (!backend.uses_maude()).then(|| Arc::new(sig.declared_fun_syms())),
             // The two normal-form shortcuts of `reduce` save a round trip to
             // Maude. Native-only has none to save: every reduction is the
-            // proved export's, at no measurable cost.
+            // proved export's, at no measurable cost. Native keeps them, as
+            // it keeps every front end of the Maude backend.
             reduce_by_symbol: backend != AlgebraBackend::NativeOnly
                 && indexed
                 && sig.has_no_ac_operators(),
@@ -1883,7 +1887,7 @@ impl MaudeHandle {
             #[cfg(feature = "lean-unification")]
             native_rules: Default::default(),
             #[cfg(feature = "lean-unification")]
-            reference: if backend == AlgebraBackend::NativeOnly {
+            reference: if !backend.uses_maude() {
                 Reference::from_env()?
             } else {
                 Reference::default()
@@ -1946,7 +1950,7 @@ impl MaudeHandle {
     /// same assumption for every theory without a certifier to consult.
     /// Reads the session state only: it builds nothing and changes no answer.
     pub fn convergence_assumed(&self) -> bool {
-        if self.backend != AlgebraBackend::NativeOnly {
+        if self.backend.uses_maude() {
             return false;
         }
         #[cfg(feature = "lean-unification")]
@@ -2173,7 +2177,7 @@ impl MaudeHandle {
 
     /// Fail a native-only session that reaches a Maude exchange.
     fn require_maude(&self, operation: &'static str) -> Result<(), MaudeError> {
-        if self.backend == AlgebraBackend::NativeOnly {
+        if !self.backend.uses_maude() {
             return Err(self.unsupported_native_operation(operation));
         }
         Ok(())
@@ -2363,16 +2367,17 @@ impl MaudeHandle {
             self.caches.provenance.record(Asked::Reduce, origin);
             return Ok(result);
         }
-        // An identity fast path can only return a well-formed term in this module.
+        // An identity fast path can only return a well-formed term in this
+        // module. Native runs the Maude backend's front end on the term as
+        // sent, and checks it where it would go to Maude.
         let canonical;
-        let t = if self.native_declarations.is_some() {
-            match self.command_term_is_canonical(t) {
-                Some(true) => t,
-                Some(false) => {
-                    canonical = crate::term::map_lits(t, &mut |lit| *lit);
+        let t = if self.backend == AlgebraBackend::NativeOnly {
+            match self.canonical_command_term(t, "normalization")? {
+                Some(rebuilt) => {
+                    canonical = rebuilt;
                     &canonical
                 }
-                None => return Err(self.unsupported_native_operation("normalization")),
+                None => t,
             }
         } else {
             t
@@ -2453,12 +2458,28 @@ impl MaudeHandle {
                 return Ok(t.clone());
             }
             // Native-only normalizes through the proved exports alone: the two
-            // shortcuts above are off for it.
+            // shortcuts above are off for it. Native hands the term the Maude
+            // backend would send to Maude to the same export.
             #[cfg(feature = "lean-unification")]
-            if self.backend == AlgebraBackend::NativeOnly {
+            if !self.backend.uses_maude() {
+                // Maude rebuilds the term it is sent in its own canonical
+                // form; the export is sent that form.
+                let rebuilt;
+                let sent = match self.backend {
+                    AlgebraBackend::Native => {
+                        match self.canonical_command_term(t, "normalization")? {
+                            Some(canonical) => {
+                                rebuilt = canonical;
+                                &rebuilt
+                            }
+                            None => t,
+                        }
+                    }
+                    _ => t,
+                };
                 // No lock is held across the search: a failed or cancelled
                 // one returns here, before the memo.
-                let (result, origin) = self.proved_reduce(t)?;
+                let (result, origin) = self.proved_reduce(sent)?;
                 self.caches
                     .stats
                     .reduce_misses
@@ -2737,21 +2758,55 @@ impl MaudeHandle {
             trace_unifiers(eqs, &answers);
             return Ok(answers);
         }
+        // Native keeps every answer under the request as sent, as
+        // native-only does: the answer of the Maude backend's code is a
+        // function of the request alone.
+        #[cfg(feature = "lean-unification")]
+        let key = (self.backend == AlgebraBackend::Native).then(|| EqsKey::new(eqs));
+        #[cfg(feature = "lean-unification")]
+        if let Some(key) = &key {
+            cancellation::check()?;
+            let memo = self.caches.proved_unify.lock().unwrap();
+            if let Some((answers, origin)) = memo.answers.get(key).cloned() {
+                drop(memo);
+                self.caches.provenance.record_cached(Asked::Unify, origin);
+                LAST_UNIFY_ORIGIN.set(match origin {
+                    Origin::NativeRust => TRACE_NATIVE_CACHED,
+                    _ => 0,
+                });
+                trace_unifiers(eqs, &answers);
+                return Ok(answers);
+            }
+        }
         UNIFY_TRACE.set(0);
         let answers = self.unify_with_maude(eqs)?;
         trace_unifiers(eqs, &answers);
         // Maude settled the request if it was consulted, else the free
-        // unifier that precedes it.
+        // unifier that precedes it. On native the proved unifier answered
+        // the delayed equations in Maude's place, and Rust composed its
+        // answer with the free unifier's.
         let trace = UNIFY_TRACE.get();
         let provenance = &self.caches.provenance;
         if trace & TRACE_MAUDE_CACHED != 0 {
             provenance.record_cached(Asked::Unify, Origin::Maude);
         } else if trace & TRACE_MAUDE != 0 {
             provenance.record(Asked::Unify, Origin::Maude);
+        } else if trace & TRACE_NATIVE_CACHED != 0 {
+            provenance.record_cached(Asked::Unify, Origin::NativeRust);
+        } else if trace & TRACE_NATIVE != 0 {
+            provenance.record(Asked::Unify, Origin::NativeRust);
         } else {
             provenance.record(Asked::Unify, Origin::SharedRust);
         }
         LAST_UNIFY_ORIGIN.set(trace);
+        #[cfg(feature = "lean-unification")]
+        if let Some(key) = key
+            && self.intact()
+        {
+            let origin = last_unify_origin();
+            let mut memo = self.caches.proved_unify.lock().unwrap();
+            memo.insert(key, &answers, origin);
+        }
         Ok(answers)
     }
 
@@ -3023,7 +3078,9 @@ impl MaudeHandle {
     }
 
     /// The Maude backend's unifier: HS `unifyLTermFactored` solves the free
-    /// part locally and sends Maude only the delayed AC/C equations.
+    /// part locally and sends Maude only the delayed AC/C equations. Native
+    /// runs the same code and hands those equations to the proved unifier
+    /// instead ([`Self::unify_residuals_with_lean`]).
     fn unify_with_maude(
         &self,
         eqs: &[Equal<LNTerm>],
@@ -3041,7 +3098,117 @@ impl MaudeHandle {
             let composed = crate::subst_vfresh::compose_vfresh(&identity, &factored_m);
             return Ok(vec![composed.to_list()]);
         }
+        #[cfg(feature = "lean-unification")]
+        if self.backend == AlgebraBackend::Native {
+            return self.unify_residuals_with_lean(&residual_eqs, &factored_m);
+        }
         self.unify_residuals_with_maude(&residual_eqs, &factored_m)
+    }
+
+    /// Native's unifier of the delayed equations `residual`, which the Maude
+    /// backend sends to Maude: the proved unifier lists their family, the
+    /// proved naming export names its witnesses, and Rust composes each
+    /// member with the free unifier `factored` as that backend composes the
+    /// members of Maude's reply.
+    ///
+    /// The witnesses are named as the Maude reply decoder names them, `x`
+    /// numbered above the variables of `residual`, in an order of first
+    /// occurrence that is that of [`crate::unifier_presentation`] for the
+    /// same request on native-only, since the order in which Maude prints a
+    /// unifier is internal to its AC solver.
+    ///
+    /// The reply of the unifier is kept by the words of the request, as on
+    /// native-only, and the naming and the composition run on every call
+    /// that reaches here, as the decoding of a stored Maude reply does.
+    /// [`Self::unify`] keeps the composed answers.
+    #[cfg(feature = "lean-unification")]
+    fn unify_residuals_with_lean(
+        &self,
+        residual: &[Equal<LNTerm>],
+        factored: &crate::subst::Subst<crate::lterm::Name, crate::lterm::LVar>,
+    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
+        cancellation::check()?;
+        let (arms, reused) = self.proved_engine_unify(residual)?;
+        if reused {
+            trace_unify(TRACE_NATIVE_CACHED);
+        } else {
+            trace_unify(TRACE_NATIVE);
+            self.bump_stats(|stats| stats.lean_unify_count += 1);
+            self.caches.stats.lean_unify.fetch_add(1, Ordering::Relaxed);
+        }
+        Ok(compose_residual_arms(arms, factored))
+    }
+
+    /// The family of the delayed equations `residual` from the proved
+    /// unifier, named as [`Self::unify_residuals_with_lean`] describes, and
+    /// whether the unifier's reply came from the session's store of replies.
+    #[cfg(feature = "lean-unification")]
+    fn proved_engine_unify(
+        &self,
+        residual: &[Equal<LNTerm>],
+    ) -> Result<(crate::lean_unification::Substitutions, bool), MaudeError> {
+        use crate::lean_unification::{unpack_conjunction, Conjunction};
+        let unsupported = || self.unsupported_native_operation("AC/C unification");
+        let Some(theory) = self.native_theory() else {
+            return Err(unsupported());
+        };
+        let rows = match unpack_conjunction(theory, residual).map_err(|e| self.lean_error(e))? {
+            Conjunction::Clash => return Ok((Vec::new(), false)),
+            Conjunction::Unsupported => return Err(unsupported()),
+            Conjunction::Rows(rows) => rows,
+        };
+        let (family, reused) = crate::lean_unification::total_unify(
+            theory,
+            &rows,
+            self.shared_replies(),
+            self.reference.search_work,
+        )
+        .map_err(|e| self.lean_error(e))?;
+        let family = family.ok_or_else(unsupported)?;
+        let spelled = &self.caches.stats.lean_unify_spelled;
+        spelled.fetch_add(1, Ordering::Relaxed);
+        // Every variable of the request is a variable of the delayed
+        // equations, and every one of its images is read.
+        let views = family.views(|_| true).map_err(|e| self.lean_error(e))?;
+        let mut targets = Vec::with_capacity(views.len());
+        let mut expected = Vec::with_capacity(views.len());
+        for view in &views {
+            let proposed = crate::unifier_presentation::engine_part(residual, &view.images)
+                .and_then(|(names, mut arm)| {
+                    let named: Option<Vec<_>> = view
+                        .witnesses
+                        .iter()
+                        .map(|(w, _)| names.get(w).copied())
+                        .collect();
+                    arm.sort_unstable_by_key(|(v, _)| *v);
+                    Some((named?, arm))
+                });
+            let Some((named, arm)) = proposed else {
+                break;
+            };
+            targets.push(named);
+            expected.push(arm);
+        }
+        if targets.len() == views.len() {
+            let mut arms = family
+                .named(Some(&targets), self.shared_replies())
+                .map_err(|e| self.lean_error(e))?;
+            for arm in &mut arms {
+                arm.sort_unstable_by_key(|(v, _)| *v);
+            }
+            // The names are only proposed: they are kept only if the export
+            // took them, and the family read through them is the expected one.
+            if arms == expected {
+                return Ok((arms, reused));
+            }
+        }
+        self.bump_stats(|stats| stats.lean_unify_unspelled += 1);
+        let unspelled = &self.caches.stats.lean_unify_unspelled;
+        unspelled.fetch_add(1, Ordering::Relaxed);
+        let arms = family
+            .named(None, self.shared_replies())
+            .map_err(|e| self.lean_error(e))?;
+        Ok((arms, reused))
     }
 
     fn unify_residuals_with_maude(
@@ -3274,17 +3441,26 @@ impl MaudeHandle {
     /// The experimental backend exposes the lexicographic order of complete
     /// binding maps in the caller's scope. This also removes repeat answers.
     fn order_native_alternatives(&self, answers: &mut Vec<Vec<(crate::lterm::LVar, LNTerm)>>) {
-        if self.backend == AlgebraBackend::NativeOnly && answers.len() > 1 {
+        if !self.backend.uses_maude() && answers.len() > 1 {
             answers.sort_unstable();
             answers.dedup();
         }
     }
 
     /// Determine whether any match exists, independent of arm order.
+    ///
+    /// Native answers what the Maude backend's front end answers, and hands
+    /// the match that backend would send to Maude to the proved existence
+    /// export, which decides what the emptiness of Maude's reply would.
     pub fn has_match_eqs(&self, eqs: &[Equal<LNTerm>]) -> Result<bool, MaudeError> {
         #[cfg(feature = "lean-unification")]
-        if self.backend == AlgebraBackend::NativeOnly {
+        if !self.backend.uses_maude() {
             self.check_backend_status()?;
+            if self.backend == AlgebraBackend::Native
+                && let Some(answers) = self.match_front_end(eqs)?
+            {
+                return Ok(!answers.is_empty());
+            }
             let oriented: Vec<_> = eqs
                 .iter()
                 .map(|eq| Equal::new(eq.rhs.clone(), eq.lhs.clone()))
@@ -3294,14 +3470,37 @@ impl MaudeHandle {
         self.match_eqs_impl(eqs).map(|answers| !answers.is_empty())
     }
 
+    /// `t` rebuilt in canonical form when its C and AC children are out of
+    /// order, `None` when it is canonical already. A term with an operator
+    /// outside the module, or of the wrong arity, is unsupported.
+    fn canonical_command_term(
+        &self,
+        t: &LNTerm,
+        operation: &'static str,
+    ) -> Result<Option<LNTerm>, MaudeError> {
+        match self.command_term_is_canonical(t) {
+            Some(true) => Ok(None),
+            Some(false) => Ok(Some(crate::term::map_lits(t, &mut |lit| *lit))),
+            None => Err(self.unsupported_native_operation(operation)),
+        }
+    }
+
     /// Validate arity and native module membership while checking C/AC child order.
     fn command_term_is_canonical(&self, t: &LNTerm) -> Option<bool> {
+        self.term_is_canonical(t, self.native_declarations.as_deref())
+    }
+
+    /// Validate arity, and membership of `declarations` where given, while
+    /// checking C/AC child order.
+    fn term_is_canonical(
+        &self,
+        t: &LNTerm,
+        declarations: Option<&crate::function_symbols::FunSig>,
+    ) -> Option<bool> {
         use crate::function_symbols::FunSym;
         use crate::{lterm::LSort, term::Term, vterm::Lit};
         let (f, args) = match t {
-            Term::Lit(_) if self.native_declarations.is_none() || self.sig.enable_nat => {
-                return Some(true)
-            }
+            Term::Lit(_) if declarations.is_none() || self.sig.enable_nat => return Some(true),
             Term::Lit(lit) => {
                 let sort = match lit {
                     Lit::Var(v) => v.sort,
@@ -3312,12 +3511,7 @@ impl MaudeHandle {
             Term::App(f, args) => (f, args),
         };
         // Every module declares the administrative list/cons/nil operators at TOP.
-        if *f != FunSym::List
-            && self
-                .native_declarations
-                .as_ref()
-                .is_some_and(|symbols| !symbols.contains(f))
-        {
+        if *f != FunSym::List && declarations.is_some_and(|symbols| !symbols.contains(f)) {
             return None;
         }
         let mut sorted = match f {
@@ -3330,12 +3524,12 @@ impl MaudeHandle {
             _ => return None,
         };
         for arg in args.iter() {
-            sorted &= self.command_term_is_canonical(arg)?;
+            sorted &= self.term_is_canonical(arg, declarations)?;
         }
         Some(sorted)
     }
 
-    // Maude backend only. With no bindable variables, matching reduces to
+    // Maude backend and native. With no bindable variables, matching reduces to
     // equality modulo C and AC. Smart constructors already produce the canonical
     // representation. A library caller can also supply valid raw trees with
     // unsorted or nested AC children.
@@ -3346,7 +3540,8 @@ impl MaudeHandle {
     ) -> Result<Option<bool>, MaudeError> {
         let mut raw = false;
         for term in eqs.iter().flat_map(|eq| [&eq.lhs, &eq.rhs]) {
-            let Some(already_sorted) = self.command_term_is_canonical(term) else {
+            // The Maude backend's test, which knows no declarations.
+            let Some(already_sorted) = self.term_is_canonical(term, None) else {
                 // The wire encoder itself rebuilds through smart constructors.
                 // Empty or singleton AC nodes have no valid application to send.
                 self.require_maude(operation)?;
@@ -3360,32 +3555,52 @@ impl MaudeHandle {
         Ok((!raw).then(|| eqs.iter().all(|eq| eq.lhs == eq.rhs)))
     }
 
-    fn match_eqs_impl(
+    /// The answer of the Maude backend's front end for matching, which needs
+    /// no algebra engine: no equation, or subjects equal to their rigid
+    /// patterns. `None` when the request goes to the engine.
+    fn match_front_end(
         &self,
         eqs: &[Equal<LNTerm>],
-    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
-        self.check_backend_status()?;
-        // Native-only answers every match through the proved total matcher.
-        #[cfg(feature = "lean-unification")]
-        if self.backend == AlgebraBackend::NativeOnly {
-            let oriented: Vec<_> = eqs
-                .iter()
-                .map(|eq| Equal::new(eq.rhs.clone(), eq.lhs.clone()))
-                .collect();
-            return self.proved_match(&oriented, Bindable::All, "matching");
-        }
+    ) -> Result<Option<Vec<Vec<(crate::lterm::LVar, LNTerm)>>>, MaudeError> {
         if eqs.is_empty() {
             self.caches
                 .provenance
                 .record(Asked::Match, Origin::SharedRust);
-            return Ok(vec![Vec::new()]);
+            return Ok(Some(vec![Vec::new()]));
         }
         let rigid = eqs.iter().all(|eq| crate::vterm::is_ground_vterm(&eq.rhs));
         if rigid && let Some(matched) = self.rigid_match_equal(eqs, "matching")? {
             self.caches
                 .provenance
                 .record(Asked::Match, Origin::SharedRust);
-            return Ok(if matched { vec![Vec::new()] } else { vec![] });
+            return Ok(Some(if matched { vec![Vec::new()] } else { vec![] }));
+        }
+        Ok(None)
+    }
+
+    fn match_eqs_impl(
+        &self,
+        eqs: &[Equal<LNTerm>],
+    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
+        self.check_backend_status()?;
+        // Native-only answers every match through the proved total matcher.
+        // Native runs the Maude backend's front end first, and hands the
+        // match that backend would send to Maude to the same matcher.
+        #[cfg(feature = "lean-unification")]
+        if !self.backend.uses_maude() {
+            if self.backend == AlgebraBackend::Native
+                && let Some(answers) = self.match_front_end(eqs)?
+            {
+                return Ok(answers);
+            }
+            let oriented: Vec<_> = eqs
+                .iter()
+                .map(|eq| Equal::new(eq.rhs.clone(), eq.lhs.clone()))
+                .collect();
+            return self.proved_match(&oriented, Bindable::All, "matching");
+        }
+        if let Some(answers) = self.match_front_end(eqs)? {
+            return Ok(answers);
         }
         let mut ctx = ConvCtx::new();
         // `subjs` ← each `eq.lhs` (HS `t1s = a = subject`);
@@ -3483,6 +3698,20 @@ impl MaudeHandle {
                 .provenance
                 .record(Asked::Match, Origin::SharedRust);
             return Ok(if matched { vec![Vec::new()] } else { vec![] });
+        }
+        // Native hands the match the Maude backend would send to Maude to
+        // the proved total matcher. The Maude backend skolemizes the
+        // variables that may not be bound, so that Maude leaves them alone;
+        // the matcher is told which variables it may bind instead.
+        #[cfg(feature = "lean-unification")]
+        if self.backend == AlgebraBackend::Native {
+            let mut answers = self.proved_match(
+                eqs,
+                Bindable::Pattern(pattern_vars),
+                "rigid-context matching",
+            )?;
+            self.order_native_alternatives(&mut answers);
+            return Ok(answers);
         }
         // Step 1: collect ALL non-pattern free vars from BOTH sides.
         // The same LVar appearing on both sides must skolemize to the
@@ -3618,8 +3847,10 @@ impl MaudeHandle {
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
         self.check_backend_status()?;
         cancellation::check()?;
+        // Native hands every request to the same route: the Maude backend
+        // sends each one to Maude.
         #[cfg(feature = "lean-unification")]
-        if self.backend == AlgebraBackend::NativeOnly {
+        if !self.backend.uses_maude() {
             use crate::lean_unification::Outcome;
             // Folding lists a family for any table. It is a proposal that
             // the checker has yet to accept.
@@ -4045,6 +4276,10 @@ thread_local! {
 }
 const TRACE_MAUDE: u8 = 1;
 const TRACE_MAUDE_CACHED: u8 = 2;
+/// On native, the proved unifier answered the delayed equations afresh or
+/// from a memo.
+const TRACE_NATIVE: u8 = 4;
+const TRACE_NATIVE_CACHED: u8 = 8;
 
 fn trace_unify(engine: u8) {
     UNIFY_TRACE.set(UNIFY_TRACE.get() | engine);
@@ -4052,8 +4287,11 @@ fn trace_unify(engine: u8) {
 
 /// The origin recorded for the unification that just finished on this thread.
 fn last_unify_origin() -> Origin {
-    if LAST_UNIFY_ORIGIN.get() & (TRACE_MAUDE | TRACE_MAUDE_CACHED) != 0 {
+    let trace = LAST_UNIFY_ORIGIN.get();
+    if trace & (TRACE_MAUDE | TRACE_MAUDE_CACHED) != 0 {
         Origin::Maude
+    } else if trace & (TRACE_NATIVE | TRACE_NATIVE_CACHED) != 0 {
+        Origin::NativeRust
     } else {
         Origin::SharedRust
     }

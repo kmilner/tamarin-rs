@@ -7844,3 +7844,162 @@ fn reference_unifiability_validates_even_reflexive_roots() {
         assert_eq!(handle.stats().unify_count, 0);
     }
 }
+
+fn dh_pair_sig() -> MaudeSig {
+    crate::maude_sig::dh_maude_sig().merge(crate::maude_sig::pair_maude_sig())
+}
+
+/// A native session and a native-only one, on one signature.
+fn native_pair(sig: MaudeSig) -> (MaudeHandle, MaudeHandle) {
+    let native =
+        MaudeHandle::start_with_backend("/nonexistent", sig.clone(), AlgebraBackend::Native)
+            .unwrap();
+    (native, native_session(sig))
+}
+
+fn unify_tally(handle: &MaudeHandle, origin: Origin) -> (u64, u64) {
+    let seen = handle.provenance();
+    (
+        seen.fresh(Command::Unify, origin),
+        seen.cached(Command::Unify, origin),
+    )
+}
+
+/// A request that the free unifier solves alone is answered by the Rust of
+/// the Maude backend, and the proved unifier is not asked.
+#[test]
+fn native_answers_a_free_request_without_handing_it_off() {
+    use crate::builtin::pair;
+    let (native, only) = native_pair(dh_pair_sig());
+    let var = |name, idx| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, idx)));
+    let mult = |l, r| f_app_ac(AcSym::Mult, vec![l, r]);
+    let eqs = [
+        Equal::new(var("k", 1), pair(var("n", 2), var("m", 3))),
+        Equal::new(var("z", 4), mult(var("n", 2), pub_term("a"))),
+    ];
+    let answers = native.unify(&eqs).unwrap();
+    assert_eq!(answers, only.unify(&eqs).unwrap());
+    assert_eq!(answers.len(), 1);
+    // A repeat reads the answer from the memo.
+    assert_eq!(native.unify(&eqs).unwrap(), answers);
+    assert_eq!(unify_tally(&native, Origin::SharedRust), (1, 1));
+    assert_eq!(native.provenance().total(Command::Unify), 2);
+    assert_eq!(native.stats().lean_unify_count, 0);
+    assert_eq!(native.stats().unify_count, 0);
+}
+
+/// A request with delayed AC equations hands them to the proved unifier,
+/// and Rust composes its answer with the free unifier's. The answer is
+/// native-only's, witness names included, and a repeat reads the memo.
+#[test]
+fn native_hands_the_delayed_equations_to_the_proved_unifier() {
+    use crate::builtin::pair;
+    let (native, only) = native_pair(dh_pair_sig());
+    let var = |name, idx| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, idx)));
+    let mult = |l, r| f_app_ac(AcSym::Mult, vec![l, r]);
+    let requests = [
+        vec![Equal::new(
+            mult(var("x", 1), var("y", 1)),
+            mult(pub_term("a"), pub_term("b")),
+        )],
+        vec![
+            Equal::new(var("k", 1), pair(var("n", 2), var("x", 1))),
+            Equal::new(
+                mult(var("x", 1), var("y", 1)),
+                mult(var("c", 5), var("d", 6)),
+            ),
+        ],
+    ];
+    for eqs in &requests {
+        let answers = native.unify(eqs).unwrap();
+        assert!(answers.len() > 1, "{answers:?}");
+        assert_eq!(answers, only.unify(eqs).unwrap());
+        assert_eq!(native.unify(eqs).unwrap(), answers);
+    }
+    assert_eq!(unify_tally(&native, Origin::NativeRust), (2, 2));
+    assert_eq!(unify_tally(&native, Origin::Proved), (0, 0));
+    assert_eq!(unify_tally(&native, Origin::SharedRust), (0, 0));
+    assert_eq!(native.stats().lean_unify_count, 2);
+    assert_eq!(native.stats().unify_count, 0);
+    // The existence question takes the Maude backend's path, through the
+    // same hand-off.
+    assert!(native.unifiable(&requests[0]).unwrap());
+}
+
+/// A request whose free part clashes has no unifier, which Rust answers as
+/// on the Maude backend, whatever its delayed equations.
+#[test]
+fn native_answers_a_free_clash_without_handing_it_off() {
+    use crate::builtin::{exp, pair};
+    let (native, only) = native_pair(dh_pair_sig());
+    let var = |name, idx| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, idx)));
+    let mult = |l, r| f_app_ac(AcSym::Mult, vec![l, r]);
+    let eqs = [
+        Equal::new(
+            pair(var("x", 1), var("y", 1)),
+            exp(pub_term("g"), var("z", 1)),
+        ),
+        Equal::new(
+            mult(var("x", 1), var("y", 1)),
+            mult(pub_term("a"), pub_term("b")),
+        ),
+    ];
+    assert_eq!(native.unify(&eqs).unwrap(), Vec::<Vec<_>>::new());
+    assert_eq!(only.unify(&eqs).unwrap(), Vec::<Vec<_>>::new());
+    assert!(!native.unifiable(&eqs).unwrap());
+    assert_eq!(unify_tally(&native, Origin::SharedRust), (1, 1));
+    assert_eq!(native.stats().lean_unify_count, 0);
+}
+
+/// Matching, normalization and variants: the Maude backend's front ends
+/// answer what they answer, and what it sends to Maude goes to the proved
+/// exports. The answers are native-only's.
+#[test]
+fn native_hands_off_matching_normalization_and_variants() {
+    use crate::builtin::{exp, pair};
+    let (native, only) = native_pair(dh_pair_sig());
+    let var = |name, idx| Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, idx)));
+    let mult = |l, r| f_app_ac(AcSym::Mult, vec![l, r]);
+    let tally = |handle: &MaudeHandle, command, origin| {
+        let seen = handle.provenance();
+        seen.fresh(command, origin) + seen.cached(command, origin)
+    };
+    // A match of a rigid subject with no pattern variable is an equality
+    // test, which the front end answers.
+    let rigid = [Equal::new(pub_term("a"), pub_term("a"))];
+    assert_eq!(native.match_eqs(&rigid).unwrap(), vec![Vec::new()]);
+    assert_eq!(tally(&native, Command::Match, Origin::SharedRust), 1);
+    // A pattern with an AC operator goes to the proved matcher.
+    let open = [Equal::new(
+        mult(pub_term("a"), pub_term("b")),
+        mult(var("x", 1), var("y", 1)),
+    )];
+    assert_eq!(
+        native.match_eqs(&open).unwrap(),
+        only.match_eqs(&open).unwrap()
+    );
+    assert!(native.has_match_eqs(&open).unwrap());
+    assert_eq!(tally(&native, Command::Match, Origin::Proved), 2);
+    // A term without a reducible operator is its own normal form, which the
+    // front end knows; a reducible one goes to the proved normalizer.
+    let plain = pair(pub_term("a"), var("x", 1));
+    assert_eq!(native.reduce(&plain).unwrap(), plain);
+    assert_eq!(tally(&native, Command::Reduce, Origin::SharedRust), 1);
+    let reducible = exp(exp(pub_term("g"), var("x", 1)), var("y", 1));
+    assert_eq!(
+        native.reduce(&reducible).unwrap(),
+        only.reduce(&reducible).unwrap()
+    );
+    assert_eq!(tally(&native, Command::Reduce, Origin::Proved), 1);
+    // Every request for variants goes to the checked route.
+    let query = exp(var("b", 1), var("e", 2));
+    assert_eq!(
+        native.variants(&query).unwrap(),
+        only.variants(&query).unwrap()
+    );
+    assert_eq!(native.provenance().total(Command::Variants), 1);
+    assert_eq!(tally(&native, Command::Variants, Origin::Proved), 1);
+    assert_eq!(native.stats().match_count, 0);
+    assert_eq!(native.stats().norm_count, 0);
+    assert_eq!(native.stats().var_count, 0);
+}

@@ -1019,6 +1019,7 @@ fn algebra_backend_selection_is_explicit_and_global() {
     for (name, expected) in [
         ("maude", AlgebraBackend::Maude),
         ("native-only", AlgebraBackend::NativeOnly),
+        ("native", AlgebraBackend::Native),
     ] {
         assert_eq!(
             parse(&["--algebra-backend", name, "x.spthy"]).algebra_backend,

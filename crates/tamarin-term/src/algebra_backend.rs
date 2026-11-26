@@ -5,11 +5,19 @@
 //! of variants only after the Lean certificate checker accepted it. The Rust
 //! encoding of requests and replies and the C/Lean runtime boundary remain
 //! trusted code.
+//!
+//! Native starts no Maude process either. It runs the code of the Maude
+//! backend, whose Rust front ends answer most requests, and hands each
+//! request that backend would send to Maude to the Lean library instead:
+//! the unifier, matcher, normalizer and variant checker native-only uses.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AlgebraBackend {
     Maude,
     NativeOnly,
+    /// The Maude backend's code with every Maude request handed to the
+    /// proved Lean exports.
+    Native,
 }
 
 /// Maude is the default in every build. Native-only does not yet finish every
@@ -22,18 +30,31 @@ impl Default for AlgebraBackend {
 
 impl AlgebraBackend {
     pub fn uses_maude(self) -> bool {
-        self != Self::NativeOnly
+        self == Self::Maude
+    }
+
+    /// The value of `--algebra-backend` that selects this backend.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Maude => "maude",
+            Self::NativeOnly => "native-only",
+            Self::Native => "native",
+        }
     }
 
     pub fn validate(self) -> Result<(), String> {
-        if self == Self::NativeOnly {
+        if !self.uses_maude() {
             if !cfg!(feature = "lean-unification") {
-                return Err("native-only requires a build with --features lean-unification".into());
+                let name = self.name();
+                return Err(format!(
+                    "{name} requires a build with --features lean-unification"
+                ));
             }
             // The oracle compares a normal-form shortcut with Maude's reply.
             let name = "TAM_RS_VERIFY_REDUCE_NF";
             if std::env::var_os(name).is_some() {
-                return Err(format!("native-only is incompatible with {name}; unset it"));
+                let backend = self.name();
+                return Err(format!("{backend} is incompatible with {name}; unset it"));
             }
         }
         Ok(())
@@ -47,12 +68,13 @@ impl std::str::FromStr for AlgebraBackend {
         match value {
             "maude" => Ok(Self::Maude),
             "native-only" => Ok(Self::NativeOnly),
+            "native" => Ok(Self::Native),
             _ => Err(format!("unknown algebra backend: {value}")),
         }
     }
 }
 
-/// What a native-only run tells the user, once per theory, when its results
+/// What a run on a native backend tells the user, once per theory, when its results
 /// rest on a rewrite table the Lean certifier did not accept. The wording is
 /// stable: tests and scripts match on it. See
 /// [`crate::maude_proc::MaudeHandle::convergence_assumed`].

@@ -34,7 +34,6 @@ use std::fs;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use tamarin_term::algebra_backend::AlgebraBackend;
 use tamarin_term::maude_proc::{MaudeHandle, MaudePool, SharedMaudeCaches};
 use tamarin_theory::constraint::solver::search::ProofNode;
 use tamarin_theory::constraint::system::System;
@@ -228,12 +227,11 @@ pub(crate) struct FileResult {
 /// inside `parse_args`' error path.
 pub fn run(args: &Args) -> Result<i32, RunError> {
     args.algebra_backend.validate().map_err(RunError::Regular)?;
-    if args.algebra_backend == AlgebraBackend::NativeOnly
-        && matches!(args.subcommand, Subcommand::Test)
-    {
-        return Err(RunError::Regular(
-            "native-only supports batch, interactive and variants modes; the installation self-test is not yet supported".into(),
-        ));
+    if !args.algebra_backend.uses_maude() && matches!(args.subcommand, Subcommand::Test) {
+        return Err(RunError::Regular(format!(
+            "{} supports batch, interactive and variants modes; the installation self-test is not yet supported",
+            args.algebra_backend.name()
+        )));
     }
 
     match args.subcommand {
@@ -842,7 +840,7 @@ fn cli_cut(args: &Args) -> Option<tamarin_theory::constraint::solver::context::C
 /// filesystem) does not pay for it twice.
 fn ensure_maude(args: &Args, maude_path: &str) -> (bool, String) {
     if !args.algebra_backend.uses_maude() {
-        return (true, "not used (native-only)".to_string());
+        return (true, format!("not used ({})", args.algebra_backend.name()));
     }
     let reported: &str = if args.maude_path.is_some() {
         maude_path
@@ -1660,7 +1658,7 @@ impl TheoryPipeline<'_> {
             self.args.algebra_backend,
             std::sync::Arc::clone(&session_maude_caches),
         );
-        self.file_maude = if self.args.algebra_backend == AlgebraBackend::NativeOnly {
+        self.file_maude = if !self.args.algebra_backend.uses_maude() {
             Some(started.map_err(|e| RunError::Regular(e.to_string()))?)
         } else {
             started.ok()
