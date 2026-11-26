@@ -57,6 +57,7 @@ pub mod macro_expand;
 pub mod maude_parse;
 pub mod maude_print;
 pub mod maude_proc;
+pub(crate) mod maude_ranks;
 pub mod maude_sig;
 pub mod maude_types;
 pub mod norm;
