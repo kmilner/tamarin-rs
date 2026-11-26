@@ -76,10 +76,42 @@ fn sort(word: u64) -> Result<LSort, Error> {
     }
 }
 
-/// The term of a binding row's postfix tokens `[kind, id, aux]`: a variable
-/// at or above `fresh` is the unifier's variable `#(id - fresh + 1)`, any
-/// other the request's `x{id}`.
-fn read_image(theory: &Theory, tokens: &[u64], fresh: u64) -> Result<MTerm, Error> {
+/// The variables of a request, by identifier and sort word, and the least
+/// identifier above them.
+struct Scope {
+    query: rustc_hash::FxHashSet<(u64, u64)>,
+    fresh: u64,
+}
+
+impl Scope {
+    fn of(rows: &Rows) -> Self {
+        let query: rustc_hash::FxHashSet<_> = rows
+            .nodes
+            .iter()
+            .filter(|row| row[0] == 0)
+            .map(|row| (row[1], row[2]))
+            .collect();
+        let fresh = query.iter().map(|(id, _)| id + 1).max().unwrap_or(0);
+        Self { query, fresh }
+    }
+
+    /// The variable of a reply with identifier `id` and sort word `s`: the
+    /// unifier's variable `#(id - fresh + 1)` from `fresh` on, below it a
+    /// variable of the request, which it must be. So the reading renames the
+    /// variables that are not the request's injectively and keeps the others.
+    fn variable(&self, id: u64, s: u64) -> Result<MTerm, Error> {
+        if id >= self.fresh {
+            Ok(Term::Lit(MaudeLit::FreshVar(id - self.fresh + 1, sort(s)?)))
+        } else if self.query.contains(&(id, s)) {
+            Ok(Term::Lit(MaudeLit::MaudeVar(id, sort(s)?)))
+        } else {
+            Err(Error::InvalidVariable(id))
+        }
+    }
+}
+
+/// The term of a binding row's postfix tokens `[kind, id, aux]`.
+fn read_image(theory: &Theory, tokens: &[u64], scope: &Scope) -> Result<MTerm, Error> {
     let (tokens, rest) = tokens.as_chunks::<3>();
     if !rest.is_empty() {
         return Err(Error::InvalidStatus(255));
@@ -87,8 +119,7 @@ fn read_image(theory: &Theory, tokens: &[u64], fresh: u64) -> Result<MTerm, Erro
     let mut stack: Vec<MTerm> = Vec::new();
     for &[kind, id, aux] in tokens {
         let term = match kind {
-            0 if id >= fresh => Term::Lit(MaudeLit::FreshVar(id - fresh + 1, sort(aux)?)),
-            0 => Term::Lit(MaudeLit::MaudeVar(id, sort(aux)?)),
+            0 => scope.variable(id, aux)?,
             1 => Term::Lit(MaudeLit::MaudeConst(id, sort(aux)?)),
             _ => {
                 let (f, arity, _) = theory.decode(kind, id).ok_or(Error::InvalidStatus(255))?;
@@ -118,7 +149,7 @@ fn read_image(theory: &Theory, tokens: &[u64], fresh: u64) -> Result<MTerm, Erro
 /// The unifiers of the reply words: after the status row, for each unifier
 /// an empty row and then a row `[N, sort, tokens…]` for each variable `xN` of
 /// the request.
-fn read_unifiers(theory: &Theory, words: &[u64], fresh: u64) -> Result<Vec<MSubst>, Error> {
+fn read_unifiers(theory: &Theory, words: &[u64], scope: &Scope) -> Result<Vec<MSubst>, Error> {
     let mut rows = rows_of(words);
     rows.next(); // the status row
     let mut unifiers: Vec<MSubst> = Vec::new();
@@ -128,7 +159,10 @@ fn read_unifiers(theory: &Theory, words: &[u64], fresh: u64) -> Result<Vec<MSubs
         match row {
             [] => unifiers.push(Vec::new()),
             [id, s, tokens @ ..] => {
-                let binding = ((sort(*s)?, *id), read_image(theory, tokens, fresh)?);
+                if !scope.query.contains(&(*id, *s)) {
+                    return Err(Error::InvalidVariable(*id));
+                }
+                let binding = ((sort(*s)?, *id), read_image(theory, tokens, scope)?);
                 unifiers
                     .last_mut()
                     .ok_or(Error::InvalidStatus(255))?
@@ -161,15 +195,7 @@ pub(crate) fn maude_unify(
             equations.push(root);
         }
     }
-    // The unifier's own variables are numbered from the least identifier
-    // above the request's variables.
-    let fresh = rows
-        .nodes
-        .iter()
-        .filter(|row| row[0] == 0)
-        .map(|row| row[1] + 1)
-        .max()
-        .unwrap_or(0);
+    let scope = Scope::of(&rows);
     let rank_rows = ranks.rows(theory);
     let rank_slices: Vec<_> = rank_rows.iter().map(|r| WordSlice::new(r)).collect();
     let node_slices: Vec<_> = rows.nodes.iter().map(|r| WordSlice::new(r)).collect();
@@ -198,7 +224,7 @@ pub(crate) fn maude_unify(
         reply_words(&MatchRows::new(raw)?)
     })?;
     match rows_of(&words).next() {
-        Some(Some([1])) => Ok(PortReply::Unifiers(read_unifiers(theory, &words, fresh)?)),
+        Some(Some([1])) => Ok(PortReply::Unifiers(read_unifiers(theory, &words, &scope)?)),
         Some(Some([3])) => Ok(PortReply::GaveUp),
         // 0 is a malformed packet, which the rows above never are.
         Some(Some([status])) => Err(Error::InvalidStatus(*status as u8)),
@@ -296,10 +322,39 @@ mod tests {
             pair_kind, pair_id, 2, xor_kind, xor_id, 2, 0, 7, 2, // #1
             xor_kind, xor_id, 2,
         ];
-        let read = read_image(&theory, &tokens, 7).unwrap();
+        let scope = Scope {
+            query: [(0, 2)].into_iter().collect(),
+            fresh: 7,
+        };
+        let read = read_image(&theory, &tokens, &scope).unwrap();
         let printed = b"Unifier 1\nx0:Msg --> tamxor(#2:Msg, tamXCFUpair(#1:Msg, f(5)), #1:Msg)\n";
         let parsed = crate::maude_parse::parse_unify_reply_with_sig(printed, &sig).unwrap();
         assert_eq!(parsed, vec![vec![((LSort::Msg, 0), read)]]);
+    }
+
+    /// A variable below the unifier's own must be one of the request, with
+    /// its sort: no other reading keeps the variables apart.
+    #[test]
+    fn a_variable_below_the_witnesses_is_one_of_the_request() {
+        let sig = minimal_maude_sig(false).merge(xor_maude_sig()).refresh();
+        let theory = Arc::new(Theory::new(&sig).unwrap());
+        let scope = Scope {
+            query: [(0, 2)].into_iter().collect(),
+            fresh: 7,
+        };
+        assert_eq!(
+            read_image(&theory, &[0, 0, 2], &scope),
+            Ok(var(0, LSort::Msg))
+        );
+        assert_eq!(read_image(&theory, &[0, 7, 1], &scope), Ok(fresh(1)));
+        assert_eq!(
+            read_image(&theory, &[0, 3, 2], &scope),
+            Err(Error::InvalidVariable(3))
+        );
+        assert_eq!(
+            read_image(&theory, &[0, 0, 1], &scope),
+            Err(Error::InvalidVariable(0))
+        );
     }
 
     /// A term with a wrapper outside the theory is not sent.
