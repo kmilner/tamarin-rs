@@ -2346,11 +2346,104 @@ fn is_perm_subst(
             }
         }
     }
+    // A joint problem that `may_match` shows to have no matcher is settled
+    // without the matcher. Renaming the patterns maps variables to
+    // variables, and `may_match` never reads which variable a pattern holds,
+    // so the unrenamed images give its answer for the renamed ones.
+    let permuted_possible = may_match_all(&lhs.subst1_permuted, &candidate.fixed);
+    let fixed_possible = may_match_all(&lhs.subst1_fixed, &candidate.fixed);
+    if !permuted_possible && !fixed_possible {
+        return Ok(false);
+    }
     let renamed2 = lhs.rename_images(candidate);
     Ok(
-        equal_subst_up_to_renaming(maude, &lhs.subst1_permuted, &renamed2)?
-            || equal_subst_up_to_renaming(maude, &lhs.subst1_fixed, &renamed2)?,
+        (permuted_possible && equal_subst_up_to_renaming(maude, &lhs.subst1_permuted, &renamed2)?)
+            || (fixed_possible && equal_subst_up_to_renaming(maude, &lhs.subst1_fixed, &renamed2)?),
     )
+}
+
+/// Whether `patterns` could match the images of `subjects` position by
+/// position, by [`may_match`].
+fn may_match_all(subjects: &[(LVar, LNTerm)], patterns: &[LNTerm]) -> bool {
+    subjects
+        .iter()
+        .zip(patterns)
+        .all(|((_, subject), pattern)| may_match(pattern, subject))
+}
+
+/// A necessary condition for a substitution `σ` of the pattern's variables
+/// with `σ(pattern) = subject` modulo the module's axioms, which are
+/// associativity with commutativity and commutativity alone (`[comm assoc]`
+/// and `[comm]`, no identity): `false` means no such matcher exists. It
+/// never reads which variable a pattern holds.
+///
+/// Exactness: the axioms keep the head symbol of an application, the arity
+/// of a free one and every constant, so a constant matches only itself and
+/// a free application only one with the same head whose arguments match
+/// (either way round for a commutative one). Two applications of an AC
+/// symbol `f` are equal exactly when their flattened argument multisets
+/// are, element by element; `σ` keeps the non-`f` head of each argument of
+/// the pattern that is not a variable, so that argument equals one argument
+/// of the subject, and each variable covers at least one.
+fn may_match(pattern: &LNTerm, subject: &LNTerm) -> bool {
+    use tamarin_term::function_symbols::FunSym;
+    use tamarin_term::term::Term;
+    use tamarin_term::vterm::Lit;
+    let is_var = |t: &LNTerm| matches!(t, Term::Lit(Lit::Var(_)));
+    match pattern {
+        Term::Lit(Lit::Var(_)) => true,
+        Term::Lit(Lit::Con(_)) => pattern == subject,
+        Term::App(f, ps) => {
+            let Term::App(g, ts) = subject else {
+                return false;
+            };
+            if f != g {
+                return false;
+            }
+            match f {
+                FunSym::Ac(_) => {
+                    let mut flat_ps = Vec::new();
+                    let mut flat_ts = Vec::new();
+                    flatten_ac(f, ps, &mut flat_ps);
+                    flatten_ac(f, ts, &mut flat_ts);
+                    let enough = if flat_ps.iter().any(|p| is_var(p)) {
+                        flat_ts.len() >= flat_ps.len()
+                    } else {
+                        flat_ts.len() == flat_ps.len()
+                    };
+                    enough
+                        && flat_ps
+                            .iter()
+                            .all(|p| is_var(p) || flat_ts.iter().any(|t| may_match(p, t)))
+                }
+                FunSym::C(_) => match (&ps[..], &ts[..]) {
+                    ([p0, p1], [t0, t1]) => {
+                        (may_match(p0, t0) && may_match(p1, t1))
+                            || (may_match(p0, t1) && may_match(p1, t0))
+                    }
+                    // Not a binary application: no verdict.
+                    _ => true,
+                },
+                _ => ps.len() == ts.len() && ps.iter().zip(ts.iter()).all(|(p, t)| may_match(p, t)),
+            }
+        }
+    }
+}
+
+/// The arguments of the AC symbol `f` in `args`, with nested applications
+/// of `f` spliced in.
+fn flatten_ac<'a>(
+    f: &tamarin_term::function_symbols::FunSym,
+    args: &'a [LNTerm],
+    out: &mut Vec<&'a LNTerm>,
+) {
+    use tamarin_term::term::Term;
+    for arg in args {
+        match arg {
+            Term::App(g, inner) if g == f => flatten_ac(f, inner, out),
+            _ => out.push(arg),
+        }
+    }
 }
 
 /// The `s1`-only half of `equalUpToRenaming` (inside `removePermutations`,

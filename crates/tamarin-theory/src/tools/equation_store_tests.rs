@@ -475,6 +475,74 @@ fn perm_test_term(rng: &mut PermRng, vars: &[LVar], depth: usize) -> LNTerm {
     }
 }
 
+/// `t` with some of its subterms replaced by pattern variables, so that the
+/// result matches `t`, and the same variable sometimes used twice, so that
+/// it may not.
+fn perm_test_generalise(rng: &mut PermRng, t: &LNTerm, next: &mut u64) -> LNTerm {
+    use tamarin_term::term::{f_app, Term};
+    use tamarin_term::vterm::var_term;
+    if rng.below(4) == 0 {
+        let idx = if rng.below(5) == 0 && *next > 100 {
+            *next - 1
+        } else {
+            *next += 1;
+            *next
+        };
+        return var_term(LVar::new("p", LSort::Msg, idx));
+    }
+    match t {
+        Term::Lit(_) => t.clone(),
+        Term::App(f, args) => f_app(
+            *f,
+            args.iter()
+                .map(|a| perm_test_generalise(rng, a, next))
+                .collect(),
+        ),
+    }
+}
+
+/// The verdict of `may_match` never contradicts the matcher: when it says
+/// no matcher exists, the backend finds none. Patterns come both from
+/// generalising the subject (mostly matching) and from fresh draws (mostly
+/// not), and the test counts that both verdicts occur.
+#[test]
+fn may_match_rejects_only_pairs_the_matcher_rejects() {
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    use tamarin_term::rewriting::Equal;
+    let subject_vars: Vec<LVar> = (0..3).map(|i| LVar::new("s", LSort::Msg, i)).collect();
+    let pattern_vars: Vec<LVar> = (100..104).map(|i| LVar::new("p", LSort::Msg, i)).collect();
+    for h in perm_test_handles(&path) {
+        let mut rng = PermRng(0x9e37_79b9_7f4a_7c15);
+        let (mut rejected, mut matched) = (0, 0);
+        for round in 0..2000 {
+            let subject = perm_test_term(&mut rng, &subject_vars, 3);
+            let pattern = if round % 2 == 0 {
+                let mut next = 100;
+                perm_test_generalise(&mut rng, &subject, &mut next)
+            } else {
+                perm_test_term(&mut rng, &pattern_vars, 3)
+            };
+            let exists = h
+                .has_match_eqs(&[Equal {
+                    lhs: subject.clone(),
+                    rhs: pattern.clone(),
+                }])
+                .expect("match");
+            if !may_match(&pattern, &subject) {
+                rejected += 1;
+                assert!(
+                    !exists,
+                    "may_match rejected a pattern that matches: {pattern:?} <=? {subject:?}"
+                );
+            }
+            matched += usize::from(exists);
+        }
+        assert!(rejected > 250 && matched > 250, "{rejected} {matched}");
+    }
+}
+
 /// `removePermutations` as it was before the per-substitution precomputing
 /// and the `may_match` filter: every pair goes through both
 /// `equalUpToRenaming` calls.
