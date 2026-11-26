@@ -68,12 +68,12 @@ impl std::error::Error for ExpandError {}
 
 impl Predicate {
     /// `mk_predicate name formula` — capitalise the leading character of
-    /// `name`, then build a linear protocol fact carrying the formula's
-    /// free variables.
+    /// `name` with `toUpper`, then build a linear protocol fact
+    /// carrying the formula's free variables.
     pub fn new(name: &str, formula: LNFormula, free_vars: Vec<LVar>) -> Self {
         let mut chars = name.chars();
         let cap = match chars.next() {
-            Some(c) => c.to_ascii_uppercase().to_string() + chars.as_str(),
+            Some(c) => c.to_uppercase().chain(chars).collect(),
             None => String::new(),
         };
         let arity = free_vars.len();

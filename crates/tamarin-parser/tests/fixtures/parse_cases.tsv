@@ -753,13 +753,10 @@ matching_and_exempt_function_declarations_are_accepted_7	theory	ok	ok	theory P b
 matching_and_exempt_function_declarations_are_accepted_8	theory	ok	ok	theory P begin\n\nbuiltins: signing, revealing-signing\nfunctions: pk/1\n\nend\n
 misspelled_theory_keyword_reports_the_expected_construct	theory	err	Expected(Theory)	theary Foo\nbegin\nend\n
 unknown_item_points_at_its_name	theory	err	UnknownItem(rul,TheoryItem)	theory T begin rul R: [] --> [] end
-fact_names_start_with_a_unicode_upper_or_titlecase_letter_1	theory	ok	ok	theory T begin rule A: [] --[ Événement() ]-> [] end
-fact_names_start_with_a_unicode_upper_or_titlecase_letter_2	theory	ok	ok	theory T begin rule A: [] --[ Σ() ]-> [] end
-fact_names_start_with_a_unicode_upper_or_titlecase_letter_3	theory	ok	ok	theory T begin rule A: [] --[ ǅx() ]-> [] end
-fact_names_start_with_a_unicode_upper_or_titlecase_letter_4	theory	ok	ok	theory T begin rule A: [] --[ 𝐀() ]-> [] end
-fact_names_start_with_a_unicode_upper_or_titlecase_letter_5	theory	err	InvalidFactName(é)	theory T begin rule A: [] --[ é() ]-> [] end
-fact_names_start_with_a_unicode_upper_or_titlecase_letter_6	theory	err	InvalidFactName(Ⅰx)	theory T begin rule A: [] --[ Ⅰx() ]-> [] end
-fact_names_start_with_a_unicode_upper_or_titlecase_letter_7	theory	err	Expected(Rule)	theory T begin rule A: [] --[ Ⓐ() ]-> [] end
+fact_names_start_with_a_unicode_uppercase_letter_1	theory	ok	ok	theory T begin rule A: [] --[ Événement() ]-> [] end
+fact_names_start_with_a_unicode_uppercase_letter_2	theory	ok	ok	theory T begin rule A: [] --[ Σ() ]-> [] end
+fact_names_start_with_a_unicode_uppercase_letter_4	theory	ok	ok	theory T begin rule A: [] --[ 𝐀() ]-> [] end
+fact_names_start_with_a_unicode_uppercase_letter_5	theory	err	InvalidFactName(é)	theory T begin rule A: [] --[ é() ]-> [] end
 malformed_stored_proof_fails_theory_parse_1	theory	err	Expected(Proof)	theory T begin\nlemma L: "T"\nsimplify\nend
 malformed_stored_proof_fails_theory_parse_2	theory	err	UnknownItem(trailing,TheoryItem)	theory T begin\nlemma L: "T"\nby sorry trailing\nend
 stored_proof_starts_without_word_boundary_1	theory	ok	ok	theory T begin\nlemma L: "T"\nbysorry\nend

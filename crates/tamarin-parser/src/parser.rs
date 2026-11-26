@@ -1694,7 +1694,7 @@ impl<'a> Parser<'a> {
         let mut presort = 's';
         if self.try_kw("presort") {
             self.require_punct(":")?;
-            let word = self.lx.ascii_alpha_run();
+            let word = self.lx.letter_run();
             if word.is_empty() {
                 return Err(self.err_expect("letter"));
             }
@@ -4014,7 +4014,7 @@ impl<'a> Parser<'a> {
         let persistent = self.try_punct("!");
         let name_start = self.save();
         let name = self.ident()?;
-        if !name.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+        if !name.chars().next().is_some_and(char::is_uppercase) {
             self.skip_ws();
             let len = name.len();
             return Err(self.semantic_error(
@@ -4071,6 +4071,8 @@ impl<'a> Parser<'a> {
         // backtracks; in rule context this surfaces as a hard load error,
         // and in formula context the alternative (term atom) is tried.  We
         // mirror that by returning `Err` from `fact()`.
+        // HS compares `map toUpper` of the name with the special names.
+        let upper_name = name.to_uppercase();
         // (canonical name, persistent, keep-annotations)
         let canonical = [
             ("Out", false, false),
@@ -4081,7 +4083,7 @@ impl<'a> Parser<'a> {
             ("Fr", false, false),
         ]
         .into_iter()
-        .find(|(canonical, _, _)| name.eq_ignore_ascii_case(canonical));
+        .find(|(canonical, _, _)| upper_name == canonical.to_ascii_uppercase());
         if let Some((cname, cpersistent, keep_ann)) = canonical {
             // `!Fr(...)` is a parse error (Theory/Text/Parser/Fact.hs).
             if cname == "Fr" && persistent {

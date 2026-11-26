@@ -287,7 +287,7 @@ pub fn parse_stop_on_trace(
     raw: &str,
 ) -> Result<crate::constraint::solver::context::CutStrategy, String> {
     use crate::constraint::solver::context::CutStrategy;
-    match raw.to_ascii_lowercase().as_str() {
+    match raw.to_lowercase().as_str() {
         "dfs" => Ok(CutStrategy::Dfs),
         "bfs" => Ok(CutStrategy::Bfs),
         "seqdfs" => Ok(CutStrategy::SeqDfs),

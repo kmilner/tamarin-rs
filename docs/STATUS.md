@@ -116,6 +116,18 @@ The condition must stay on the `#ifdef` line. Active code parses comments and
 quoted text normally. In inactive branches, every conditional line is structural;
 all other text is ignored, including incomplete declarations, quotes, and brackets.
 
+## Known differences
+
+- **Unicode character classes.** Identifiers, whitespace, fact-name
+  capitalisation and case-insensitive comparisons use Rust's `char`
+  methods (`is_alphanumeric`, `is_whitespace`, `is_uppercase`,
+  `to_lowercase`, ...), where Haskell uses GHC's `Data.Char`. The two
+  disagree on some non-ASCII characters: Rust follows a newer Unicode
+  version, counts combining marks and some symbols as alphabetic (U+1885,
+  U+24D0), treats U+0085 and U+2028/2029 as whitespace, and uses full rather
+  than single-character case mappings (`İ` lowercases to `i` plus U+0307).
+  ASCII input is unaffected.
+
 ## Not yet ported
 
 - **`diff(...)` / `--diff`** — observational-equivalence mode.

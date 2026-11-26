@@ -142,12 +142,22 @@ impl<'a> Lexer<'a> {
 
     /// Consume a maximal run of ASCII-alphabetic characters and return it
     /// (empty when the next char is not ASCII-alphabetic). Does NOT skip
-    /// leading whitespace — used to read `#directive` names and formal-comment
-    /// headers, where the run starts exactly at the cursor.
+    /// leading whitespace — used to read `#directive` names, which HS
+    /// matches as literal symbols.
     pub fn ascii_alpha_run(&mut self) -> String {
+        self.run_of(|c| c.is_ascii_alphabetic())
+    }
+
+    /// Parsec's `many letter`: a maximal run of letters, starting exactly at
+    /// the cursor.
+    pub fn letter_run(&mut self) -> String {
+        self.run_of(char::is_alphabetic)
+    }
+
+    fn run_of(&mut self, class: impl Fn(char) -> bool) -> String {
         let mut s = String::new();
         while let Some(c) = self.peek() {
-            if c.is_ascii_alphabetic() {
+            if class(c) {
                 s.push(c);
                 self.bump();
             } else {
@@ -680,7 +690,7 @@ impl<'a> Lexer<'a> {
     pub fn formal_comment(&mut self) -> Option<(String, String)> {
         self.skip_ws();
         let save = self.pos;
-        let header = self.ascii_alpha_run();
+        let header = self.letter_run();
         if header.is_empty() {
             self.pos = save;
             return None;

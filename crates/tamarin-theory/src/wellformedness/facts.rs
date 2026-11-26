@@ -16,6 +16,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use tamarin_term::lterm::{is_fresh_var, is_msg_var};
+use tamarin_utils::prelude_ext::show_string;
 
 use super::{
     numbered_index_width, quote, show_rule_case_name, thy_proto_rules, underline_topic,
@@ -402,7 +403,7 @@ fn fact_usage(facts: &[(String, Vec<FactCell>)]) -> WfReport {
             "Fact capitalization issues",
             CAP_ISSUE_MSG,
             &cap,
-            &|c| format!("capitalization {:?}", fact_tag_name(&c.tag)),
+            &|c| format!("capitalization {}", show_string(&fact_tag_name(&c.tag))),
         ));
     }
     let arity = with_issue(&all_clashes, |c| c.arity);

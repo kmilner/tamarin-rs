@@ -321,8 +321,8 @@ pub fn parse_heuristic_str_with_tactics(
         // `filterHeuristic`) consumes a maximal run of letters as one token.
         // `defaultOracleNames` later gives any oracle in it the same default
         // workDir and relative path as a standalone default oracle.
-        if c.is_ascii_alphabetic() {
-            while i < chars.len() && chars[i].is_ascii_alphabetic() {
+        if c.is_alphabetic() {
+            while i < chars.len() && chars[i].is_alphabetic() {
                 let ranking = chars[i];
                 let oracle = if matches!(ranking, 'o' | 'O') {
                     default_oracle

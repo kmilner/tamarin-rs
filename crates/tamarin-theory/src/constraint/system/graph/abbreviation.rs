@@ -122,9 +122,11 @@ fn get_term_prefix(opts: &AbbreviationOptions, t: &LNTerm) -> String {
         Term::App(FunSym::List, _) => "LST".to_string(),
         Term::App(FunSym::Ac(op), _) => format!("{:?}", op),
     };
-    let mut out: String = raw.chars().filter(|c| c.is_ascii_alphabetic()).collect();
-    out.truncate(opts.prefix_length);
-    out.to_ascii_uppercase()
+    raw.chars()
+        .filter(|c| c.is_alphabetic())
+        .take(opts.prefix_length)
+        .flat_map(char::to_uppercase)
+        .collect()
 }
 
 // ---------------------------------------------------------------------
