@@ -33,6 +33,11 @@
 //! numbered in the order of this module's traversal, because the order in
 //! which Maude prints a unifier is internal to its AC solver.
 //!
+//! The native backend sends the proved export only the delayed equations,
+//! as the Maude backend sends them to Maude, and composes in Rust. It names
+//! the engine's witnesses by [`engine_part`], the numbering used here, so
+//! that its answers are native-only's.
+//!
 //! A request the free unifier solves alone, as far as a test that unifies
 //! nothing can tell (`maude_proc::solved_by_free_unifier`), does not come
 //! here: the algebra library proposes the same names itself
@@ -134,6 +139,50 @@ pub(crate) fn present(
         .collect()
 }
 
+/// The engine's part of an arm: the images of the variables of the delayed
+/// equations `residual`, in the order of their first occurrence there, with
+/// the witnesses called `x` and numbered above those variables in order of
+/// first occurrence, as the Maude reply decoder numbers them; and the name
+/// each witness got. `images` holds the arm's image of each of those
+/// variables under the caller's names for the witnesses.
+///
+/// `None` when a variable has no image, or the index space above the
+/// variables is exhausted.
+pub(crate) fn engine_part(
+    residual: &[Equal<LNTerm>],
+    images: &[(LVar, LNTerm)],
+) -> Option<(FastMap<LVar, LVar>, Arm)> {
+    let images: FastMap<LVar, &LNTerm> = images.iter().map(|(v, t)| (*v, t)).collect();
+    let mut variables = Vec::new();
+    let mut seen = FastSet::default();
+    for eq in residual {
+        for side in [&eq.lhs, &eq.rhs] {
+            side.for_each_free(&mut |v| {
+                if seen.insert(*v) {
+                    variables.push(*v);
+                }
+            });
+        }
+    }
+    let highest = variables.iter().map(|v| v.idx).max().unwrap_or(0);
+    let mut next = highest.checked_add(1);
+    let mut names: FastMap<LVar, LVar> = FastMap::default();
+    let mut engine = Vec::with_capacity(variables.len());
+    for v in variables {
+        let image = (*images.get(&v)?).clone().map_free(&mut |w| {
+            *names.entry(w).or_insert_with(|| {
+                let idx = next.unwrap_or(u64::MAX);
+                next = next.and_then(|n| n.checked_add(1));
+                LVar::new("x", w.sort, idx)
+            })
+        });
+        engine.push((v, image));
+    }
+    // The index space above the query is exhausted.
+    next?;
+    Some((names, engine))
+}
+
 /// `composition` is the composition with an empty fresh substitution of
 /// `factored`, the unifier of the free part, which it holds.
 fn present_arm(
@@ -161,39 +210,12 @@ fn present_arm(
         return None;
     }
 
-    // The engine's part of the arm: the images of the delayed equations'
-    // variables, with witnesses called `x` and numbered above those variables
-    // in order of first occurrence, as the Maude reply decoder does.
-    let mut engine_names: FastMap<LVar, LVar> = FastMap::default();
-    let mut engine = Vec::new();
-    if !residual.is_empty() {
-        let images: FastMap<LVar, &LNTerm> = arm.images.iter().map(|(v, t)| (*v, t)).collect();
-        let mut variables = Vec::new();
-        let mut seen = FastSet::default();
-        for eq in residual {
-            for side in [&eq.lhs, &eq.rhs] {
-                side.for_each_free(&mut |v| {
-                    if seen.insert(*v) {
-                        variables.push(*v);
-                    }
-                });
-            }
-        }
-        let highest = variables.iter().map(|v| v.idx).max().unwrap_or(0);
-        let mut next = highest.checked_add(1);
-        for v in variables {
-            let image = (*images.get(&v)?).clone().map_free(&mut |w| {
-                *engine_names.entry(w).or_insert_with(|| {
-                    let idx = next.unwrap_or(u64::MAX);
-                    next = next.and_then(|n| n.checked_add(1));
-                    LVar::new("x", w.sort, idx)
-                })
-            });
-            engine.push((v, image));
-        }
-        // The index space above the query is exhausted.
-        next?;
-    }
+    // The engine's part of the arm.
+    let (engine_names, engine) = if residual.is_empty() {
+        (FastMap::default(), Vec::new())
+    } else {
+        engine_part(residual, &arm.images)?
+    };
     let engine = if engine.is_empty() {
         LNSubstVFresh::empty()
     } else {
