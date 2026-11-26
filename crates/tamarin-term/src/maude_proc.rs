@@ -530,7 +530,7 @@ impl Drop for SharedMaudeCaches {
             let count = |n: &AtomicU64| n.load(Ordering::Relaxed);
             let s = &self.stats;
             eprintln!(
-                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{} spelled={} unspelled={} self_named={} self_declined={} lean_exists={} lean_unify={} maude_port={} maude_port_gave_up={} maude_port_declined={}",
+                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{} spelled={} unspelled={} self_named={} self_declined={} maude_port={} maude_port_gave_up={} maude_port_declined={} lean_exists={} lean_unify={}",
                 count(&s.reduce_hits),
                 count(&s.reduce_misses),
                 count(&s.unifiable_hits),
@@ -541,11 +541,11 @@ impl Drop for SharedMaudeCaches {
                 count(&s.lean_unify_unspelled),
                 count(&s.lean_unify_self_named),
                 count(&s.lean_unify_self_declined),
-                count(&s.lean_unify_exists),
-                count(&s.lean_unify),
                 count(&s.maude_port),
                 count(&s.maude_port_gave_up),
                 count(&s.maude_port_declined),
+                count(&s.lean_unify_exists),
+                count(&s.lean_unify),
             );
             for line in self.provenance.report() {
                 eprintln!("{line}");
