@@ -38,18 +38,29 @@ pub(crate) enum PortReply {
 
 /// The node rows of the terms of a request and the root of each term.
 #[derive(Default)]
-struct Rows {
-    nodes: Vec<Vec<u64>>,
+pub(super) struct Rows {
+    pub(super) nodes: Vec<Vec<u64>>,
+    /// Whether a fact's arguments (`list(cons(…))`) are written, as the row
+    /// `5, children…`; otherwise such a term is outside the request.
+    pub(super) lists: bool,
 }
 
 impl Rows {
     /// Append `t` in postorder and return its row, or `None` for a term
     /// outside the theory's operators.
-    fn term(&mut self, theory: &Theory, t: &MTerm) -> Option<u64> {
+    pub(super) fn term(&mut self, theory: &Theory, t: &MTerm) -> Option<u64> {
         let row = match t {
             Term::Lit(MaudeLit::MaudeVar(id, s)) => vec![0, *id, sort_word(*s)],
             Term::Lit(MaudeLit::MaudeConst(id, s)) => vec![1, *id, sort_word(*s)],
             Term::Lit(MaudeLit::FreshVar(..)) => return None,
+            Term::App(FunSym::List, args) if self.lists => {
+                let mut row = Vec::with_capacity(args.len() + 1);
+                row.push(5);
+                for a in args.iter() {
+                    row.push(self.term(theory, a)?);
+                }
+                row
+            }
             Term::App(f, args) => {
                 let (kind, id) = theory.encode(*f, args.len())?;
                 let mut row = Vec::with_capacity(args.len() + 2);
@@ -78,13 +89,13 @@ fn sort(word: u64) -> Result<LSort, Error> {
 
 /// The variables of a request, by identifier and sort word, and the least
 /// identifier above them.
-struct Scope {
-    query: rustc_hash::FxHashSet<(u64, u64)>,
-    fresh: u64,
+pub(super) struct Scope {
+    pub(super) query: rustc_hash::FxHashSet<(u64, u64)>,
+    pub(super) fresh: u64,
 }
 
 impl Scope {
-    fn of(rows: &Rows) -> Self {
+    pub(super) fn of(rows: &Rows) -> Self {
         let query: rustc_hash::FxHashSet<_> = rows
             .nodes
             .iter()
@@ -149,7 +160,11 @@ fn read_image(theory: &Theory, tokens: &[u64], scope: &Scope) -> Result<MTerm, E
 /// The unifiers of the reply words: after the status row, for each unifier
 /// an empty row and then a row `[N, sort, tokens…]` for each variable `xN` of
 /// the request.
-fn read_unifiers(theory: &Theory, words: &[u64], scope: &Scope) -> Result<Vec<MSubst>, Error> {
+pub(super) fn read_unifiers(
+    theory: &Theory,
+    words: &[u64],
+    scope: &Scope,
+) -> Result<Vec<MSubst>, Error> {
     let mut rows = rows_of(words);
     rows.next(); // the status row
     let mut unifiers: Vec<MSubst> = Vec::new();

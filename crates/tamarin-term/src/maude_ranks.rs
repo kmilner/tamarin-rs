@@ -238,6 +238,15 @@ impl MaudeRanks {
             .map(|(_, rank)| *rank)
     }
 
+    /// The ranks of `list`, `cons` and `nil`, which wrap the arguments of a
+    /// fact: row 6 of the variants export (`Tamarin.MaudeVariantsExport`).
+    #[cfg(feature = "lean-unification")]
+    pub(crate) fn list_row(&self) -> Vec<u64> {
+        ["list", "cons", "nil"]
+            .map(|name| self.operator(Operator::List(name)).unwrap_or(0))
+            .to_vec()
+    }
+
     /// The rank rows of the export (`Tamarin.MaudeUnifyExport`) for the
     /// operator ids of `theory`: the free, C and AC symbols by id; the name
     /// operators by sort word; the variable symbols and the sort indices of
