@@ -140,9 +140,9 @@ pub(crate) fn maude_variants(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::function_symbols::{fst_sym, pair_sym, pmult_sym, CSym, FunSym};
+    use crate::function_symbols::{exp_sym, fst_sym, pmult_sym, FunSym};
     use crate::lterm::LSort;
-    use crate::maude_sig::{bp_maude_sig, dh_maude_sig, minimal_maude_sig, pair_maude_sig};
+    use crate::maude_sig::{dh_maude_sig, minimal_maude_sig, pair_maude_sig};
     use crate::maude_types::MaudeLit;
     use crate::term::Term;
     use std::sync::Arc;
@@ -188,23 +188,52 @@ mod tests {
         assert_eq!(reply, VariantsReply::Variants(maude));
     }
 
-    /// A product of the reply comes back as the reply parser builds it, and
-    /// a term outside the theory is not sent.
+    /// A command of a captured Maude 3.5.1 session on Diffie-Hellman (the
+    /// `native_shared_exponent` fixture), whose six variants come from two
+    /// layers of narrowing, and Maude's reply: products come back as the
+    /// reply parser builds them. A term outside the theory is not sent.
+    ///
+    /// ```text
+    /// get variants in MSG : list(cons(x0:Fresh,cons(x1:Msg,cons(tamXCFUexp(p(2),x1:Msg),
+    ///   cons(tamXCFUexp(tamXCFUexp(p(2),x1:Msg),x0:Fresh),nil))))) .
+    /// ```
     #[test]
-    fn a_bilinear_query_lists_its_variants() {
+    fn a_diffie_hellman_query_reads_as_maudes_reply() {
         let sig = minimal_maude_sig(false)
             .merge(dh_maude_sig())
-            .merge(bp_maude_sig())
+            .merge(pair_maude_sig())
             .refresh();
         let (theory, ranks, equations) = module(&sig);
-        let pmult = app(FunSym::NoEq(pmult_sym()), vec![var(1), var(2)]);
-        let em = app(FunSym::C(CSym::EMap), vec![var(0), pmult]);
-        let query = app(FunSym::List, vec![em]);
-        match maude_variants(&theory, &ranks, &equations, &query, 1 << 20, 0).unwrap() {
-            VariantsReply::Variants(variants) => assert!(variants.len() > 1, "{variants:?}"),
-            other => panic!("{other:?}"),
-        }
-        let foreign = app(FunSym::NoEq(pair_sym()), vec![var(0), var(1)]);
+        let exp = |a, b| app(FunSym::NoEq(exp_sym()), vec![a, b]);
+        let g = || Term::Lit(MaudeLit::MaudeConst(2, LSort::Pub));
+        let x0 = Term::Lit(MaudeLit::MaudeVar(0, LSort::Fresh));
+        let query = app(
+            FunSym::List,
+            vec![
+                x0.clone(),
+                var(1),
+                exp(g(), var(1)),
+                exp(exp(g(), var(1)), x0),
+            ],
+        );
+        let reply = maude_variants(&theory, &ranks, &equations, &query, 1 << 20, 0).unwrap();
+        let maude = crate::maude_parse::parse_variants_reply_with_sig(
+            b"\nVariant 1\nrewrites: 1\nTOP: t\nx0:Fresh --> #1:Fresh\nx1:Msg --> #2:Msg\n\
+              \nVariant 2\nrewrites: 8\nTOP: t\nx0:Fresh --> %1:Fresh\nx1:Msg --> tamXCFUone\n\
+              \nVariant 3\nrewrites: 8\nTOP: t\nx0:Fresh --> %2:Fresh\n\
+              x1:Msg --> tammult(%1:Msg, tamXCFUinv(%2:Fresh))\n\
+              \nVariant 4\nrewrites: 8\nTOP: t\nx0:Fresh --> %1:Fresh\nx1:Msg --> tamXCFUinv(%1:Fresh)\n\
+              \nVariant 5\nrewrites: 8\nTOP: t\nx0:Fresh --> %3:Fresh\n\
+              x1:Msg --> tammult(%1:Msg, tamXCFUinv(tammult(%2:Msg, %3:Fresh)))\n\
+              \nVariant 6\nrewrites: 8\nTOP: t\nx0:Fresh --> %2:Fresh\n\
+              x1:Msg --> tamXCFUinv(tammult(%1:Msg, %2:Fresh))\n\
+              \nNo more variants.\nrewrites: 8\n",
+            &sig,
+        )
+        .unwrap();
+        assert_eq!(maude.len(), 6);
+        assert_eq!(reply, VariantsReply::Variants(maude));
+        let foreign = app(FunSym::NoEq(pmult_sym()), vec![var(0), var(1)]);
         assert_eq!(
             maude_variants(&theory, &ranks, &equations, &foreign, 1 << 20, 0),
             Ok(VariantsReply::Unencodable)

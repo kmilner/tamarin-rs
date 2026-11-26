@@ -349,6 +349,27 @@ fn native_prints_what_maude_prints_on_xor_and_bilinear_protocols() {
     }
 }
 
+/// On native, a `get variants` command the Maude backend sends to Maude goes
+/// to the generator of Maude's listings, and its family, once the
+/// certificate checker accepted it, is decoded by that backend's code. On a
+/// bilinear protocol whose rule variants native used to list in another
+/// order and with other witnesses, native prints what the Maude backend
+/// prints.
+#[test]
+fn native_prints_what_maude_prints_on_a_bilinear_protocol_with_many_variants() {
+    if !common::maude_available() {
+        return;
+    }
+    let example = "sp14/TAK1.spthy";
+    let (reference, _) = run_corpus(example, "maude", &["--prove"]);
+    let (native, _) = run_corpus(example, "native", &["--prove"]);
+    assert!(
+        reference.contains("Session_Key_Secrecy (all-traces): verified"),
+        "{reference}"
+    );
+    assert_parity(Parity::Output, &native, &reference, example);
+}
+
 #[test]
 fn dh_message_deduction_preserves_sources_and_the_full_proof_without_maude() {
     assert_corpus_proof(

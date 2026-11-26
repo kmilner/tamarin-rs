@@ -277,6 +277,26 @@ fn a_runaway_variant_search_stops_when_its_request_is_cancelled() {
     assert!(!h.variants(&small).unwrap().is_empty());
 }
 
+/// `LIST(em(x, pmult(y, z)))` over bilinear pairing: on native the generator
+/// of Maude's listings narrows it for minutes before its work bound stops it.
+/// A cancelled request stops it at once, and is no failure of the session.
+#[test]
+fn a_runaway_maude_listing_stops_when_its_request_is_cancelled() {
+    use tamarin_term::builtin::pmult;
+    use tamarin_term::term::f_app_list;
+    let sig = tamarin_term::maude_sig::dh_maude_sig()
+        .merge(bp_maude_sig())
+        .refresh();
+    let h = MaudeHandle::start_with_backend(MISSING, sig, AlgebraBackend::Native).unwrap();
+    let [x, y, z] = ["x", "y", "z"].map(variable);
+    let query = f_app_list(vec![emap(x, pmult(y, z))]);
+    let (result, latency) = cancelled(|| h.variants(&query));
+    assert!(matches!(result, Err(MaudeError::Cancelled)), "{result:?}");
+    assert!(latency < PROMPT, "returned {latency:?} after the request");
+    eprintln!("Maude's listing: returned {latency:?} after cancellation");
+    h.check_backend_status().unwrap();
+}
+
 /// Not a regression test: without a request to stop, the wide reduction
 /// runs until the harness kills it. Run it under a timeout to see the
 /// behavior the other tests exclude.

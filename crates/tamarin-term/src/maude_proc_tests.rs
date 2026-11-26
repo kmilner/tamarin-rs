@@ -1869,6 +1869,95 @@ mod variant_check {
     }
 }
 
+/// Native lists Maude's variants with the generator of Maude's listings, and
+/// uses its family only after the certificate checker accepted it. Where the
+/// generator gives up or the checker refuses its family, native's own route
+/// answers, as on proved-only, and the session goes on.
+#[cfg(feature = "lean-unification")]
+mod maude_listing {
+    use super::*;
+    use crate::algebra_provenance::{Command, Origin, VariantRoute};
+    use crate::builtin::fst;
+    use crate::lean_unification::Substitutions;
+    use crate::term::{f_app_list, Term};
+
+    fn var(name: &'static str, idx: u64) -> LNTerm {
+        Term::Lit(Lit::Var(LVar::new(name, LSort::Msg, idx)))
+    }
+
+    fn start(backend: AlgebraBackend) -> MaudeHandle {
+        MaudeHandle::start_with_backend("/nonexistent/maude", pair_maude_sig(), backend).unwrap()
+    }
+
+    /// fst(x) and x: the identity and x := pair(y, z).
+    fn projection() -> LNTerm {
+        f_app_list(vec![fst(var("x", 0)), var("x", 0)])
+    }
+
+    /// The four counters of the statistics line: families taken, and
+    /// requests given up, refused and declined.
+    fn counts(h: &MaudeHandle) -> [u64; 4] {
+        let s = &h.caches.stats;
+        [
+            &s.maude_variants,
+            &s.maude_variants_gave_up,
+            &s.maude_variants_refused,
+            &s.maude_variants_declined,
+        ]
+        .map(|n| n.load(Ordering::Relaxed))
+    }
+
+    #[test]
+    fn native_takes_maudes_listing_once_the_checker_accepts_it() {
+        let h = start(AlgebraBackend::Native);
+        let family = h.variants(&projection()).unwrap();
+        assert_eq!(family.len(), 2, "{family:?}");
+        assert_eq!(counts(&h), [1, 0, 0, 0]);
+        assert_eq!(h.caches.provenance.route(VariantRoute::MaudeListing), 1);
+        assert_eq!(h.provenance().fresh(Command::Variants, Origin::Proved), 1);
+        // The reply is kept for the session; the verdict comes from the memo.
+        assert_eq!(h.variants(&projection()).unwrap(), family);
+        assert_eq!(h.provenance().cached(Command::Variants, Origin::Proved), 1);
+        h.check_backend_status().unwrap();
+    }
+
+    #[test]
+    fn a_listing_the_generator_gives_up_on_is_answered_by_natives_own_route() {
+        let reference = start(AlgebraBackend::ProvedOnly)
+            .variants(&projection())
+            .unwrap();
+        let mut h = start(AlgebraBackend::Native);
+        h.set_maude_variants_work(1);
+        assert_eq!(h.variants(&projection()).unwrap(), reference);
+        assert_eq!(counts(&h), [0, 1, 0, 0]);
+        assert_eq!(h.caches.provenance.route(VariantRoute::MaudeListing), 0);
+        // The give-up is kept for the session.
+        assert_eq!(h.variants(&projection()).unwrap(), reference);
+        assert_eq!(counts(&h), [0, 2, 0, 0]);
+        h.check_backend_status().unwrap();
+    }
+
+    #[test]
+    fn a_listing_the_checker_refuses_is_answered_by_natives_own_route() {
+        // Without its last member the family does not cover the query.
+        fn drop_last(family: &mut Substitutions) {
+            family.pop();
+        }
+        let reference = start(AlgebraBackend::ProvedOnly)
+            .variants(&projection())
+            .unwrap();
+        let mut h = start(AlgebraBackend::Native);
+        h.set_maude_variants_tamper(Some(drop_last));
+        assert_eq!(h.variants(&projection()).unwrap(), reference);
+        assert_eq!(counts(&h), [0, 0, 1, 0]);
+        // The refusal is no failure of the session, and is kept for it.
+        h.check_backend_status().unwrap();
+        assert_eq!(h.variants(&projection()).unwrap(), reference);
+        assert_eq!(counts(&h), [0, 0, 2, 0]);
+        h.check_backend_status().unwrap();
+    }
+}
+
 const SPIN_MODULE: &[u8] = b"fmod CANCEL is sort S . op spin : -> S . eq spin = spin . endfm\n";
 const SPIN: &[u8] = b"reduce in CANCEL : spin .\n";
 
