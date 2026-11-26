@@ -1303,6 +1303,21 @@ named in Lean. Rust walks trees in both directions and decides nothing:
   builds with debug assertions every such answer is compared with the answer of
   the path above.
 
+On the native backend the delayed AC and C equations of a request, which the
+Maude backend sends to Maude, go to `tamarin_lean_theory_maude_unify`, the
+proved port of Maude's unification algorithm. Rust sends the terms of the
+`unify` command that backend writes (`xN` as the variable with identifier
+`N`, a name constant `p(k)` as the name with identifier `k`) and the ranks of
+Maude's term order on the session's module (`crate::maude_ranks`), reads the
+reply into the form of a parsed Maude reply, and decodes and composes it with
+the Maude backend's own code (`decode_unify_reply`). Where the port gives up
+or cannot take a request, the total unifier above answers instead
+(`maude_port=`, `maude_port_gave_up=` and `maude_port_declined=` in
+`TAM_MAUDE_CACHE_STATS=1` count the three; on the corpus only the first is
+nonzero). `native_lists_maudes_*` in
+`crates/tamarin-term/src/lean_unification_integration_tests.rs` compare the
+answers with the Maude backend's.
+
 `crates/tamarin-term/src/lean_unification/whole/wire_tests.rs` holds the
 tests, on the queries of `examples/audit_fuzz.rs` for every signature that
 fuzzer knows (the file is included as a module, so the two cannot drift):
