@@ -133,6 +133,7 @@ for old checkouts while current gates refill their own generation. Re-certify:
   5. cargo test -p tamarin-server (HTTP captures refreshed automatically above;
      with SKIP_BUILD=1, build the oracle and run capture_haskell_fixtures.sh first)
   6. scripts/test.sh web
+  7. scripts/capture_parse_refs.sh && cargo test -p tamarin-parser --test parse_table
 
 These two corpus commands also fill/reuse their oracle caches. See scripts/README.md.
 EOF

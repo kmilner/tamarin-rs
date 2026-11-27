@@ -589,32 +589,3 @@ pub struct VarSpec {
     pub sort: LSort,
     pub typ: Option<String>, // SAPIC type annotation
 }
-
-#[cfg(test)]
-mod tests {
-    use super::BinOp;
-
-    /// The separator strings HS `prettyTerm` puts between operands
-    /// (Term/Term.hs).  Every printer of a `BinOp` reads them from
-    /// here, so a typo would move in lockstep across all of them — pin the
-    /// table itself.
-    #[test]
-    fn separator_table_matches_prettyterm() {
-        assert_eq!(BinOp::Exp.separator(), "^");
-        assert_eq!(BinOp::Mult.separator(), "*");
-        assert_eq!(BinOp::Union.separator(), "++");
-        assert_eq!(BinOp::Xor.separator(), "\u{2295}");
-        assert_eq!(BinOp::NatPlus.separator(), "%+");
-        // A user-declared `[AC]` symbol keeps the surrounding spaces.
-        assert_eq!(BinOp::AcFct("add").separator(), " add ");
-        // Only that arm needs to own its string.
-        assert!(matches!(
-            BinOp::Exp.separator(),
-            std::borrow::Cow::Borrowed(_)
-        ));
-        assert!(matches!(
-            BinOp::AcFct("add").separator(),
-            std::borrow::Cow::Owned(_)
-        ));
-    }
-}

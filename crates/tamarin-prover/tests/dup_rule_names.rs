@@ -1,105 +1,26 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! End-to-end diagnostics and exit codes for duplicate-rule guards.
+//! The duplicate-rule guard at translate time.  The parse-time guard is in
+//! the parser's parse table.
 //!
-//! Parse time: `liftedAddProtoRule` (Theory/Text/Parser.hs) rejects a
-//! second, DIFFERENT rule under an existing name via `addOpenProtoRule`
-//! (OpenTheory.hs); batch mode's `handleError` `die`s on the
-//! resulting parser error. The port renders a semantic diagnostic on stderr
-//! and exits 1, before the `Theory loaded` marker. Rules compare as HS's
-//! open rules do, so a `let`-written rule equals its expansion. An identical
-//! duplicate is accepted and appended again.
-//!
-//! Translate time: SAPIC's `translate` folds its generated rules through the
-//! same guard (`foldM liftedAddProtoRule`, lib/sapic/src/Sapic.hs), so a user rule named
-//! like a generated one (`rule Init` alongside a `process:`) aborts AFTER the
-//! `Theory translated` marker.  In HS the thrown `DuplicateItem` escapes to
-//! GHC's runtime: the pinned oracle (Git revision ef3f0468) prints exactly
+//! SAPIC's `translate` folds its generated rules through the same guard as
+//! the parser (`foldM liftedAddProtoRule`, lib/sapic/src/Sapic.hs), so a
+//! user rule named like a generated one (`rule Init` alongside a `process:`)
+//! aborts AFTER the `Theory translated` marker.  In HS the thrown
+//! `DuplicateItem` escapes to GHC's runtime: the pinned oracle prints exactly
 //! `tamarin-prover: duplicate rule: Init` after the markers and exits 1.
-//!
-//! The oracle emits the `maude tool:` banner and the `[Theory X] …` markers
-//! on stderr even under `--quiet` (the flag is registered but never read —
-//! TheoryLoader.hs).  Expectations below are its `--quiet`
-//! stderr minus the three banner lines, whose maude path and version are
-//! machine-local.
 
 mod common;
 
 use common::{maude_available, strip_maude_banner};
 
-/// The temp subdirectory this suite writes its theories to.
-const TMP_DIR: &str = "tamarin_prover_dup_rule_names";
-
 /// Run the built binary on `src` under `--quiet` and return `(exit code,
 /// stdout, stderr minus the maude banner)`.
 fn run_binary(stem: &str, src: &str) -> (i32, String, String) {
-    let (code, stdout, stderr) = common::run_raw(TMP_DIR, stem, src, &["--quiet"]);
+    let (code, stdout, stderr) =
+        common::run_raw("tamarin_prover_dup_rule_names", stem, src, &["--quiet"]);
     (code, stdout, strip_maude_banner(&stderr))
-}
-
-/// Two different rules under one name produce the structured conflict
-/// diagnostic.
-#[test]
-fn duplicate_rule_prints_a_diagnostic_and_exits_1() {
-    if !maude_available() {
-        eprintln!("skipping: maude not on path");
-        return;
-    }
-    let (code, _, stderr) = run_binary(
-        "dup",
-        "theory T begin\n\n\
-         rule R1: [ ] --> [ Out('a') ]\n\
-         rule R1: [ ] --> [ Out('b') ]\n\n\
-         end\n",
-    );
-    assert_eq!(code, 1);
-    common::assert_diagnostic(
-        &stderr,
-        &[
-            "error: Conflicting rule",
-            "`R1` was already declared incompatibly",
-        ],
-    );
-    assert!(!stderr.contains("Theory loaded"), "{stderr}");
-}
-
-/// A `let`-written rule and its expansion are one rule (HS applies the `let`
-/// substitution before `addOpenProtoRule` compares), so the duplicate loads.
-#[test]
-fn a_let_rule_and_its_expansion_are_not_a_conflict() {
-    if !maude_available() {
-        return;
-    }
-    let (code, _stdout, stderr) = run_binary(
-        "dup_let",
-        "theory DupLet\nbegin\n\
-         rule A: [ Fr(~k) ] --> [ Out(<~k, ~k>) ]\n\
-         rule A: let x = ~k in [ Fr(~k) ] --> [ Out(pair(x, ~k)) ]\n\
-         end\n",
-    );
-    assert_eq!(code, 0, "{stderr}");
-}
-
-/// An identical duplicate loads with exit 0 and renders BOTH copies.
-#[test]
-fn identical_duplicate_loads_and_renders_twice() {
-    if !maude_available() {
-        eprintln!("skipping: maude not on path");
-        return;
-    }
-    let (code, stdout, _) = run_binary(
-        "ident",
-        "theory T begin\n\nrule R1: [ ] --> [ ]\nrule R1: [ ] --> [ ]\n\nend\n",
-    );
-    assert_eq!(code, 0);
-    assert_eq!(
-        stdout
-            .matches("rule (modulo E) R1:\n   [ ] --> [ ]")
-            .count(),
-        2,
-        "expected both R1 copies rendered:\n{stdout}"
-    );
 }
 
 /// A user rule named like a SAPIC-generated one dies at translate time with
@@ -130,25 +51,4 @@ fn sapic_generated_name_clash_aborts_translation() {
         stderr.contains("[Theory T] Theory translated\n"),
         "the clash fires after the `Theory translated` marker:\n{stderr}"
     );
-}
-
-#[test]
-fn parsed_identity_member_cannot_reuse_the_parent_name() {
-    if !maude_available() {
-        return;
-    }
-    let source = r#"theory IdentityParentName begin
-rule R: [] --[A('a')]-> []
-variants rule (modulo AC) R: [] --[A('a')]-> []
-lemma witness: exists-trace "Ex #i. A('a')@i"
-end"#;
-    let (code, output, error) = common::run_raw(
-        TMP_DIR,
-        "identity_parent",
-        source,
-        &["--prove", "--quit-on-warning"],
-    );
-    assert_eq!(code, 1, "{output}\n{error}");
-    common::assert_diagnostic(&error, &["error: Duplicate rule", "`R`"]);
-    assert!(!output.contains("verified"), "{output}");
 }

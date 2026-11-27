@@ -689,10 +689,29 @@ impl fmt::Display for ParseErrorKind {
 mod tests {
     use super::line_column;
 
+    /// Parsec's positions: a tab advances to the next eight-column stop, a
+    /// newline starts the next line at column 1, and an offset inside a
+    /// UTF-8 character counts the bytes before it.
     #[test]
-    fn line_column_tolerates_offsets_inside_utf8_characters() {
-        assert_eq!(line_column("éx", 1), (1, 1));
-        assert_eq!(line_column("éx", 2), (1, 2));
-        assert_eq!(line_column("éx", 3), (1, 3));
+    fn line_column_counts_as_parsec_does() {
+        for (source, offset, expected) in [
+            ("éx", 1, (1, 1)),
+            ("éx", 2, (1, 2)),
+            ("éx", 3, (1, 3)),
+            ("\tx", 1, (1, 9)),
+            ("\t\tx", 2, (1, 17)),
+            (" \tx", 2, (1, 9)),
+            ("       \tx", 8, (1, 9)),
+            ("        \tx", 9, (1, 17)),
+            ("[ ]\t--[ ]->\tx", 12, (1, 17)),
+            ("a\t\nbc", 3, (2, 1)),
+            ("a\t\n\tbc", 4, (2, 9)),
+        ] {
+            assert_eq!(
+                line_column(source, offset),
+                expected,
+                "{source:?} @ {offset}"
+            );
+        }
     }
 }

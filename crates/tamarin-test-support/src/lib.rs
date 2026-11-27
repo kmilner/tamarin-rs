@@ -13,6 +13,22 @@
 //! `TAM_ALLOW_NO_MAUDE=1` turns the panic back into a skip, for a machine
 //! that genuinely has no maude.
 
+/// Gitlink against which the workspace's Haskell references are captured.
+pub fn pinned_oracle_revision() -> String {
+    let git = std::process::Command::new("git")
+        .args(["rev-parse", ":tamarin-prover"])
+        .current_dir(workspace_root(
+            std::env::var_os("CARGO_MANIFEST_DIR").as_deref(),
+        ))
+        .output()
+        .expect("git rev-parse :tamarin-prover");
+    assert!(
+        git.status.success(),
+        "could not read the tamarin-prover gitlink"
+    );
+    String::from_utf8(git.stdout).unwrap().trim().to_owned()
+}
+
 /// The examples corpus used by workspace tests: `$CORPUS_ROOT` when set,
 /// otherwise the `tamarin-prover` submodule's examples directory.
 pub fn corpus_root() -> std::path::PathBuf {
