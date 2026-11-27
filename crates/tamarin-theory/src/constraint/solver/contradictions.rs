@@ -1721,14 +1721,8 @@ impl SubstNfChecker {
                 continue;
             }
             let restricted = vfresh_subst.restrict(tvars);
-            // HS `freshToFreeAvoidingFast subst tvars` (Term/Substitution.hs):
-            // a PURE uniform-shift rename of the range vars avoiding `tvars`
-            // (`rename (map snd l) \`evalFreshAvoiding\` tvars`).  It consumes
-            // NO fresh-counter state — the probe subst is local to this
-            // predicate.  Drawing real idxs from the shared counter here would
-            // advance it on every variant probed, shifting every later
-            // persisted mint above HS.  `fresh_start` is the per-term
-            // `succ (maxIdx tvars)` precomputed in the snapshot cache.
+            // `freshToFreeAvoidingFast subst tvars` uses the term's own
+            // avoidance set. Its witnesses are private to this probe.
             let free_subst = restricted.fresh_to_free_uniform_shift(*fresh_start);
             let t_prime = apply_vterm(&free_subst, t.clone());
             // Fast path: if subst doesn't change the term, it's still NF.

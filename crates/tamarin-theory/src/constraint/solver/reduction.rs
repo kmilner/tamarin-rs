@@ -5,8 +5,8 @@
 //!
 //! Haskell's `Reduction` is `StateT System (FreshT (DisjT (Reader
 //! ProofContext)))`. The port models it as a struct holding the mutable
-//! `System`, the `ProofContext` and its own fresh counter
-//! (`Reduction::maude`); a split returns its branches explicitly. See
+//! `System`, a shared `ProofContext` and its own fresh supply. A split
+//! returns its branches explicitly. See
 //! `constraint/solver/BRANCHING.md` for the branch-state and fresh-counter
 //! invariants.
 
@@ -17,6 +17,7 @@ use crate::guarded::{bterm_to_lterm, Guarded};
 use crate::rule::RuleACInst;
 use tamarin_term::apply::Apply;
 use tamarin_term::lterm::{blterm_node_id, lterm_node_id};
+use tamarin_utils::fresh::FastFreshState;
 
 /// Haskell `setNodes` groups by the final node ID, retaining input order
 /// within each group. Substitution supplies nodes in their old-ID order so
@@ -52,14 +53,7 @@ fn group_node_rules(mut nodes: Vec<(NodeId, RuleACInst)>) -> GroupedNodes {
 pub struct Reduction<'ctx> {
     pub ctx: &'ctx ProofContext,
     pub sys: System,
-    /// Per-Reduction MaudeHandle: shares Maude's process state with
-    /// `ctx.maude` but carries its own `fresh_counter` initialised from
-    /// `bounds_max(&sys) + 1` at Reduction creation.  Mirrors Haskell's
-    /// `runReduction m ctx sys (avoid sys)` — each runReduction call gets
-    /// its own FreshState that advances within the call but doesn't leak
-    /// across Reductions.  Use `self.maude` for any fresh-idx allocation
-    /// inside Reduction methods (so witness allocation patterns match HS).
-    pub maude: tamarin_term::maude_proc::MaudeHandle,
+    pub(crate) fresh: FastFreshState,
     /// Whether the system has been mutated since the last
     /// `whileChanging` checkpoint.
     pub changed: ChangeIndicator,
@@ -83,68 +77,27 @@ impl ChangeIndicator {
     }
 }
 
-thread_local! {
-    /// Source-wide `avoid th` floor for nested refinement reductions
-    /// (`refineSource`, Sources.hs). It covers all source cases, including
-    /// variables absent from the case currently being simplified. A scoped
-    /// guard restores it after refinement; zero means no additional floor.
-    static REFINE_FLOOR: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-/// Set the source-precompute fresh-counter floor, returning the previous
-/// value (for RAII restore).  See [`REFINE_FLOOR`].
-pub fn set_refine_floor(floor: u64) -> u64 {
-    REFINE_FLOOR.with(|c| {
-        let old = c.get();
-        c.set(floor);
-        old
-    })
-}
-
-/// Current source-precompute fresh-counter floor (`avoid th`, 0 if unset).
-pub fn refine_floor() -> u64 {
-    REFINE_FLOOR.with(|c| c.get())
-}
-
 impl<'ctx> Reduction<'ctx> {
-    /// A reduction seeded from `avoid sys` (Haskell `runReduction m ctx sys
-    /// (avoid sys)`), lifted to the source-precompute floor when one is set.
+    /// Start a proof step at Haskell's `avoid sys`.
     pub fn new(ctx: &'ctx ProofContext, sys: System) -> Self {
         Self::new_inheriting(ctx, sys, 0)
     }
 
-    /// Like [`new`](Self::new) but continues an enclosing Reduction's fresh
-    /// counter: the next draw is `max(avoid sys, floor + 1, inherit_next)`.
-    ///
-    /// Haskell's `Reduction = StateT System (FreshT (DisjT ...))` has one
-    /// fresh counter per `runReduction`; the port runs sub-computations in
-    /// child Reductions, and reseeding a child from `avoid sys` alone would
-    /// rewind past draws whose variables never reached the system.
-    /// `inherit_next` is the parent's `maude.fresh_counter_peek()` at the
-    /// fork. The floor is `avoid th` of the source being refined
-    /// (`refineSource`, Sources.hs), carried by [`REFINE_FLOOR`]; 0 means
-    /// none.
+    /// Resume a branch above both its system's variables and all previous
+    /// draws, including temporary names that never entered the system.
     pub fn new_inheriting(ctx: &'ctx ProofContext, sys: System, inherit_next: u64) -> Self {
-        let floor = refine_floor();
-        let next = avoid_fresh_state(&sys)
-            .max(if floor == 0 {
-                0
-            } else {
-                floor.saturating_add(1)
-            })
-            .max(inherit_next);
-        let maude = ctx.maude.with_fresh_counter_next(next);
-        // Keep the shared handle above this Reduction's start, so an allocator
-        // drawing from `ctx.maude` directly cannot collide with it.
-        if next > 0 {
-            ctx.maude.ensure_above(next - 1);
-        }
+        let next = avoid_fresh_state(&sys).max(inherit_next);
         Reduction {
             ctx,
             sys,
-            maude,
+            fresh: FastFreshState::seeded(next),
             changed: ChangeIndicator::Unchanged,
         }
+    }
+
+    /// Fork a disjunct with its current system and fresh-variable position.
+    pub(crate) fn fork(&self) -> Self {
+        Self::new_inheriting(self.ctx, self.sys.clone(), self.fresh.next_index())
     }
 
     /// Mark the system contradictory, the port's stand-in for Haskell's
@@ -499,7 +452,8 @@ impl<'ctx> Reduction<'ctx> {
         };
         let reinserts_actions = self.sys.goals.iter().any(|(goal, _)| needs_reinsert(goal));
         if reinserts_actions {
-            self.maude.ensure_above(bounds_max(&self.sys));
+            self.fresh
+                .advance_to(bounds_max(&self.sys).saturating_add(1));
             self.sys.invalidate_max_var_idx_cache();
         }
         let mut goals = std::sync::Arc::unwrap_or_clone(std::mem::take(
@@ -665,11 +619,14 @@ impl<'ctx> Reduction<'ctx> {
         // disjunction into the substitution and orphans the goal.
         self.insert_goal(Goal::Split(id));
         {
-            let maude = self.maude.clone();
+            let maude = &self.ctx.maude;
             let store = std::sync::Arc::unwrap_or_clone(self.sys.take_eq_store());
             self.sys.invalidate_max_var_idx_cache();
-            self.sys
-                .set_eq_store(std::sync::Arc::new(store.simp(&maude, |_, _| Ok(false))?));
+            self.sys.set_eq_store(std::sync::Arc::new(store.simp(
+                maude,
+                &mut self.fresh,
+                |_, _| Ok(false),
+            )?));
             // eq_store simp can rewrite/drop subst entries → max may lower.
             self.sys.invalidate_max_var_idx_cache();
             // The orphaned SplitG goal stays until the next
@@ -1204,7 +1161,7 @@ impl<'ctx> Reduction<'ctx> {
     /// This reduction's state as a completed branch.
     pub(crate) fn into_branch(self) -> SystemBranch {
         SystemBranch {
-            counter: self.maude.fresh_counter_peek(),
+            counter: self.fresh.next_index(),
             sys: self.sys,
         }
     }
@@ -1241,7 +1198,7 @@ impl<'ctx> Reduction<'ctx> {
             1 => {
                 let branch = cases.pop().unwrap();
                 self.sys = branch.sys;
-                self.maude.reset_counter_to(branch.counter);
+                self.fresh = FastFreshState::seeded(branch.counter);
                 self.changed = ChangeIndicator::Changed;
                 SystemOutcome::Linear
             }
@@ -1278,10 +1235,8 @@ impl<'ctx> Reduction<'ctx> {
             return Ok(SystemOutcome::Linear);
         }
 
-        // Take eq_store out of self, mutate it, put it back, then
-        // borrow Maude — this avoids overlapping borrows of self.
-        let maude = self.maude.clone();
-        let split = self.sys.eq_store_mut().add_eqs(&maude, &pending)?;
+        let maude = &self.ctx.maude;
+        let split = self.sys.eq_store_mut().add_eqs(maude, &pending)?;
         // Run simp with substCreatesNonNormalTerms as the is_contr
         // predicate.  Without it, SplitG variants that would
         // introduce non-normal terms (e.g. verify=sign(...)) aren't
@@ -1294,7 +1249,7 @@ impl<'ctx> Reduction<'ctx> {
         // one walk of the system, shared by every candidate substitution.
         // Signatures without reducible symbols skip it.
         let nf_checker = has_reducible.then(|| {
-            crate::constraint::solver::contradictions::SubstNfChecker::new(&maude, &self.sys)
+            crate::constraint::solver::contradictions::SubstNfChecker::new(maude, &self.sys)
         });
         let store = std::sync::Arc::unwrap_or_clone(self.sys.take_eq_store());
         // Use `EquationStore::simp` so singleton SplitG disjunctions
@@ -1302,18 +1257,9 @@ impl<'ctx> Reduction<'ctx> {
         // (EquationStore.hs) calls `simpSingleton` as part of the
         // main loop, so by the time the search sees the goal list, a
         // singleton variant subst is already in `subst`.
-        let maude_alloc = maude.clone();
-        // Closure-style helper: simp one EquationStore with the same
-        // non-normal-terms predicate.  Reused for both
-        // the no-split branch and the per-arm SplitNow loop below.
-        // `nf_checker.is_some()` iff `has_reducible` (built via
-        // `has_reducible.then(...)`), so the checker's presence IS the
-        // reducible-symbol dispatch: `as_ref()` is `Some` exactly when
-        // the non-normal-terms check must run.
-        let do_simp = |s: crate::tools::equation_store::EquationStore| -> Result<
-            crate::tools::equation_store::EquationStore,
-            crate::prove::ProveError,
-        > { simp_store(s, nf_checker.as_ref(), &maude_alloc) };
+        let do_simp = |store, fresh: &mut FastFreshState| {
+            simp_store(store, nf_checker.as_ref(), maude, fresh)
+        };
 
         match (split, strategy) {
             (Some(id), SplitStrategy::SplitNow) => {
@@ -1324,7 +1270,7 @@ impl<'ctx> Reduction<'ctx> {
                 // that only permute the rule's two premise variables.
                 let store = match is_ac {
                     IsAcConstructor::AcConstructor(v1, v2) => {
-                        store.remove_permutations(&maude, id, &v1, &v2)?
+                        store.remove_permutations(maude, id, &v1, &v2)?
                     }
                     IsAcConstructor::OtherRule => store,
                 };
@@ -1334,7 +1280,7 @@ impl<'ctx> Reduction<'ctx> {
                         id
                     ))
                 })?;
-                let mut live_arms = simp_split_arms(&maude_alloc, arms, do_simp)?;
+                let mut live_arms = simp_split_arms(&self.fresh, arms, do_simp)?;
                 if live_arms.is_empty() {
                     // All arms contradicted under per-arm simp.
                     // Install a false store so downstream is_false
@@ -1354,7 +1300,7 @@ impl<'ctx> Reduction<'ctx> {
                     self.sys.invalidate_max_var_idx_cache();
                     let (store, counter) = live_arms.pop().unwrap();
                     self.sys.set_eq_store(std::sync::Arc::new(store));
-                    self.maude.reset_counter_to(counter);
+                    self.fresh = FastFreshState::seeded(counter);
                     Ok(SystemOutcome::Linear)
                 } else {
                     // Each arm is the pre-split system with its own store.
@@ -1375,7 +1321,8 @@ impl<'ctx> Reduction<'ctx> {
                 // No split fanout: simp once on the combined store, and
                 // record a deferred split as a goal.
                 self.sys.invalidate_max_var_idx_cache();
-                self.sys.set_eq_store(std::sync::Arc::new(do_simp(store)?));
+                self.sys
+                    .set_eq_store(std::sync::Arc::new(do_simp(store, &mut self.fresh)?));
                 if self.sys.eq_store().is_false() {
                     return Ok(SystemOutcome::Contradictory);
                 }
@@ -2066,7 +2013,7 @@ fn freshen_rule_with_constrs(
     rule: RuleACInst,
     constrs: Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
     avoid_max: u64,
-    maude: &tamarin_term::maude_proc::MaudeHandle,
+    fresh: &mut FastFreshState,
 ) -> (
     RuleACInst,
     Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
@@ -2075,12 +2022,12 @@ fn freshen_rule_with_constrs(
     if tamarin_term::lterm::bounds_var_idx(&pair).is_none() {
         return pair;
     }
-    maude.ensure_above(avoid_max);
-    tamarin_term::lterm::rename(pair, &mut &*maude)
+    fresh.advance_to(avoid_max.saturating_add(1));
+    tamarin_term::lterm::rename(pair, fresh)
 }
 
 /// simp one `EquationStore` with `EquationStore::simp`, drawing fresh
-/// indices from the same `reserve_idxs` counter.  `Some(checker)` wires the
+/// indices from the reduction.  `Some(checker)` wires the
 /// `substCreatesNonNormalTerms` predicate; `None` disables it
 /// (`|_,_| false`), mirroring the `has_reducible` gate at the call sites.
 /// Shared by `solve_term_eqs`'s `do_simp` and `solve_split_goal`'s
@@ -2089,37 +2036,33 @@ fn simp_store(
     store: crate::tools::equation_store::EquationStore,
     checker: Option<&crate::constraint::solver::contradictions::SubstNfChecker>,
     maude: &tamarin_term::maude_proc::MaudeHandle,
+    fresh: &mut FastFreshState,
 ) -> Result<crate::tools::equation_store::EquationStore, crate::prove::ProveError> {
     Ok(match checker {
-        Some(checker) => store.simp(maude, |fs, vfs| checker.check(fs, vfs))?,
-        None => store.simp(maude, |_, _| Ok(false))?,
+        Some(checker) => store.simp(maude, fresh, |fs, vfs| checker.check(fs, vfs))?,
+        None => store.simp(maude, fresh, |_, _| Ok(false))?,
     })
 }
 
 /// Simplify each arm of an equation-store split. The arms fork DisjT below
-/// FreshT, so each starts from the same counter; each live arm keeps the
-/// counter its simplification left, contradictory arms are dropped, and the
-/// shared counter ends at the highest one reached.
+/// FreshT. Each arm starts at the split and carries its own draws onward.
 fn simp_split_arms(
-    maude: &tamarin_term::maude_proc::MaudeHandle,
+    fresh: &FastFreshState,
     arms: Vec<crate::tools::equation_store::EquationStore>,
     simp: impl Fn(
         crate::tools::equation_store::EquationStore,
+        &mut FastFreshState,
     ) -> Result<crate::tools::equation_store::EquationStore, crate::prove::ProveError>,
 ) -> Result<Vec<(crate::tools::equation_store::EquationStore, u64)>, crate::prove::ProveError> {
-    let fork_base = maude.fresh_counter_peek();
-    let mut high_water = fork_base;
     let mut live = Vec::new();
     for arm in arms {
-        maude.reset_counter_to(fork_base);
-        let simped = simp(arm)?;
-        let counter = maude.fresh_counter_peek();
-        high_water = high_water.max(counter);
+        let mut branch = fresh.clone();
+        let simped = simp(arm, &mut branch)?;
+        let counter = branch.next_index();
         if !simped.is_false() {
             live.push((simped, counter));
         }
     }
-    maude.ensure_above(high_water.saturating_sub(1));
     Ok(live)
 }
 
@@ -2348,13 +2291,7 @@ impl<'ctx> Reduction<'ctx> {
             _ => {
                 let mut cases = Vec::with_capacity(alts.len());
                 for (i, gfm) in alts.iter().enumerate() {
-                    // HS FreshT-threading: each disjunct branch continues
-                    // the enclosing thread (see `new_inheriting`).
-                    let mut sub = Reduction::new_inheriting(
-                        self.ctx,
-                        self.sys.clone(),
-                        self.maude.fresh_counter_peek(),
-                    );
+                    let mut sub = self.fork();
                     // Decompose the chosen alternative — see comment in
                     // singleton branch.  Mirrors Haskell `solveDisjunction`
                     // → `insertFormula alt`.
@@ -2543,7 +2480,7 @@ impl<'ctx> Reduction<'ctx> {
     /// HS `freshLVar name sort`: the next index of this reduction's fresh
     /// counter.
     pub(crate) fn fresh_lvar(
-        &self,
+        &mut self,
         name: &str,
         sort: tamarin_term::lterm::LSort,
     ) -> tamarin_term::lterm::LVar {
@@ -2554,12 +2491,10 @@ impl<'ctx> Reduction<'ctx> {
     /// first. The counter is first lifted to `avoid sys`, which Haskell's
     /// threaded counter satisfies by construction; a system without free
     /// variables leaves it unlifted, as `avoid` is then 0.
-    fn fresh_idxs(&self, n: u64) -> u64 {
+    fn fresh_idxs(&mut self, n: u64) -> u64 {
         let avoid = avoid_fresh_state(&self.sys);
-        if avoid > 0 {
-            self.maude.ensure_above(avoid - 1);
-        }
-        self.maude.reserve_idxs(n)
+        self.fresh.advance_to(avoid);
+        self.fresh.fresh_idents(n)
     }
 
     /// Collapse a goal solver's branches: none is `Contradictory`; a single
@@ -2572,7 +2507,7 @@ impl<'ctx> Reduction<'ctx> {
         if cases.len() == 1 {
             let branch = cases.pop().unwrap();
             self.sys = branch.sys;
-            self.maude.reset_counter_to(branch.counter);
+            self.fresh = FastFreshState::seeded(branch.counter);
             self.changed = ChangeIndicator::Changed;
             return GoalCases::LinearNamed(branch.name);
         }
@@ -2610,14 +2545,9 @@ impl<'ctx> Reduction<'ctx> {
                 // instance, unifying that action with `fa`. All cases
                 // share the same rule name; proof_method.rs dedup will
                 // append `_case_1`/`_case_2`/... if multiple cases.
-                //
                 let mut cases = Vec::new();
-                // HS FreshT-threading: per pushed case, the branch's final
-                // fresh counter (see `new_inheriting`).
                 for act in &ru.actions {
-                    let sys = self.sys.clone();
-                    let mut sub =
-                        Reduction::new_inheriting(self.ctx, sys, self.maude.fresh_counter_peek());
+                    let mut sub = self.fork();
                     let res = sub.solve_fact_eqs(
                         SplitStrategy::SplitNow,
                         &[tamarin_term::rewriting::Equal {
@@ -2642,8 +2572,8 @@ impl<'ctx> Reduction<'ctx> {
                 // the rule's first two premises lets the SplitNow fan-out
                 // drop unifier arms that only permute them (#883).
                 let avoid_max = bounds_max(&self.sys);
-                self.maude.ensure_above(avoid_max);
-                let fork_base = self.maude.fresh_counter_peek();
+                self.fresh.advance_to(avoid_max.saturating_add(1));
+
                 let goal_ac_headed = matches!(fa.tag, crate::fact::FactTag::Ku)
                     && fa.arity() == 1
                     && matches!(
@@ -2674,20 +2604,18 @@ impl<'ctx> Reduction<'ctx> {
                         rule
                     };
                     let Some((renamed, prefix)) =
-                        self.label_node_id(*i, rule, None, avoid_max, fork_base, |_| true)?
+                        self.label_node_id(*i, rule, None, avoid_max, |_| true)?
                     else {
                         continue;
                     };
                     let case_name = rule_case_name(&renamed);
-                    let fork_counter = prefix.maude.fresh_counter_peek();
                     let is_ac = if goal_ac_headed {
                         ku_vars(&renamed)
                     } else {
                         IsAcConstructor::OtherRule
                     };
                     for act in renamed.actions.iter().filter(|act| matches_goal(act)) {
-                        let mut sub =
-                            Reduction::new_inheriting(self.ctx, prefix.sys.clone(), fork_counter);
+                        let mut sub = prefix.fork();
                         let res = sub.solve_fact_eqs_ac(
                             SplitStrategy::SplitNow,
                             is_ac,
@@ -2708,22 +2636,21 @@ impl<'ctx> Reduction<'ctx> {
     /// caller's `disjunctionOfList rules`: import (rename) the rule, lower
     /// its budget below a same-named `parent`, solve its variant
     /// constraints, label `i` with it and exploit its premises. Sibling
-    /// rules fork below FreshT, so every import starts from `fork_base`.
+    /// rules each import from the same fresh state.
     /// `keep` rejects a renamed rule whose branch Haskell kills later.
     /// Returns the labelled rule and the branch, or `None` when the branch
     /// dies (including `noContradictoryEqStore` after the constraints).
     fn label_node_id(
-        &mut self,
+        &self,
         i: crate::constraint::constraints::NodeId,
         (rule, constrs): &crate::constraint::solver::context::RuleWithConstrs,
         parent: Option<&RuleACInst>,
         avoid_max: u64,
-        fork_base: u64,
         keep: impl FnOnce(&RuleACInst) -> bool,
     ) -> Result<Option<(RuleACInst, Reduction<'ctx>)>, crate::prove::ProveError> {
-        self.maude.reset_counter_to(fork_base);
+        let mut fresh = self.fresh.clone();
         let (mut ru, constrs) =
-            freshen_rule_with_constrs(rule.clone(), constrs.clone(), avoid_max, &self.maude);
+            freshen_rule_with_constrs(rule.clone(), constrs.clone(), avoid_max, &mut fresh);
         if let Some(parent) = parent {
             let budget = crate::rule::get_remaining_rule_applications(parent);
             let name = crate::rule::rule_name_string(parent);
@@ -2736,7 +2663,7 @@ impl<'ctx> Reduction<'ctx> {
         }
         let mut sys = self.sys.clone();
         sys.add_node(i, ru.clone());
-        let mut branch = Reduction::new_inheriting(self.ctx, sys, self.maude.fresh_counter_peek());
+        let mut branch = Reduction::new_inheriting(self.ctx, sys, fresh.next_index());
         if branch.solve_rule_constraints(constrs)? {
             return Ok(None);
         }
@@ -2785,7 +2712,6 @@ impl<'ctx> Reduction<'ctx> {
         let rules = &self.ctx.classified_rules;
         let avoid_max = bounds_max(&self.sys);
         let new_node = self.fresh_lvar("vr", tamarin_term::lterm::LSort::Node);
-        let fork_base = self.maude.fresh_counter_peek();
         let matches_prem =
             |fc: &crate::fact::LNFact| fc.tag == fa_prem.tag && fc.arity() == fa_prem.arity();
         let mut cases: Vec<GoalBranch> = Vec::new();
@@ -2796,17 +2722,16 @@ impl<'ctx> Reduction<'ctx> {
                 continue;
             }
             let Some((renamed, label)) =
-                self.label_node_id(new_node, rule, None, avoid_max, fork_base, |_| true)?
+                self.label_node_id(new_node, rule, None, avoid_max, |_| true)?
             else {
                 continue;
             };
             let case_name = rule_case_name(&renamed);
-            let label_counter = label.maude.fresh_counter_peek();
             for (c_idx, fa_conc) in renamed.enumerate_conclusions() {
                 if !matches_prem(fa_conc) {
                     continue;
                 }
-                let mut sub = Reduction::new_inheriting(self.ctx, label.sys.clone(), label_counter);
+                let mut sub = label.fork();
                 let res = sub.insert_edge_with_facts(
                     Edge {
                         src: (new_node, c_idx),
@@ -2860,9 +2785,7 @@ impl<'ctx> Reduction<'ctx> {
             // route through `insert_edge_with_facts` so unification fires
             // BEFORE the edge enters sEdges.  Mirrors HS's
             // `solveFactEqs SplitNow` + `modM sEdges` order.
-            let sys_clone = self.sys.clone();
-            let mut sub =
-                Reduction::new_inheriting(self.ctx, sys_clone, self.maude.fresh_counter_peek());
+            let mut sub = self.fork();
             let res = sub.insert_edge_with_facts(
                 crate::constraint::constraints::Edge { src: *c, tgt: *p },
                 &fa_conc,
@@ -2936,8 +2859,7 @@ impl<'ctx> Reduction<'ctx> {
                 // AC fanout.
                 let mut sys_clone = self.sys.clone();
                 sys_clone.add_node(new_node, ru_inst.clone());
-                let sub =
-                    Reduction::new_inheriting(self.ctx, sys_clone, self.maude.fresh_counter_peek());
+                let sub = Reduction::new_inheriting(self.ctx, sys_clone, self.fresh.next_index());
                 let Some(prem0) = ru_inst.premises.first() else {
                     continue;
                 };
@@ -2955,7 +2877,7 @@ impl<'ctx> Reduction<'ctx> {
             // destructor, extended from its first premise.
             let avoid_max = bounds_max(&self.sys);
             let new_node = self.fresh_lvar("vr", tamarin_term::lterm::LSort::Node);
-            let fork_base = self.maude.fresh_counter_peek();
+
             let ctx = self.ctx;
             for rule in &ctx.classified_rules.destruct {
                 // `contradictoryIf (forbiddenEdge cRule ru)`, and a first
@@ -2968,7 +2890,7 @@ impl<'ctx> Reduction<'ctx> {
                         && !ru.conclusions.is_empty()
                 };
                 let Some((ru, sub)) =
-                    self.label_node_id(new_node, rule, Some(&c_rule), avoid_max, fork_base, keep)?
+                    self.label_node_id(new_node, rule, Some(&c_rule), avoid_max, keep)?
                 else {
                     continue;
                 };
@@ -3053,9 +2975,9 @@ impl<'ctx> Reduction<'ctx> {
         }
 
         // splitList <- splitSubterm reducible True st.  Fresh vars for the
-        // AC-recurse arm come from the maude counter (HS `freshLVar`).
+        // AC-recurse arm come from the reduction (HS `freshLVar`).
         use crate::tools::subterm_store::SubtermSplit;
-        let reducible = self.maude.maude_sig().reducible_fun_syms_fast.clone();
+        let reducible = self.ctx.maude.maude_sig().reducible_fun_syms_fast.clone();
         let split_list = {
             let mut mk_fresh = |sort: LSort| -> LVar { self.fresh_lvar("newVar", sort) };
             crate::tools::subterm_store::split_subterm(
@@ -3084,9 +3006,11 @@ impl<'ctx> Reduction<'ctx> {
             // its fresh allocation above every var minted so far (incl. the
             // AC `newVar` from the split), so advance the per-branch
             // counter past the parent's current high-water mark.
-            let mut sub = Reduction::new(self.ctx, base_sys.clone());
-            sub.maude
-                .ensure_above(self.maude.fresh_counter_peek().saturating_sub(1));
+            let mut sub = Reduction::new_inheriting(
+                self.ctx,
+                base_sys.clone(),
+                self.fresh.next_index().max(1),
+            );
             let outcome = match split {
                 SubtermSplit::TrueD => SystemOutcome::Linear,
                 SubtermSplit::SubtermD(s, t) => {
@@ -3158,24 +3082,21 @@ impl<'ctx> Reduction<'ctx> {
         // `solveSplit` (Goals.hs) simplifies the chosen store with
         // `substCreatesNonNormalTerms` as the contradiction check, which
         // folds the chosen variant into the substitution.
-        let maude = self.maude.clone();
+        let maude = &self.ctx.maude;
         let has_reducible = !maude.maude_sig().reducible_fun_syms.is_empty();
         // One `maybeNonNormalTerms` walk of `self.sys`, shared across every
         // candidate probe below — HS's curried `substCheck` from Goals.hs
         // (`gets (substCreatesNonNormalTerms hnd)` captures the system once).
         // See `SubstNfChecker`.
         let nf_checker = has_reducible.then(|| {
-            crate::constraint::solver::contradictions::SubstNfChecker::new(&maude, &self.sys)
+            crate::constraint::solver::contradictions::SubstNfChecker::new(maude, &self.sys)
         });
-        // `nf_checker.is_some()` iff `has_reducible`, so `as_ref()` is
-        // `Some` exactly when the non-normal-terms check must run.
-        let simplify_picked = |store: crate::tools::equation_store::EquationStore| -> Result<
-            crate::tools::equation_store::EquationStore,
-            crate::prove::ProveError,
-        > { simp_store(store, nf_checker.as_ref(), &maude) };
+        let simplify_picked = |store, fresh: &mut FastFreshState| {
+            simp_store(store, nf_checker.as_ref(), maude, fresh)
+        };
         if cases.len() == 1 {
             self.sys.invalidate_max_var_idx_cache();
-            let store = simplify_picked(cases.into_iter().next().unwrap())?;
+            let store = simplify_picked(cases.into_iter().next().unwrap(), &mut self.fresh)?;
             if store.is_false() {
                 self.mark_contradictory();
                 return Ok(GoalCases::Contradictory);
@@ -3185,7 +3106,7 @@ impl<'ctx> Reduction<'ctx> {
         }
         // `solveSplit` (Goals.hs) returns "split" for every alternative;
         // `distinguish` later numbers the siblings.
-        let out = simp_split_arms(&maude, cases, simplify_picked)?
+        let out = simp_split_arms(&self.fresh, cases, simplify_picked)?
             .into_iter()
             .map(|(store, counter)| {
                 let mut sys = self.sys.clone();

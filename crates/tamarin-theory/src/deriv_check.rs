@@ -156,10 +156,7 @@ pub fn check_message_derivation(
                     .map(tamarin_utils::parallel::Helper::Own)
             },
             move |lease, (idx, name, rule, vars)| {
-                let maude = lease
-                    .as_deref()
-                    .unwrap_or(&primary)
-                    .with_fresh_counter_from(0);
+                let maude = lease.as_deref().unwrap_or(&primary).clone();
                 run(idx, name, &rule, vars, maude)
             },
             |_| false,

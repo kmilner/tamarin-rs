@@ -532,11 +532,6 @@ pub struct ProverSession {
     /// `full_sources` (raw, unsaturated cells), etc.
     /// Proof contexts share the template's ordered source goals.
     template_ctx: std::sync::Arc<ProofContext>,
-    /// Fresh-counter value BEFORE the template was built.  The template
-    /// build is counter-neutral (the build's fresh allocation is undone by
-    /// restoring the counter), so every lemma starts from this same base.
-    /// Used as the `ensure_above` floor on the per-lemma counter clone.
-    setup_counter_before: u64,
     /// Raw and refined results are published once per successful build.
     source_cache: SourceCache,
     /// Snapshot the process-wide diagnostic gate when the session is built so
@@ -930,7 +925,7 @@ impl ProverSession {
     /// through the same provider as proof search so cache bypass and deferred
     /// conversion failures have one implementation.
     pub fn context_for_sources(&self, kind: SourceKind) -> Result<ProofContext, ProveError> {
-        let mut ctx = self.fresh_context(&self.template_ctx.maude);
+        let mut ctx = (*self.template_ctx).clone();
         self.install_source_provider(&mut ctx, kind);
         ctx.ensure_saturated()?;
         Ok(ctx)
@@ -1043,10 +1038,6 @@ impl ProverSession {
             restrictions.push(guarded_or_error(&r.formula)?);
         }
         let rules: Vec<OpenProtoRule> = theory.rules().cloned().collect();
-        // HS closes the theory once and each proof seeds its fresh supply
-        // from `avoid sys`; restore the counter so the template build does
-        // not shift any lemma's numbering.
-        let setup_counter_before = maude.fresh_counter_peek();
         let template_ctx = ProofContext::try_with_options(
             maude.clone(),
             rules,
@@ -1062,21 +1053,18 @@ impl ProverSession {
                 loop_breakers_prepared: true,
             },
         )?;
-        maude.reset_counter_to(setup_counter_before);
         Ok(ProverSession {
             theory,
             prepared_lemmas,
             source_assumptions,
             cut,
             template_ctx: std::sync::Arc::new(template_ctx),
-            setup_counter_before,
             source_cache: SourceCache::default(),
             source_cache_disabled: tamarin_utils::env_gate!("TAM_RS_NO_SOURCE_CACHE"),
         })
     }
 
     /// Batch search and interactive replay use the same per-lemma context.
-    /// Each lemma has its own fresh counter on the assigned Maude process.
     /// The session supplies raw or refined sources on demand.
     fn setup_per_lemma_ctx(
         &self,
@@ -1085,7 +1073,7 @@ impl ProverSession {
         maude: &MaudeHandle,
     ) -> ProofContext {
         let source_kind = lemma.source_kind();
-        let mut ctx = self.fresh_context(maude);
+        let mut ctx = self.context_for_process(maude);
         ctx.use_induction = induction_hint(lemma);
         ctx.is_exists_trace = matches!(
             lemma.trace_quantifier,
@@ -1102,11 +1090,9 @@ impl ProverSession {
         ctx
     }
 
-    fn fresh_context(&self, maude: &MaudeHandle) -> ProofContext {
+    fn context_for_process(&self, maude: &MaudeHandle) -> ProofContext {
         let mut ctx = (*self.template_ctx).clone();
-        ctx.maude = maude.with_fresh_counter_from(0);
-        ctx.maude
-            .ensure_above(self.setup_counter_before.saturating_sub(1));
+        ctx.maude = maude.clone();
         ctx
     }
 
@@ -1130,7 +1116,7 @@ impl ProverSession {
             let maude = maude.clone();
             let session = self.clone();
             move || {
-                let mut ctx = session.fresh_context(&maude);
+                let mut ctx = session.context_for_process(&maude);
                 if kind == SourceKind::RawSources {
                     return ctx.build_raw_sources();
                 }

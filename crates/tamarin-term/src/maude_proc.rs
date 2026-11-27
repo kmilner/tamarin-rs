@@ -13,7 +13,7 @@
 use std::io::{Read, Write};
 use std::ops::Deref;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::lterm::LNTerm;
@@ -23,7 +23,6 @@ use crate::maude_sig::MaudeSig;
 use crate::maude_types::{lterm_to_mterm_global, mterm_to_lnterm, ConvCtx, MSubst, MTerm};
 use crate::rewriting::Equal;
 use tamarin_utils::cancellation;
-use tamarin_utils::fresh::MonadFresh;
 
 const PROMPT: &[u8] = b"Maude> ";
 
@@ -493,9 +492,6 @@ pub struct MaudeHandle {
     inner: Arc<parking_lot::Mutex<MaudeProcessInner>>,
     child: Arc<Mutex<MaudeChildReaper>>,
     caches: Arc<SharedMaudeCaches>,
-    /// The solver's fresh supply (HS `MonadFresh` of `Reduction`).  Each
-    /// `with_fresh_counter_*` clone gets its own counter.
-    fresh_counter: Arc<AtomicU64>,
     /// Every st-rule LHS is Ac/C-free, so `nf_via_haskell` is complete for
     /// `reduce`'s normal-form fast path.  Computed once at start.
     st_lhs_ac_free: bool,
@@ -529,8 +525,6 @@ impl MaudeHandle {
         sig: MaudeSig,
         caches: Arc<SharedMaudeCaches>,
     ) -> Result<Self, MaudeError> {
-        // Wrap once: `inner`, the handle, and every `with_fresh_counter_from`
-        // clone share this single immutable signature.
         let sig = Arc::new(sig);
         // stderr: INHERIT, not pipe.  HS uses `runInteractiveCommand`
         // (System.Process) at Maude/Process.hs, which opens a PIPE for
@@ -569,93 +563,9 @@ impl MaudeHandle {
             inner: Arc::new(parking_lot::Mutex::new(inner)),
             child: reaper,
             caches,
-            // The global fresh counter starts at 0 (HS-faithful: HS's
-            // `MonadFresh` global counter starts at 0).
-            fresh_counter: Arc::new(AtomicU64::new(0)),
             st_lhs_ac_free: sig.st_lhs_all_ac_c_free(),
             sig,
         })
-    }
-
-    /// Return the next unique idx and increment the counter.
-    /// Mirrors Haskell's `freshIdent` / `freshLVar` — every call returns
-    /// a globally-unique integer across the entire proof session.
-    pub fn fresh_idx(&self) -> u64 {
-        self.fresh_counter.fetch_add(1, Ordering::SeqCst)
-    }
-
-    /// Atomically reserve `n` consecutive idxs from the global counter,
-    /// returning the FIRST one.  Used by `freshen_rule` to shift a rule's
-    /// vars into a globally unique range without per-call collisions.
-    /// Haskell's MonadFresh equivalent: `freshIdents n` (replicates
-    /// `freshIdent` n times).
-    pub fn reserve_idxs(&self, n: u64) -> u64 {
-        if n == 0 {
-            return self.fresh_counter.load(Ordering::SeqCst);
-        }
-        self.fresh_counter.fetch_add(n, Ordering::SeqCst)
-    }
-
-    /// Bump the counter so the next allocation is strictly greater than `n`.
-    /// No-op if the counter is already > `n`.  Callers use this before
-    /// `fresh_idx()` to guarantee new allocations don't collide with
-    /// any system var below `n`.  The counter never goes backward.
-    pub fn ensure_above(&self, n: u64) {
-        let target = n.saturating_add(1);
-        let mut cur = self.fresh_counter.load(Ordering::SeqCst);
-        while cur < target {
-            match self.fresh_counter.compare_exchange(
-                cur,
-                target,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                Ok(_) => return,
-                Err(actual) => cur = actual,
-            }
-        }
-    }
-
-    /// Current counter value (for diagnostics / probe output).
-    pub fn fresh_counter_peek(&self) -> u64 {
-        self.fresh_counter.load(Ordering::SeqCst)
-    }
-
-    /// Force-set the counter to `n` (overwriting the current value
-    /// even if `n` is BELOW current).  Used by `apply_eq_store` to
-    /// reset the counter between per-variant Maude calls so each
-    /// variant's witness allocation starts from the same baseline —
-    /// HS-faithful `evalFreshAvoiding` semantics where each
-    /// per-variant `applyBound` call has its own fresh state.
-    ///
-    /// IMPORTANT: callers MUST advance the counter back to the high
-    /// water mark after the per-variant loop or subsequent
-    /// allocations could collide with the per-variant outputs.
-    pub fn reset_counter_to(&self, n: u64) {
-        self.fresh_counter.store(n, Ordering::SeqCst);
-    }
-
-    /// Share this handle's process with a new fresh supply starting at
-    /// `avoid_max + 1`: HS `runReduction ... (avoid sys)` gives each
-    /// reduction its own counter.
-    pub fn with_fresh_counter_from(&self, avoid_max: u64) -> MaudeHandle {
-        self.with_fresh_counter_next(avoid_max.saturating_add(1))
-    }
-
-    /// Like [`with_fresh_counter_from`] but takes the NEXT-draw value
-    /// directly (HS `FreshState` units).  HS `avoid sys` (LTerm.hs,
-    /// `maybe 0 (succ . snd) . boundsVarIdx`) is legitimately 0 for a
-    /// system with NO free variables (e.g. a lemma's root system: closed
-    /// formula, no nodes), which the `avoid_max + 1` form cannot express.
-    pub fn with_fresh_counter_next(&self, next: u64) -> MaudeHandle {
-        MaudeHandle {
-            inner: self.inner.clone(),
-            child: self.child.clone(),
-            caches: self.caches.clone(),
-            fresh_counter: Arc::new(AtomicU64::new(next)),
-            st_lhs_ac_free: self.st_lhs_ac_free,
-            sig: Arc::clone(&self.sig),
-        }
     }
 
     /// The theory signature (a refcount bump, no lock).
@@ -1009,21 +919,6 @@ impl MaudeHandle {
     }
 }
 
-/// The solver's fresh supply.  HS `Reduction` is
-/// `StateT System (FreshT (DisjT (Reader ProofContext)))` (Reduction.hs)
-/// and `Control.Monad.Fresh` re-exports the FAST `FreshT`
-/// (Control/Monad/Fresh.hs), so the name is ignored and both methods draw
-/// from the one counter (Control/Monad/Fresh/Class.hs).
-impl MonadFresh for &MaudeHandle {
-    fn fresh_ident(&mut self, _name: &str) -> u64 {
-        self.reserve_idxs(1)
-    }
-
-    fn fresh_idents(&mut self, k: u64) -> u64 {
-        self.reserve_idxs(k)
-    }
-}
-
 /// Build a conjunction-equation Maude command: `<prefix>lhs =? rhs /\ ... .\n`.
 /// Each side is converted via `lterm_to_mterm_global` threading the shared
 /// `ctx`, so one wire encoding serves the whole conjunction.
@@ -1178,10 +1073,7 @@ fn convert_reply(
 //
 // HS uses a single Maude per ClosedTheory (Term/Maude/Process.hs); this
 // pool is a Rust-specific implementation improvement — it doesn't
-// change semantics, only removes a serialisation point.  Per-call
-// fresh-counter scope (`with_fresh_counter_from`) already guarantees
-// HS-faithful witness allocation regardless of which pool member
-// handles a given task.
+// change semantics, only removes a serialisation point.
 // ---------------------------------------------------------------------------
 
 /// Mutable state of a `MaudePool`, guarded by a single `Mutex`.
@@ -1241,10 +1133,7 @@ impl PoolState {
 ///
 /// Released handles are reused LIFO (see `PoolState::free`), so under light
 /// contention the same warm member serves repeatedly and the lazy members
-/// stay unspawned.  Pool members are interchangeable: identical `sig`, and
-/// each draw site seeds its own fresh-counter (`with_fresh_counter_next` /
-/// `with_fresh_counter_from`), so which member — and how many — handle a
-/// task is output-invariant.
+/// stay unspawned. Pool members use the same signature.
 ///
 /// Internally a `Mutex<PoolState>` LIFO works fine — the pool is small
 /// (≤ num_cpus) and `acquire` is rare on the hot path (it happens once per

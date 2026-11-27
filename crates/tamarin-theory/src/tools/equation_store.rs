@@ -25,6 +25,7 @@
 //! `simp_disjunction`.
 
 use std::collections::BTreeSet;
+use tamarin_utils::fresh::FastFreshState;
 
 use std::cmp::Ordering;
 
@@ -531,12 +532,13 @@ impl EquationStore {
     pub fn simp<F: Fn(&LNSubst, &LNSubstVFresh) -> Result<bool, MaudeError>>(
         mut self,
         maude: &MaudeHandle,
+        fresh: &mut FastFreshState,
         is_contr: F,
     ) -> Result<Self, AddEqsError> {
         // `foreachDisj` passes look at the first substitution of a
         // disjunction in `Set` order, so keep every disjunction sorted.
         self.sort_disj_substs();
-        let passes: [fn(&MaudeHandle, &LNSubst, &[LNSubstVFresh]) -> DisjStep; 5] = [
+        let passes: [fn(&mut FastFreshState, &LNSubst, &[LNSubstVFresh]) -> DisjStep; 5] = [
             simp_singleton,
             simp_abstract_sorted_var,
             simp_identify,
@@ -562,7 +564,7 @@ impl EquationStore {
             }
             changed |= self.simp_empty_disj();
             for pass in passes {
-                if self.foreach_disj(maude, pass)? {
+                if self.foreach_disj(maude, fresh, pass)? {
                     changed = true;
                     self.sort_disj_substs();
                 }
@@ -579,10 +581,11 @@ impl EquationStore {
     fn foreach_disj(
         &mut self,
         maude: &MaudeHandle,
-        pass: fn(&MaudeHandle, &LNSubst, &[LNSubstVFresh]) -> DisjStep,
+        fresh: &mut FastFreshState,
+        pass: fn(&mut FastFreshState, &LNSubst, &[LNSubstVFresh]) -> DisjStep,
     ) -> Result<bool, AddEqsError> {
         for idx in 0..self.conj.len() {
-            let Some((factor, replacement)) = pass(maude, &self.subst, &self.conj[idx].substs)
+            let Some((factor, replacement)) = pass(fresh, &self.subst, &self.conj[idx].substs)
             else {
                 continue;
             };
@@ -603,12 +606,13 @@ impl EquationStore {
     /// disjunction (`None` when it simplified away).
     pub fn simp_disjunction<F: Fn(&LNSubst, &LNSubstVFresh) -> Result<bool, MaudeError>>(
         maude: &MaudeHandle,
+        fresh: &mut FastFreshState,
         is_contr: F,
         substs: Vec<LNSubstVFresh>,
     ) -> Result<(LNSubst, Option<Vec<LNSubstVFresh>>), AddEqsError> {
         let mut store = EquationStore::empty();
         store.add_disj(substs);
-        let store = store.simp(maude, is_contr)?;
+        let store = store.simp(maude, fresh, is_contr)?;
         let EquationStore { subst, conj, .. } = store;
         Ok(match <[EqDisj; 1]>::try_from(conj) {
             Ok([d]) => (subst, Some(d.substs)),
@@ -671,13 +675,7 @@ impl EquationStore {
                         rhs: t,
                     })
                     .collect();
-                // Each variant unifies on its own counter seeded at the same
-                // avoidance set, as HS's `evalFreshAvoiding`; the session
-                // counter is left alone.
-                let unifiers = maude
-                    .with_fresh_counter_from(avoid_max)
-                    .unify(&eqs)
-                    .map_err(AddEqsError::from)?;
+                let unifiers = maude.unify(&eqs).map_err(AddEqsError::from)?;
                 // `restrictVFresh (varsRange newsubst ++ domVFresh s)`. The
                 // range terms are kept as Maude returns them, unnormalised.
                 new_substs.extend(unifiers.into_iter().map(|u| {
@@ -704,7 +702,11 @@ impl EquationStore {
 
 /// `simpSingleton` (EquationStore.hs): fold a singleton disjunction into the
 /// free substitution via `freshToFree`.
-fn simp_singleton(maude: &MaudeHandle, free: &LNSubst, substs: &[LNSubstVFresh]) -> DisjStep {
+fn simp_singleton(
+    fresh: &mut FastFreshState,
+    free: &LNSubst,
+    substs: &[LNSubstVFresh],
+) -> DisjStep {
     let [s] = substs else {
         return None;
     };
@@ -724,16 +726,16 @@ fn simp_singleton(maude: &MaudeHandle, free: &LNSubst, substs: &[LNSubstVFresh])
         t.for_each_free(&mut |w: &LVar| floor = floor.max(w.idx));
     }
     if floor > 0 {
-        maude.ensure_above(floor);
+        fresh.advance_to(floor.saturating_add(1));
     }
-    Some((s.fresh_to_free_avoiding(|n| maude.reserve_idxs(n)), None))
+    Some((s.fresh_to_free_avoiding(|n| fresh.fresh_idents(n)), None))
 }
 
 /// `simpAbstractSortedVar` (EquationStore.hs): if every substitution maps
 /// `v` to a variable of the same sort `s`, strictly below `v`'s sort, factor
 /// out `{v -> y}` for a fresh `y` of sort `s`.
 fn simp_abstract_sorted_var(
-    maude: &MaudeHandle,
+    fresh: &mut FastFreshState,
     _free: &LNSubst,
     substs: &[LNSubstVFresh],
 ) -> DisjStep {
@@ -757,7 +759,7 @@ fn simp_abstract_sorted_var(
     let fv = LVar {
         name: v.name,
         sort: lvs[0].sort,
-        idx: maude.reserve_idxs(1),
+        idx: fresh.fresh_idents(1),
     };
     let substs = substs
         .iter()
@@ -774,7 +776,11 @@ fn simp_abstract_sorted_var(
 /// `simpIdentify` (EquationStore.hs): if every substitution maps `v` and
 /// `v'` to the same term, factor out `{vremove -> vkeep}`, keeping the
 /// variable of the smaller sort.
-fn simp_identify(_maude: &MaudeHandle, _free: &LNSubst, substs: &[LNSubstVFresh]) -> DisjStep {
+fn simp_identify(
+    _fresh: &mut FastFreshState,
+    _free: &LNSubst,
+    substs: &[LNSubstVFresh],
+) -> DisjStep {
     let (first, others) = substs.split_first()?;
     let entries: Vec<(&LVar, &LNTerm)> = first.iter().collect();
     let (v, v2) = entries
@@ -814,7 +820,11 @@ fn simp_identify(_maude: &MaudeHandle, _free: &LNSubst, substs: &[LNSubstVFresh]
 /// an application of the same symbol `o`, factor out `{v -> o(x1, .., xk)}`
 /// for fresh `xi`. An AC symbol applied at differing arities is split into
 /// its first argument and the rest.
-fn simp_abstract_fun(maude: &MaudeHandle, _free: &LNSubst, substs: &[LNSubstVFresh]) -> DisjStep {
+fn simp_abstract_fun(
+    fresh: &mut FastFreshState,
+    _free: &LNSubst,
+    substs: &[LNSubstVFresh],
+) -> DisjStep {
     let (first, others) = substs.split_first()?;
     let (v, op, argss) = first.iter().find_map(|(v, t)| {
         let Term::App(op, args) = t else {
@@ -829,10 +839,10 @@ fn simp_abstract_fun(maude: &MaudeHandle, _free: &LNSubst, substs: &[LNSubstVFre
         }
         Some((*v, *op, argss))
     })?;
-    let fresh_x = || LVar {
+    let mut fresh_x = || LVar {
         name: "x",
         sort: LSort::Msg,
-        idx: maude.reserve_idxs(1),
+        idx: fresh.fresh_idents(1),
     };
     let arity = argss[0].len();
     let (fvars, mappings): (Vec<LVar>, Vec<Vec<LNTerm>>) = if argss.iter().all(|a| a.len() == arity)
@@ -868,7 +878,11 @@ fn simp_abstract_fun(maude: &MaudeHandle, _free: &LNSubst, substs: &[LNSubstVFre
 
 /// `simpAbstractName` (EquationStore.hs): if every substitution maps `v` to
 /// the same name, factor out `{v -> n}`.
-fn simp_abstract_name(_maude: &MaudeHandle, _free: &LNSubst, substs: &[LNSubstVFresh]) -> DisjStep {
+fn simp_abstract_name(
+    _fresh: &mut FastFreshState,
+    _free: &LNSubst,
+    substs: &[LNSubstVFresh],
+) -> DisjStep {
     let (v, n) = substs.first()?.iter().find(|(v, t)| {
         matches!(t, Term::Lit(Lit::Con(_))) && substs.iter().all(|s| s.image_of(v) == Some(*t))
     })?;

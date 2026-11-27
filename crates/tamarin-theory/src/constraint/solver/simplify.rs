@@ -102,9 +102,6 @@ pub(crate) fn simplify_system_with_fanout_seeded_with_counters(
     seed: u64,
 ) -> Result<Vec<SystemBranch>, crate::prove::ProveError> {
     use crate::constraint::solver::reduction::Reduction;
-    // `new_inheriting` consults the `REFINE_FLOOR` thread-local so this
-    // sub-reduction inherits the source precompute's `avoid th` seed (HS
-    // Sources.hs); 0 (general proving path) is a no-op.
     let mut red = Reduction::new_inheriting(ctx, sys, seed);
     simplify_system_fan_out_inner_with_passes(&mut red, SIMPLIFY_PASSES)
 }
@@ -141,7 +138,7 @@ fn simplify_system_fan_out_inner_with_passes(
     simp_post_loop_steps(red)?;
     Ok(vec![SystemBranch {
         sys: std::mem::replace(&mut red.sys, crate::constraint::system::System::empty()),
-        counter: red.maude.fresh_counter_peek(),
+        counter: red.fresh.next_index(),
     }])
 }
 
@@ -2115,10 +2112,9 @@ fn propagate_subterm_obvious(
     // `freshLVar "newVar"` for the `ACNewVarD` splits.
     let mut mk_fresh = {
         let avoid_max = crate::constraint::solver::reduction::bounds_max(&red.sys);
-        red.maude.ensure_above(avoid_max);
-        let maude = red.maude.clone();
-        move |sort: tamarin_term::lterm::LSort| -> tamarin_term::lterm::LVar {
-            tamarin_term::lterm::LVar::new("newVar", sort, maude.fresh_idx())
+        red.fresh.advance_to(avoid_max.saturating_add(1));
+        |sort: tamarin_term::lterm::LSort| -> tamarin_term::lterm::LVar {
+            tamarin_term::lterm::LVar::new("newVar", sort, red.fresh.fresh_idents(1))
         }
     };
     let mut contradictory = false;

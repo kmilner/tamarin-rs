@@ -169,7 +169,6 @@ fn public_proving_validates_its_input() {
         let Some(h) = maude_with(theory.signature.clone()) else {
             return;
         };
-        let counter = h.fresh_counter_peek();
         let result = match entry {
             Entry::Raw { narrow } => {
                 for item in theory.items.iter_mut().filter(|_| narrow) {
@@ -186,9 +185,7 @@ fn public_proving_validates_its_input() {
                 .and_then(|(theory, report)| {
                     assert!(!report.is_empty(), "{label}");
                     assert!(crate::wellformedness::variants::fatal_wf_errors(&report).is_empty());
-                    let counter = h.fresh_counter_peek();
                     let session = ProverSession::build(&theory, h.clone(), Default::default())?;
-                    assert_eq!(h.fresh_counter_peek(), counter, "{label}: session build");
                     prove_lemma_in_session(&session, "l", 30)
                 }),
         };
@@ -200,7 +197,6 @@ fn public_proving_validates_its_input() {
             ),
             (Err(ProveError::UnsupportedInput(message)), Err(needle)) => {
                 assert!(message.contains(needle), "{label}: {message}");
-                assert_eq!(h.fresh_counter_peek(), counter, "{label}: rejection");
             }
             (other, _) => panic!("{label}: {:?}", other.map(|_| ())),
         }
@@ -1254,7 +1250,6 @@ fn cancellation_fails_cleanly_and_a_retry_matches_a_clean_run() {
         .ensure_saturated()
         .unwrap();
     let sources_ctx = session.context_for_lemma("goal").unwrap();
-    let next = sources_ctx.maude.fresh_counter_peek() + 43;
     let xorr_ctx = xorr_contradiction_ctx(&path);
     // One system (one set of stamps) for the baseline and every run.
     let xorr_sys = std::sync::Mutex::new(xorr_contradiction_system());
@@ -1307,7 +1302,7 @@ fn cancellation_fails_cleanly_and_a_retry_matches_a_clean_run() {
     // Source fan-out, cancelled while both workers build sources.  A second
     // request snapshotting the same in-progress build must return on its
     // own cancellation while the builder is still parked.  Nothing partial
-    // is published and the fresh counter stays where it was.
+    // is published.
     rows.push(CancelRow {
         label: "parallel sources".into(),
         threads: 2,
@@ -1336,7 +1331,6 @@ fn cancellation_fails_cleanly_and_a_retry_matches_a_clean_run() {
                     .unwrap();
                 let short = std::time::Duration::from_millis(30);
                 assert!(result.recv_timeout(short).is_err(), "the waiter waits");
-                sources_ctx.maude.reset_counter_to(next);
                 token.cancel();
                 let wait = std::time::Duration::from_secs(3);
                 assert!(matches!(
@@ -1350,9 +1344,7 @@ fn cancellation_fails_cleanly_and_a_retry_matches_a_clean_run() {
                 session.source_cache.raw.ready.get().is_none(),
                 "partial sources"
             );
-            assert_eq!(sources_ctx.maude.fresh_counter_peek(), next);
             assert!(!sources_ctx.source_cases().unwrap().is_empty());
-            assert_eq!(sources_ctx.maude.fresh_counter_peek(), next);
             let _guard = CancellationGuard::new(Some(token.clone()));
             assert!(matches!(
                 sources_ctx.source_cases(),
@@ -2217,10 +2209,5 @@ fn backend_ndc_check(backend: &Backend) -> Result<(), ProveError> {
     )
     .unwrap();
     let h = backend.maude(sig);
-    let counter = h.fresh_counter_peek();
-    let result = crate::close_rule::pretty_ndc_check(&h, None, rules, Default::default());
-    if result.is_err() {
-        assert_eq!(h.fresh_counter_peek(), counter);
-    }
-    result.map(drop)
+    crate::close_rule::pretty_ndc_check(&h, None, rules, Default::default()).map(drop)
 }

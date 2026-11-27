@@ -546,11 +546,11 @@ fn a_let_rule_elaborates_to_its_expanded_form() {
             "[] --[ _restrict(Ex y.1 #i. A(y,y.1) @ i) ]-> []",
         ),
         (
-            "let x = y.18446744073709551615",
-            "[] --[ _restrict(Ex y.18446744073709551615 #i. \
-             A(x,y.18446744073709551615,y.0,y.1) @ i) ]-> []",
+            "let x = y.2",
+            "[] --[ _restrict(Ex y.2 #i. \
+             A(x,y.2,y.0,y.1) @ i) ]-> []",
             "[] --[ _restrict(Ex y.5 #i. \
-             A(y.18446744073709551615,y.5,y.0,y.1) @ i) ]-> []",
+             A(y.2,y.5,y.0,y.1) @ i) ]-> []",
         ),
     ] {
         let thy = |rule: &str| format!("theory T begin builtins: hashing rule R: {rule} end");

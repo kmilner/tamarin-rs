@@ -55,6 +55,16 @@ impl FastFreshState {
         FastFreshState { next: seed }
     }
 
+    /// Next index that will be allocated.
+    pub fn next_index(&self) -> u64 {
+        self.next
+    }
+
+    /// Reserve all indices below `floor`.
+    pub fn advance_to(&mut self, floor: u64) {
+        self.next = self.next.max(floor);
+    }
+
     /// Allocate `k` consecutive identifiers and return the first one.
     pub fn fresh_idents(&mut self, k: u64) -> u64 {
         let i = self.next;

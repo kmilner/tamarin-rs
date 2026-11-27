@@ -4941,7 +4941,7 @@ impl<'a> Parser<'a> {
         if self.is_nullary_sym(&id) {
             return Ok(Term::App(id, Vec::new()));
         }
-        let idx = self.try_dot_index();
+        let idx = self.try_dot_index()?;
         let v = VarSpec {
             name: id,
             idx,
@@ -5153,7 +5153,7 @@ impl<'a> Parser<'a> {
             self.restore(save);
             return Ok(None);
         };
-        let idx = self.try_dot_index();
+        let idx = self.try_dot_index()?;
         let v = VarSpec {
             name,
             idx,
@@ -5239,30 +5239,20 @@ impl<'a> Parser<'a> {
     /// Consume `.<digit>+` as a variable index, otherwise leave input
     /// alone. Used so that `x.` (in quantifier lists, function arity slashes,
     /// etc.) doesn't accidentally swallow the trailing dot.
-    fn try_dot_index(&mut self) -> u64 {
-        let save = self.save();
-        // Don't skip whitespace — `.` must be immediately after the identifier
-        // for it to be an index. (Tamarin's `indexedIdentifier` matches
-        // `dot *> natural`, but the dot follows the lexeme without an
-        // intervening token break.)
-        if self.lx.peek() != Some('.') {
-            return 0;
+    fn try_dot_index(&mut self) -> Result<u64, ParseError> {
+        if self.lx.peek() != Some('.') || !self.lx.peek2().is_some_and(|c| c.is_ascii_digit()) {
+            return Ok(0);
         }
         self.lx.bump();
-        // After the dot we accept digits with no intervening whitespace.
-        match self.lx.peek() {
-            Some(c) if c.is_ascii_digit() => match self.lx.natural() {
-                Some(n) => n,
-                None => {
-                    self.restore(save);
-                    0
-                }
-            },
-            _ => {
-                self.restore(save);
-                0
-            }
-        }
+        let start = self.lx.pos();
+        // Keep headroom for fresh variables and substitution shifts in the u64 supply.
+        self.lx
+            .natural()
+            .filter(|&n| n <= u64::from(u32::MAX))
+            .ok_or_else(|| {
+                self.err(format!("variable index exceeds {}", u32::MAX))
+                    .with_location(start, 1)
+            })
     }
 
     // =========================================================================
@@ -5538,7 +5528,7 @@ impl<'a> Parser<'a> {
             self.lx.bump();
         }
         let name = self.lx.identifier();
-        let idx = self.try_dot_index();
+        let idx = self.try_dot_index()?;
         let Some(name) = name.filter(|_| prefixed || !self.try_punct(":") || self.try_kw("node"))
         else {
             self.restore(save);

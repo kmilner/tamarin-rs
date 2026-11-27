@@ -811,6 +811,17 @@ fn var_of(t: &Term) -> &VarSpec {
     }
 }
 
+#[test]
+fn explicit_variable_indices_fit_in_u32() {
+    let model = |idx| format!("theory T begin rule R: [In(x.{idx})] --> [Out(x.{idx})] end");
+    let facts = rule_conclusions(&model(u64::from(u32::MAX)));
+    assert_eq!(var_of(&facts[0].args[0]).idx, u64::from(u32::MAX));
+    let error = parse_theory(&model(u64::from(u32::MAX) + 1), &[]).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("variable index exceeds 4294967295"));
+}
+
 /// A sigil names the sort and a bare identifier is message-sorted, as HS
 /// `sortedLVar`'s prefix arms do — the bare `LSortMsg -> pure ()` case
 /// (Token.hs).

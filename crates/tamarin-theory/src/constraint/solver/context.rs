@@ -194,10 +194,6 @@ pub struct ProofContext {
     /// one per task instead of serialising on `maude`'s IPC mutex, and falls
     /// back to `maude` when none is free. `None` means only `maude` exists
     /// and every task shares it.
-    ///
-    /// HS uses a single Maude per ClosedTheory. The pool does not change
-    /// semantics: every lease site seeds its own fresh counter, so which
-    /// process serves a task does not affect the result.
     pub maude_pool: Option<std::sync::Arc<MaudePool>>,
     /// Which expanded proof nodes retain their constraint systems.
     pub(crate) sys_retention: crate::constraint::solver::search::SysRetention,
@@ -483,10 +479,11 @@ impl ProofContext {
         worker
     }
 
-    pub(crate) fn for_dfs_case(&self, lease: Option<&OwnedPooledMaude>, next_counter: u64) -> Self {
+    pub(crate) fn for_dfs_case(&self, lease: Option<&OwnedPooledMaude>) -> Self {
         let mut worker = self.clone();
-        let maude = lease.map_or(&self.maude, |lease| lease.handle());
-        worker.maude = maude.with_fresh_counter_next(next_counter);
+        if let Some(lease) = lease {
+            worker.maude = lease.handle().clone();
+        }
         worker
     }
 
@@ -524,11 +521,6 @@ impl ProofContext {
     /// Saturate the raw sources (HS `precomputeSources`).
     pub(crate) fn build_raw_sources(&mut self) -> Result<SharedSources, ProveError> {
         self.sources = ContextSources::Materialized;
-        // Source refinement uses local fresh variables. A cancelled build can
-        // drop its entire working set without touching a proof's counter or cases.
-        self.maude = self
-            .maude
-            .with_fresh_counter_next(self.maude.fresh_counter_peek());
         self.full_sources = Arc::new(
             self.full_sources
                 .iter()

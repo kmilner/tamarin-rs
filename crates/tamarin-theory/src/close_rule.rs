@@ -869,13 +869,7 @@ pub fn pretty_ndc_check(
         }
     };
     marker("started");
-    // The deduction checks advance the shared Maude fresh counter; the
-    // check is observationally pure (its verdicts alone are kept), so
-    // restore the counter — mirroring the `ensure_saturated` purity
-    // bracket.
-    let cnt_before = maude.fresh_counter_peek();
     let result = apply_ndc_check(maude, &init_rules, checked_groups, parameters);
-    maude.reset_counter_to(cnt_before);
     marker("ended");
     let (tagged, checked_rules) = result?;
     Ok((

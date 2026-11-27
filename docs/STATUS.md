@@ -118,6 +118,8 @@ all other text is ignored, including incomplete declarations, quotes, and bracke
 
 ## Known differences
 
+- **Variable indices.** Explicit suffixes such as `x.1` accept values from
+  0 to 4294967295. Haskell accepts larger indices.
 - **Unicode character classes.** Identifiers, whitespace, fact-name
   capitalisation and case-insensitive comparisons use Rust's `char`
   methods (`is_alphanumeric`, `is_whitespace`, `is_uppercase`,

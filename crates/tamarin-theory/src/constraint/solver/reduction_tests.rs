@@ -549,7 +549,7 @@ fn solve_disj_goal_empty_is_contradictory() {
 fn goal_cases_preserve_each_branch_counter_and_adopt_the_singleton() {
     let Some(ctx) = ctx() else { return };
     let mut red = Reduction::new(&ctx, System::empty());
-    let start = red.maude.fresh_counter_peek();
+    let start = red.fresh.next_index();
     let branches = vec![
         GoalBranch {
             name: "left".into(),
@@ -587,7 +587,7 @@ fn goal_cases_preserve_each_branch_counter_and_adopt_the_singleton() {
         GoalCases::LinearNamed(name) if name == "only"
     ));
     assert_eq!(red.sys.last_atom, Some(marker));
-    assert_eq!(red.maude.fresh_counter_peek(), start + 30);
+    assert_eq!(red.fresh.next_index(), start + 30);
 }
 
 #[test]

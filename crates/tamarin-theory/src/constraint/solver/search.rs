@@ -339,12 +339,7 @@ fn visit_forked(
                 path_snapshot.clone(),
                 &name,
             );
-            // HS seeds a fresh counter from the free variables of each case.
-            let avoid_next = child
-                .annotation
-                .system()
-                .map_or(0, crate::constraint::solver::reduction::avoid_fresh_state);
-            let worker_ctx = ctx.for_dfs_case(lease.as_ref(), avoid_next);
+            let worker_ctx = ctx.for_dfs_case(lease.as_ref());
             #[cfg(test)]
             super::cancellation_tests::checkpoint(
                 &worker_ctx,

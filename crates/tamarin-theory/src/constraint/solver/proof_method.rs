@@ -171,11 +171,6 @@ pub fn exec_proof_method(
         return Ok(None);
     }
 
-    // `runReduction ... (avoid sys)`: every step's FreshT counter starts at
-    // `avoid sys`.
-    let avoid = crate::constraint::solver::reduction::avoid_fresh_state(sys);
-    ctx.maude.reset_counter_to(avoid);
-
     let result = match method {
         ProofMethod::Sorry(_) | ProofMethod::Finished(_) => Some(Vec::new()),
         ProofMethod::Invalidated => None,
@@ -211,7 +206,7 @@ pub fn exec_proof_method(
             crate::constraint::solver::trace::trace_pick(g);
             let mut r = Reduction::new(ctx, sys.clone());
             let outcome = crate::constraint::solver::goals::dispatch_solve_goal(&mut r, g)?;
-            let adopted_counter = r.maude.fresh_counter_peek();
+            let adopted_counter = r.fresh.next_index();
             // `process (solve goal)`: each goal case continues with its own
             // fresh counter through `simplifySystem`, which may fan out.
             let cases: Vec<(String, System, u64)> = match outcome {

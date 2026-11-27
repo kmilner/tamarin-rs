@@ -499,7 +499,7 @@ fn split_into_success_then_failure(
         return Ok(SystemOutcome::Linear);
     }
     red.changed = ChangeIndicator::Changed;
-    let counter = red.maude.fresh_counter_peek();
+    let counter = red.fresh.next_index();
     Ok(SystemOutcome::Cases(vec![
         SystemBranch {
             sys: mark_split_arm_at(red.sys.clone(), 30),
@@ -526,7 +526,7 @@ fn split_once(red: &mut Reduction<'_>) -> Result<SystemOutcome, crate::prove::Pr
         return Ok(SystemOutcome::Linear);
     }
     red.changed = ChangeIndicator::Changed;
-    let counter = red.maude.fresh_counter_peek();
+    let counter = red.fresh.next_index();
     Ok(SystemOutcome::Cases(vec![
         SystemBranch {
             sys: mark_split_arm(red.sys.clone()),
@@ -565,7 +565,8 @@ fn allocate_counter_marker_once(
         matches!(goal, crate::constraint::constraints::Goal::Action(node, _) if node.name == "fresh")
     });
     if !already_allocated {
-        insert_continuation_marker(red, "fresh", red.maude.fresh_idx());
+        let idx = red.fresh.fresh_idents(1);
+        insert_continuation_marker(red, "fresh", idx);
     }
     Ok(SystemOutcome::Linear)
 }
@@ -750,7 +751,7 @@ fn merge_candidates_finishes_each_group_before_starting_the_next() {
             calls.set(call + 1);
             if call == 0 {
                 assert_eq!((eqs[0].lhs, eqs[0].rhs), (10, 11));
-                let counter = red.maude.fresh_counter_peek();
+                let counter = red.fresh.next_index();
                 Ok::<_, crate::prove::ProveError>(SystemOutcome::Cases(vec![
                     SystemBranch {
                         sys: red.sys.clone(),

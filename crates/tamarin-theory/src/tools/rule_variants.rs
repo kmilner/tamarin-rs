@@ -12,6 +12,7 @@ use tamarin_term::maude_proc::{MaudeError, MaudeHandle, MaudePool};
 use tamarin_term::subst::{apply_vterm, Subst};
 use tamarin_term::subst_vfresh::LNSubstVFresh;
 use tamarin_term::term::Term;
+use tamarin_utils::fresh::FastFreshState;
 
 use crate::fact::Fact;
 use crate::rule::{ProtoRuleAC, ProtoRuleE};
@@ -288,16 +289,9 @@ pub fn variants_proto_rule(
     }
     let irreducible = sig.irreducible_fun_syms.clone();
 
-    // Avoid clashes with the rule's existing free vars.  HS:
-    // `convertRule \`evalFreshTAvoiding\` ru` — Fresh counter starts at
-    // (max idx of rule's free vars) + 1.
+    // The starting index is visible in the fresh ranges of residual variants.
     let rule_frees = tamarin_term::lterm::frees(rule);
-    let avoid_max = rule_frees.iter().map(|v| v.idx).max().unwrap_or(0);
-    // `convertRule` runs under `evalFreshTAvoiding ru` (RuleVariants.hs).
-    // Share the Maude process while giving each rule its own counter, seeded
-    // above all variables in that rule.
-    let local_maude_owned = maude.with_fresh_counter_from(avoid_max);
-    let maude: &MaudeHandle = &local_maude_owned;
+    let mut fresh = FastFreshState::seeded(rule_frees.last().map_or(1, |v| v.idx + 1));
 
     fn name_hint(t: &LNTerm) -> String {
         use tamarin_term::vterm::Lit;
@@ -316,7 +310,7 @@ pub fn variants_proto_rule(
         t: &LNTerm,
         irreducible: &std::collections::BTreeSet<FunSym>,
         bindings: &mut std::collections::BTreeMap<LNTerm, LVar>,
-        maude: &MaudeHandle,
+        fresh: &mut FastFreshState,
     ) -> LNTerm {
         // Irreducible head: recurse into args.
         if let Term::App(f, args) = t
@@ -325,7 +319,7 @@ pub fn variants_proto_rule(
             return Term::App(
                 *f,
                 args.iter()
-                    .map(|a| abstr_term(a, irreducible, bindings, maude))
+                    .map(|a| abstr_term(a, irreducible, bindings, fresh))
                     .collect(),
             );
         }
@@ -334,7 +328,7 @@ pub fn variants_proto_rule(
         if let Some(v) = bindings.get(t) {
             return Term::Lit(tamarin_term::vterm::Lit::Var(*v));
         }
-        let new_idx = maude.reserve_idxs(1);
+        let new_idx = fresh.fresh_idents(1);
         let v = LVar {
             name: tamarin_term::intern::intern_str(&name_hint(t)),
             // HS-faithful `abstrTerm` (RuleVariants.hs):
@@ -353,13 +347,13 @@ pub fn variants_proto_rule(
         f: &Fact<LNTerm>,
         irreducible: &std::collections::BTreeSet<FunSym>,
         bindings: &mut std::collections::BTreeMap<LNTerm, LVar>,
-        maude: &MaudeHandle,
+        fresh: &mut FastFreshState,
     ) -> Fact<LNTerm> {
         // Abstraction rewrite — frees change; recompute the bloom.
         let terms: Vec<LNTerm> = f
             .terms()
             .iter()
-            .map(|t| abstr_term(t, irreducible, bindings, maude))
+            .map(|t| abstr_term(t, irreducible, bindings, fresh))
             .collect();
         Fact::fresh_annotated(f.tag, f.annotations.clone(), terms)
     }
@@ -372,28 +366,28 @@ pub fn variants_proto_rule(
         let leaf_term: LNTerm = Term::Lit(tamarin_term::vterm::Lit::Var(v));
         // The result is discarded; the side effect on `bindings` is
         // what matters.
-        let _ = abstr_term(&leaf_term, &irreducible, &mut bindings, maude);
+        let _ = abstr_term(&leaf_term, &irreducible, &mut bindings, &mut fresh);
     }
 
     let prems: Vec<Fact<LNTerm>> = rule
         .premises
         .iter()
-        .map(|f| abstr_fact(f, &irreducible, &mut bindings, maude))
+        .map(|f| abstr_fact(f, &irreducible, &mut bindings, &mut fresh))
         .collect();
     let concs: Vec<Fact<LNTerm>> = rule
         .conclusions
         .iter()
-        .map(|f| abstr_fact(f, &irreducible, &mut bindings, maude))
+        .map(|f| abstr_fact(f, &irreducible, &mut bindings, &mut fresh))
         .collect();
     let acts: Vec<Fact<LNTerm>> = rule
         .actions
         .iter()
-        .map(|f| abstr_fact(f, &irreducible, &mut bindings, maude))
+        .map(|f| abstr_fact(f, &irreducible, &mut bindings, &mut fresh))
         .collect();
     let nvs: Vec<LNTerm> = rule
         .new_vars
         .iter()
-        .map(|t| abstr_term(t, &irreducible, &mut bindings, maude))
+        .map(|t| abstr_term(t, &irreducible, &mut bindings, &mut fresh))
         .collect();
 
     // Build the abstracted rule.
@@ -498,6 +492,7 @@ pub fn variants_proto_rule(
     // substitution (EquationStore.hs).
     let (common_subst, residual) = crate::tools::equation_store::EquationStore::simp_disjunction(
         maude,
+        &mut fresh,
         |_, _| Ok(false),
         composed_substs,
     )?;

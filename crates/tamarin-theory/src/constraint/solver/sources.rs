@@ -19,10 +19,11 @@
 //! Alongside the full machinery it also exposes the public data shapes
 //! and the `IntegerParameters` config used by the rest of the solver.
 
-use crate::constraint::solver::reduction::{GoalBranch, SystemBranch};
+use crate::constraint::solver::reduction::{GoalBranch, Reduction, SystemBranch};
 use crate::constraint::system::System;
 use tamarin_term::bind::Bindings;
 use tamarin_term::lterm::frees;
+use tamarin_utils::fresh::FastFreshState;
 
 /// Solver-tuning parameters mirroring Haskell's `IntegerParameters`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -351,9 +352,8 @@ fn source_bounds(src: &Source) -> (Option<u64>, Option<u64>) {
     }
 }
 
-/// Haskell `avoid th` for source saturation: the maximum free index in the
-/// complete Source, including `cdGoal` and every case system.
-fn source_avoid(src: &Source, cases: &[SourceCase]) -> u64 {
+/// Haskell `avoid th`: start above the free variables of the goal and every case.
+fn source_fresh_seed(src: &Source, cases: &[SourceCase]) -> u64 {
     cases
         .iter()
         .map(|(_, sys)| crate::constraint::solver::reduction::bounds_max(sys))
@@ -364,28 +364,7 @@ fn source_avoid(src: &Source, cases: &[SourceCase]) -> u64 {
         ))
         .max()
         .unwrap_or(0)
-}
-
-/// Restore the previous fresh-variable floor when a refinement scope ends.
-/// [`Self::set`] takes the next variable index. [`Self::floor`] takes the
-/// highest index already in use by the source.
-#[must_use = "dropping this guard immediately ends the scope it protects"]
-struct RefineFsScope(u64);
-impl RefineFsScope {
-    /// Push a raw refine-floor, saving the previous one for restore.
-    fn floor(floor: u64) -> Self {
-        RefineFsScope(crate::constraint::solver::reduction::set_refine_floor(
-            floor,
-        ))
-    }
-    fn set(fs: u64) -> Self {
-        Self::floor(fs.saturating_sub(1))
-    }
-}
-impl Drop for RefineFsScope {
-    fn drop(&mut self) {
-        crate::constraint::solver::reduction::set_refine_floor(self.0);
-    }
+        .saturating_add(1)
 }
 
 /// HS `refineWithSourceAsms` (Sources.hs): add the `[sources]` assumptions
@@ -485,11 +464,7 @@ fn refine_one_source(
         });
     }
     let all_cases = src.cases_take();
-    // HS `refineSource` (Sources.hs): `fs = avoid th` — the fresh seed
-    // for EVERY case is the max var idx over the WHOLE source `th` (all its
-    // cases), NOT the per-case `avoid se`.  Compute it once here and thread
-    // it as the seed floor into each case's Reduction.
-    let source_avoid = source_avoid(&src, &all_cases);
+    let seed = source_fresh_seed(&src, &all_cases);
     const LARGE_SOURCE: usize = 8;
     let sig = ctx.maude.maude_sig();
     let needs_dedup = sig.enable_bp || sig.enable_mset;
@@ -499,8 +474,7 @@ fn refine_one_source(
         previously_deduplicated && needs_dedup && all_cases.len() >= LARGE_SOURCE;
     for (name_list, sys) in all_cases {
         let original = still_distinct.then(|| sys.clone());
-        let (branches, took_step) =
-            solve_all_safe_goals(ctx, sys, ths_snapshot, name_list, source_avoid)?;
+        let (branches, took_step) = solve_all_safe_goals(ctx, sys, ths_snapshot, name_list, seed)?;
         changed |= took_step;
         still_distinct &= branches.len() <= 1;
         // `refineSource` restricts each branch's substitution to the
@@ -573,10 +547,9 @@ pub(crate) fn saturate_sources_with_simp(
                 .maude_pool
                 .as_ref()
                 .and_then(|pool| pool.try_take_idle_owned());
-            let task_maude = pooled.as_ref().map_or_else(
-                || ctx.maude.clone(),
-                |p| p.handle().with_fresh_counter_from(0),
-            );
+            let task_maude = pooled
+                .as_ref()
+                .map_or_else(|| ctx.maude.clone(), |p| p.handle().clone());
             let task_ctx = ctx.with_swapped_maude(task_maude);
             refine_one_source(&task_ctx, src, &ths_snapshot, iter_n > 0)
         })?;
@@ -631,7 +604,7 @@ fn solve_all_safe_goals(
     initial_sys: System,
     ths: &[Source],
     initial_name: Vec<String>,
-    source_avoid: u64,
+    seed: u64,
 ) -> Result<(Vec<(System, Vec<String>)>, bool), crate::prove::ProveError> {
     use crate::constraint::constraints::Goal;
     use crate::constraint::solver::contradictions::first_contradiction;
@@ -654,10 +627,6 @@ fn solve_all_safe_goals(
         took_step: bool,
         fresh_counter: u64,
     }
-    // `avoid th` (Sources.hs) bounds the entire source, including all its
-    // cases. Carry this floor into nested simplification reductions and
-    // restore the outer scope when this refinement returns.
-    let _refine_floor_guard = RefineFsScope::floor(source_avoid);
     let chains_limit = ctx.parameters.open_chains_limit();
     let mut worklist: Vec<Entry> = vec![Entry {
         sys: initial_sys,
@@ -666,7 +635,7 @@ fn solve_all_safe_goals(
         chains_left: chains_limit,
         last_chain_term: None,
         took_step: false,
-        fresh_counter: source_avoid.saturating_add(1),
+        fresh_counter: seed,
     }];
     let mut finished: Vec<(System, Vec<String>)> = Vec::new();
     // Only steps on branches that reach a leaf count towards saturation progress.
@@ -849,7 +818,7 @@ fn solve_all_safe_goals(
                         chains_left: new_chains_left,
                         last_chain_term: new_last_chain_term.clone(),
                         took_step: true,
-                        fresh_counter: red.maude.fresh_counter_peek(),
+                        fresh_counter: red.fresh.next_index(),
                     });
                 }
                 GoalCases::Cases(cases) => {
@@ -914,7 +883,7 @@ fn solve_all_safe_goals(
         let mut picked = None;
         for goal in &useful {
             let unused = ths.iter().enumerate().filter(|(i, _)| !used.contains(i));
-            picked = apply_first_source(ctx, unused, &red.sys, goal, &red.maude)?;
+            picked = apply_first_source(&red, unused, goal)?;
             if picked.is_some() {
                 break;
             }
@@ -965,35 +934,32 @@ fn solve_all_safe_goals(
 /// the proof's sources that matches `goal`. `None` when no source matches; a
 /// matched source whose cases all vanish closes the goal with no branches.
 pub(crate) fn solve_with_source(
-    ctx: &crate::constraint::solver::context::ProofContext,
-    sys: &System,
+    red: &Reduction<'_>,
     goal: &crate::constraint::constraints::Goal,
-    maude: &tamarin_term::maude_proc::MaudeHandle,
 ) -> Result<Option<Vec<GoalBranch>>, crate::prove::ProveError> {
     // Goal matching uses the layout alone. Force the proof's sources only
     // after finding a candidate.
-    if !ctx
+    if !red
+        .ctx
         .full_sources
         .iter()
         .any(|source| source_goal_may_match(&source.goal, goal))
     {
         return Ok(None);
     }
-    let sources = ctx.ensure_saturated()?;
+    let sources = red.ctx.ensure_saturated()?;
     // `intercalate "_"` of each case's names (ProofMethod.hs `solve`).
     Ok(
-        apply_first_source(ctx, sources.iter().enumerate(), sys, goal, maude)?.map(
-            |(_, branches)| {
-                branches
-                    .into_iter()
-                    .map(|(names, SystemBranch { sys, counter })| GoalBranch {
-                        name: case_name_list_to_string(&names),
-                        sys,
-                        counter,
-                    })
-                    .collect()
-            },
-        ),
+        apply_first_source(red, sources.iter().enumerate(), goal)?.map(|(_, branches)| {
+            branches
+                .into_iter()
+                .map(|(names, SystemBranch { sys, counter })| GoalBranch {
+                    name: case_name_list_to_string(&names),
+                    sys,
+                    counter,
+                })
+                .collect()
+        }),
     )
 }
 
@@ -1004,18 +970,16 @@ type SourceBranch = (Vec<String>, SystemBranch);
 /// of `sources` that `matchToGoal` accepts, returning that source's index
 /// with the resulting branches.
 fn apply_first_source<'s>(
-    ctx: &crate::constraint::solver::context::ProofContext,
+    red: &Reduction<'_>,
     sources: impl IntoIterator<Item = (usize, &'s Source)>,
-    sys: &System,
     goal: &crate::constraint::constraints::Goal,
-    maude: &tamarin_term::maude_proc::MaudeHandle,
 ) -> Result<Option<(usize, Vec<SourceBranch>)>, crate::prove::ProveError> {
     for (index, source) in sources {
         if !source_goal_may_match(&source.goal, goal) {
             continue;
         }
-        if let Some(prepared) = prepare_source_match(ctx, source, goal)? {
-            let branches = apply_source(ctx, source.cases_or_empty(), &prepared, sys, goal, maude)?;
+        if let Some(prepared) = prepare_source_match(red.ctx, source, goal)? {
+            let branches = apply_source(red, source.cases_or_empty(), &prepared, goal)?;
             return Ok(Some((index, branches)));
         }
     }
@@ -1028,23 +992,20 @@ fn apply_first_source<'s>(
 /// The case disjunction sits below FreshT, so every case starts from the
 /// counter at the pick and carries only its own draws onward.
 fn apply_source(
-    ctx: &crate::constraint::solver::context::ProofContext,
+    red: &Reduction<'_>,
     cases: Vec<SourceCase>,
     prepared: &PreparedSourceMatch,
-    sys: &System,
     live_goal: &crate::constraint::constraints::Goal,
-    maude: &tamarin_term::maude_proc::MaudeHandle,
 ) -> Result<Vec<SourceBranch>, crate::prove::ProveError> {
-    let fork_base = maude.fresh_counter_peek();
     let mut refined = Vec::new();
     for (name, case_sys) in cases {
         refined.extend(
-            refine_source_case(ctx, prepared, case_sys)?
+            refine_source_case(red.ctx, prepared, case_sys)?
                 .into_iter()
                 .map(|case| (name.clone(), case)),
         );
     }
-    let msig = ctx.maude.maude_sig();
+    let msig = red.ctx.maude.maude_sig();
     let refined = remove_redundant_cases(
         msig.enable_bp,
         msig.enable_mset,
@@ -1055,9 +1016,9 @@ fn apply_source(
     let keep_vars: Vec<_> = prepared.stable_vars.iter().copied().collect();
     let mut out = Vec::new();
     for (name, case) in refined {
-        maude.reset_counter_to(fork_base);
-        let case = some_inst_system(case, &keep_vars, maude);
-        for branch in conjoin_source_case(ctx, sys, live_goal, &case, maude)? {
+        let mut r = red.fork();
+        let case = some_inst_system(case, &keep_vars, &mut r.fresh);
+        for branch in conjoin_source_case(r, live_goal, &case)? {
             out.push((name.clone(), branch));
         }
     }
@@ -1146,21 +1107,19 @@ fn rename_system_by(sys: System, shift_amount: i128) -> System {
 /// `someInst` (LTerm.hs) is `mapFrees (Arbitrary importBinding)`, so
 /// the index a variable gets is decided by where `instance HasFrees System`
 /// (System.hs) first reaches it, and every index is drawn from the
-/// step's own `MonadFresh` — here the Maude handle whose counter the live
-/// `Reduction` threads.  `keep` is HS's `frees goal`, seeded into the store as
+/// step's own fresh supply.  `keep` is HS's `frees goal`, seeded into the store as
 /// identity bindings that `importBinding` finds and reuses instead of drawing
 /// (Control/Monad/Bind.hs).
 fn some_inst_system(
     sys: System,
     keep: &[tamarin_term::lterm::LVar],
-    maude: &tamarin_term::maude_proc::MaudeHandle,
+    fresh: &mut FastFreshState,
 ) -> System {
     let mut bindings = Bindings::new();
     for v in keep {
         bindings.insert(*v, *v);
     }
-    let mut fresh = maude;
-    tamarin_term::bind::some_inst(sys, &mut bindings, &mut fresh)
+    tamarin_term::bind::some_inst(sys, &mut bindings, fresh)
 }
 
 /// Cheap half of Haskell's `maybeMatcher`.  In particular, reject action
@@ -1375,18 +1334,8 @@ fn refine_source_case(
         rewire_source_premise(&mut renamed_case, pat_prem, new_prem);
     }
 
-    // `refineSubst` (Sources.hs) solves the match substitution with SplitNow
-    // and substitutes each resulting system.
-    //
-    // Build `Equal (varTerm v) t` for each (v, t) in the match-subst,
-    // then run them through the renamed case's Reduction.
-    //
-    // Refinement uses the local `avoid th` seed through `RefineFsScope`.
-    // The scope ends before `apply_source` uses the live counter for
-    // `someInst` and conjoins the case.
-    // ---------------------------------------------------------------
-    let _refine_fs = RefineFsScope::set(*refine_seed);
-    let mut refined = Reduction::new(ctx, renamed_case);
+    // `refineSubst` runs in the matched source's own fresh scope.
+    let mut refined = Reduction::new_inheriting(ctx, renamed_case, *refine_seed);
     // HS-faithful `solveSubstEqs` (Reduction.hs):
     //   solveTermEqs split [Equal (varTerm v) t | (v, t) <- substToList subst]
     // builds `Equal (varTerm v) t` with no conditional flip.
@@ -1430,27 +1379,22 @@ fn refine_source_case(
 }
 
 /// The conjoin half of `_applySource` (Sources.hs) for one instantiated
-/// case: `markGoalAsSolved` and `conjoinSystem` in the live reduction, whose
-/// counter `maude` carries. Each conjoin branch keeps its own FreshT
-/// continuation.
+/// case. Mark the goal solved and conjoin the system in the fresh scope
+/// that instantiated the case. Each branch keeps its own continuation.
 fn conjoin_source_case(
-    ctx: &crate::constraint::solver::context::ProofContext,
-    live_sys: &System,
+    mut r: Reduction<'_>,
     live_goal: &crate::constraint::constraints::Goal,
     case: &System,
-    maude: &tamarin_term::maude_proc::MaudeHandle,
 ) -> Result<Vec<SystemBranch>, crate::prove::ProveError> {
     use crate::constraint::solver::reduction::{Reduction, SystemOutcome};
 
-    let mut r = Reduction::new(ctx, live_sys.clone());
-    r.maude = maude.clone();
     r.mark_goal_as_solved(live_goal);
     Ok(match r.conjoin_system(case)? {
         SystemOutcome::Contradictory => Vec::new(),
         SystemOutcome::Linear => vec![r.into_branch()],
         SystemOutcome::Cases(arms) => arms
             .into_iter()
-            .map(|arm| Reduction::new_inheriting(ctx, arm.sys, arm.counter).into_branch())
+            .map(|arm| Reduction::new_inheriting(r.ctx, arm.sys, arm.counter).into_branch())
             .collect(),
     })
 }

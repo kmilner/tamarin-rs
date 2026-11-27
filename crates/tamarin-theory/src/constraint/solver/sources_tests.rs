@@ -487,17 +487,13 @@ fn shift_keeps_ac_arg_order() {
 /// charged nothing (Control/Monad/Bind.hs).
 #[test]
 fn some_inst_system_keeps_the_seeded_vars_and_draws_in_hs_field_order() {
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let maude = start_maude(&path, tamarin_term::maude_sig::pair_maude_sig());
     let sys = system_with_a_variable_per_field(mterm(11));
     // The goal's own variables: the node the case is grafted onto and the
     // term of its fact, in the ascending order `frees` hands over.
     let keep = [nvar(10), mvar(11)];
 
-    maude.reset_counter_to(500);
-    let out = some_inst_system(sys, &keep, &maude);
+    let mut fresh = FastFreshState::seeded(500);
+    let out = some_inst_system(sys, &keep, &mut fresh);
 
     let node = |idx: u64| nvar(idx);
     let msg = |idx: u64| mvar(idx);
@@ -541,7 +537,7 @@ fn some_inst_system_keeps_the_seeded_vars_and_draws_in_hs_field_order() {
         ]
     );
     assert_eq!(
-        maude.fresh_counter_peek(),
+        fresh.next_index(),
         522,
         "one identifier per variable that is not seeded"
     );
@@ -606,15 +602,8 @@ fn source_probe_distinguishes_no_match_from_matched_empty() {
         Vec::new(),
     );
     let goal = Goal::Action(node, live);
-    let probe = |sources: &[Source]| {
-        apply_first_source(
-            &ctx,
-            sources.iter().enumerate(),
-            &System::empty(),
-            &goal,
-            &ctx.maude,
-        )
-    };
+    let red = Reduction::new(&ctx, System::empty());
+    let probe = |sources: &[Source]| apply_first_source(&red, sources.iter().enumerate(), &goal);
 
     assert!(matches!(
         probe(&[matched]),
@@ -707,7 +696,7 @@ fn source_application_uses_complete_conjoin_state() {
     });
     let expected_substs = case.eq_store().conj[0].substs.clone();
     let output =
-        conjoin_source_case(&ctx, &live, &goal, &case, &ctx.maude).expect("solver operation");
+        conjoin_source_case(Reduction::new(&ctx, live), &goal, &case).expect("solver operation");
     assert_eq!(output.len(), 1);
     let joined = &output[0].sys;
     assert_eq!(joined.last_atom, Some(nvar(22)));

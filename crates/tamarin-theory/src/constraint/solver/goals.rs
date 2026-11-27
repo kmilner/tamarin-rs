@@ -2478,9 +2478,7 @@ pub(crate) fn dispatch_solve_goal(
     red: &mut crate::constraint::solver::reduction::Reduction<'_>,
     g: &Goal,
 ) -> Result<crate::constraint::solver::reduction::GoalCases, crate::prove::ProveError> {
-    if let Some(branches) =
-        crate::constraint::solver::sources::solve_with_source(red.ctx, &red.sys, g, &red.maude)?
-    {
+    if let Some(branches) = crate::constraint::solver::sources::solve_with_source(red, g)? {
         return Ok(red.finish_goal_cases(branches));
     }
     solve_goal(red, g)
