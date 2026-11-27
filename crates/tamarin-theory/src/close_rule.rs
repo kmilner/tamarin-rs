@@ -73,7 +73,7 @@ pub struct NdcCheckedCache {
     /// inject this into every `ProofContext` built for the theory (the
     /// `intr_override` constructor parameter) — HS's `closeRuleCache`
     /// consumes the checked `_thyCache` verbatim.
-    pub cache: Vec<IntrRuleAC>,
+    pub cache: IntrRuleCache,
     /// Function symbols found to have the NDC property (HS
     /// `joinNDCinSigWMaude` targets).  Callers join these into the
     /// theory's signature so every rendering of the `functions:` header
@@ -107,12 +107,15 @@ pub fn check_close_intr_rule(
     .map_err(|error| crate::prove::ProveError::maude("intruder rules", error))?;
     if !deduction_chain_check {
         return Ok(NdcCheckedCache {
-            cache: assembled,
+            cache: assembled.into(),
             ndc_funs: Vec::new(),
         });
     }
     let (ndc_funs, cache) = pretty_ndc_check(maude, theory_name, assembled, parameters)?;
-    Ok(NdcCheckedCache { cache, ndc_funs })
+    Ok(NdcCheckedCache {
+        cache: cache.into(),
+        ndc_funs,
+    })
 }
 
 // =============================================================================

@@ -44,7 +44,10 @@ fn precompute_renders_each_file_before_a_later_file_fails() {
         ([valid.as_path(), failing.as_path()], 1),
         ([failing.as_path(), valid.as_path()], 0),
     ] {
-        let (code, stdout, stderr) = run_binary(&["--precompute-only"], &inputs);
+        let (code, stdout, stderr) = run_binary(
+            &["--precompute-only", "--partial-evaluation=summary"],
+            &inputs,
+        );
         assert_eq!(code, 1, "{inputs:?}");
         assert_eq!(
             stdout.matches("Multiset rewriting rules:").count(),
@@ -54,11 +57,13 @@ fn precompute_renders_each_file_before_a_later_file_fails() {
         let failure = stderr
             .find("unguarded variable")
             .expect("the guard failure");
+        let trace = stderr.find(" partial evaluation: step ");
+        assert_eq!(trace.is_some(), docs == 1, "{inputs:?}:\n{stderr}");
         for theory in ["SingleRecv", "GuardedRestriction"] {
             let closed = stderr
                 .find(&format!("[Theory {theory}] Theory closed"))
                 .unwrap_or_else(|| panic!("{theory} was not loaded:\n{stderr}"));
-            assert!(closed < failure, "{inputs:?}:\n{stderr}");
+            assert!(closed < trace.unwrap_or(failure), "{inputs:?}:\n{stderr}");
         }
     }
 }

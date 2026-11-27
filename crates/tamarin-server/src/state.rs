@@ -43,8 +43,7 @@ pub struct TheoryEntry {
     /// rules and the theory's terms keep their untagged symbols, so a module
     /// built from the joined signature declares operators nothing else names.
     pub prover_maude_sig: Arc<tamarin_term::maude_sig::MaudeSig>,
-    /// The prover session's cut strategy, resolved once by the loader
-    /// (`TheoryPipeline::cut`).
+    /// The prover session's cut strategy, resolved at load time.
     pub cut: tamarin_theory::constraint::solver::context::CutStrategy,
     /// Where the theory came from.
     pub origin: TheoryOrigin,
@@ -61,12 +60,8 @@ pub struct TheoryEntry {
     /// (`theory_io::make_wf_errors_html`, HS `errorsHtml`).  Empty ⇒ no
     /// warnings (theory is well-formed).
     pub wf_report: Arc<[tamarin_theory::wellformedness::WfError]>,
-    /// The theory's once-per-load NDC-checked intruder cache
-    /// (`close_rule::check_close_intr_rule`, run in `theory_io` before
-    /// the derivation checks). Injected into the lazily built prover session,
-    /// whose context factory reuses it for every operation. `None` when the
-    /// load-time Maude boot failed.
-    pub ndc_cache: Option<tamarin_theory::constraint::solver::context::IntrRuleCache>,
+    /// The NDC-checked intruder rules shared with the theory's proof session.
+    pub ndc_cache: tamarin_theory::constraint::solver::context::IntrRuleCache,
     /// A detached/materialized proof state. Stored entries always keep this
     /// `None`: their generation cell is the sole authoritative proof owner.
     /// Materialized snapshots attach that generation's state here so existing
@@ -402,8 +397,6 @@ pub struct AppState {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use tamarin_term::maude_sig::minimal_maude_sig;
-    use tamarin_theory::theory::{OpenProtoRule, Theory as TypedTheory};
 
     type Cell = RetryCell<usize, StoreError>;
 
@@ -417,28 +410,19 @@ mod tests {
     /// A builder of entries holding a closed empty theory, or `None` (the
     /// test skips) when no Maude is available to close it.
     fn entries() -> Option<impl Fn(&str) -> TheoryEntry> {
-        let prover_maude_sig = minimal_maude_sig(false);
-        let maude_path = tamarin_test_support::require_maude_path()?;
-        let maude =
-            tamarin_term::maude_proc::MaudeHandle::start(&maude_path, prover_maude_sig.clone())
-                .expect("start maude");
+        let mut cfg = crate::ServerConfig::new(
+            "127.0.0.1:0".parse().unwrap(),
+            None,
+            tamarin_test_support::require_maude_path()?,
+        );
+        cfg.load.derivation_checks = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
         Some(move |name: &str| {
-            let typed_theory = TypedTheory::<OpenProtoRule>::new(name, prover_maude_sig.clone());
-            let (typed_theory, _) =
-                tamarin_theory::closed_theory::close_theory(typed_theory, &maude, None)
-                    .expect("close an empty theory");
-            TheoryEntry {
-                idx: 0,
-                typed_theory,
-                prover_maude_sig: Arc::new(prover_maude_sig.clone()),
-                cut: tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
-                origin: TheoryOrigin::Interactive,
-                loaded_at: Local::now(),
-                primary: true,
-                wf_report: Arc::default(),
-                ndc_cache: None,
-                proof_state: None,
-            }
+            crate::theory_io::load_from_source(
+                &format!("theory {name} begin end"),
+                TheoryOrigin::Interactive,
+                &cfg,
+            )
+            .expect("load an empty theory")
         })
     }
 

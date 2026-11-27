@@ -199,7 +199,7 @@ pub fn populate_rule_variants(
 /// mode) refuse a report carrying a fatal entry. The theory keeps every rule,
 /// zero-variant ones included: HS runs the derivation checks and the
 /// translate-mode echo on the open theory, and only `closeTheoryWithMaude`
-/// ([`crate::closed_theory::close_prepared_theory`]) removes them.
+/// ([`crate::closed_theory::PreparedTheory::close`]) removes them.
 pub fn prepare_theory_rules(
     theory: &mut Theory,
     maude: &MaudeHandle,

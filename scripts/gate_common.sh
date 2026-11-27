@@ -159,8 +159,7 @@ slice_gate_one() {
 #                        actually runs — one extra sequence on a theory with a
 #                        [sources] lemma, one where HS emits none on a theory
 #                        whose proofs never consult a source case, and counts
-#                        differing both ways under --auto-sources (run.rs's
-#                        close_translated_theory enumerates all three). 282 of
+#                        differing both ways under --auto-sources. 282 of
 #                        the 372 case-studies-regression theories differ by
 #                        these lines alone.
 #

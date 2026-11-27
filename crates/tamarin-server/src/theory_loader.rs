@@ -9,16 +9,17 @@
 //!                             >=> closeTranslatedTheory >=> withVersionAndReport
 //!   translateAndCheckTheory = the same minus closeTranslatedTheory
 //!
-//! [`load_theory`] parses; [`TheoryPipeline`] carries one theory through the
-//! remaining stages. Proving (`proveTheory`) is left to the front-end: batch
-//! mode proves the selected lemmas, the web UI builds its proof session
+//! [`load_theory`] parses. [`translate_and_check_theory`] returns an open
+//! theory for export, and [`close_theory`] prepares a theory for proving.
+//! Batch mode proves the selected lemmas. The web UI builds its proof session
 //! lazily.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use tamarin_term::maude_proc::{MaudeHandle, MaudePool, SharedMaudeCaches};
-use tamarin_theory::closed_theory::ClosedTheory;
+use tamarin_theory::close_rule::NdcCheckedCache;
+use tamarin_theory::closed_theory::{ClosedTheory, PreparedTheory};
 use tamarin_theory::constraint::solver::context::{CutStrategy, IntrRuleCache};
 use tamarin_theory::constraint::solver::sources::IntegerParameters;
 use tamarin_theory::deriv_check::DerivCheckTimeout;
@@ -27,7 +28,7 @@ use tamarin_theory::prove::{ConfigBlock, ProveError};
 use tamarin_theory::theory::Theory;
 use tamarin_theory::tools::rule_variants::VariantsError;
 use tamarin_theory::tools::EvaluationStyle;
-use tamarin_theory::wellformedness::{WfError, WfReport};
+use tamarin_theory::wellformedness::WfReport;
 
 /// HS `TheoryLoadOptions` (TheoryLoader.hs). Field order follows HS's record;
 /// the last two fields are Rust-only.
@@ -114,8 +115,7 @@ impl TheoryLoadOptions {
 }
 
 /// The `-m` modules translate mode renders (HS `ModuleType` minus the export
-/// backends). `None` in [`TheoryPipeline::translate_module`] selects
-/// `closeTheory`.
+/// backends).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TranslateModule {
     Spthy,
@@ -197,8 +197,7 @@ pub fn take_deferred_hs_error_markers() -> Option<String> {
 /// The parsing half of HS `loadTheory`: parse `src` with the options'
 /// parser flags, resolving `#include` against `base_dir` (HS `takeDirectory
 /// inFile`). HS's parser also performs what the port's elaboration checks,
-/// so `Theory loaded` follows elaboration ([`TheoryPipeline::new`], or
-/// [`elaborate_loaded`] for `--parse-only`): an elaboration error is an HS
+/// so `Theory loaded` follows [`elaborate_loaded`]: an elaboration error is an HS
 /// parse error, which no marker precedes.
 pub fn load_theory(
     opts: &TheoryLoadOptions,
@@ -235,77 +234,22 @@ pub fn elaborate_loaded(
     Ok(theory)
 }
 
-/// A loaded theory: open until [`TheoryPipeline::check_translated_theory`]
-/// closes it, which close mode always does; translate mode leaves it open.
-#[derive(Debug, Clone)]
-pub enum LoadedTheory {
-    Open(Arc<Theory>),
-    Closed(ClosedTheory),
-}
-
-impl std::ops::Deref for LoadedTheory {
-    type Target = Theory;
-
-    fn deref(&self) -> &Theory {
-        match self {
-            Self::Open(theory) => theory,
-            Self::Closed(theory) => theory,
-        }
-    }
-}
-
-impl LoadedTheory {
-    /// The closed theory, which every prover session is built from.
-    pub fn closed(&self) -> Option<&ClosedTheory> {
-        match self {
-            Self::Open(_) => None,
-            Self::Closed(theory) => Some(theory),
-        }
-    }
-
-    fn open_mut(&mut self) -> &mut Theory {
-        match self {
-            Self::Open(theory) => Arc::make_mut(theory),
-            Self::Closed(_) => unreachable!("a closed theory is changed only through ClosedTheory"),
-        }
-    }
-
-    fn closed_mut(&mut self) -> &mut ClosedTheory {
-        match self {
-            Self::Open(_) => unreachable!("close mode closes the theory"),
-            Self::Closed(theory) => theory,
-        }
-    }
-}
-
-/// One theory's state through HS's load stages.
-pub struct TheoryPipeline<'a> {
-    pub opts: &'a TheoryLoadOptions,
-    /// `Some` runs `translateAndCheckTheory` for that module, `None` runs
-    /// `closeTheory`.
-    pub translate_module: Option<TranslateModule>,
-    /// Shared with the prover session; the stages mutate it while the
-    /// pipeline holds the only reference.
-    pub theory: LoadedTheory,
-    /// HS `preReport ++ postReport`.
-    pub wf_report: Vec<WfError>,
-    /// The open theory's signature, which every Maude process for this
-    /// theory loads (HS `toSignatureWithMaude` before `closeTheory`). The NDC
-    /// join never reaches it.
-    pub maude_sig: tamarin_term::maude_sig::MaudeSig,
-    /// HS `configAutoSources`: the CLI flag OR the configuration block.
-    pub auto_sources: bool,
-    /// The autoprover's cut strategy (`effective_cut`).
-    pub cut: CutStrategy,
-    pub maude: Option<MaudeHandle>,
+/// The closed theory and the resources needed to prove or serve it.
+pub struct ClosedTheoryLoad {
+    pub theory: ClosedTheory,
+    pub wf_report: WfReport,
+    pub maude: MaudeHandle,
     pub maude_pool: Option<Arc<MaudePool>>,
-    /// The NDC-checked intruder rules (`checkCloseIntrRule`), shared by every
-    /// proof context built for this theory.
-    pub ndc_cache: Option<IntrRuleCache>,
-    /// NDC-tagged symbols, joined into the signature by
-    /// [`Self::close_translated_theory`] only: `closeTheory` adopts
-    /// `checkTranslatedTheory`'s `sign'`, `translateAndCheckTheory` drops it.
-    ndc_funs: Vec<tamarin_term::function_symbols::FunSym>,
+    pub ndc_cache: IntrRuleCache,
+    pub cut: CutStrategy,
+    pe_trace: String,
+}
+
+impl ClosedTheoryLoad {
+    /// Emit the trace when the front end first consumes the closed theory.
+    pub fn print_partial_evaluation_trace(&self) {
+        eprint!("{}", self.pe_trace);
+    }
 }
 
 /// HS `closeTheory`'s configuration-block read: the theory's
@@ -340,12 +284,18 @@ fn effective_cut(opts: &TheoryLoadOptions, config: &ConfigBlock) -> Result<CutSt
     }
 }
 
-impl<'a> TheoryPipeline<'a> {
-    /// Elaborate ([`elaborate_loaded`], which ends HS `loadTheory`), read the
-    /// configuration block ([`read_config_block`]) and apply HS
-    /// `addParamsOptions`.
-    pub fn new(
-        opts: &'a TheoryLoadOptions,
+/// A translated, open theory and the load-time choices made from its source.
+struct TranslatedTheory {
+    theory: Theory,
+    report: WfReport,
+    maude_sig: tamarin_term::maude_sig::MaudeSig,
+    auto_sources: bool,
+    cut: CutStrategy,
+}
+
+impl TranslatedTheory {
+    fn translate(
+        opts: &TheoryLoadOptions,
         parsed: tamarin_parser::Theory,
         in_file: &str,
         translate_module: Option<TranslateModule>,
@@ -361,74 +311,27 @@ impl<'a> TheoryPipeline<'a> {
 
         // HS reads the configuration block after `loadTheory`.
         let config = read_config_block(&parsed, translate_module)?;
+        drop(parsed);
         let cut = effective_cut(opts, &config)?;
-        let auto_sources = opts.auto_sources || config.auto_sources;
 
         // HS `addParamsOptions`: `addNdcOption` and `addLemmaToProve`.
         theory.options.deduction_chain_check = opts.ndc_check;
         theory.options.lemmas_to_prove = opts.lemma_names.clone();
         let maude_sig = theory.signature.clone();
-        Ok(Self {
-            opts,
-            translate_module,
-            theory: LoadedTheory::Open(Arc::new(theory)),
-            wf_report: Vec::new(),
-            maude_sig,
-            auto_sources,
-            cut,
-            maude: None,
-            maude_pool: None,
-            ndc_cache: None,
-            ndc_funs: Vec::new(),
-        })
-    }
-
-    /// `[Theory X] MSG` for this theory.
-    pub fn marker(&self, msg: &str) {
-        theory_marker(&self.theory.name, msg);
-    }
-
-    /// `[Theory X] Theory closed`, followed by `--partial-evaluation`'s
-    /// `Debug.Trace` output, which the oracle forces right after it.
-    pub fn closed_marker(&self, pe_trace: &str) {
-        self.marker("Theory closed");
-        eprint!("{pe_trace}");
-    }
-
-    /// This theory's Maude handle, or the spawn failure every close-time
-    /// stage reports.
-    pub fn require_maude(&self) -> Result<MaudeHandle, LoadError> {
-        self.maude.clone().ok_or_else(|| {
-            LoadError::Other(format!(
-                "failed to start maude at {:?}",
-                self.opts.maude_path
-            ))
-        })
-    }
-
-    fn theory_mut(&mut self) -> &mut Theory {
-        self.theory.open_mut()
-    }
-
-    /// HS `translateTheory` with `processOpenTheory`'s per-module dispatch
-    /// and `-m msr`'s lemma filter: the report opens with the
-    /// pre-translation `Sapic.checkWellformedness ++ Acc.checkWellformedness`.
-    pub fn translate_theory(&mut self) -> Result<(), LoadError> {
-        let module = self.translate_module;
-        self.marker("Theory translated");
+        theory_marker(&theory.name, "Theory translated");
 
         // `Acc.checkWellformedness` reads the pre-translation theory.
-        let acc_wf = tamarin_accountability::check_wellformedness(&self.theory);
+        let acc_wf = tamarin_accountability::check_wellformedness(&theory);
         // HS `addHeuristic` returns `Nothing` when a `heuristic:` item exists.
-        let user_set_heuristic = !self.theory.heuristic.is_empty();
+        let user_set_heuristic = !theory.heuristic.is_empty();
         // `processOpenTheory`: `spthy` is `pure`, `spthytyped` is
         // `Sapic.typeTheory`, `msr` and close mode run `Sapic.typeTheory >=>
         // Sapic.translate >=> Acc.translate`.
-        let sapic_wf = match module {
+        let mut report = match translate_module {
             Some(TranslateModule::Spthy | TranslateModule::SpthyTyped) => {
-                let wf = tamarin_sapic::apply::sapic_pre_report(&self.theory);
-                if module == Some(TranslateModule::SpthyTyped) {
-                    tamarin_sapic::type_theory::type_theory(self.theory_mut())
+                let wf = tamarin_sapic::apply::sapic_pre_report(&theory);
+                if translate_module == Some(TranslateModule::SpthyTyped) {
+                    tamarin_sapic::type_theory::type_theory(&mut theory)
                         .map_err(|e| LoadError::Exception(e.message))?;
                 }
                 wf
@@ -436,63 +339,64 @@ impl<'a> TheoryPipeline<'a> {
             None | Some(TranslateModule::Msr) => {
                 // SAPIC and accountability exceptions (e.g. `duplicate rule`,
                 // `CaseTestsUndefined`) escape to GHC's runtime.
-                let wf = tamarin_sapic::apply::apply_sapic(self.theory_mut(), user_set_heuristic)
+                let wf = tamarin_sapic::apply::apply_sapic(&mut theory, user_set_heuristic)
                     .map_err(|e| LoadError::Exception(e.message))?;
-                tamarin_accountability::translate(self.theory_mut())
+                tamarin_accountability::translate(&mut theory)
                     .map_err(|e| LoadError::Exception(e.to_string()))?;
                 wf
             }
         };
-        self.wf_report.extend(sapic_wf);
-        self.wf_report.extend(acc_wf);
+        report.extend(acc_wf);
 
         // `-m msr` keeps only the selected lemmas (`filterLemma
         // (lemmaSelector thyOpts)`), before the checks below.
-        if module == Some(TranslateModule::Msr) {
-            let lemma_names = &self.opts.lemma_names;
-            self.theory_mut().items.retain(|i| match i {
+        if translate_module == Some(TranslateModule::Msr) {
+            let lemma_names = &opts.lemma_names;
+            theory.items.retain(|i| match i {
                 tamarin_theory::theory::TheoryItem::Lemma(l) => lemma_matches(lemma_names, &l.name),
                 _ => true,
             });
         }
-        Ok(())
+        Ok(Self {
+            theory,
+            report,
+            maude_sig,
+            auto_sources: opts.auto_sources || config.auto_sources,
+            cut,
+        })
     }
 
-    /// HS `checkTranslatedTheory`: start Maude (the `SignatureWithMaude`),
-    /// prepare the protocol rules (variants, wellformedness, rejection of
-    /// unsupported input in close mode), run the NDC check, and run the
-    /// message-derivation checks on the open theory. Close mode then closes
-    /// it (`closeTheoryWithMaude`'s zero-variant filter and loop breakers).
-    pub fn check_translated_theory(&mut self) -> Result<(), LoadError> {
-        let close_mode = self.translate_module.is_none();
-        // One memo-cache set shared by the handle and every pool member.
-        let caches = Arc::new(SharedMaudeCaches::default());
-        self.maude = MaudeHandle::start_with_caches(
-            &self.opts.maude_path,
-            self.maude_sig.clone(),
-            Arc::clone(&caches),
-        )
-        .ok();
-        // HS closes the theory with Maude, so a load that cannot start it
-        // fails; only translate mode carries on without one.
-        if close_mode {
-            self.require_maude()?;
-        }
+    fn maude(
+        &self,
+        opts: &TheoryLoadOptions,
+        caches: &Arc<SharedMaudeCaches>,
+    ) -> Result<MaudeHandle, LoadError> {
+        MaudeHandle::start_with_caches(&opts.maude_path, self.maude_sig.clone(), Arc::clone(caches))
+            .map_err(|_| {
+                LoadError::Other(format!("failed to start maude at {:?}", opts.maude_path))
+            })
+    }
+
+    fn maude_pool(
+        &self,
+        opts: &TheoryLoadOptions,
+        caches: Arc<SharedMaudeCaches>,
+    ) -> Option<Arc<MaudePool>> {
         // Parallel sites lease pool members instead of serialising on `maude`.
-        self.maude_pool = if self.opts.maude_processes >= 2 {
+        if opts.maude_processes >= 2 {
             match MaudePool::new(
-                &self.opts.maude_path,
+                &opts.maude_path,
                 self.maude_sig.clone(),
-                self.opts.maude_processes,
+                opts.maude_processes,
                 caches,
             ) {
                 Ok(pool) => Some(Arc::new(pool)),
                 Err(e) => {
-                    if !self.opts.quiet {
+                    if !opts.quiet {
                         eprintln!(
                             "[warn] failed to spawn MaudePool({}): {} \
                                 — falling back to single shared Maude",
-                            self.opts.maude_processes, e
+                            opts.maude_processes, e
                         );
                     }
                     None
@@ -500,128 +404,143 @@ impl<'a> TheoryPipeline<'a> {
             }
         } else {
             None
-        };
-
-        if let Some(maude) = self.maude.clone() {
-            let pool = self.maude_pool.as_deref();
-            let report = tamarin_theory::tools::rule_variants::prepare_theory_rules(
-                self.theory.open_mut(),
-                &maude,
-                pool,
-                close_mode,
-            )
-            .map_err(LoadError::variants)?;
-            self.wf_report.extend(report);
-        } else {
-            let report = tamarin_theory::wellformedness::check_wellformedness(&self.theory, None)
-                .map_err(LoadError::variants)?;
-            self.wf_report.extend(report);
         }
+    }
+}
 
-        // `checkCloseIntrRule`, before the derivation checks.
-        if let Some(maude) = self.maude.as_ref() {
-            let checked = tamarin_theory::close_rule::check_close_intr_rule(
-                maude,
-                Some(self.theory.name.as_str()),
-                self.theory.options.deduction_chain_check,
-                &self.theory.intruder_rules,
-                self.opts.parameters,
+fn check_derivations(
+    theory: &Theory,
+    report: &mut WfReport,
+    opts: &TheoryLoadOptions,
+    maude: &MaudeHandle,
+    pool: Option<&Arc<MaudePool>>,
+) -> Result<NdcCheckedCache, LoadError> {
+    let checked = tamarin_theory::close_rule::check_close_intr_rule(
+        maude,
+        Some(&theory.name),
+        theory.options.deduction_chain_check,
+        &theory.intruder_rules,
+        opts.parameters,
+    )?;
+    // `checkVariableDeducibility`, skipped entirely when disabled.
+    let timeout = opts.derivation_checks;
+    if timeout.is_enabled() {
+        theory_marker(&theory.name, "Derivation checks started");
+        report.extend(tamarin_theory::deriv_check::check_message_derivation(
+            theory,
+            maude,
+            pool,
+            timeout,
+            Some(checked.cache.clone()),
+            opts.parameters,
+        )?);
+        theory_marker(&theory.name, "Derivation checks ended");
+    }
+
+    Ok(checked)
+}
+
+/// HS `translateAndCheckTheory`. Translation can produce an open theory
+/// even if Maude is unavailable.
+pub fn translate_and_check_theory(
+    opts: &TheoryLoadOptions,
+    parsed: tamarin_parser::Theory,
+    in_file: &str,
+    module: TranslateModule,
+) -> Result<(Theory, WfReport), LoadError> {
+    let mut open = TranslatedTheory::translate(opts, parsed, in_file, Some(module))?;
+    let caches = Arc::new(SharedMaudeCaches::default());
+    let maude = open.maude(opts, &caches);
+    let pool = open.maude_pool(opts, caches);
+    if let Ok(maude) = maude {
+        open.report.extend(
+            tamarin_theory::tools::rule_variants::prepare_theory_rules(
+                &mut open.theory,
+                &maude,
+                pool.as_deref(),
+                false,
+            )
+            .map_err(LoadError::variants)?,
+        );
+        check_derivations(&open.theory, &mut open.report, opts, &maude, pool.as_ref())?;
+    } else {
+        let report = tamarin_theory::wellformedness::check_wellformedness(&open.theory, None)
+            .map_err(LoadError::variants)?;
+        open.report.extend(report);
+        // Translation still reports the derivation stage when Maude is unavailable.
+        if opts.derivation_checks.is_enabled() {
+            theory_marker(&open.theory.name, "Derivation checks started");
+            theory_marker(&open.theory.name, "Derivation checks ended");
+        }
+    }
+    if opts.quit_on_warning && !open.report.is_empty() {
+        return Err(LoadError::Warning(open.report));
+    }
+    Ok((open.theory, open.report))
+}
+
+/// HS `closeTheory` up to proof search. Checking sees the open theory.
+/// Closing consumes it, adopts the NDC verdicts and applies the requested
+/// auto-sources and partial evaluation passes.
+pub fn close_theory(
+    opts: &TheoryLoadOptions,
+    parsed: tamarin_parser::Theory,
+    in_file: &str,
+) -> Result<ClosedTheoryLoad, LoadError> {
+    let mut open = TranslatedTheory::translate(opts, parsed, in_file, None)?;
+    let caches = Arc::new(SharedMaudeCaches::default());
+    let maude = open.maude(opts, &caches)?;
+    let pool = open.maude_pool(opts, caches);
+    let (prepared, report) = PreparedTheory::prepare(open.theory, &maude, pool.as_deref())
+        .map_err(LoadError::variants)?;
+    open.report.extend(report);
+    let checked = check_derivations(
+        prepared.theory(),
+        &mut open.report,
+        opts,
+        &maude,
+        pool.as_ref(),
+    )?;
+    theory_marker(&prepared.theory().name, "Theory closed");
+    if opts.quit_on_warning && !open.report.is_empty() {
+        return Err(LoadError::Warning(open.report));
+    }
+
+    let mut theory = prepared.close(&maude).map_err(LoadError::variants)?;
+    for f in checked.ndc_funs {
+        theory.join_ndc_in_sig(f, tamarin_term::function_symbols::NdcState::IsNdc);
+    }
+
+    let auto_sources = |theory: &mut ClosedTheory| -> Result<(), LoadError> {
+        if open.auto_sources {
+            theory.apply_auto_sources(
+                maude.clone(),
+                pool.clone(),
+                Some(&checked.cache),
+                opts.parameters,
             )?;
-            self.ndc_funs = checked.ndc_funs;
-            self.ndc_cache = Some(checked.cache.into());
-        }
-
-        // `checkVariableDeducibility`, skipped entirely when disabled.
-        let timeout = self.opts.derivation_checks;
-        if timeout.is_enabled() {
-            self.marker("Derivation checks started");
-            if let Some(maude) = self.maude.as_ref() {
-                let report = tamarin_theory::deriv_check::check_message_derivation(
-                    &self.theory,
-                    maude,
-                    self.maude_pool.as_ref(),
-                    timeout,
-                    self.ndc_cache.clone(),
-                    self.opts.parameters,
-                )?;
-                self.wf_report.extend(report);
-            }
-            self.marker("Derivation checks ended");
-        }
-
-        // `closeTranslatedTheory`'s `closeTheoryWithMaude`: the checks above
-        // ran on the open theory, zero-variant rules included.
-        if close_mode {
-            let maude = self.require_maude()?;
-            let placeholder = Theory::new(self.theory.name.clone(), self.maude_sig.clone());
-            let LoadedTheory::Open(open) =
-                std::mem::replace(&mut self.theory, LoadedTheory::Open(Arc::new(placeholder)))
-            else {
-                unreachable!("the theory is closed once")
-            };
-            let closed = tamarin_theory::closed_theory::close_prepared_theory(
-                Arc::unwrap_or_clone(open),
-                &maude,
-            )
-            .map_err(LoadError::variants)?;
-            self.theory = LoadedTheory::Closed(closed);
         }
         Ok(())
+    };
+    auto_sources(&mut theory)?;
+    let mut pe_trace = String::new();
+    if let Some(style) = opts.partial_evaluation {
+        pe_trace = theory
+            .apply_partial_evaluation(&maude, pool.as_deref(), style)
+            .map_err(|e| {
+                LoadError::Other(format!("partial evaluation of {in_file} failed: {e}"))
+            })?;
+        auto_sources(&mut theory)?;
     }
-
-    /// HS `closeTranslatedTheory` minus `proveTheory`, with
-    /// `withVersionAndReport`'s `--quit-on-warning` raise: HS prints `Theory
-    /// closed` before the unforced close, auto-sources and proof, then raises
-    /// once the report is known, so none of them run.
-    ///
-    /// Otherwise adopt the NDC-joined signature, apply `--auto-sources`
-    /// (`closeTheoryWithMaude`) and `--partial-evaluation`
-    /// (`applyPartialEvaluation`, which re-closes with auto-sources).
-    /// Returns the partial evaluation's trace for [`Self::closed_marker`].
-    /// The warning error takes the report, leaving `wf_report` empty.
-    pub fn close_translated_theory(&mut self) -> Result<String, LoadError> {
-        if self.opts.quit_on_warning && !self.wf_report.is_empty() {
-            self.marker("Theory closed");
-            return Err(LoadError::Warning(std::mem::take(&mut self.wf_report)));
-        }
-
-        let ndc_funs = std::mem::take(&mut self.ndc_funs);
-        let theory = self.theory.closed_mut();
-        for f in ndc_funs {
-            theory.join_ndc_in_sig(f, tamarin_term::function_symbols::NdcState::IsNdc);
-        }
-
-        if self.auto_sources {
-            self.apply_auto_sources()?;
-        }
-
-        let mut pe_trace = String::new();
-        if let (Some(style), Some(maude)) = (self.opts.partial_evaluation, self.maude.clone()) {
-            let in_file = self.theory.in_file.clone();
-            let pool = self.maude_pool.clone();
-            let theory = self.theory.closed_mut();
-            // The refined rules are closed again before auto-sources.
-            pe_trace = theory
-                .apply_partial_evaluation(&maude, pool.as_deref(), style)
-                .map_err(|e| {
-                    LoadError::Other(format!("partial evaluation of {in_file} failed: {e}"))
-                })?;
-            if self.auto_sources {
-                self.apply_auto_sources()?;
-            }
-        }
-        Ok(pe_trace)
-    }
-
-    fn apply_auto_sources(&mut self) -> Result<(), LoadError> {
-        let maude = self.require_maude()?;
-        let pool = self.maude_pool.clone();
-        let ndc_cache = self.ndc_cache.clone();
-        let parameters = self.opts.parameters;
-        let theory = self.theory.closed_mut();
-        theory.apply_auto_sources(maude, pool, ndc_cache.as_ref(), parameters)?;
-        Ok(())
-    }
+    Ok(ClosedTheoryLoad {
+        theory,
+        wf_report: open.report,
+        maude,
+        maude_pool: pool,
+        ndc_cache: checked.cache,
+        cut: open.cut,
+        pe_trace,
+    })
 }
 
 /// HS `lemmaSelector` (TheoryLoader.hs): `[]`, `[""]` and `["",""]` select

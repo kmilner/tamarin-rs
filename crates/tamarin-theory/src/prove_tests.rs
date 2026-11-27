@@ -128,6 +128,12 @@ fn public_proving_validates_its_input() {
             Err("Variants"),
         ),
         (
+            "invalid variants at close",
+            INVALID_VARIANT.into(),
+            Entry::Closed,
+            Err("Variants"),
+        ),
+        (
             "invalid variants, narrowed body",
             INVALID_VARIANT.into(),
             Entry::Raw { narrow: true },
@@ -175,16 +181,16 @@ fn public_proving_validates_its_input() {
                 }
                 prove_lemma(std::sync::Arc::new(theory), "l", h.clone(), 30)
             }
-            Entry::Closed => {
-                let (theory, report) =
-                    crate::closed_theory::close_theory(theory, &h, None).unwrap();
-                assert!(!report.is_empty(), "{label}");
-                assert!(crate::wellformedness::variants::fatal_wf_errors(&report).is_empty());
-                let counter = h.fresh_counter_peek();
-                let session = ProverSession::build(&theory, h.clone(), Default::default()).unwrap();
-                assert_eq!(h.fresh_counter_peek(), counter, "{label}: session build");
-                prove_lemma_in_session(&session, "l", 30)
-            }
+            Entry::Closed => crate::closed_theory::close_theory(theory, &h, None)
+                .map_err(ProveError::from)
+                .and_then(|(theory, report)| {
+                    assert!(!report.is_empty(), "{label}");
+                    assert!(crate::wellformedness::variants::fatal_wf_errors(&report).is_empty());
+                    let counter = h.fresh_counter_peek();
+                    let session = ProverSession::build(&theory, h.clone(), Default::default())?;
+                    assert_eq!(h.fresh_counter_peek(), counter, "{label}: session build");
+                    prove_lemma_in_session(&session, "l", 30)
+                }),
         };
         match (result, expected) {
             (Ok(proof), Ok(status)) => assert_eq!(

@@ -2,9 +2,8 @@
 // Derived from the upstream tamarin-prover sources referenced below.
 
 //! HS `ClosedTheory` (ClosedTheory.hs): a theory whose protocol rules went
-//! through the loader's closing step exactly once. [`close_theory`] and
-//! [`close_prepared_theory`] are the only constructors, so a [`ClosedTheory`]
-//! has its zero-variant rules removed and its loop breakers annotated.
+//! through the loader's closing step. Closing validates explicit variants,
+//! removes zero-variant rules and annotates loop breakers.
 
 use std::sync::Arc;
 
@@ -28,28 +27,39 @@ impl std::ops::Deref for ClosedTheory {
     }
 }
 
-/// Close the protocol rules of `theory` in Haskell's order: compute variants,
-/// report wellformedness while zero-variant rules are still present, reject
-/// unsupported input (HS `checkTranslatedTheory` with `rejectUnsupported`),
-/// then [`close_prepared_theory`]. Returns the wellformedness report.
+/// A theory whose rule variants have passed the checks required for closing.
+/// Loaders can inspect the open rules for derivation checks before closing.
+pub struct PreparedTheory(Theory);
+
+impl PreparedTheory {
+    pub fn prepare(
+        mut theory: Theory,
+        maude: &MaudeHandle,
+        pool: Option<&MaudePool>,
+    ) -> Result<(Self, WfReport), VariantsError> {
+        let report =
+            crate::tools::rule_variants::prepare_theory_rules(&mut theory, maude, pool, true)?;
+        Ok((Self(theory), report))
+    }
+
+    pub fn theory(&self) -> &Theory {
+        &self.0
+    }
+
+    pub fn close(mut self, maude: &MaudeHandle) -> Result<ClosedTheory, VariantsError> {
+        crate::tools::rule_variants::finish_theory_rules(&mut self.0, maude)?;
+        Ok(ClosedTheory(Arc::new(self.0)))
+    }
+}
+
+/// Validate and close the protocol rules, returning the wellformedness report.
 pub fn close_theory(
-    mut theory: Theory,
+    theory: Theory,
     maude: &MaudeHandle,
     pool: Option<&MaudePool>,
 ) -> Result<(ClosedTheory, WfReport), VariantsError> {
-    let report = crate::tools::rule_variants::prepare_theory_rules(&mut theory, maude, pool, true)?;
-    Ok((close_prepared_theory(theory, maude)?, report))
-}
-
-/// HS `closeTheoryWithMaude` (CloseRule.hs) on a theory whose rules
-/// [`crate::tools::rule_variants::prepare_theory_rules`] has prepared: remove
-/// the zero-variant rules and annotate loop breakers.
-pub fn close_prepared_theory(
-    mut theory: Theory,
-    maude: &MaudeHandle,
-) -> Result<ClosedTheory, VariantsError> {
-    crate::tools::rule_variants::finish_theory_rules(&mut theory, maude)?;
-    Ok(ClosedTheory(Arc::new(theory)))
+    let (prepared, report) = PreparedTheory::prepare(theory, maude, pool)?;
+    Ok((prepared.close(maude)?, report))
 }
 
 impl ClosedTheory {

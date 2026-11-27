@@ -14,7 +14,7 @@
 //!
 //!   `tamarin-prover interactive theory.spthy`  →
 //!     - load and close the theory (`theory_io::load_from_path`, which runs
-//!       `theory_loader::load_theory` and the `TheoryPipeline` close stages)
+//!       `theory_loader::load_theory` and `theory_loader::close_theory`)
 //!     - register the theory in a `TheoryStore`
 //!     - serve the bundled `frontend/dist/` (+ `data/`) on a TCP port
 //!

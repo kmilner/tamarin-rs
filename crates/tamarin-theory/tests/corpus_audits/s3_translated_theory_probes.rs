@@ -1,11 +1,8 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Corpus probes over the TRANSLATED theory — the internal theory as the
-//! driver leaves it after `elaborate`, `apply_sapic` and
-//! `tamarin_accountability::translate` (run.rs `translate_theory`).  The
-//! lemmas and restrictions those two translations inject are the ones the
-//! other corpus nets do not reach.
+//! Corpus probes for the lemmas and restrictions that SAPIC and accountability
+//! translation add to an elaborated theory.
 //!
 //! `translated_items_carry_both_formulas` walks the two formulas such an item
 //! stores — `_lFormula` / `_rstrFormula`, macro- and predicate-expanded, and
@@ -222,10 +219,7 @@ fn probe_lookups(
     (out, pairs, carried)
 }
 
-/// The driver's load pipeline for one file, up to the point where the
-/// translated theory is complete — the load ladder, then the SAPIC and the
-/// accountability translation (run.rs `translate_theory`) — then both
-/// probes over that theory.
+/// Elaborate and translate one file, then run both probes on its translated theory.
 fn probe(path: &Path, root: &Path) -> FileProbe {
     let start = Instant::now();
     let mut elab = match corpus_util::load_elaborated(path, root) {

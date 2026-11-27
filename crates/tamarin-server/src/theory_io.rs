@@ -6,12 +6,11 @@
 
 use chrono::Local;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use tamarin_theory::wellformedness::WfError;
 
 use crate::state::{TheoryEntry, TheoryOrigin};
-use crate::theory_loader::{load_theory, TheoryPipeline};
+use crate::theory_loader::{close_theory, load_theory};
 
 #[derive(Debug)]
 pub enum LoadError {
@@ -58,30 +57,18 @@ pub(crate) fn load_from_source(
     };
     let parsed = load_theory(&cfg.load, src, base_dir)
         .map_err(|e| LoadError::Parse(e.render_plain_with_source(&source_name, src)))?;
-    let mut pipeline =
-        TheoryPipeline::new(&cfg.load, parsed, &source_name, None).map_err(LoadError::Close)?;
-    pipeline.translate_theory().map_err(LoadError::Close)?;
-    pipeline
-        .check_translated_theory()
-        .map_err(LoadError::Close)?;
-    let pe_trace = pipeline
-        .close_translated_theory()
-        .map_err(LoadError::Close)?;
-    pipeline.closed_marker(&pe_trace);
-
-    let crate::theory_loader::LoadedTheory::Closed(typed_theory) = pipeline.theory else {
-        unreachable!("close mode closes the theory")
-    };
+    let closed = close_theory(&cfg.load, parsed, &source_name).map_err(LoadError::Close)?;
+    closed.print_partial_evaluation_trace();
     Ok(TheoryEntry {
         idx: 0,
-        typed_theory,
-        prover_maude_sig: Arc::new(pipeline.maude_sig),
-        cut: pipeline.cut,
+        typed_theory: closed.theory,
+        prover_maude_sig: closed.maude.maude_sig(),
+        cut: closed.cut,
         origin,
         loaded_at: Local::now(),
         primary: true,
-        wf_report: pipeline.wf_report.into(),
-        ndc_cache: pipeline.ndc_cache,
+        wf_report: closed.wf_report.into(),
+        ndc_cache: closed.ndc_cache,
         proof_state: None,
     })
 }

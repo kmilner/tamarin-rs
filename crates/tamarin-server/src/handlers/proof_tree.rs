@@ -174,28 +174,12 @@ impl ProofState {
             (*entry.prover_maude_sig).clone(),
         )
         .map_err(|e| format!("maude start: {:?}", e))?;
-        Self::new_with_maude(
+        let session = tamarin_theory::prove::ProverSession::build(
             &entry.typed_theory,
             maude,
-            entry.ndc_cache.as_ref(),
-            entry.cut,
-            cfg,
-        )
-    }
-
-    fn new_with_maude(
-        typed: &tamarin_theory::closed_theory::ClosedTheory,
-        maude: tamarin_term::maude_proc::MaudeHandle,
-        ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
-        cut: tamarin_theory::constraint::solver::context::CutStrategy,
-        cfg: &crate::ServerConfig,
-    ) -> Result<Self, String> {
-        let session = tamarin_theory::prove::ProverSession::build(
-            typed,
-            maude,
             tamarin_theory::prove::ProverSessionOptions {
-                cut,
-                ndc_cache: ndc_cache.cloned(),
+                cut: entry.cut,
+                ndc_cache: Some(entry.ndc_cache.clone()),
                 parameters: cfg.load.parameters,
                 sys_retention: tamarin_theory::constraint::solver::search::SysRetention::KeepAll,
                 show_saturation_steps: true,
@@ -204,7 +188,8 @@ impl ProofState {
         )
         .map(Arc::new)
         .map_err(|e| format!("prover session: {e}"))?;
-        let by_lemma = typed
+        let by_lemma = entry
+            .typed_theory
             .lemmas()
             .map(|lemma| (lemma.name.clone(), Mutex::new(LemmaProofState::Lazy)))
             .collect();
