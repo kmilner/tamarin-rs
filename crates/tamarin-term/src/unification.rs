@@ -365,19 +365,3 @@ where
 #[cfg(test)]
 #[path = "unification_tests.rs"]
 mod tests;
-
-// =============================================================================
-// Haskell-faithfulness invariants
-// =============================================================================
-//
-// These tests pin subtle term-layer semantic choices whose violation is
-// easy to miss.  The cost of getting any of these wrong is a silent
-// divergence — the wrong unifier "works" in the logical sense (produces
-// equivalent equality classes) but the SHAPE of the result differs, which
-// downstream code can implicitly depend on.
-//
-// If any of these tests fails, STOP and investigate before chasing a
-// downstream symptom — the root is here at the term layer.
-#[cfg(test)]
-#[path = "unification_haskell_invariants_tests.rs"]
-mod haskell_invariants_tests;

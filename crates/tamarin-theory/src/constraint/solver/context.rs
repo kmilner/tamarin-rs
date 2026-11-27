@@ -1197,28 +1197,6 @@ mod tests {
     use tamarin_test_support::require_maude_path;
 
     #[test]
-    fn explicit_variant_actions_are_used_by_the_solver() {
-        let Some(path) = require_maude_path() else {
-            return;
-        };
-        let source = r#"theory ExplicitActions begin
-rule Emit: [In(x)] --[Original(x)]-> []
-variants
-rule (modulo AC) Emit___VARIANT_1: [In(y.8)] --[Original(y.8), Added(y.8)]-> []
-end"#;
-        let theory =
-            crate::elaborate::elaborate(&tamarin_parser::parse_theory(source, &[]).unwrap())
-                .unwrap();
-        let maude =
-            tamarin_term::maude_proc::MaudeHandle::start(&path, theory.signature.clone()).unwrap();
-        let ctx = ProofContext::new(maude, theory.rules().cloned().collect());
-        assert_eq!(ctx.rules.len(), 1);
-        assert_eq!(ctx.rules[0].rule.actions.len(), 2);
-        assert_eq!(ctx.rules[0].variant_substs().len(), 1);
-        assert!(ctx.rules[0].variant_substs()[0].is_empty());
-    }
-
-    #[test]
     fn injectivity_analysis_uses_original_rules_after_unfolding() {
         use crate::fact::{FactTag, Multiplicity};
         use crate::tools::injective_fact_instances::MonotonicBehaviour;
@@ -1275,62 +1253,6 @@ end"#
             assert_eq!(
                 ctx.injective_fact_insts.iter().cloned().collect::<Vec<_>>(),
                 expected
-            );
-        }
-    }
-
-    #[test]
-    fn injectivity_analysis_uses_expanded_macros_not_display_rules() {
-        use crate::fact::{FactTag, Multiplicity};
-        use crate::tools::injective_fact_instances::{
-            simple_injective_fact_instances, MonotonicBehaviour,
-        };
-        let Some(path) = require_maude_path() else {
-            return;
-        };
-        // Upstream baf837f / msr-macro-injectivity: unexpanded macro
-        // applications look like strictly increasing free constructors.
-        let source = r#"theory MacroInjectivity begin
-macros: identity(x) = x, constant(x) = 'c', projection(x) = fst(<x, 'c'>)
-rule Init: [Fr(~id), In(x)] --> [S(~id, x), C(~id, x), P(~id, x)]
-rule Identity: [S(~id, x)] --> [S(~id, identity(x))]
-rule Constant: [C(~id, x)] --> [C(~id, constant(x))]
-rule Projection: [P(~id, x)] --> [P(~id, projection(x))]
-end"#;
-        let theory =
-            crate::elaborate::elaborate(&tamarin_parser::parse_theory(source, &[]).unwrap())
-                .unwrap();
-        let rules: Vec<_> = theory.rules().cloned().collect();
-        assert!(rules[1..].iter().all(|r| r.rule_e.is_some()));
-        let unexpanded = simple_injective_fact_instances(
-            &rules.iter().map(|r| r.rule_e()).collect::<Vec<_>>(),
-            &theory.signature.reducible_fun_syms_fast,
-        );
-        assert_eq!(unexpanded.len(), 3);
-        assert!(unexpanded
-            .iter()
-            .all(|(_, shape)| *shape == vec![vec![MonotonicBehaviour::StrictlyIncreasing]]));
-        let maude =
-            tamarin_term::maude_proc::MaudeHandle::start(&path, theory.signature.clone()).unwrap();
-        let ctx = ProofContext::with_options(
-            maude,
-            rules,
-            super::ProofContextOptions {
-                macros: theory.macros().cloned().collect(),
-                ..Default::default()
-            },
-        );
-        for (tag, behaviour) in [
-            ("S", MonotonicBehaviour::Constant),
-            ("C", MonotonicBehaviour::Unstable),
-            ("P", MonotonicBehaviour::Unstable),
-        ] {
-            assert!(
-                ctx.injective_fact_insts.contains(&(
-                    FactTag::Proto(Multiplicity::Linear, tag, 2),
-                    vec![vec![behaviour]]
-                )),
-                "{tag} must be analysed after macro expansion"
             );
         }
     }

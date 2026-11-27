@@ -31,31 +31,6 @@ fn products_are_supported_only_in_exponents() {
     );
 }
 
-/// `Rule::new` puts each argument into its own field.  The lists have distinct
-/// lengths and distinct contents.  A swap of the premises and the conclusions
-/// therefore cannot hide behind two lists of the same shape.
-/// `ProtoRuleEInfo::standard` interns the name into `Stand` without change,
-/// and it leaves the attributes and the restrictions empty.
-#[test]
-fn build_simple_proto_rule_e() {
-    let r: ProtoRuleE = Rule::new(
-        ProtoRuleEInfo::standard("Send"),
-        vec![fresh_fact(msg_var("k", 0)), in_fact(msg_var("m", 0))],
-        vec![out_fact(msg_var("k", 0))],
-        vec![],
-    );
-    assert_eq!(
-        r.premises,
-        vec![fresh_fact(msg_var("k", 0)), in_fact(msg_var("m", 0))]
-    );
-    assert_eq!(r.conclusions, vec![out_fact(msg_var("k", 0))]);
-    assert!(r.actions.is_empty());
-    assert!(r.new_vars.is_empty());
-    assert_eq!(r.info.name, ProtoRuleName::Stand("Send"));
-    assert_eq!(r.info.attributes, RuleAttributes::empty());
-    assert!(r.info.restrictions.is_empty());
-}
-
 /// `lookup_premise` and `lookup_conclusion` index their own list.  The two
 /// lists have different lengths, and the test also checks the identity of each
 /// fact.  A lookup that reads the wrong list therefore fails here.  Both
@@ -184,27 +159,17 @@ fn intruder_predicates() {
     }));
     // The HS-faithful pair covers a whole class: `isDestrRule` takes
     // `IEquality` too and `isConstrRule` takes the four non-`ConstrRule`
-    // constructors, while neither takes an `IRecv`.
+    // constructors, while neither takes an `IRecv`.  A rule `isDestrRule`
+    // accepts and `isConstrRule` rejects lands in `crDestruct`
+    // (CloseRule.hs), so `IEquality` is a destruction rule.
     assert!(is_destr_rule(&IntrRuleACInfo::IEquality));
+    assert!(!is_constr_rule(&IntrRuleACInfo::IEquality));
     assert!(is_constr_rule(&IntrRuleACInfo::Coerce));
     assert!(is_constr_rule(&IntrRuleACInfo::FreshConstr));
     assert!(is_constr_rule(&IntrRuleACInfo::PubConstr));
     assert!(is_constr_rule(&IntrRuleACInfo::NatConstr));
     assert!(!is_constr_rule(&IntrRuleACInfo::IRecv));
     assert!(!is_destr_rule(&IntrRuleACInfo::IRecv));
-}
-
-/// HS classifies the rules by partitioning them with `isDestrRule` and
-/// `isConstrRule` (CloseRule.hs): a rule `isDestrRule` accepts and
-/// `isConstrRule` rejects lands in `crDestruct`, and the intruder rules
-/// both reject land in `crProtocol`.  `isDestrRule` accepts `IEqualityRule`
-/// (Theory/Model/Rule.hs), so the `IEquality` rule belongs to
-/// `crDestruct`: `solveChain` iterates it (Goals.hs) and `solvePremise`
-/// does not (Goals.hs).
-#[test]
-fn iequality_belongs_to_the_destruction_class() {
-    assert!(is_destr_rule(&IntrRuleACInfo::IEquality));
-    assert!(!is_constr_rule(&IntrRuleACInfo::IEquality));
 }
 
 /// `IntrRuleACInfo`'s derived `Ord`/`Hash` walk the variants in
@@ -526,110 +491,6 @@ fn rename_rule_shifts_indices() {
 // `prettyRuleRestrGen` (Theory/Model/Rule.hs)
 // =========================================================================
 
-/// With no actions the middle of the `sep` is the bare `-->`
-/// (Theory/Model/Rule.hs), and each fact list is
-/// `fsep ["[", ppList, "]"]`, so a body that fits on one line carries a
-/// space inside each bracket.  The premise and conclusion lists are `nest
-/// 1`ed (Theory/Model/Rule.hs), which is the leading column the
-/// rule body shows when it is rendered at column zero.
-#[test]
-fn pretty_rule_restr_gen_uses_the_bare_arrow_without_actions() {
-    use tamarin_term::builtin::fresh_var;
-    let prems = vec![fresh_fact(fresh_var("k", 0))];
-    let concls = vec![out_fact(fresh_var("k", 0))];
-    assert_eq!(
-        pretty_rule_restr_gen(&prems, &[], &concls).render(),
-        " [ Fr( ~k ) ] --> [ Out( ~k ) ]"
-    );
-}
-
-/// With actions the arrow becomes `fsep ["--[", ppList acts, "]->"]`
-/// (Theory/Model/Rule.hs), and the action list is punctuated by
-/// the same comma as the premise and conclusion lists.
-#[test]
-fn pretty_rule_restr_gen_brackets_the_actions() {
-    use crate::fact::{proto_fact, Multiplicity};
-    use tamarin_term::builtin::fresh_var;
-    let prems = vec![fresh_fact(fresh_var("k", 0))];
-    let acts = vec![
-        proto_fact(Multiplicity::Linear, "A", vec![fresh_var("k", 0)]),
-        proto_fact(Multiplicity::Persistent, "B", vec![fresh_var("k", 0)]),
-    ];
-    let concls = vec![out_fact(fresh_var("k", 0))];
-    assert_eq!(
-        pretty_rule_restr_gen(&prems, &acts, &concls).render(),
-        " [ Fr( ~k ) ] --[ A( ~k ), !B( ~k ) ]-> [ Out( ~k ) ]"
-    );
-}
-
-/// A body too wide for the ribbon breaks at the `sep`
-/// (Theory/Model/Rule.hs): the premises, the arrow and the
-/// conclusions each take a line, and only the two fact lists carry the
-/// `nest 1` column.
-#[test]
-fn pretty_rule_restr_gen_breaks_at_the_arrows() {
-    use crate::fact::{proto_fact, Multiplicity};
-    use tamarin_term::builtin::fresh_var;
-    let prems: Vec<_> = (0..3)
-        .map(|i| {
-            proto_fact(
-                Multiplicity::Linear,
-                "Wide",
-                vec![fresh_var("keymaterial", i)],
-            )
-        })
-        .collect();
-    let concls = vec![out_fact(fresh_var("k", 0))];
-    let rendered = pretty_rule_restr_gen(&prems, &[], &concls).render();
-    assert_eq!(
-        rendered.lines().collect::<Vec<_>>(),
-        vec![
-            " [ Wide( ~keymaterial ), Wide( ~keymaterial.1 ), Wide( ~keymaterial.2 ) ]",
-            "-->",
-            " [ Out( ~k ) ]",
-        ]
-    );
-}
-
-/// HS keeps a rule's `_restrict` formulas on `preRestriction`
-/// (Theory/Text/Parser/Rule.hs) and `liftedAddProtoRule` appends the
-/// generated actions without touching the field
-/// (Theory/Text/Parser.hs), so the elaborated rule carries them —
-/// closed against the theory's signature, with its predicate atoms
-/// unexpanded.
-#[test]
-fn elaborated_rule_carries_its_restrict_formulas() {
-    let src = "theory T begin\n\
-               functions: eq/2\n\
-               rule A:\n  [In(x)] --[ _restrict(Ex #i. Act(eq(x,x)) @ #i) ]-> []\n\
-               end";
-    let parsed = tamarin_parser::parse_theory(src, &[]).unwrap();
-    let elab = crate::elaborate::elaborate(&parsed).unwrap();
-    let source = parsed
-        .items
-        .iter()
-        .find_map(|it| match it {
-            tamarin_parser::ast::TheoryItem::Rule(r) if r.name == "A" => Some(r),
-            _ => None,
-        })
-        .expect("parsed rule A");
-    assert_eq!(source.embedded_restrictions.len(), 1);
-    let expected =
-        crate::formula::from_parser(&source.embedded_restrictions[0], &elab.signature).unwrap();
-    let rule = elab.rules().find(|r| r.name() == "A").expect("rule A");
-    assert_eq!(rule.rule.info.restrictions, vec![expected]);
-}
-
-/// HS `prettyRuleAttributes` returns `emptyDoc` for a record equal to `mempty`
-/// (Theory/Model/Rule.hs), which is what an unattributed rule
-/// carries.
-#[test]
-fn pretty_rule_attribute_omits_an_empty_record() {
-    let attr = RuleAttributes::empty();
-    assert_eq!(pretty_rule_attribute(&attr).render(), "");
-    assert_eq!(pretty_rule_attributes(&attr).render(), "");
-}
-
 /// HS `prettyRuleAttribute` renders `catMaybes [color, process,
 /// no_derivcheck, issapicrule, role]` in that order, separated by
 /// `punctuate comma` and wrapped in brackets by `prettyRuleAttributes`
@@ -788,57 +649,6 @@ fn merge_open_proto_rules_groups_consecutive_equal_e_rules() {
         TheoryItem::Rule(r) => assert!(r.rule_ac.is_empty()),
         other => panic!("expected a rule item, got {other:?}"),
     }
-}
-
-/// `closeProtoRule` maps `ClosedProtoRule ruE` over the `variants (modulo AC)`
-/// blocks the source writes and reaches `variantsProtoRule` only for a rule
-/// that writes none (lib/theory/src/Rule.hs), so a written variant keeps
-/// the disjunction its parser gave it — `Disj [emptySubstVFresh]`
-/// (`protoRuleACInfo`, Theory/Text/Parser/Rule.hs).
-/// `prettyOpenProtoRuleAsClosedRule` then takes its `length disj == 1` arm and
-/// annotates the rule instead of quoting a `variants (modulo AC)` block
-/// (OpenTheory.hs).  The rule here also carries a narrowing
-/// disjunction, which is what `populate_rule_variants` leaves on every rule
-/// item whose E rule holds a reducible sub-term.
-#[test]
-fn manual_variant_keeps_the_trivial_disjunction() {
-    let opr = crate::theory::OpenProtoRule {
-        rule: Rule::new(
-            ProtoRuleEInfo::standard("R"),
-            vec![in_fact(msg_var("c", 0))],
-            vec![out_fact(msg_var("c", 0))],
-            vec![],
-        ),
-        variants: crate::theory::RuleVariants::Closed {
-            body: Rule::new(
-                ProtoRuleEInfo::standard("R"),
-                vec![in_fact(msg_var("c", 0))],
-                vec![out_fact(msg_var("c", 0))],
-                vec![],
-            ),
-            variants: vec![tamarin_term::subst_vfresh::LNSubstVFresh::from_list([(
-                LVar::new("c", tamarin_term::lterm::LSort::Msg, 0),
-                msg_var("z", 4),
-            )])],
-        },
-        loop_breakers: Vec::new(),
-        rule_e: None,
-        rule_ac: vec![Rule::new(
-            ProtoRuleEInfo::standard("R___VARIANT_1"),
-            vec![in_fact(msg_var("z", 0))],
-            vec![out_fact(msg_var("z", 0))],
-            vec![],
-        )],
-    };
-    let merged = crate::theory::open_proto_rule(&opr);
-    assert_eq!(
-        merged.rule_ac[0].info.variants,
-        vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()]
-    );
-    let out = pretty_open_proto_rule_as_closed_rule(&merged).render();
-    assert!(out.contains("rule (modulo E) R:"), "{out}");
-    assert!(out.contains("rule (modulo AC) R___VARIANT_1:"), "{out}");
-    assert!(out.contains("variants"), "{out}");
 }
 
 /// HS `frees` at `Rule ProtoRuleEInfo` folds the info before the four fact

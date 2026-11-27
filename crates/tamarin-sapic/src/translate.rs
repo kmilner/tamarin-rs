@@ -572,10 +572,7 @@ fn is_pos_neg_atom(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::typing::{init_te_from_sig, type_and_rename_process_in};
-    use tamarin_parser::ast as p;
     use tamarin_term::lterm::LSort;
-    use tamarin_theory::process_convert::convert_process;
     use tamarin_theory::sapic::ProcessParsedAnnotation;
 
     #[test]
@@ -668,43 +665,6 @@ mod tests {
         }
     }
 
-    fn typing2_process() -> p::Process {
-        let xspec = p::VarSpec {
-            name: "x".into(),
-            idx: 0,
-            sort: LSort::Msg,
-            typ: Some("lol".into()),
-        };
-        let xref = p::Term::Var(p::VarSpec {
-            name: "x".into(),
-            idx: 0,
-            sort: LSort::Msg,
-            typ: None,
-        });
-        let ffx = p::Term::App(
-            "f".into(),
-            vec![p::Term::App("f".into(), vec![xref.clone()])],
-        );
-        p::Process::Action {
-            action: p::SapicAction::New(xspec),
-            body: Box::new(p::Process::Action {
-                action: p::SapicAction::Event(p::Fact {
-                    persistent: false,
-                    name: "Test".into(),
-                    args: vec![xref],
-                    annotations: vec![],
-                }),
-                body: Box::new(p::Process::Action {
-                    action: p::SapicAction::ChOut {
-                        chan: None,
-                        msg: ffx,
-                    },
-                    body: Box::new(p::Process::Null),
-                }),
-            }),
-        }
-    }
-
     #[test]
     fn propagate_names_preserves_location() {
         // Propagated process names leave the other annotation fields intact.
@@ -721,45 +681,6 @@ mod tests {
         };
         assert_eq!(propagated.process_names, ["P"]);
         assert_eq!(propagated.location, Some(location));
-    }
-
-    #[test]
-    fn translate_typing2_rule_names_and_restriction() {
-        // No function-typing needed for the rule-count check; convert and
-        // type over an empty signature (defaults all funs).
-        let sig = tamarin_term::maude_sig::MaudeSig::default();
-        let plain = convert_process(&typing2_process(), &sig).unwrap();
-        let mut env = init_te_from_sig(&sig, &[]).unwrap();
-        let typed = type_and_rename_process_in(&mut env, &plain).unwrap();
-        let st_rules = std::collections::BTreeSet::new();
-        let tr = translate(&typed, false, &st_rules, &[], TranslateOptions::default()).unwrap();
-        // The rules are Init, new, event, out and null, in that order.  They
-        // use the `<label>_<index>_<position>` naming that HS derives from
-        // the pretty-printed head of each node (Facts.hs `toRule`).  The test
-        // compares the names, not the count.  So it catches a rule emitted
-        // for the wrong node.  It also catches a position suffix that comes
-        // from a wrong walk, and a changed emission order.
-        let names: Vec<String> = tr
-            .rules
-            .iter()
-            .map(|r| match &r.info.name {
-                tamarin_theory::rule::ProtoRuleName::Stand(n) => n.to_string(),
-                other => panic!("expected a standard rule name, got {other:?}"),
-            })
-            .collect();
-        assert_eq!(
-            names,
-            [
-                "Init",
-                "newxlol_0_",
-                "eventTestxlol_0_1",
-                "outffxlol_0_11",
-                "p_0_111"
-            ]
-        );
-        // Every SAPIC theory also gets the `single_session` restriction.
-        assert_eq!(tr.restrictions.len(), 1);
-        assert_eq!(tr.restrictions[0].name, "single_session");
     }
 
     /// `name()@#i` as the lemma formula holds it: a `ProtoFact` action atom

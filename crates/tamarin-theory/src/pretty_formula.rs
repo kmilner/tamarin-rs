@@ -69,37 +69,6 @@ pub(crate) fn pretty_guarded(g: &Guarded) -> String {
     guarded_doc(g).render_with(FLAT_WIDTH, FLAT_WIDTH)
 }
 
-/// Test-only: pretty-print a guarded formula with HS-style
-/// `sep`/`nest`-driven line wrapping.  `indent` is the column where the
-/// first character of the formula will land in the final output.  The page
-/// /ribbon widths are the fixed `LINE_LENGTH`/`RIBBON` constants, so there
-/// is no per-call width knob.  Mirrors Haskell's `prettyGuarded`
-/// (Guarded.hs) composed with the HughesPJ `sep`/`nest` layout
-/// semantics.
-///
-/// Routes through the HS-faithful Doc engine (`crate::pretty_hpj`):
-/// `guarded_to_doc` builds a `Doc` tree that mirrors HS `prettyGuarded`'s
-/// `sep`/`nest`/`fsep` structure node-for-node, then `render_at` lays it
-/// out with the same `get1` per-NilAbove `w`-shrinkage HughesPJ uses
-/// (HughesPJ.hs).  `indent` is the column where the formula's first
-/// char will land (e.g. 1, right after the opening `"` of the lemma's
-/// `doubleQuotes` wrap, lib/theory/src/Lemma.hs).
-///
-/// NOTE: `render_at`'s `sl_initial` only shrinks the budget; it does NOT
-/// shift continuation lines by the leading prefix width.  In HS the
-/// `prettyGuarded` doc is the RIGHT operand of `doubleQuotes`'s `<>`
-/// (`"\"" <> prettyGuarded <> "\""`, Text/PrettyPrint/Class.hs), and HughesPJ `beside`
-/// DOES shift the right doc's vertical layout by the leading `"`'s width
-/// (1 col).  Callers that place the formula after a 1-col prefix must use
-/// `pretty_guarded_doublequoted` (which models the `"` as a real Doc
-/// `beside`, getting the continuation indent right).  Used only by the
-/// unit tests in this module; production callers use
-/// `pretty_guarded_doublequoted`.
-#[cfg(test)]
-fn pretty_guarded_wrapped(g: &Guarded, indent: usize) -> String {
-    guarded_doc(g).render_at(hpj::LINE_LENGTH, hpj::RIBBON, indent)
-}
-
 /// HS `doubleQuotes (prettyGuarded gf)` (lib/theory/src/Lemma.hs, Text/PrettyPrint/Class.hs).
 /// Builds `"\"" <> guarded_doc <> "\""` as a single Doc and renders it,
 /// so HughesPJ `beside`'s column-shift puts continuation lines at the

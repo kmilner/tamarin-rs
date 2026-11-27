@@ -80,6 +80,8 @@ pub mod tactic;
 pub(crate) mod test_corpus;
 #[cfg(test)]
 mod test_corpus_common;
+#[cfg(test)]
+mod test_corpus_common_tests;
 pub mod theory;
 pub mod tools;
 pub mod wellformedness;

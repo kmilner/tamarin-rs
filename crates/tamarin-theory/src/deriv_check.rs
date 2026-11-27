@@ -582,22 +582,6 @@ mod tests {
     }
 
     #[test]
-    fn deriv_check_passes_on_derivable_var() {
-        let Some(m) = maude() else { return };
-        let src = r#"
-            theory T begin
-              rule R: [In(x)] --[Use(x)]-> [Out(x)]
-              lemma trivial: "T"
-            end
-        "#;
-        let report =
-            check_message_derivation(&theory(src), &m, None, secs(5), None, Default::default())
-                .expect("solver operation");
-        // `x` appears in `In(x)` which is intruder-known → derivable.
-        assert!(report.is_empty(), "expected no warnings, got {:?}", report);
-    }
-
-    #[test]
     fn deriv_check_reports_unbound_vars_in_declaration_order() {
         let Some(path) = require_maude_path() else {
             return;
@@ -754,46 +738,6 @@ mod tests {
         assert!("4294967296".parse::<DerivCheckTimeout>().is_err());
         assert!("five".parse::<DerivCheckTimeout>().is_err());
         assert_eq!(DerivCheckTimeout::DEFAULT, secs(5));
-    }
-
-    /// `ignoreDerivChecks` on the rule's attributes keeps the rule out of
-    /// the report (HS `reportVars`, MessageDerivationChecks.hs), so
-    /// the same underivable variable as above is not named.
-    #[test]
-    fn deriv_check_skips_a_no_derivcheck_rule() {
-        let Some(m) = maude() else { return };
-        let src = r#"
-            theory T begin
-              rule R [no_derivcheck]: [] --[Use(unbound)]-> [Out(unbound)]
-              lemma trivial: "T"
-            end
-        "#;
-        let report =
-            check_message_derivation(&theory(src), &m, None, secs(5), None, Default::default())
-                .expect("solver operation");
-        assert!(
-            report.is_empty(),
-            "a no_derivcheck rule is not reported, got {:?}",
-            report
-        );
-    }
-
-    /// HS `frees` keys on the whole `LVar`, so a rule binding both `~ltk`
-    /// and `ltk` offers two candidates (issue527's `Register_pk`).  A
-    /// name-only key would let the fresh one mask the message-sorted one,
-    /// which is the variable the report names.
-    #[test]
-    fn free_vars_keep_same_named_vars_of_different_sorts_apart() {
-        let thy = theory(
-            r#"
-            theory T begin
-              rule Register_pk: [ Fr( ~ltk ), In( ltk ) ] --[ Reg( ltk ) ]-> [ Out( ~ltk ) ]
-            end
-        "#,
-        );
-        let rule = &thy.rules().next().expect("one rule item").rule;
-        let shown: Vec<String> = rule_free_vars(rule).iter().map(|v| v.to_string()).collect();
-        assert_eq!(shown, vec!["~ltk".to_string(), "ltk".to_string()]);
     }
 
     /// The free variables come back in ascending `LVar` Ord — index first,

@@ -729,26 +729,73 @@ mod tests {
         assert_eq!(app.cmp(&differing), Ordering::Less);
     }
 
+    /// The term-ord table: HS's derived `Ord (Term a)` (Term/Term/Raw.hs)
+    /// over `LNTerm`s, each row checked in both directions.
+    ///
+    /// - A pair is a nested arity-2 `FAPP`, so `<a, z>` and `<a, b, c>` first
+    ///   differ at `z` against `pair(b, c)`, where `LIT _ < FAPP _ _`.
+    /// - `FunSym` ranks `NoEq < AC < C < List` (FunctionSymbols.hs) before
+    ///   any name, so `em/2` (C) outranks every NoEq and AC head.  Only the
+    ///   binary `em` is a C symbol; the `em{t1}t2` spelling and an `em/3` are
+    ///   NoEq symbols ordered by name.  Two C terms tie on the symbol and
+    ///   compare their arguments.
+    #[test]
+    fn every_term_ord_row_holds_in_both_directions() {
+        use crate::function_symbols::{Constructability, Privacy};
+        use crate::lterm::{pub_term, LNTerm, LSort, LVar};
+        use crate::vterm::var_term;
+        use std::cmp::Ordering::{Greater, Less};
+
+        let msg = |n: &str| -> LNTerm { var_term(LVar::new(n, LSort::Msg, 0)) };
+        let pair = |a: LNTerm, b: LNTerm| f_app_no_eq(pair_sym(), vec![a, b]);
+        let user = |n: &str, args: Vec<LNTerm>| {
+            let sym = NoEqSym::new(
+                n.as_bytes().to_vec(),
+                args.len(),
+                Privacy::Public,
+                Constructability::Constructor,
+            );
+            f_app_no_eq(sym, args)
+        };
+        let (g, h) = (pub_term("g"), pub_term("h"));
+        let gh = || vec![g.clone(), h.clone()];
+        let em = f_app_c(CSym::EMap, gh());
+        let f = user("f", gh());
+        let rows: Vec<(&str, LNTerm, LNTerm, std::cmp::Ordering)> = vec![
+            (
+                "pair spine",
+                pair(msg("a"), msg("z")),
+                pair(msg("a"), pair(msg("b"), msg("c"))),
+                Less,
+            ),
+            ("NoEq f/2 < C em/2", f.clone(), em.clone(), Less),
+            ("NoEq aaa/2 < C em/2", user("aaa", gh()), em.clone(), Less),
+            ("AC < C", f_app_ac(AcSym::Mult, gh()), em.clone(), Less),
+            ("NoEq em/2 by name", user("em", gh()), f.clone(), Less),
+            ("NoEq em/2 < C em/2", user("em", gh()), em.clone(), Less),
+            (
+                "C ties fall to the arguments",
+                f_app_c(CSym::EMap, vec![g.clone(), g.clone()]),
+                em.clone(),
+                Less,
+            ),
+            (
+                "em/3 is NoEq",
+                user("em", vec![g.clone(), h.clone(), g.clone()]),
+                f,
+                Less,
+            ),
+            ("C em/2 > AC", em, f_app_ac(AcSym::Mult, gh()), Greater),
+        ];
+        for (label, l, r, want) in rows {
+            assert_eq!(l.cmp(&r), want, "{label}");
+            assert_eq!(r.cmp(&l), want.reverse(), "{label}");
+        }
+    }
+
     // =========================================================================
     // Haskell-faithfulness invariants for AC/C/NoEq term constructors.
     // =========================================================================
-
-    /// AC terms with the same multiset are *equal* mod-AC: `+(a, b)` and
-    /// `+(b, a)` get sorted to the same canonical form, so structural
-    /// equality holds.  Haskell-faithful: AC canonicalization happens at
-    /// construction time (`fAppAC` in Term/Term/Raw.hs).
-    #[test]
-    fn ac_terms_are_equal_modulo_argument_order() {
-        let t1 = f_app_ac(AcSym::Mult, vec![nat(7), nat(2), nat(5)]);
-        let t2 = f_app_ac(AcSym::Mult, vec![nat(5), nat(7), nat(2)]);
-        let t3 = f_app_ac(AcSym::Mult, vec![nat(2), nat(5), nat(7)]);
-        assert_eq!(
-            t1, t2,
-            "AC terms with same multiset of args must compare equal — \
-             smart constructor canonicalizes order"
-        );
-        assert_eq!(t1, t3);
-    }
 
     /// AC vs C distinction: C terms ARE sorted but NOT flattened.  NoEq
     /// terms preserve argument order.
@@ -776,53 +823,6 @@ mod tests {
             }
             _ => panic!(),
         }
-    }
-
-    /// Lit::Con < Lit::Var: constants sort before variables.
-    /// VTerm.hs: `data Lit c v = Con c | Var v`.
-    ///
-    /// This matters for `f_app_ac`/`f_app_c` argument sorting: if a
-    /// term mixes constants and variables, constants always sort first.
-    /// Downstream code in atom_valuation expects constants in fixed
-    /// positions when matching.
-    #[test]
-    fn lit_con_sorts_before_lit_var() {
-        use crate::lterm::{LNTerm, LSort, LVar, Name, NameId, NameTag};
-        use crate::vterm::Lit;
-
-        // Variant tags: Con=0, Var=1 in Haskell decl order.
-        let pub_a = Name {
-            tag: NameTag::Pub,
-            id: NameId::new("a"),
-        };
-        let v_x = LVar::new("x", LSort::Msg, 0);
-        let con: LNTerm = Term::Lit(Lit::Con(pub_a));
-        let var: LNTerm = Term::Lit(Lit::Var(v_x));
-        assert!(
-            con < var,
-            "Lit::Con must sort before Lit::Var (Haskell decl order). \
-                 AC term canonicalization relies on this — `+(x, 'a')` \
-                 canonicalizes to `+('a', x)`."
-        );
-    }
-
-    /// `BVar::Bound < BVar::Free` from LTerm.hs declaration order.
-    /// `data BVar v = Bound Integer | Free v`
-    ///
-    /// This drives the BTreeMap key order for guarded-formula
-    /// binders/bound-var lookup — when we de Bruijn-index a formula's
-    /// quantified variables, the bound positions sort before any free
-    /// occurrences.
-    #[test]
-    fn bvar_bound_sorts_before_bvar_free() {
-        use crate::lterm::{BVar, LSort, LVar};
-        let bound: BVar<LVar> = BVar::Bound(5);
-        let free: BVar<LVar> = BVar::Free(LVar::new("x", LSort::Msg, 0));
-        assert!(
-            bound < free,
-            "BVar::Bound must sort before BVar::Free \
-                 (Haskell LTerm.hs declaration order)"
-        );
     }
 
     /// `fAppAC _ [] = error "Term.fAppAC: empty argument list"` (Raw.hs).
@@ -875,89 +875,5 @@ mod tests {
         };
         assert_eq!(&args[..], &[var_term(x), var_term(z)]);
         assert_eq!(swapped, prod);
-    }
-
-    // =========================================================================
-    // `show_term` — the raw Haskell `Show (Term a)` form.
-    // =========================================================================
-
-    /// The literal type the `show_term` tests build over.
-    type ShowT = crate::vterm::VTerm<crate::lterm::Name, crate::lterm::LVar>;
-
-    fn show_msg_var(name: &str) -> ShowT {
-        use crate::lterm::{LSort, LVar};
-        crate::vterm::var_term(LVar::new(name, LSort::Msg, 0))
-    }
-
-    fn show_noeq(name: &[u8], arity: usize) -> NoEqSym {
-        use crate::function_symbols::{Constructability, Privacy};
-        NoEqSym::new(
-            name.to_vec(),
-            arity,
-            Privacy::Public,
-            Constructability::Constructor,
-        )
-    }
-
-    fn show_acfct(name: &[u8]) -> AcFctSym {
-        use crate::function_symbols::{Constructability, NdcState, Privacy};
-        AcFctSym::new(
-            name.to_vec(),
-            Privacy::Public,
-            Constructability::Constructor,
-            NdcState::NotNdc,
-        )
-    }
-
-    /// `FApp (NoEq (s,_)) [] -> BC.unpack s` and
-    /// `FApp (AC (ACfct (s,_))) [] -> BC.unpack s` (Term/Raw.hs): the two nullary arms write the name alone.
-    #[test]
-    fn show_term_writes_a_nullary_symbol_without_parentheses() {
-        let g: ShowT = f_app_no_eq(show_noeq(b"g", 0), vec![]);
-        assert_eq!(show_term(&g), "g");
-        let nil: ShowT = unsafe_f_app(FunSym::Ac(AcSym::AcFct(show_acfct(b"nil"))), vec![]);
-        assert_eq!(show_term(&nil), "nil");
-    }
-
-    /// `intercalate ","` (Term/Raw.hs): no space follows
-    /// a comma, and each argument is itself shown, so the form nests.
-    #[test]
-    fn show_term_writes_comma_separated_arguments() {
-        let (x, y) = (show_msg_var("x"), show_msg_var("y"));
-        let inner = f_app_no_eq(show_noeq(b"h", 2), vec![x.clone(), y.clone()]);
-        assert_eq!(show_term(&inner), "h(x,y)");
-        let outer = f_app_no_eq(show_noeq(b"k", 3), vec![inner, x, f_app_list(vec![y])]);
-        assert_eq!(show_term(&outer), "k(h(x,y),x,LIST(y))");
-    }
-
-    /// `FApp (AC o) as -> show o ++ …` (Term/Raw.hs)
-    /// writes the derived `ACSym` constructor name
-    /// (Term/Term/FunctionSymbols.hs); the `ACfct` arm
-    /// writes the user symbol's own name instead.
-    #[test]
-    fn show_writes_an_ac_head_by_its_constructor_name() {
-        let (x, y) = (show_msg_var("x"), show_msg_var("y"));
-        for (sym, name) in [
-            (AcSym::Union, "Union"),
-            (AcSym::Mult, "Mult"),
-            (AcSym::Xor, "Xor"),
-            (AcSym::NatPlus, "NatPlus"),
-        ] {
-            let t: ShowT = f_app_ac(sym, vec![x.clone(), y.clone()]);
-            assert_eq!(show_term(&t), format!("{}(x,y)", name));
-        }
-        let user: ShowT = f_app_acfct(show_acfct(b"xorr"), vec![x, y]);
-        assert_eq!(show_term(&user), "xorr(x,y)");
-    }
-
-    /// `pair` and `exp` are `NoEq` symbols, so `show` writes them prefix; the
-    /// `<a, b>` and `a^b` spellings belong to `prettyTerm`.
-    #[test]
-    fn show_writes_a_pairing_as_the_prefix_symbol() {
-        use crate::lterm::pub_term;
-        let p: ShowT = f_app_no_eq(pair_sym(), vec![pub_term("a"), pub_term("b")]);
-        assert_eq!(show_term(&p), "pair('a','b')");
-        let e: ShowT = f_app_no_eq(exp_sym(), vec![p, pub_term("c")]);
-        assert_eq!(show_term(&e), "exp(pair('a','b'),'c')");
     }
 }

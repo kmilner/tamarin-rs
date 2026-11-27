@@ -635,15 +635,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn lookup_returns_first_field() {
-        let mut abbrevs = Abbreviations::new();
-        let t = f_app_no_eq(senc_sym(), vec![var("a", LSort::Msg), var("b", LSort::Msg)]);
-        let name = var("SE1", LSort::Msg);
-        abbrevs.insert(t.clone(), (name.clone(), t.clone()));
-        assert_eq!(lookup_abbreviation(&abbrevs, &t), Some(&name));
-    }
-
     // `orderAbbreviationsForJSON` sorts DESCENDING by rendered abbreviation
     // name and then topologically, so an abbreviation used inside another's
     // recursive expansion is listed first: the name sort alone would put

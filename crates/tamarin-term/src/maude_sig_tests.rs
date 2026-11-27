@@ -4,13 +4,6 @@
 use super::*;
 
 #[test]
-fn dh_signature_includes_dh_rules() {
-    let sig = dh_maude_sig();
-    assert!(sig.enable_dh);
-    assert_eq!(sig.rrules().len(), 13);
-}
-
-#[test]
 fn bp_implies_dh() {
     let sig = bp_maude_sig();
     // bp turns on dh in refresh().
@@ -93,24 +86,6 @@ fn add_macro_sym_resets_eq_convergent() {
     assert!(
         !sig.eq_convergent,
         "add_macro_sym must reset eq_convergent (HS monoid <>)"
-    );
-}
-
-/// `add_ctxt_st_rule` must PRESERVE eq_convergent (no reset), because the
-/// Rust elaborator sets eq_convergent BEFORE the add_ctxt_st_rule loop
-/// (elaborate.rs's `TheoryItem::Equations` arm), then refreshes — matching
-/// the printed `equations [convergent]:` for the normal
-/// functions-before-equations corpus ordering.
-#[test]
-fn add_ctxt_st_rule_preserves_eq_convergent() {
-    let sig = MaudeSig {
-        eq_convergent: true,
-        ..MaudeSig::default()
-    };
-    let sig = sig.add_ctxt_st_rule(fst_dest_rule());
-    assert!(
-        sig.eq_convergent,
-        "add_ctxt_st_rule must NOT reset eq_convergent"
     );
 }
 

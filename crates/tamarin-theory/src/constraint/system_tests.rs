@@ -127,37 +127,6 @@ fn clone_copies_stamps_and_marker_verbatim() {
 }
 
 #[test]
-fn content_mutation_bumps_content_stamp_leaving_parent_untouched() {
-    let parent = System::empty();
-    let c0 = parent.content_stamp.get();
-    let mut child = parent.clone();
-    assert_eq!(child.content_stamp.get(), c0, "clone inherits verbatim");
-    let v = LVar::new("k", LSort::Msg, 0);
-    let f = LNFact::new(crate::fact::FactTag::Out, vec![]);
-    child.add_goal(Goal::Action(v, f));
-    assert_ne!(child.content_stamp.get(), c0, "add_goal bumps the child");
-    assert_eq!(parent.content_stamp.get(), c0, "parent untouched");
-}
-
-#[test]
-fn set_eq_store_bumps_subst_stamp() {
-    let mut s = System::empty();
-    let b0 = s.subst_stamp.get();
-    s.set_eq_store(std::sync::Arc::new(
-        crate::tools::equation_store::EquationStore::default(),
-    ));
-    assert_ne!(s.subst_stamp.get(), b0);
-}
-
-#[test]
-fn eq_store_mut_bumps_subst_stamp() {
-    let mut s = System::empty();
-    let b0 = s.subst_stamp.get();
-    let _ = s.eq_store_mut();
-    assert_ne!(s.subst_stamp.get(), b0);
-}
-
-#[test]
 fn stamps_and_marker_excluded_from_partial_eq() {
     let a = System::empty();
     let b = a.clone();
@@ -349,160 +318,82 @@ fn content_untracked_callers_are_enumerated() {
     );
 }
 
-#[test]
-fn content_mut_bumps_both_stamps_and_invalidates_caches() {
-    let mut s = System::empty();
-    s.max_var_idx_cache.set(Some(5));
-    s.node_max_cache.set(Some(5));
-    let c0 = s.content_stamp.get();
-    let b0 = s.subst_stamp.get();
-    let _ = s.content_mut();
-    assert_ne!(s.content_stamp.get(), c0, "content_mut bumps content_stamp");
-    assert_ne!(s.subst_stamp.get(), b0, "content_mut bumps subst_stamp");
-    assert_eq!(
-        s.max_var_idx_cache.get(),
-        None,
-        "content_mut clears max cache"
-    );
-    assert_eq!(
-        s.node_max_cache.get(),
-        None,
-        "content_mut clears node cache"
-    );
+/// What a `System` mutation does to the max-var caches.
+#[derive(Clone, Copy, Debug)]
+enum Caches {
+    /// Both caches are cleared.
+    Cleared,
+    /// Neither cache is touched; the caller invalidates them if needed.
+    Untouched,
+    /// The cached max still equals the full walk afterwards.
+    Exact,
 }
 
+/// Each mutation entry point bumps exactly its stamps and handles the
+/// max-var caches as documented.  A missed bump lets `subst_system` skip a
+/// needed substitution; a stale cache changes fresh indices.  Each mutation
+/// runs on a clone, whose parent must keep its stamps.  The seed holds its
+/// largest variable index only in the substitution, so `cleanup` lowers it.
+/// Columns: mutation, bumps the content stamp, bumps the subst stamp, caches.
 #[test]
-fn content_mut_untracked_bumps_nothing() {
-    let mut s = System::empty();
-    s.max_var_idx_cache.set(Some(5));
-    let c0 = s.content_stamp.get();
-    let b0 = s.subst_stamp.get();
-    let _ = s.content_mut_untracked();
-    assert_eq!(
-        s.content_stamp.get(),
-        c0,
-        "untracked door does not bump content"
-    );
-    assert_eq!(
-        s.subst_stamp.get(),
-        b0,
-        "untracked door does not bump subst"
-    );
-    assert_eq!(
-        s.max_var_idx_cache.get(),
-        Some(5),
-        "untracked door leaves caches"
-    );
-}
-
-#[test]
-fn deref_reads_reach_content_fields() {
-    // Compile-level coverage that reads auto-deref through `SystemContent`.
-    let s = System::empty();
-    assert_eq!(s.nodes.len(), 0);
-    assert_eq!(s.edges.len(), 0);
-    assert_eq!(s.less_atoms.len(), 0);
-    assert_eq!(s.formulas.len(), 0);
-    assert_eq!(s.goals.len(), 0);
-    assert!(s.last_atom.is_none());
-    assert!(s.eq_store().subst.is_empty());
-}
-
-#[test]
-fn formula_accessors_bump_content_stamp() {
-    let mut s = System::empty();
-    for pick in 0..3 {
-        let c0 = s.content_stamp.get();
-        match pick {
-            0 => {
-                let _ = s.formulas_mut();
-            }
-            1 => {
-                let _ = s.solved_formulas_mut();
-            }
-            _ => {
-                let _ = s.lemmas_mut();
-            }
-        }
-        assert_ne!(
-            s.content_stamp.get(),
-            c0,
-            "formula accessor bumps content_stamp"
-        );
-    }
-}
-
-#[test]
-fn untracked_formula_accessors_bump_no_stamp() {
-    let mut s = System::empty();
-    let c0 = s.content_stamp.get();
-    let b0 = s.subst_stamp.get();
-    s.max_var_idx_cache.set(Some(5));
-    let _ = s.formulas_mut_untracked();
-    assert_eq!(
-        s.content_stamp.get(),
-        c0,
-        "untracked formula door leaves content_stamp"
-    );
-    assert_eq!(
-        s.subst_stamp.get(),
-        b0,
-        "untracked formula door leaves subst_stamp"
-    );
-    assert_eq!(
-        s.max_var_idx_cache.get(),
-        Some(5),
-        "untracked formula door leaves caches"
-    );
-
-    let _ = s.solved_formulas_mut_untracked();
-    assert_eq!(
-        s.content_stamp.get(),
-        c0,
-        "untracked solved door leaves content_stamp"
-    );
-}
-
-#[test]
-fn set_last_atom_bumps_content_stamp() {
-    let mut s = System::empty();
-    let c0 = s.content_stamp.get();
-    s.set_last_atom(None);
-    assert_ne!(s.content_stamp.get(), c0);
-}
-
-#[test]
-fn cleanup_invalidates_max_var_idx_cache() {
+fn mutations_bump_exactly_their_stamps() {
     use crate::constraint::solver::reduction::{bounds_max, bounds_max_uncached};
+    use crate::fact::FactTag;
+    use crate::tools::equation_store::EquationStore;
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
 
-    // Per-name idxs dense from 0 make `rename_precise_system` the
-    // identity (no remap ⇒ no invalidation from the rename itself),
-    // while the subst holds the global max idx: `x.1` occurs nowhere
-    // outside the subst range, so `cleanup`'s subst-clear lowers the
-    // true max from 1 to 0.
-    let mut s = System::empty();
-    s.set_last_atom(Some(LVar::new("i", LSort::Node, 0)));
-    s.eq_store_mut().subst = tamarin_term::subst::Subst::from_list([(
-        LVar::new("x", LSort::Msg, 0),
-        Term::Lit(Lit::Var(LVar::new("x", LSort::Msg, 1))),
-    )]);
-    // Populate the cache with the pre-cleanup max (held by the subst).
-    assert_eq!(bounds_max(&s), 1);
-    let s = s.cleanup();
-    assert_eq!(bounds_max_uncached(&s), 0);
-    // The cached read must match — a stale cache would return 1 here.
-    assert_eq!(bounds_max(&s), 0);
-}
-
-#[test]
-fn take_eq_store_bumps_subst_stamp_and_takes() {
-    let mut s = System::empty();
-    let b0 = s.subst_stamp.get();
-    let taken = s.take_eq_store();
-    assert_ne!(s.subst_stamp.get(), b0, "take_eq_store bumps subst_stamp");
-    assert!(taken.subst.is_empty());
+    type Mutation = fn(&mut System);
+    #[rustfmt::skip]
+    let rows: &[(&str, Mutation, bool, bool, Caches)] = &[
+        ("add_goal", |s| s.add_goal(Goal::Action(mvar(0), LNFact::new(FactTag::Out, vec![]))), true, false, Caches::Exact),
+        ("set_eq_store", |s| s.set_eq_store(std::sync::Arc::new(EquationStore::default())), false, true, Caches::Untouched),
+        ("eq_store_mut", |s| _ = s.eq_store_mut(), false, true, Caches::Untouched),
+        ("take_eq_store", |s| assert!(!s.take_eq_store().subst.is_empty()), false, true, Caches::Untouched),
+        ("content_mut", |s| _ = s.content_mut(), true, true, Caches::Cleared),
+        ("content_mut_untracked", |s| _ = s.content_mut_untracked(), false, false, Caches::Untouched),
+        ("formulas_mut", |s| _ = s.formulas_mut(), true, false, Caches::Untouched),
+        ("solved_formulas_mut", |s| _ = s.solved_formulas_mut(), true, false, Caches::Untouched),
+        ("lemmas_mut", |s| _ = s.lemmas_mut(), true, false, Caches::Untouched),
+        ("formulas_mut_untracked", |s| _ = s.formulas_mut_untracked(), false, false, Caches::Untouched),
+        ("solved_formulas_mut_untracked", |s| _ = s.solved_formulas_mut_untracked(), false, false, Caches::Untouched),
+        ("set_last_atom", |s| s.set_last_atom(None), true, false, Caches::Untouched),
+        ("cleanup", |s| *s = s.clone().cleanup(), true, true, Caches::Exact),
+    ];
+    let mut parent = System::empty();
+    parent.set_last_atom(Some(nvar(0)));
+    parent.eq_store_mut().subst =
+        tamarin_term::subst::Subst::from_list([(mvar(0), Term::Lit(Lit::Var(mvar(1))))]);
+    assert_eq!(bounds_max(&parent), 1);
+    let stamps = |s: &System| (s.content_stamp.get(), s.subst_stamp.get());
+    let caches = |s: &System| (s.max_var_idx_cache.get(), s.node_max_cache.get());
+    let (content, subst) = stamps(&parent);
+    for (label, mutate, bumps_content, bumps_subst, cache) in rows {
+        let mut child = parent.clone();
+        assert_eq!(stamps(&child), (content, subst), "clone copies the stamps");
+        let before = caches(&child);
+        mutate(&mut child);
+        assert_eq!(
+            stamps(&parent),
+            (content, subst),
+            "{label}: parent untouched"
+        );
+        assert_eq!(
+            child.content_stamp.get() != content,
+            *bumps_content,
+            "{label}: content"
+        );
+        assert_eq!(
+            child.subst_stamp.get() != subst,
+            *bumps_subst,
+            "{label}: subst"
+        );
+        match cache {
+            Caches::Cleared => assert_eq!(caches(&child), (None, None), "{label}"),
+            Caches::Untouched => assert_eq!(caches(&child), before, "{label}"),
+            Caches::Exact => assert_eq!(bounds_max(&child), bounds_max_uncached(&child), "{label}"),
+        }
+    }
 }
 
 #[test]

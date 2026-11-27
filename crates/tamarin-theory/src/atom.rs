@@ -392,14 +392,25 @@ mod tests {
     /// `@` and the time point with `<->`, `EqE` and `Subterm` are `sep`s,
     /// `Less` is two `<->`s and `Last` wraps its operand in plain
     /// parentheses.  Only the two `sep` arms add a break point of their own.
+    ///
+    /// Time point positions take HS `show`, not the `ppT` of the fact and the
+    /// `EqE`/`Subterm` operands; the two differ only on an applied term,
+    /// where `show` keeps the prefix form.  `show LVar` writes the index
+    /// alone for an empty name (LTerm.hs), the spelling `prettyNTerm`
+    /// reaches through `Show (Lit c v)` (VTerm.hs).
     #[test]
     fn pretty_natom_prints_each_arm() {
+        let applied = || f_app_no_eq(pair_sym(), vec![x(), y()]);
+        let anon: LNTerm = lit(Lit::Var(LVar::new("", LSort::Fresh, 7)));
         let cases: Vec<(Atom<LNTerm>, &str)> = vec![
             (ProtoAtom::Action(tp("i"), fresh_fact(y())), "Fr( y ) @ #i"),
             (ProtoAtom::EqE(x(), y()), "x = y"),
             (ProtoAtom::Subterm(x(), y()), "x \u{228F} y"),
             (ProtoAtom::Less(tp("i"), tp("j")), "#i < #j"),
             (ProtoAtom::Last(tp("i")), "last(#i)"),
+            (ProtoAtom::Last(applied()), "last(pair(x,y))"),
+            (ProtoAtom::EqE(applied(), y()), "<x, y> = y"),
+            (ProtoAtom::EqE(anon, y()), "~7 = y"),
         ];
         for (a, want) in cases {
             assert_eq!(pretty_natom(&a).render(), want, "{a:?}");
@@ -417,28 +428,5 @@ mod tests {
         assert_eq!(pretty_syntactic_natom(&a).render(), "Eq( x, y )");
         let plain: SyntacticAtom<LNTerm> = ProtoAtom::EqE(x(), y());
         assert_eq!(pretty_syntactic_natom(&plain).render(), "x = y");
-    }
-
-    /// The time point positions take HS `show` (Atom.hs), not the
-    /// `ppT` the fact and the `EqE`/`Subterm` operands take.  The two spell a
-    /// `Lit` alike, so the difference shows only on an applied term: `show`
-    /// keeps the prefix form where `prettyTerm` would write `<x, y>`.
-    #[test]
-    fn pretty_natom_shows_the_time_point() {
-        let applied = f_app_no_eq(pair_sym(), vec![x(), y()]);
-        let a: Atom<LNTerm> = ProtoAtom::Last(applied.clone());
-        assert_eq!(pretty_natom(&a).render(), "last(pair(x,y))");
-        let eq: Atom<LNTerm> = ProtoAtom::EqE(applied, y());
-        assert_eq!(pretty_natom(&eq).render(), "<x, y> = y");
-    }
-
-    /// `show LVar` writes the index alone when the name is empty
-    /// (LTerm.hs), which is the variable spelling `prettyNTerm` reaches
-    /// through `Show (Lit c v)` (VTerm.hs).
-    #[test]
-    fn lvar_with_no_name_shows_its_index() {
-        let anon: LNTerm = lit(Lit::Var(LVar::new("", LSort::Fresh, 7)));
-        let a: Atom<LNTerm> = ProtoAtom::EqE(anon, y());
-        assert_eq!(pretty_natom(&a).render(), "~7 = y");
     }
 }

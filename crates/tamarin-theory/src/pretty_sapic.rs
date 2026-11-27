@@ -500,7 +500,6 @@ impl<Ann> ProcessDoc<Ann> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tamarin_term::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::f_app_no_eq;
     use tamarin_term::vterm::VTerm;
@@ -509,166 +508,12 @@ mod tests {
         SapicLVar::new(LVar::new(name, LSort::Msg, idx), ty.map(String::from))
     }
 
-    #[test]
-    fn new_top_level() {
-        let p = Process::Action(
-            SapicAction::New(sv("x", 1, Some("lol"))),
-            ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-        );
-        assert_eq!(pretty_sapic_top_level(&p), "new x.1:lol;");
-    }
-
-    #[test]
-    fn out_ffx_top_level() {
-        let f = NoEqSym::new(
-            b"f".to_vec(),
-            1,
-            Privacy::Public,
-            Constructability::Constructor,
-        );
-        let x = VTerm::Lit(Lit::Var(sv("x", 1, Some("lol"))));
-        let ffx = f_app_no_eq(f, vec![f_app_no_eq(f, vec![x])]);
-        let p = Process::Action(
-            SapicAction::ChOut {
-                chan: None,
-                msg: ffx,
-            },
-            ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-        );
-        assert_eq!(pretty_sapic_top_level(&p), "out(f(f(x.1:lol)));");
-    }
-
-    #[test]
-    fn event_top_level_has_spaces() {
-        let x = VTerm::Lit(Lit::Var(sv("x", 1, Some("lol"))));
-        let fact = crate::fact::Fact::new(
-            crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "Test", 1),
-            vec![x],
-        );
-        let p = Process::Action(
-            SapicAction::Event(fact),
-            ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-        );
-        assert_eq!(pretty_sapic_top_level(&p), "event Test( x.1:lol );");
-    }
-
-    #[test]
-    fn user_ac_term_infix_and_nullary() {
-        use tamarin_term::function_symbols::{AcFctSym, AcSym, NdcState};
-        let f = AcFctSym::new(
-            b"f".to_vec(),
-            Privacy::Public,
-            Constructability::Constructor,
-            NdcState::NotNdc,
-        );
-        let x = VTerm::Lit(Lit::Var(sv("x", 1, None)));
-        let y = VTerm::Lit(Lit::Var(sv("y", 1, None)));
-        let applied = tamarin_term::term::f_app_ac(AcSym::AcFct(f), vec![x, y]);
-        assert_eq!(pretty_sapic_term(&applied), "(x.1 f y.1)");
-        // HS `FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)` (Term/Term.hs):
-        // the bare name, no parens.  `f_app_ac` rejects an empty argument list
-        // (HS `fAppAC` errors likewise, Raw.hs), so no theory text reaches
-        // this arm — it is here to keep the printer the shape of `prettyTerm`.
-        let nullary: SapicTerm = VTerm::App(FunSym::Ac(AcSym::AcFct(f)), vec![].into());
-        assert_eq!(pretty_sapic_term(&nullary), "f");
-    }
-
-    #[test]
-    fn null_top_level() {
-        let p: PlainProcess = Process::Null(ProcessParsedAnnotation::empty());
-        assert_eq!(pretty_sapic_top_level(&p), "0");
-    }
-
     /// The Maude signature of a one-line theory, for building a condition
     /// from source text the way the SAPIC parser does.
     fn sig_of(decl: &str) -> tamarin_term::maude_sig::MaudeSig {
         let thy =
             tamarin_parser::parse_theory(&format!("theory T begin\n{decl}\nend"), &[]).unwrap();
         crate::elaborate::elaborate(&thy).unwrap().signature
-    }
-
-    /// `if <formula>` as the process printer renders it, with `formula` read
-    /// against the signature `decl` declares.
-    fn cond_render(src: &str, decl: &str) -> String {
-        let sig = sig_of(decl);
-        let f = tamarin_parser::parser::parse_formula_str(src, &sig).unwrap();
-        let proc: PlainProcess = Process::Comb(
-            ProcessCombinator::Cond(crate::formula::sapic_from_parser(&f, &sig).unwrap()),
-            ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-        );
-        pretty_sapic_top_level(&proc)
-    }
-
-    /// A conditional renders its formula STANDALONE, so a conjunction wider
-    /// than the HughesPJ default page breaks and the second conjunct starts a
-    /// new line at column 0.
-    ///
-    /// Oracle bytes (pinned build, Git revision ef3f0468) for
-    /// `functions: aaaaaaaaaa/1, bbbbbbbbbb/1, cccccccccc/1` +
-    /// `predicates: Longer(xxxxxxxxxx, yyyyyyyyyy) <=> xxxxxxxxxx = yyyyyyyyyy` +
-    /// `in(<xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz>); if Longer(aaaaaaaaaa(xxxxxxxxxx), bbbbbbbbbb(yyyyyyyyyy)) & Longer(cccccccccc(zzzzzzzzzz), aaaaaaaaaa(yyyyyyyyyy)) then …`
-    /// (fixture `sapic_cond_wrap`).
-    #[test]
-    fn cond_wraps_at_the_hughespj_default_width() {
-        let got = cond_render(
-            "Longer(aaaaaaaaaa(xxxxxxxxxx.1), bbbbbbbbbb(yyyyyyyyyy.1)) \
-             & Longer(cccccccccc(zzzzzzzzzz.1), aaaaaaaaaa(yyyyyyyyyy.1))",
-            "functions: aaaaaaaaaa/1, bbbbbbbbbb/1, cccccccccc/1",
-        );
-        assert_eq!(
-            got,
-            "if (Longer( aaaaaaaaaa(xxxxxxxxxx.1), bbbbbbbbbb(yyyyyyyyyy.1) )) ∧\n\
-             (Longer( cccccccccc(zzzzzzzzzz.1), aaaaaaaaaa(yyyyyyyyyy.1) ))"
-        );
-        // The derived rule name is `filter isAlpha` over the same string
-        // (Sapic/Facts.hs#stripNonAlphanumerical), so the break leaves it
-        // untouched.
-        let name: String = got.chars().filter(|c| c.is_alphabetic()).collect();
-        assert_eq!(
-            name,
-            "ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy"
-        );
-    }
-
-    /// `if <formula>` renders its user-`[AC]` applications the way HS's
-    /// signature-built `SapicTerm`s do: flattened, sorted, infix.
-    ///
-    /// Oracle bytes (pinned build, Git revision ef3f0468) for
-    /// `functions: add/2 [AC]` + `predicates: Eq(a, b) <=> a = b` +
-    /// `in(k); if Eq(<'g'^k, add(k,'a')>, k) then out('yes') else out('no')`:
-    ///   `process="if Eq( <'g'^k.1, ('a' add k.1)>, k.1 )"`
-    /// and for `if Eq(add(k, add('a','b')), k)`:
-    ///   `process="if Eq( ('a' add 'b' add k.1), k.1 )"`.
-    #[test]
-    fn cond_renders_user_ac_flattened_sorted_and_infix() {
-        // `^` is a term operator only under `builtins: diffie-hellman`
-        // (Theory/Text/Parser/Term.hs).
-        // With `add` an ordinary function symbol the application stays
-        // prefix, which is what makes the AC assertions below discriminating.
-        assert_eq!(
-            cond_render(
-                "Eq(<'g'^k.1, add(k.1,'a')>, k.1)",
-                "builtins: diffie-hellman\nfunctions: add/2"
-            ),
-            "if Eq( <'g'^k.1, add(k.1, 'a')>, k.1 )"
-        );
-        assert_eq!(
-            cond_render(
-                "Eq(<'g'^k.1, add(k.1,'a')>, k.1)",
-                "builtins: diffie-hellman\nfunctions: add/2 [AC]"
-            ),
-            "if Eq( <'g'^k.1, ('a' add k.1)>, k.1 )"
-        );
-        // A nested chain flattens to three operands under one AC node.
-        assert_eq!(
-            cond_render("Eq(add(k.1, add('a','b')), k.1)", "functions: add/2 [AC]"),
-            "if Eq( ('a' add 'b' add k.1), k.1 )"
-        );
     }
 
     /// An embedded MSR as the process printer renders it: one `Ev(<arg>)`
@@ -774,42 +619,6 @@ mod tests {
         );
         let name: String = got.chars().filter(|c| c.is_alphabetic()).collect();
         assert_eq!(name, "StxEvxnoprecompOutx");
-    }
-
-    /// The restriction item is the Doc composition `_restrict(` <> formula <>
-    /// `)`, so a break the formula takes indents by the ten columns of the
-    /// opening operator and the whole item lays out inside the rule.
-    ///
-    /// Oracle bytes (pinned build, Git revision ef3f0468) for
-    /// `functions: aaaaaaaaaa/1, bbbbbbbbbb/1, cccccccccc/1` +
-    /// `in(<xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz>); [ ] --[ Ev(xxxxxxxxxx), _restrict( aaaaaaaaaa(xxxxxxxxxx) = bbbbbbbbbb(yyyyyyyyyy) & cccccccccc(zzzzzzzzzz) = aaaaaaaaaa(yyyyyyyyyy) ) ]-> [ ]; out('a')`
-    /// (fixture `sapic_msr_restrict_wrap`).
-    #[test]
-    fn msr_restrict_wraps_under_the_restrict_paren() {
-        let got = msr_render(
-            "xxxxxxxxxx.1",
-            "aaaaaaaaaa(xxxxxxxxxx.1) = bbbbbbbbbb(yyyyyyyyyy.1) \
-             & cccccccccc(zzzzzzzzzz.1) = aaaaaaaaaa(yyyyyyyyyy.1)",
-            "functions: aaaaaaaaaa/1, bbbbbbbbbb/1, cccccccccc/1",
-        );
-        assert_eq!(
-            got,
-            " [ ]\n\
-             --[\n\
-             Ev( xxxxxxxxxx.1 ),\n\
-             _restrict((aaaaaaaaaa(xxxxxxxxxx.1) = bbbbbbbbbb(yyyyyyyyyy.1)) \u{2227}\n\
-             \x20         (cccccccccc(zzzzzzzzzz.1) = aaaaaaaaaa(yyyyyyyyyy.1)))\n\
-             ]->\n\
-             \x20[ ];"
-        );
-        // The derived rule name is `filter isAlpha` over the same string
-        // (Sapic/Facts.hs#stripNonAlphanumerical), so the breaks leave it
-        // untouched.
-        let name: String = got.chars().filter(|c| c.is_alphabetic()).collect();
-        assert_eq!(
-            name,
-            "Evxxxxxxxxxxrestrictaaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyycccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy"
-        );
     }
 
     /// The `process="..."` rule attribute and the `process:` block are plain

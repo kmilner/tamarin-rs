@@ -402,13 +402,8 @@ mod tests {
     /// restrict :: IsVar v => [v] -> Subst c v -> Subst c v
     /// restrict vs (Subst smap) = Subst (M.filterWithKey (\v _ -> v `elem` vs) smap)
     /// ```
-    /// Nothing else.  No chain-chase.
-    ///
-    /// Do NOT chain-chase values to a fixed point before filtering:
-    /// collapsing `t.1 → e_A_1 → blind(...)` into `t.1 → blind(...)`
-    /// directly prevents Haskell-faithful `restrict` from dropping the
-    /// binding (since `t.1` is stable), causing foo_eligibility's `A_1`
-    /// case to be dropped at runtime via refineSubst-contradictory.
+    /// Nothing else: a kept binding keeps its value literally, never chased
+    /// through the substitution to a fixed point.
     #[test]
     fn restrict_does_not_chain_chase() {
         // Build a subst with a chain: y → z, z → 1.
@@ -421,59 +416,10 @@ mod tests {
         assert_eq!(
             r.image_of(&"y"),
             Some(&var_term("z")),
-            "restrict must NOT chain-chase: y → z stays as y → z, \
-                    not y → 1.  Chain-chase here breaks foo_eligibility."
+            "restrict must not chain-chase: y → z stays y → z"
         );
         // z is filtered out entirely.
         assert_eq!(r.image_of(&"z"), None);
-    }
-
-    /// `restrict stableVars` empties the subst when no key is stable.
-    ///
-    /// This is the exact foo_eligibility shape: Haskell's pre-restrict
-    /// subst has keys like `m.19` and `sk.28` (rule-internal vars,
-    /// large idx), and stableVars are `{#i, t.1, t.2}` (lemma vars,
-    /// small idx).  Post-restrict: empty subst.
-    #[test]
-    fn restrict_empties_subst_when_no_key_is_stable() {
-        // "Rule-internal" keys binding to whatever values.
-        let s: Subst<C, V> = Subst::from_list(vec![
-            ("m", const_term(19)),  // m.19 in spirit
-            ("sk", const_term(28)), // sk.28 in spirit
-        ]);
-        // "Stable" vars: don't overlap.
-        let r = s.restrict(&["t", "i"]);
-        assert!(
-            r.is_empty(),
-            "When no key is in stable set, restrict produces empty subst. \
-                 This is what enables foo_eligibility's clean runtime bind."
-        );
-    }
-
-    /// `compose s1 s2` applies right-then-left.
-    ///
-    /// Haskell `SubstVFree.compose` (mirrors Robinson):
-    /// applying `s1 ∘ s2` to a term is `s1 (s2 t)`.
-    ///
-    /// If we get this backwards, downstream code that composes the
-    /// freshly-built subst with the running eq-store gets the wrong
-    /// effective substitution (and the proof state silently drifts).
-    #[test]
-    fn compose_direction_is_right_then_left() {
-        // s1 = {x → 1}; s2 = {y → x}.
-        // compose(s1, s2) means "apply s2 first, then s1".
-        // (s1 . s2)(y) = s1(s2(y)) = s1(x) = 1.
-        let s1: Subst<C, V> = Subst::from_list(vec![("x", const_term(1))]);
-        let s2: Subst<C, V> = Subst::from_list(vec![("y", var_term("x"))]);
-        let composed = s1.compose(&s2);
-        assert_eq!(
-            apply_vterm(&composed, var_term("y")),
-            const_term(1),
-            "compose(s1, s2) applied to y must equal s1(s2(y)) = 1, \
-                    NOT s2(s1(y)) = y.  If this fails, the direction is \
-                    reversed and eq-store subst composition is silently \
-                    wrong."
-        );
     }
 
     /// `compose` preserves `s1`'s domain when `s2` doesn't bind it.

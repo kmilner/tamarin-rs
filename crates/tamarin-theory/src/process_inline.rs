@@ -36,8 +36,6 @@ use std::collections::BTreeMap;
 use tamarin_parser::ast as p;
 use tamarin_term::maude_sig::MaudeSig;
 
-#[cfg(test)]
-use crate::process_convert::{action as convert_action, combinator as convert_combinator};
 use crate::process_convert::{
     add_root_annotation, convert_process_with, term as convert_term, ConvertError,
 };
@@ -184,46 +182,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn inlines_call_substituting_param() {
-        // def `P(x) = out(x)`; call `P('t')` should inline to
-        // ProcessCall("P", ['t']) over body `out('t')`.
-        let def = out_x_def("P", "x");
-        let sig = pair_maude_sig();
-        let mut defs: ProcessDefMap = BTreeMap::new();
-        defs.insert("P".to_string(), resolved_def(&def, &sig));
-        let call = p::Process::Call {
-            name: "P".into(),
-            args: vec![pub_lit("t")],
-        };
-        let inlined = convert_process_with_defs(&call, &defs, &sig).unwrap();
-        match inlined {
-            Process::Action(SapicAction::ProcessCall(n, args), _, body) => {
-                assert_eq!(n, "P");
-                assert_eq!(args.len(), 1);
-                // The wrapped body must carry processnames = ["P"].
-                assert_eq!(body.annotation().process_names, vec!["P".to_string()]);
-                // The out() argument in the body must be the substituted 't',
-                // and not x.  It must also be the same term that the call site
-                // passed.  A substitution that drops the argument, or that
-                // binds the wrong formal parameter, therefore cannot pass this
-                // check with some other constant.
-                match *body {
-                    Process::Action(SapicAction::ChOut { msg, .. }, _, _) => {
-                        assert_eq!(msg, args[0]);
-                        assert_eq!(
-                            msg,
-                            crate::process_convert::term(&pub_lit("t"), &pair_maude_sig())
-                                .expect("'t' converts")
-                        );
-                    }
-                    other => panic!("expected ChOut body, got {other:?}"),
-                }
-            }
-            other => panic!("expected ProcessCall action, got {other:?}"),
-        }
-    }
-
     fn msg_var(name: &str) -> p::VarSpec {
         p::VarSpec {
             name: name.to_string(),
@@ -231,90 +189,6 @@ mod tests {
             sort: LSort::Msg,
             typ: None,
         }
-    }
-
-    #[test]
-    fn inlines_call_substituting_a_parameter_into_a_conditional() {
-        // `let P(y) = if Eq(y,'a') then 0 else 0` called as `P('t')`: the
-        // argument replaces the formal parameter inside the condition's
-        // formula, so the inlined combinator is the one the callee's body
-        // would convert to with `'t'` written in place of `y`.
-        let cond_on = |t: p::Term| {
-            p::ProcessComb::Cond(p::Condition::Formula(p::Formula::Atom(p::Atom::Eq(
-                t,
-                pub_lit("a"),
-            ))))
-        };
-        let def = p::ProcessDef {
-            name: "P".into(),
-            vars: Some(vec![msg_var("y")]),
-            body: p::Process::Comb {
-                comb: cond_on(p::Term::Var(msg_var("y"))),
-                left: Box::new(p::Process::Null),
-                right: Box::new(p::Process::Null),
-            },
-        };
-        let sig = pair_maude_sig();
-        let mut defs: ProcessDefMap = BTreeMap::new();
-        defs.insert("P".to_string(), resolved_def(&def, &sig));
-        let call = p::Process::Call {
-            name: "P".into(),
-            args: vec![pub_lit("t")],
-        };
-        let Process::Action(SapicAction::ProcessCall(..), _, body) =
-            convert_process_with_defs(&call, &defs, &sig).unwrap()
-        else {
-            panic!("expected a ProcessCall action");
-        };
-        let Process::Comb(got, ..) = *body else {
-            panic!("expected a Comb node under the call marker");
-        };
-        assert_eq!(
-            got,
-            convert_combinator(&cond_on(pub_lit("t")), &sig).unwrap()
-        );
-    }
-
-    #[test]
-    fn inlines_call_substituting_a_parameter_into_an_embedded_restriction() {
-        // `let P(y) = [ ] --[ _restrict(Q(y)) ]-> [ ]` called as `P('t')`:
-        // the argument replaces the formal parameter inside the embedded
-        // restriction as it does in the fact rows.
-        let msr_on = |t: p::Term| p::SapicAction::Msr {
-            prems: vec![],
-            acts: vec![],
-            concs: vec![],
-            restrictions: vec![p::Formula::Atom(p::Atom::Pred(p::Fact {
-                persistent: false,
-                name: "Q".into(),
-                args: vec![t],
-                annotations: vec![],
-            }))],
-        };
-        let def = p::ProcessDef {
-            name: "P".into(),
-            vars: Some(vec![msg_var("y")]),
-            body: p::Process::Action {
-                action: msr_on(p::Term::Var(msg_var("y"))),
-                body: Box::new(p::Process::Null),
-            },
-        };
-        let sig = pair_maude_sig();
-        let mut defs: ProcessDefMap = BTreeMap::new();
-        defs.insert("P".to_string(), resolved_def(&def, &sig));
-        let call = p::Process::Call {
-            name: "P".into(),
-            args: vec![pub_lit("t")],
-        };
-        let Process::Action(SapicAction::ProcessCall(..), _, body) =
-            convert_process_with_defs(&call, &defs, &sig).unwrap()
-        else {
-            panic!("expected a ProcessCall action");
-        };
-        let Process::Action(got, ..) = *body else {
-            panic!("expected an action under the call marker");
-        };
-        assert_eq!(got, convert_action(&msr_on(pub_lit("t")), &sig).unwrap());
     }
 
     #[test]

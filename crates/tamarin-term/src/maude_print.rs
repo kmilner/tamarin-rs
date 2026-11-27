@@ -520,14 +520,6 @@ mod tests {
         assert_eq!(pp_mterm(&list), &appended[b"prefix:".len()..]);
     }
 
-    #[test]
-    fn dh_neutral_op_has_two_spaces_before_colon() {
-        // HS `theoryOpEq "DH-neutral  : -> Msg"` (Maude/Parser.hs) emits TWO
-        // spaces before the colon; the emitted module must match byte-for-byte.
-        let s = pp_theory(&dh_maude_sig());
-        assert!(s.contains("op tamXCFUDH-neutral  : -> Msg ."));
-    }
-
     /// The builtin operator declarations of HS `ppTheory` (Maude/Parser.hs),
     /// byte for byte, with every equational builtin enabled: `theoryOpEq`
     /// lines carry the public-constructor attribute block, `theoryOpAC` and

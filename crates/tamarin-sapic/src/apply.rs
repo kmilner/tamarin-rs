@@ -135,91 +135,6 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
 mod tests {
     use super::*;
     use tamarin_theory::rule::ProtoRuleName;
-    use tamarin_theory::theory::TheoryItem;
-
-    /// The `else` arm of a pattern `let` carries the restriction
-    /// `∀ y w. (<y, w> = z) ⇒ ⊥` (Basetranslation.hs), so the
-    /// translated theory gets one generated `Restr_letywz_2_1_1` restriction
-    /// plus the action that reaches it on rule `letywz_2_1`.
-    const LET_ELSE: &str = "theory T begin\n\
-        process:\n\
-          in(z); let <y, w> = z in out(y) else out('n')\n\
-        end";
-
-    /// The generated restriction and the appended action land in the theory,
-    /// the restriction immediately before its rule (HS adds the expanded
-    /// restrictions and then the rule, Theory/Text/Parser.hs), and the
-    /// rule keeps the premises, conclusions and new variables the translation
-    /// built — the lift only appends actions (`addActions`,
-    /// Theory/Text/Parser.hs).
-    #[test]
-    fn generated_rule_carries_its_restrict_formulas() {
-        let parsed = tamarin_parser::parse_theory(LET_ELSE, &[]).unwrap();
-        let mut thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
-
-        // The same translation `apply_sapic` runs, so the rule it injects can
-        // be compared against the values the translation produced.
-        let maude_sig = thy.signature.clone();
-        let mut typed_thy = thy.clone();
-        crate::type_theory::type_theory(&mut typed_thy).unwrap();
-        let typed = typed_thy.processes().next().unwrap().clone();
-        let translation = translate(
-            &typed,
-            false,
-            &maude_sig.st_rules,
-            &[],
-            TranslateOptions::default(),
-        )
-        .unwrap();
-        let translated = translation
-            .rules
-            .iter()
-            .find(|r| !r.info.restrictions.is_empty())
-            .expect("no generated rule carries a `_restrict` formula");
-
-        apply_sapic(&mut thy, false).unwrap();
-
-        let restr_pos = thy
-            .items
-            .iter()
-            .position(|i| matches!(i, TheoryItem::Restriction(r) if r.name == "Restr_letywz_2_1_1"))
-            .expect("restriction not generated");
-        let rule_pos = thy
-            .items
-            .iter()
-            .position(|i| {
-                matches!(i, TheoryItem::Rule(r)
-                    if r.rule.info.name == ProtoRuleName::Stand("letywz_2_1"))
-            })
-            .expect("rule missing");
-        assert_eq!(restr_pos + 1, rule_pos, "restriction must precede rule");
-        let TheoryItem::Restriction(er) = &thy.items[restr_pos] else {
-            panic!("item at {restr_pos} is not the restriction");
-        };
-        assert_eq!(er.original_formula.as_ref(), Some(&er.formula));
-
-        let TheoryItem::Rule(er) = &thy.items[rule_pos] else {
-            panic!("item at {rule_pos} is not the rule");
-        };
-        let injected = &er.rule;
-        assert_eq!(injected.premises, translated.premises);
-        assert_eq!(injected.conclusions, translated.conclusions);
-        assert_eq!(injected.new_vars, translated.new_vars);
-        assert_eq!(
-            injected.actions.len(),
-            translated.actions.len() + 1,
-            "the lift appends exactly the generated action"
-        );
-        assert_eq!(
-            injected.actions[..translated.actions.len()],
-            translated.actions[..]
-        );
-        assert_eq!(
-            tamarin_theory::fact::show_fact_tag(&injected.actions[translated.actions.len()].tag),
-            "Restr_letywz_2_1_1"
-        );
-        assert_eq!(injected.info.restrictions, translated.info.restrictions);
-    }
 
     /// Under progress, path compression absorbs the `_restrict` step into
     /// `Init`.  `mergeInfo` keeps the first name and concatenates the
@@ -290,92 +205,6 @@ mod tests {
         assert_eq!(forced("process:\n  0"), ["L_CellLocked", "L_PureState"]);
     }
 
-    /// Translation and `_restrict` expansion exceptions reach the user as
-    /// their bare `show`: the oracle prints `undefined predicate Foo/1` here.
-    #[test]
-    fn restrict_expansion_errors_are_reported_bare() {
-        let src = "theory T begin\nprocess:\n  in(x); if Foo(x) then out('a')\nend";
-        let parsed = tamarin_parser::parse_theory(src, &[]).unwrap();
-        let mut thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
-        let err = apply_sapic(&mut thy, false).unwrap_err();
-        assert_eq!(err.message, "undefined predicate Foo/1");
-    }
-
-    /// `liftedAddRestriction` and `liftedAddProtoRule` (Theory/Text/Parser.hs)
-    /// reject a generated restriction whose name the user already declared,
-    /// as the oracle does for both of these theories.
-    #[test]
-    fn generated_restrictions_reject_declared_names() {
-        for (body, name) in [
-            (
-                "restriction single_session: \"T\"\nprocess: 0",
-                "single_session",
-            ),
-            (
-                "restriction Restr_Init_1: \"T\"\noptions: translation-progress\n\
-                 process: [] --[ _restrict(F) ]-> []; event E()",
-                "Restr_Init_1",
-            ),
-        ] {
-            let src = format!("theory T begin\n{body}\nend");
-            let parsed = tamarin_parser::parse_theory(&src, &[]).unwrap();
-            let mut thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
-            let err = apply_sapic(&mut thy, false).unwrap_err();
-            assert_eq!(err.message, format!("duplicate restriction: {name}"));
-        }
-    }
-
-    /// A `macros:` declaration whose call sits in the process body, so the
-    /// rules the translation generates carry it.
-    const MACRO_PROCESS: &str = "theory T begin\n\
-        macros: tag(x) = <'t', x>\n\
-        process:\n\
-          in(z); out(tag(z))\n\
-        end";
-
-    /// `closeTheoryItem` applies the theory's macros to every rule of the
-    /// TRANSLATED theory, the generated ones included (CloseRule.hs),
-    /// and `closeProtoRule` narrows `applyMacroInRule macros ruE` while
-    /// keeping the unexpanded `ruE` as the `cprRuleE` half
-    /// (lib/theory/src/Rule.hs).
-    #[test]
-    fn generated_rules_carry_the_macro_applied_rule_beside_the_call() {
-        let parsed = tamarin_parser::parse_theory(MACRO_PROCESS, &[]).unwrap();
-        let mut thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
-        apply_sapic(&mut thy, false).unwrap();
-
-        let shown = |r: &tamarin_theory::rule::ProtoRuleE| {
-            r.premises
-                .iter()
-                .chain(&r.actions)
-                .chain(&r.conclusions)
-                .map(|f| tamarin_theory::fact::pretty_lnfact(f).render())
-                .collect::<Vec<_>>()
-                .join(" ")
-        };
-        let mut with_call = 0;
-        for r in thy.rules() {
-            let call = shown(r.rule_e());
-            let applied = shown(&r.rule);
-            if !call.contains("tag(") {
-                assert!(
-                    !applied.contains("<'t', "),
-                    "a rule applies a macro its `cprRuleE` never called: {applied}"
-                );
-                continue;
-            }
-            with_call += 1;
-            assert!(
-                applied.contains("<'t', ") && !applied.contains("tag("),
-                "the macro reached the closed rule unapplied: {applied}"
-            );
-        }
-        assert!(
-            with_call > 0,
-            "no generated rule kept the process's macro call"
-        );
-    }
-
     /// The `tamarin-prover: <show e>` texts of the exceptions SAPIC typing
     /// and translation throw, as the pinned oracle (a75fec7f) prints them.
     #[test]
@@ -416,6 +245,48 @@ mod tests {
             (
                 "let P(x, y) = out(<x, y>)\nprocess:\nnew k; P(k)",
                 "Process not well-formed: The variable(s) y are not bound.\n  out(<k.1, y>)",
+            ),
+            (
+                "process:\nin(x); if a = b then out(x)",
+                "Process not well-formed: The variable(s) a are not bound.\n  \
+                 if a=b then\n      out(x.1)",
+            ),
+            (
+                "process:\nlock 's'; (0 | 0)",
+                "Process not well-formed: Process contains lock that extends over \
+                 a parallel which is not allowed.\n  0 | 0",
+            ),
+            (
+                "functions: d/2 [AC,destructor]\nprocess:\nlet x=d('a','b') in event Done(x)",
+                "This feature is not implemented yet. Sorry! SAPIC does not support AC \
+                 destructor calls.",
+            ),
+            (
+                "functions: d/2 [AC,destructor], c/1\nprocess:\n\
+                 let x=c(d('a','b')) in event Done(x)",
+                "This feature is not implemented yet. Sorry! SAPIC does not support AC \
+                 destructor calls.",
+            ),
+            (
+                "process:\nlet x = 'v' in in(=x); 0",
+                "CapturedEx CapturedIn x.1",
+            ),
+            // `_restrict` expansion errors reach the user as their bare show.
+            (
+                "process:\nin(x); if Foo(x) then out('a')",
+                "undefined predicate Foo/1",
+            ),
+            // `liftedAddRestriction` and `liftedAddProtoRule`
+            // (Theory/Text/Parser.hs) reject a generated restriction whose
+            // name the user already declared.
+            (
+                "restriction single_session: \"T\"\nprocess: 0",
+                "duplicate restriction: single_session",
+            ),
+            (
+                "restriction Restr_Init_1: \"T\"\noptions: translation-progress\n\
+                 process: [] --[ _restrict(F) ]-> []; event E()",
+                "duplicate restriction: Restr_Init_1",
             ),
         ] {
             let src = format!("theory T begin\n{body}\nend");

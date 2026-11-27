@@ -185,22 +185,6 @@ mod tests {
         assert_eq!(sorted(LSort::Msg, "", 7), "7");
     }
 
-    #[test]
-    fn show_term_writes_exp_g() {
-        // 'g'^~s  ==>  exp('g',Free ~s)
-        let t: BLNTerm = f_app_no_eq(exp_sym(), vec![pub_name("g"), fresh("s")]);
-        assert_eq!(show_term(&t), "exp('g',Free ~s)");
-    }
-
-    /// HS's `Show (Term a)` intercalates the WHOLE argument list of an
-    /// application (Term/Term/Raw.hs), so a three-argument AC term
-    /// shows flat rather than as a nested binary chain.
-    #[test]
-    fn show_term_writes_a_three_argument_ac_application_flat() {
-        let t: BLNTerm = f_app_ac(AcSym::Mult, vec![fresh("a"), fresh("b"), fresh("c")]);
-        assert_eq!(show_term(&t), "Mult(Free ~a,Free ~b,Free ~c)");
-    }
-
     /// The derived `Show [a]` puts the items in brackets.  It separates them
     /// with a comma and no space.  It shows `[]` for an empty list.
     #[test]
@@ -217,17 +201,20 @@ mod tests {
         assert_eq!(show_term_list(&[]), "[]");
     }
 
-    /// Every applied-symbol arm of `Show (Term a)` (Term/Raw.hs):
-    /// the `NoEq` nullary/applied pair, `C EMap`, `List`, the four builtin
-    /// AC operators (whose derived `show ACSym` names always take an
-    /// argument list) and the user-`[AC]` nullary/applied pair.
+    /// `Show (Term a)` (Term/Raw.hs) over every applied-symbol arm: the
+    /// `NoEq` nullary/applied pair (including `one` and `tone`,
+    /// FunctionSymbols.hs), `C EMap`, `List`, the four builtin AC operators
+    /// (whose derived `show ACSym` names always take an argument list), the
+    /// user-`[AC]` nullary/applied pair, and a `Bound` leaf (derived
+    /// `Show (BVar v)`, LTerm.hs).  An application intercalates its WHOLE
+    /// argument list, so a three-argument AC term shows flat.
     #[test]
     fn show_term_covers_every_applied_symbol_arm() {
         use tamarin_term::builtin::{emap, msg_var, mult, nat_plus, union, xor};
         use tamarin_term::function_symbols::{
-            AcFctSym, Constructability, NdcState, NoEqSym, Privacy,
+            one_sym, AcFctSym, Constructability, FunSym, NdcState, NoEqSym, Privacy,
         };
-        use tamarin_term::term::{f_app_acfct, f_app_list, f_app_no_eq};
+        use tamarin_term::term::{f_app_acfct, f_app_list, Term};
 
         let (x, y) = (msg_var("x", 0), msg_var("y", 0));
         let noeq = |n: &[u8], a: usize| {
@@ -246,50 +233,33 @@ mod tests {
                 NdcState::NotNdc,
             )
         };
-
-        let nullary: LNTerm = f_app_no_eq(noeq(b"g", 0), vec![]);
-        assert_eq!(show_term(&nullary), "g");
-        assert_eq!(
-            show_term(&f_app_no_eq(noeq(b"h", 2), vec![x.clone(), y.clone()])),
-            "h(x,y)"
-        );
-        assert_eq!(show_term(&emap(x.clone(), y.clone())), "em(x,y)");
-        assert_eq!(
-            show_term(&f_app_list(vec![x.clone(), y.clone()])),
-            "LIST(x,y)"
-        );
-        assert_eq!(show_term(&union(x.clone(), y.clone())), "Union(x,y)");
-        assert_eq!(show_term(&mult(x.clone(), y.clone())), "Mult(x,y)");
-        assert_eq!(show_term(&xor(x.clone(), y.clone())), "Xor(x,y)");
-        assert_eq!(show_term(&nat_plus(x.clone(), y.clone())), "NatPlus(x,y)");
-        assert_eq!(
-            show_term(&f_app_acfct(acfct(b"xorr"), vec![x.clone(), y.clone()])),
-            "xorr(x,y)"
-        );
-        // `FApp (AC (ACfct (s,_))) [] -> s` — the bare name, no parens.
-        let nullary_acfct: LNTerm = tamarin_term::term::Term::App(
-            tamarin_term::function_symbols::FunSym::Ac(AcSym::AcFct(acfct(b"nil"))),
-            Vec::new().into(),
-        );
-        assert_eq!(show_term(&nullary_acfct), "nil");
-    }
-
-    #[test]
-    fn show_term_writes_the_two_nullary_arithmetic_symbols_by_name() {
-        // fAppOne = FApp (NoEq oneSym) [] with oneSymString = "one" and
-        // fAppNatOne = FApp (NoEq natOneSym) [] with natOneSymString = "tone"
-        // (FunctionSymbols.hs).
-        let one: BLNTerm = f_app_no_eq(tamarin_term::function_symbols::one_sym(), vec![]);
-        assert_eq!(show_term(&one), "one");
-        let tone: BLNTerm = f_app_no_eq(nat_one_sym(), vec![]);
-        assert_eq!(show_term(&tone), "tone");
-    }
-
-    /// A `Bound` leaf shows as the derived `Show (BVar v)` writes it
-    /// (LTerm.hs).
-    #[test]
-    fn show_term_writes_a_bound_leaf_with_its_index() {
-        let t: BLNTerm = var_term(BVar::Bound(3));
-        assert_eq!(show_term(&t), "Bound 3");
+        let xy = || vec![x.clone(), y.clone()];
+        // `FApp (AC (ACfct (s,_))) [] -> s`: the bare name, no parens.
+        let nullary_acfct: LNTerm =
+            Term::App(FunSym::Ac(AcSym::AcFct(acfct(b"nil"))), Vec::new().into());
+        let exp_g: BLNTerm = f_app_no_eq(exp_sym(), vec![pub_name("g"), fresh("s")]);
+        let mult3: BLNTerm = f_app_ac(AcSym::Mult, vec![fresh("a"), fresh("b"), fresh("c")]);
+        let nullary = |sym| -> LNTerm { f_app_no_eq(sym, vec![]) };
+        let bound: BLNTerm = var_term(BVar::Bound(3));
+        let rows = [
+            (show_term(&nullary(noeq(b"g", 0))), "g"),
+            (show_term(&f_app_no_eq(noeq(b"h", 2), xy())), "h(x,y)"),
+            (show_term(&nullary(one_sym())), "one"),
+            (show_term(&nullary(nat_one_sym())), "tone"),
+            (show_term(&exp_g), "exp('g',Free ~s)"),
+            (show_term(&emap(x.clone(), y.clone())), "em(x,y)"),
+            (show_term(&f_app_list(xy())), "LIST(x,y)"),
+            (show_term(&union(x.clone(), y.clone())), "Union(x,y)"),
+            (show_term(&mult(x.clone(), y.clone())), "Mult(x,y)"),
+            (show_term(&mult3), "Mult(Free ~a,Free ~b,Free ~c)"),
+            (show_term(&xor(x.clone(), y.clone())), "Xor(x,y)"),
+            (show_term(&nat_plus(x.clone(), y.clone())), "NatPlus(x,y)"),
+            (show_term(&f_app_acfct(acfct(b"xorr"), xy())), "xorr(x,y)"),
+            (show_term(&nullary_acfct), "nil"),
+            (show_term(&bound), "Bound 3"),
+        ];
+        for (shown, expected) in rows {
+            assert_eq!(shown, expected);
+        }
     }
 }

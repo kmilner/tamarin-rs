@@ -1933,6 +1933,12 @@ pub(crate) fn bm_goal(g: &Goal, max: &mut u64) {
 /// The largest free variable index in the system (0 if none), through
 /// the system's max-var cache.
 pub fn bounds_max(sys: &System) -> u64 {
+    let v = bounds_max_cached(sys);
+    debug_assert_eq!(v, bounds_max_uncached(sys), "stale max-var-idx cache");
+    v
+}
+
+fn bounds_max_cached(sys: &System) -> u64 {
     if let Some(v) = sys.max_var_idx_cache.get() {
         return v;
     }
@@ -1972,9 +1978,8 @@ fn bounds_max_nodes(sys: &System) -> u64 {
     max
 }
 
-/// Full-walk `bounds_max` that bypasses the caches; tests compare the
-/// cached value against it.
-#[cfg(test)]
+/// Full-walk `bounds_max` that bypasses the caches; debug builds check
+/// every cached value against it.
 pub(crate) fn bounds_max_uncached(sys: &System) -> u64 {
     bounds_max_nodes(sys).max(bounds_max_rest(sys))
 }

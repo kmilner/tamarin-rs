@@ -11,309 +11,100 @@ fn monotonic_behaviour_renders_unicode() {
     assert_eq!(MonotonicBehaviour::Unstable.to_string(), ".");
 }
 
+/// HS `injectiveFactInstances` (InjectiveFactInstances.hs) over the rules
+/// of a theory: a linear protocol fact is injective when every rule that
+/// has it in both premises and conclusions keeps its first term, with a
+/// behaviour per pair-leaf of every other position.  Each row is `(rules,
+/// forced tags, instances)`, an instance written `Tag/arity` followed by
+/// one `[..]` per non-first position.
 #[test]
-fn empty_rules_no_injective_facts() {
-    let r: Vec<&ProtoRuleE> = Vec::new();
-    assert!(simple_injective_fact_instances(&r, &Default::default()).is_empty());
-}
-
-/// Loop-style rules: `Start: Fr(x) → A(x); Loop: A(x) → A(x); Stop: A(x) → []`.
-/// `A` should be detected as injective because every rule producing it
-/// either consumes `A(x)` with same first arg or has `Fr(x)` premise.
-#[test]
-fn loop_pattern_detects_a_as_injective() {
-    use crate::fact::{fresh_fact, Fact, FactTag, Multiplicity};
-    use crate::rule::{ProtoRuleEInfo, Rule};
-    use tamarin_term::builtin::msg_var;
-
-    let a_tag = FactTag::Proto(Multiplicity::Linear, "A", 1);
-    let a_fact = Fact::new(a_tag, vec![msg_var("x", 0)]);
-    let start: ProtoRuleE = Rule::new(
-        ProtoRuleEInfo::standard("Start"),
-        vec![fresh_fact(msg_var("x", 0))],
-        vec![a_fact.clone()],
-        vec![],
-    );
-    let loop_r: ProtoRuleE = Rule::new(
-        ProtoRuleEInfo::standard("Loop"),
-        vec![a_fact.clone()],
-        vec![a_fact.clone()],
-        vec![],
-    );
-    let stop: ProtoRuleE = Rule::new(
-        ProtoRuleEInfo::standard("Stop"),
-        vec![a_fact.clone()],
-        vec![],
-        vec![],
-    );
-    let rules = [start, loop_r, stop];
-    let rules: Vec<&ProtoRuleE> = rules.iter().collect();
-    let inj = simple_injective_fact_instances(&rules, &Default::default());
-    assert_eq!(inj.len(), 1);
-    assert_eq!(inj[0].0, a_tag);
-}
-
-/// `S(~id, k)` with copy rule that preserves `k` ⇒ position 1
-/// behaviour should be `Constant`.
-#[test]
-fn copy_preserving_arg_marks_position_constant() {
-    use crate::fact::{fresh_fact, Fact, FactTag, Multiplicity};
-    use crate::rule::{ProtoRuleEInfo, Rule};
-    use tamarin_term::builtin::msg_var;
-
-    let s_tag = FactTag::Proto(Multiplicity::Linear, "S", 2);
-    let s_fact = Fact::new(s_tag, vec![msg_var("id", 0), msg_var("k", 0)]);
-    let init: ProtoRuleE = Rule::new(
-        ProtoRuleEInfo::standard("Init"),
-        vec![fresh_fact(msg_var("id", 0))],
-        vec![s_fact.clone()],
-        vec![],
-    );
-    let copy: ProtoRuleE = Rule::new(
-        ProtoRuleEInfo::standard("Copy"),
-        vec![s_fact.clone()],
-        vec![s_fact.clone()],
-        vec![],
-    );
-    let rules = [init, copy];
-    let rules: Vec<&ProtoRuleE> = rules.iter().collect();
-    let inj = simple_injective_fact_instances(&rules, &Default::default());
-    assert_eq!(inj.len(), 1);
-    assert_eq!(inj[0].0, s_tag);
-    // One non-first position; its single (non-tuple) pair-leaf is Constant.
-    assert_eq!(inj[0].1.len(), 1);
-    assert_eq!(inj[0].1[0], vec![MonotonicBehaviour::Constant]);
-}
-
-/// Non-injective: a rule produces `B(t)` but doesn't consume `B`
-/// or have a Fresh-premise binding `t`.
-#[test]
-fn arbitrary_production_not_injective() {
-    use crate::fact::{Fact, FactTag, Multiplicity};
-    use crate::rule::{ProtoRuleEInfo, Rule};
-    use tamarin_term::builtin::msg_var;
-
-    let b_tag = FactTag::Proto(Multiplicity::Linear, "B", 1);
-    let b_fact = Fact::new(b_tag, vec![msg_var("y", 0)]);
-    // No Fresh premise binding `y`, no `B` premise.
-    let weird: ProtoRuleE = Rule::new(
-        ProtoRuleEInfo::standard("Weird"),
-        vec![],
-        vec![b_fact.clone()],
-        vec![],
-    );
-    assert!(simple_injective_fact_instances(&[&weird], &Default::default()).is_empty());
-}
-
-/// Pair-flattening (HS `getPairTerms` / `getShape` / `shapeTerm`):
-/// `S(~id, <a, b>) → S(~id, <a, c>)`.  The non-first position is a
-/// top-level tuple; it flattens to the right into two pair-leaves
-/// (2.1 = `a`/`a`, 2.2 = `b`/`c`).  So the behaviour is the
-/// list-of-lists `[[Constant, Unstable]]` (`[[=, .]]`) — NOT a single
-/// collapsed `Unstable` over the whole `<a, b>`/`<a, c>` argument.
-#[test]
-fn pair_argument_is_flattened_to_the_right() {
-    use crate::fact::{fresh_fact, Fact, FactTag, Multiplicity};
-    use crate::rule::{ProtoRuleEInfo, Rule};
-    use tamarin_term::builtin::{msg_var, pair};
-
-    let s_tag = FactTag::Proto(Multiplicity::Linear, "S", 2);
-    let prem_fact = Fact::new(
-        s_tag,
-        vec![msg_var("id", 0), pair(msg_var("a", 0), msg_var("b", 0))],
-    );
-    let conc_fact = Fact::new(
-        s_tag,
-        vec![msg_var("id", 0), pair(msg_var("a", 0), msg_var("c", 0))],
-    );
-    let init: ProtoRuleE = Rule::new(
-        ProtoRuleEInfo::standard("Init"),
-        vec![fresh_fact(msg_var("id", 0))],
-        vec![prem_fact.clone()],
-        vec![],
-    );
-    let copy: ProtoRuleE = Rule::new(
-        ProtoRuleEInfo::standard("Copy"),
-        vec![prem_fact.clone()],
-        vec![conc_fact.clone()],
-        vec![],
-    );
-    let inj = simple_injective_fact_instances(&[&init, &copy], &Default::default());
-    assert_eq!(inj.len(), 1);
-    assert_eq!(inj[0].0, s_tag);
-    // One non-first position whose tuple flattens into two leaves.
-    assert_eq!(
-        inj[0].1,
-        vec![vec![
-            MonotonicBehaviour::Constant,
-            MonotonicBehaviour::Unstable
-        ]]
-    );
-}
-
-/// `duplicateFirstTerms` (HS InjectiveFactInstances.hs):
-/// a rule with two same-tag conclusions sharing the same first term
-/// cannot be injective — `getMaybeEqMonConclusion` returns `Nothing`
-/// for the duplicated conclusion, so `combineAll` drops the WHOLE tag.
-/// `[A(x)] → A(x), A(x)`: `A` must NOT be injective.
-#[test]
-fn duplicate_first_terms_drops_tag() {
-    use crate::fact::{Fact, FactTag, Multiplicity};
-    use crate::rule::{ProtoRuleEInfo, Rule};
-    use tamarin_term::builtin::msg_var;
-
-    let a_tag = FactTag::Proto(Multiplicity::Linear, "A", 1);
-    let a_fact = Fact::new(a_tag, vec![msg_var("x", 0)]);
-    let r: ProtoRuleE = Rule::new(
-        ProtoRuleEInfo::standard("Dup"),
-        vec![a_fact.clone()],
-        vec![a_fact.clone(), a_fact.clone()],
-        vec![],
-    );
-    let inj = simple_injective_fact_instances(&[&r], &Default::default());
-    assert!(
-        inj.is_empty(),
-        "two conclusions A(x), A(x) share the first term x → A cannot be \
-             injective (HS duplicateFirstTerms drops the whole tag)"
-    );
-}
-
-// =========================================================================
-// Haskell-faithfulness invariants — pinning the candidate filter
-// (#206: `Artificial::Fin_unique` regression).
-//
-// Mirrors Haskell `simpleInjectiveFactInstances`
-// (InjectiveFactInstances.hs):
-//
-//   guard $ (factTagMultiplicity tag == Linear)
-//        && (tag `elem` (factTag <$> rPrems ru))
-//
-// The `tag elem prems` check is PER-RULE, not across all rules: a
-// broader filter (any rule that produces the tag) would count facts
-// as injective when one rule creates them and another consumes them,
-// even though no SINGLE rule has both prems AND concs — adding
-// spurious less-atoms and breaking Fin_unique's case_2.
-// =========================================================================
-
-/// Fact created in Rule1 and consumed in Rule2 (no single rule has
-/// it in both prems and concs) — must NOT be injective.
-///
-/// This is the Artificial.spthy::Fin_unique shape:
-///   Step1: Fr(x) → St(x, k)
-///   Step2: St(x, k) → []
-/// No round-trip → St is NOT injective in Haskell.
-/// Without per-rule filter, we'd mark it injective and add a
-/// spurious less-atom in case_2.
-#[test]
-fn cross_rule_create_consume_is_not_injective() {
-    use crate::fact::{fresh_fact, Fact, FactTag, Multiplicity};
-    use crate::rule::{ProtoRuleEInfo, Rule};
-    use tamarin_term::builtin::msg_var;
-
-    let st_tag = FactTag::Proto(Multiplicity::Linear, "St", 2);
-    let st_fact = Fact::new(st_tag, vec![msg_var("x", 0), msg_var("k", 0)]);
-    // Step1 creates St but doesn't consume it.
-    let step1: ProtoRuleE = Rule::new(
-        ProtoRuleEInfo::standard("Step1"),
-        vec![fresh_fact(msg_var("x", 0))],
-        vec![st_fact.clone()],
-        vec![],
-    );
-    // Step2 consumes St but doesn't produce it.
-    let step2: ProtoRuleE = Rule::new(
-        ProtoRuleEInfo::standard("Step2"),
-        vec![st_fact.clone()],
-        vec![],
-        vec![],
-    );
-
-    let inj = simple_injective_fact_instances(&[&step1, &step2], &Default::default());
-    assert!(
-        inj.is_empty(),
-        "St is created in Step1, consumed in Step2, but NO single rule \
-             has St in both prems and concs → must NOT be marked injective. \
-             Haskell `simpleInjectiveFactInstances` checks the per-rule \
-             `tag elem rPrems ru` condition.  Otherwise spurious less-atoms \
-             break Artificial::Fin_unique case_2."
-    );
-}
-
-/// Persistent facts (multiplicity = Persistent) are never marked
-/// injective.  Mirrors Haskell's
-/// `guard (factTagMultiplicity tag == Linear)`.
-#[test]
-fn persistent_facts_are_not_injective() {
-    use crate::fact::{Fact, FactTag, Multiplicity};
-    use crate::rule::{ProtoRuleEInfo, Rule};
-    use tamarin_term::builtin::msg_var;
-
-    let p_tag = FactTag::Proto(Multiplicity::Persistent, "P", 1);
-    let p_fact = Fact::new(p_tag, vec![msg_var("x", 0)]);
-    // Even with both prems + concs (which would normally pass the
-    // candidate filter), Persistent disqualifies.
-    let r: ProtoRuleE = Rule::new(
-        ProtoRuleEInfo::standard("R"),
-        vec![p_fact.clone()],
-        vec![p_fact.clone()],
-        vec![],
-    );
-    let inj = simple_injective_fact_instances(&[&r], &Default::default());
-    assert!(
-        inj.is_empty(),
-        "Persistent facts are never injective (Haskell: \
-             `factTagMultiplicity tag == Linear` guard)"
-    );
-}
-
-/// Arity-0 facts (no args) have no first term to be injective ON, so the
-/// candidate loop drops them via its `if conc.terms.is_empty()` guard —
-/// HS `guard (not (null (factTerms conc)))`
-/// (InjectiveFactInstances.hs).
-#[test]
-fn arity_zero_facts_are_not_injective() {
-    use crate::fact::{Fact, FactTag, Multiplicity};
-    use crate::rule::{ProtoRuleEInfo, Rule};
-
-    let z_tag = FactTag::Proto(Multiplicity::Linear, "Z", 0);
-    let z_fact = Fact::new(z_tag, vec![]);
-    let r: ProtoRuleE = Rule::new(
-        ProtoRuleEInfo::standard("R"),
-        vec![z_fact.clone()],
-        vec![z_fact.clone()],
-        vec![],
-    );
-    let inj = simple_injective_fact_instances(&[&r], &Default::default());
-    assert!(
-        inj.is_empty(),
-        "Arity-0 facts have no behaviour to track → never injective"
-    );
-}
-
-/// Built-in facts (Out, Ku, Kd, Fresh, etc.) are never injective.
-/// Only Proto-tagged facts get the analysis.
-#[test]
-fn builtin_facts_are_not_injective() {
-    use crate::fact::{fresh_fact, Fact, FactTag};
-    use crate::rule::{ProtoRuleEInfo, Rule};
-    use tamarin_term::builtin::msg_var;
-
-    // Two Out facts — never injective regardless of pattern.
-    let out_fact = Fact::new(FactTag::Out, vec![msg_var("x", 0)]);
-    let r: ProtoRuleE = Rule::new(
-        ProtoRuleEInfo::standard("R"),
-        vec![fresh_fact(msg_var("x", 0)), out_fact.clone()],
-        vec![out_fact.clone()],
-        vec![],
-    );
-    let inj = simple_injective_fact_instances(&[&r], &Default::default());
-    // The rule's only round-tripped tag is `Out`, and only Proto tags are
-    // candidates, so nothing survives.  Asserting emptiness (rather than
-    // "no Out in the result") keeps the pin from passing vacuously.
-    assert!(
-        inj.is_empty(),
-        "only Proto facts are injective candidates; got {:?}",
-        inj.iter().map(|(t, _)| *t).collect::<Vec<_>>()
-    );
+fn injective_instances_table() {
+    let rows: &[(&str, &[(&'static str, usize)], &[&str])] = &[
+        ("", &[], &[]),
+        (
+            "rule Start: [Fr(~x)] --> [A(~x)]\n\
+             rule Loop: [A(x)] --> [A(x)]\n\
+             rule Stop: [A(x)] --> []",
+            &[],
+            &["A/1"],
+        ),
+        // A copied argument is constant.
+        (
+            "rule Init: [Fr(~id)] --> [S(~id, k)]\n\
+             rule Copy: [S(id, k)] --> [S(id, k)]",
+            &[],
+            &["S/2 [=]"],
+        ),
+        // A top-level tuple flattens to the right into one behaviour per
+        // leaf, not one collapsed behaviour for the whole argument.
+        (
+            "rule Init: [Fr(~id)] --> [S(~id, <a, b>)]\n\
+             rule Copy: [S(id, <a, b>)] --> [S(id, <a, c>)]",
+            &[],
+            &["S/2 [=.]"],
+        ),
+        // Produced without a premise of its own tag or a fresh first term.
+        ("rule Weird: [] --> [B(y)]", &[], &[]),
+        // `duplicateFirstTerms`: two conclusions share the first term, so
+        // the whole tag goes.
+        ("rule Dup: [A(x)] --> [A(x), A(x)]", &[], &[]),
+        // The premise check is per rule: no single rule both consumes and
+        // produces `St`.
+        (
+            "rule Step1: [Fr(~x)] --> [St(~x, k)]\n\
+             rule Step2: [St(x, k)] --> []",
+            &[],
+            &[],
+        ),
+        // Only linear, non-nullary protocol facts are candidates.
+        ("rule R: [!P(x)] --> [!P(x)]", &[], &[]),
+        ("rule R: [Z()] --> [Z()]", &[], &[]),
+        ("rule R: [Fr(~x), Out(x)] --> [Out(x)]", &[], &[]),
+        // HS unions forced and inferred `(tag, behaviours)` pairs, so a
+        // forced tag the analysis also infers appears twice; the oracle
+        // prints `L_CellLocked/2, L_PureState/2, L_PureState/2`.
+        (
+            "rule BeginCell: [Fr(~k)] --> [L_PureState(~k, 'v')]\n\
+             rule Copy: [L_PureState(~k, x)] --> [L_PureState(~k, x)]",
+            &[("L_PureState", 2), ("L_CellLocked", 2)],
+            &[
+                "L_CellLocked/2 [?] [?]",
+                "L_PureState/2 [=]",
+                "L_PureState/2 [?] [?]",
+            ],
+        ),
+    ];
+    for &(rules, forced, want) in rows {
+        let theory = crate::elaborate::elaborate(
+            &tamarin_parser::parse_theory(&format!("theory T begin\n{rules}\nend"), &[]).unwrap(),
+        )
+        .unwrap();
+        let forced = forced
+            .iter()
+            .map(|&(name, arity)| FactTag::Proto(crate::fact::Multiplicity::Linear, name, arity))
+            .collect();
+        let got: Vec<String> = injective_fact_instances_for_rules(
+            theory.rules(),
+            &[],
+            &theory.signature.reducible_fun_syms_fast,
+            &forced,
+        )
+        .into_iter()
+        .map(|(tag, positions)| {
+            let FactTag::Proto(_, name, arity) = tag else {
+                panic!("{rules}: a non-protocol instance {tag:?}")
+            };
+            let mut shown = format!("{name}/{arity}");
+            for leaves in positions {
+                shown.push_str(" [");
+                leaves.iter().for_each(|b| shown.push_str(&b.to_string()));
+                shown.push(']');
+            }
+            shown
+        })
+        .collect();
+        assert_eq!(got, want, "{rules}");
+    }
 }
 
 /// HS `trimmedPairTerms` (Simplify.hs): an instance whose term has fewer
@@ -341,40 +132,5 @@ fn trimmed_pair_terms_drops_an_instance_too_short_for_the_shape() {
     assert_eq!(
         trimmed_pair_terms(&deep, &behaviours),
         Some((id, vec![(Constant, pair(a, b)), (StrictlyIncreasing, c)]))
-    );
-}
-
-/// HS unions forced and inferred `(tag, behaviours)` pairs, so a forced tag
-/// the analysis also infers appears twice: the oracle prints
-/// `L_CellLocked/2, L_PureState/2, L_PureState/2` for this theory.
-#[test]
-fn forced_and_inferred_instances_of_a_tag_both_survive() {
-    let theory = crate::elaborate::elaborate(
-        &tamarin_parser::parse_theory(
-            "theory T begin\n\
-             rule BeginCell: [Fr(~k)] --> [L_PureState(~k, 'v')]\n\
-             rule Copy: [L_PureState(~k, x)] --> [L_PureState(~k, x)]\n\
-             end",
-            &[],
-        )
-        .unwrap(),
-    )
-    .unwrap();
-    let pure_state = FactTag::Proto(crate::fact::Multiplicity::Linear, "L_PureState", 2);
-    let cell_locked = FactTag::Proto(crate::fact::Multiplicity::Linear, "L_CellLocked", 2);
-    let insts = injective_fact_instances_for_rules(
-        theory.rules(),
-        &[],
-        &theory.signature.reducible_fun_syms_fast,
-        &[pure_state, cell_locked].into(),
-    );
-    let forced = vec![vec![MonotonicBehaviour::Unspecified]; 2];
-    assert_eq!(
-        insts.into_iter().collect::<Vec<_>>(),
-        [
-            (cell_locked, forced.clone()),
-            (pure_state, vec![vec![MonotonicBehaviour::Constant]]),
-            (pure_state, forced),
-        ]
     );
 }

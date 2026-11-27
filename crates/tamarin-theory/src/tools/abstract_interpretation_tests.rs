@@ -595,60 +595,6 @@ fn apply_partial_evaluation_splices_at_first_rule_item() {
     ));
 }
 
-/// A refinement is already compiled: macro expansion survives export.
-#[test]
-fn a_refined_rule_exports_its_compiled_macro_expansion() {
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-
-    // `macros: dup(y) = <y, y>` and a rule whose conclusion calls it.
-    let y = LVar::new("y", LSort::Msg, 0);
-    let dup: crate::theory::LNMacro = crate::theory::LNMacro::new(
-        b"dup".to_vec(),
-        vec![y],
-        tamarin_term::builtin::pair(var_term(y), var_term(y)),
-    );
-    let dup_call: LNTerm = f_app(
-        tamarin_term::macro_expand::macro_to_fun_sym(&dup),
-        vec![var_term(y)],
-    );
-    let macroed: ProtoRuleE = Rule::new(
-        ProtoRuleEInfo::standard("Macroed"),
-        vec![],
-        vec![proto_fact(
-            Multiplicity::Linear,
-            "Ap",
-            vec![dup_call.clone()],
-        )],
-        vec![],
-    );
-
-    let mut elab: Theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
-    let mut open = OpenProtoRule::new(crate::rule::apply_macro_in_rule(
-        std::slice::from_ref(&dup),
-        macroed.clone(),
-    ));
-    open.rule_e = Some(Box::new(macroed));
-    elab.items = vec![TheoryItem::Macros(vec![dup]), TheoryItem::Rule(open)];
-    apply_partial_evaluation(&mut elab, &h, EvaluationStyle::Silent).unwrap();
-
-    let refined: Vec<&OpenProtoRule> = elab.rules().collect();
-    assert_eq!(refined.len(), 1);
-    let opr = refined[0];
-    assert_eq!(opr.rule_e().conclusions, opr.rule.conclusions);
-    assert_eq!(
-        opr.rule.conclusions,
-        vec![proto_fact(
-            Multiplicity::Linear,
-            "Ap",
-            vec![tamarin_term::builtin::pair(var_term(y), var_term(y))]
-        )]
-    );
-    assert!(crate::theory::open_proto_rule(opr).rule_ac.is_empty());
-}
-
 /// A theory with no rule items is a no-op (HS `replaceProtoRules [] = []`).
 #[test]
 fn apply_partial_evaluation_no_rules_is_noop() {

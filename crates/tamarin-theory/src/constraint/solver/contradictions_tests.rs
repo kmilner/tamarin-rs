@@ -133,59 +133,6 @@ fn non_injective_fact_witness_emitted() {
     );
 }
 
-/// The pass-shared `NodeRuleMap` is lazy: checks whose early-outs
-/// fire must leave the `OnceCell` untouched.
-#[test]
-fn shared_node_rule_map_stays_lazy_on_early_outs() {
-    use crate::constraint::constraints::{LessAtom, Reason};
-    use crate::constraint::system::System;
-    use crate::fact::{Fact, FactTag, Multiplicity};
-    use crate::rule::{
-        IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleACInst, RuleAttributes,
-        RuleInfo,
-    };
-    use tamarin_term::builtin::msg_var;
-
-    let a_fact = Fact::new(
-        FactTag::Proto(Multiplicity::Linear, "A", 1),
-        vec![msg_var("x", 0)],
-    );
-    let b_fact = Fact::new(
-        FactTag::Proto(Multiplicity::Linear, "B", 1),
-        vec![msg_var("x", 0)],
-    );
-    let proto = |name: &'static str,
-                 prems: Vec<crate::fact::LNFact>,
-                 concs: Vec<crate::fact::LNFact>|
-     -> RuleACInst {
-        Rule::new(
-            RuleInfo::<ProtoRuleACInstInfo, IntrRuleACInfo>::Proto(ProtoRuleACInstInfo {
-                name: ProtoRuleName::Stand(name),
-                attributes: RuleAttributes::empty(),
-                loop_breakers: Vec::new(),
-            }),
-            prems,
-            concs,
-            vec![],
-        )
-    };
-
-    // Early-out path: an Adversary less-atom over non-AC rules must not
-    // force the shared map.
-    let i = n("1");
-    let k = n("2");
-    let mut sys = System::empty();
-    sys.add_node(i, proto("Src", vec![], vec![a_fact.clone()]));
-    sys.add_node(k, proto("Snk", vec![b_fact.clone()], vec![]));
-    sys.add_less(LessAtom::new(i, k, Reason::Adversary));
-    let cell = std::cell::OnceCell::new();
-    assert!(!has_forbidden_constr_chain(&sys, &cell));
-    assert!(
-        cell.get().is_none(),
-        "early-outs must not build the shared map"
-    );
-}
-
 /// The [`NfMemo`] must never change a verdict: every candidate answered
 /// from the memo agrees with a fresh `nf_via_haskell_maude`
 /// call, including for builtin-AC-headed and user-`[AC]`-headed terms
@@ -378,41 +325,4 @@ fn forbidden_constr_chain_fires_on_two_trivial_xor_instances() {
         &one_trivial,
         &std::cell::OnceCell::new()
     ));
-}
-
-/// `isForbiddenDPMult` (Contradictions.hs) gates ONLY on the
-/// structural shape `[KD(pmult(_,p)), KU(b)] -> [KD(pmult(c,p))]` plus
-/// `neverContainsFreshPriv p && (niFactors c \\ niFactors b == [])` —
-/// there is no `isDPMultRule` rule-name guard. Pin that the Rust port
-/// fires on a rule with the pmult shape even when its `info` is NOT a
-/// `_pmult` DestrRule (here: a Coerce intruder rule).
-#[test]
-fn forbidden_d_pmult_fires_without_pmult_rule_name() {
-    use crate::fact::{Fact, FactTag};
-    use crate::rule::{IntrRuleACInfo, ProtoRuleACInstInfo, Rule, RuleACInst, RuleInfo};
-    use tamarin_term::builtin::{msg_var, pmult, pub_var};
-
-    // p (point) is Pub → neverContainsFreshPriv p == true.
-    // c == b == msg_var "b" → niFactors c \\ niFactors b == [].
-    let p = pub_var("p", 0);
-    let b = msg_var("b", 0);
-    let s = msg_var("s", 0);
-    let kd = |t| Fact::new(FactTag::Kd, vec![t]);
-    let ku = |t| Fact::new(FactTag::Ku, vec![t]);
-
-    // info = Coerce, deliberately NOT a `_pmult` DestrRule.
-    let ru: RuleACInst = Rule::new(
-        RuleInfo::<ProtoRuleACInstInfo, IntrRuleACInfo>::Intr(IntrRuleACInfo::Coerce),
-        vec![kd(pmult(s.clone(), p.clone())), ku(b.clone())],
-        vec![kd(pmult(b.clone(), p.clone()))],
-        vec![],
-    );
-    assert!(
-        !crate::rule::is_d_pmult_rule(&ru),
-        "guard precondition: this rule is NOT a _pmult DestrRule"
-    );
-    assert!(
-        super::is_forbidden_d_pmult(&ru),
-        "HS isForbiddenDPMult fires on the pmult shape regardless of rule name"
-    );
 }

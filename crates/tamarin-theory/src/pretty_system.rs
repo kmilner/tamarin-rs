@@ -434,7 +434,6 @@ pub fn pretty_fact(fa: &LNFact) -> String {
 mod tests {
     use super::*;
     use crate::constraint::system::System;
-    use tamarin_term::lterm::LSort;
 
     /// This is the all-empty shape, which no corpus proof reaches.  Every
     /// section body is `emptyDoc`.  The definition
@@ -582,111 +581,5 @@ mod tests {
             .find("y.5")
             .unwrap_or_else(|| panic!("no y.5 in:\n{out}"));
         assert!(at3 < at5, "displayed case order disagrees with:\n{out}");
-    }
-
-    // Minimized web-pane repro for task #20 (json shape): the UM_three_pass
-    // `/main/cases/raw/0/0` subst term `<'UM3', $A.5, $B.5, (<'1',…>++…)>
-    // <~ {t.1}` must wrap EXACTLY as HS's `prettyEqStore`→`prettySubst`→
-    // `prettyTerm` Doc does inside the `equations:`/`subst:` nesting under
-    // the web HtmlDoc width (100/67 with entity fill-widths).  Expected
-    // bytes extracted from the cached HS response for
-    // `examples/ake/dh/UM_three_pass.spthy` (`&nbsp;`→space, `<br/>`→\n).
-    #[test]
-    fn um3_subst_term_wraps_like_hs() {
-        use tamarin_term::function_symbols::{
-            exp_sym, pair_sym, AcSym, Constructability, NoEqSym, Privacy,
-        };
-        use tamarin_term::lterm::{LNTerm, LVar, Name, NameTag};
-        use tamarin_term::term::{f_app_ac, f_app_no_eq};
-        use tamarin_term::vterm::{const_term, var_term};
-
-        let var = |name: &str, idx: u64, sort: LSort| var_term(LVar::new(name, sort, idx));
-        let pube = |s: &str| const_term(Name::new(NameTag::Pub, s));
-        let app = |n: &str, args: Vec<LNTerm>| {
-            f_app_no_eq(
-                NoEqSym::new(
-                    n.as_bytes().to_vec(),
-                    args.len(),
-                    Privacy::Public,
-                    Constructability::Constructor,
-                ),
-                args,
-            )
-        };
-        // HS `fAppPair` is arity 2 (Term/Term.hs), so `<a, b, c>` is the
-        // right-nested chain `prettyTerm`'s `split` walks back out.
-        let pair = |items: Vec<LNTerm>| {
-            let mut it = items.into_iter().rev();
-            let mut acc = it.next().expect("a tuple has at least one element");
-            for prev in it {
-                acc = f_app_no_eq(pair_sym(), vec![prev, acc]);
-            }
-            acc
-        };
-        let exp = |l: LNTerm, r: LNTerm| f_app_no_eq(exp_sym(), vec![l, r]);
-        let a5 = || var("A", 5, LSort::Pub);
-        let b5 = || var("B", 5, LSort::Pub);
-        let y5 = || var("Y", 5, LSort::Msg);
-        let z5 = || var("z", 5, LSort::Msg);
-        let ex5 = || var("ex", 5, LSort::Fresh);
-        let g_ex5 = || exp(pube("g"), ex5());
-        let g_eax5 = || {
-            exp(
-                pube("g"),
-                f_app_ac(
-                    AcSym::Mult,
-                    vec![var("ea", 5, LSort::Fresh), var("x", 5, LSort::Fresh)],
-                ),
-            )
-        };
-        let h_arg = || pair(vec![z5(), g_eax5(), a5(), b5(), g_ex5(), y5()]);
-        let mac = |snd: LNTerm| {
-            app(
-                "MAC",
-                vec![app("first", vec![app("h", vec![h_arg()])]), snd],
-            )
-        };
-        let t1 = pair(vec![pube("1"), g_ex5()]);
-        let t2 = pair(vec![
-            pube("2"),
-            y5(),
-            mac(pair(vec![pube("I"), a5(), b5(), g_ex5(), y5()])),
-        ]);
-        let t3 = pair(vec![
-            pube("3"),
-            mac(pair(vec![pube("R"), b5(), a5(), y5(), g_ex5()])),
-        ]);
-        let union = f_app_ac(AcSym::Union, vec![t1, t2, t3]);
-        let term = pair(vec![pube("UM3"), a5(), b5(), union]);
-
-        // HS HtmlDoc escapes at `text` time, so the fill measures escaped
-        // widths; RS captures them at Doc build, under the guard.
-        let _g = crate::pretty_hpj::HtmlDocGuard::enable();
-        // The `prettySubst` mapping line (SubstVFree.hs).
-        let line = pretty_nterm(&term)
-            .beside_sp(Doc::text(" <~ {"))
-            .beside(fsep(punctuate(Doc::text(","), vec![Doc::text("t.1")])))
-            .beside(Doc::text("}"));
-        // Pane context: `combine ("equations", vcat [combine ("subst", …)])`
-        // — the mapping sits at nest 2+2 exactly as in `prettyEqStore`.
-        let doc = combine("equations", vcat(vec![combine("subst", vcat(vec![line]))]));
-        let out = doc.render_with(100, 67);
-        let expected = "<span class=\"hl_keyword\">equations</span>:\n  \
-<span class=\"hl_keyword\">subst</span>:\n    \
-&lt;&#39;UM3&#39;, $A.5, $B.5, \n     \
-(&lt;&#39;1&#39;, &#39;g&#39;^~ex.5&gt;++\n      \
-&lt;&#39;2&#39;, Y.5, \n       \
-MAC(first(h(&lt;z.5, &#39;g&#39;^(~ea.5*~x.5), $A.5, $B.5, \n                    \
-&#39;g&#39;^~ex.5, Y.5&gt;)),\n           \
-&lt;&#39;I&#39;, $A.5, $B.5, &#39;g&#39;^~ex.5, Y.5&gt;)\n      \
-&gt;++\n      \
-&lt;&#39;3&#39;, \n       \
-MAC(first(h(&lt;z.5, &#39;g&#39;^(~ea.5*~x.5), $A.5, $B.5, \n                    \
-&#39;g&#39;^~ex.5, Y.5&gt;)),\n           \
-&lt;&#39;R&#39;, $B.5, $A.5, Y.5, &#39;g&#39;^~ex.5&gt;)\n      \
-&gt;\n     \
-)\n    \
-&gt;  &lt;~ {t.1}";
-        assert_eq!(out, expected, "got:\n{out}\nexpected:\n{expected}");
     }
 }

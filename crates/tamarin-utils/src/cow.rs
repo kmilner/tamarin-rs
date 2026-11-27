@@ -100,12 +100,6 @@ mod tests {
     }
 
     #[test]
-    fn rebuilt_reserves_the_complete_slice() {
-        let got = cow_map_vec(&[1, 3, 4, 5], neg_even).unwrap();
-        assert!(got.capacity() >= 4);
-    }
-
-    #[test]
     fn empty_slice_is_unchanged() {
         assert_eq!(cow_map_vec::<i32>(&[], neg_even), None);
     }

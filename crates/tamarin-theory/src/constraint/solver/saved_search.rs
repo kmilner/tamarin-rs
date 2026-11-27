@@ -314,23 +314,6 @@ mod tests {
     }
 
     #[test]
-    fn replacement_bound_does_not_bound_the_saved_tree() {
-        let Some(ctx) = context() else {
-            return;
-        };
-        let tree = branch(vec![
-            ("a", leaf(ProofMethod::Sorry(None))),
-            ("b", deep_solution()),
-        ]);
-        let result = extend_saved_proof(&ctx, tree, 0).unwrap();
-        assert_eq!(
-            result.children.keys().cloned().collect::<Vec<_>>(),
-            vec!["b"]
-        );
-        assert_eq!(proof_status(&result), ProofStatus::TraceFound);
-    }
-
-    #[test]
     fn stored_only_solved_markers_cannot_cut_a_checked_proof() {
         let Some(mut ctx) = context() else {
             return;

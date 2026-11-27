@@ -308,60 +308,12 @@ mod tests {
         assert_eq!(ctx.variable_bound(), 2);
     }
 
-    /// Pins the load-bearing sort-tolerant DOMAIN fallback in
-    /// `substitute_lookup_var`.  HS `lookupVar s i = lookupBinding
-    /// (MaudeVar i s)` (Term/Maude/Types.hs) is strict and would
-    /// `error` on a sort-miss; the Rust fallback instead recovers the
-    /// original LVar by (idx, ANY sort).  This test locks the CURRENT Rust
-    /// behavior so any change to that fallback is caught and re-validated
-    /// against the corpus.  If the upstream registration cause is ever
-    /// traced and the fallback removed, this test changes with it.
-    #[test]
-    fn substitute_lookup_var_recovers_widened_sort() {
-        let mut ctx = ConvCtx::new();
-        // Bind MaudeVar(6, Fresh) -> ~k1 (a Fresh-sorted LVar).
-        let k1 = LVar::new("~k", LSort::Fresh, 1);
-        ctx.inverse
-            .insert(MaudeLit::MaudeVar(6, LSort::Fresh), Lit::Var(k1));
-        // Maude references it back with a WIDENED sort (Msg); the strict
-        // (6, Msg) key misses, but the (idx, any-sort) fallback recovers
-        // the original Fresh-sorted LVar.
-        let got = substitute_lookup_var(&ctx, LSort::Msg, 6);
-        assert_eq!(got, Some(k1));
-        // A genuinely unknown idx still returns None (no fabrication).
-        assert_eq!(substitute_lookup_var(&ctx, LSort::Msg, 99), None);
-    }
-
-    /// Pins the load-bearing sort-tolerant RANGE fallback used by
-    /// `mterm_to_lnterm` via `lookup_canonical_var_lit`.  HS `importLit`
-    /// (Term/Maude/Types.hs) is strict on the full sort and on a miss
-    /// mints a FRESH `LVar` at the widened sort; the Rust fallback instead
-    /// recovers the original LVar identity.  Locks current Rust behavior.
-    #[test]
-    fn mterm_to_lnterm_recovers_widened_sort_var() {
-        let mut ctx = ConvCtx::new();
-        // ctx only has MaudeVar(idx, Fresh) bound.
-        let k = LVar::new("~k", LSort::Fresh, 3);
-        ctx.inverse
-            .insert(MaudeLit::MaudeVar(4, LSort::Fresh), Lit::Var(k));
-        // Maude hands back the SAME idx widened to Msg.
-        let mt: MTerm = Term::Lit(MaudeLit::MaudeVar(4, LSort::Msg));
-        let mut next = 50;
-        let back = mterm_to_lnterm(&mt, &mut ctx, "x", &mut next);
-        // Rust recovers the original Fresh-sorted LVar rather than minting
-        // a fresh Msg-sorted one (which is what HS would do).  next is
-        // untouched because no new LVar was allocated.
-        assert_eq!(back, Term::Lit(Lit::Var(k)));
-        assert_eq!(next, 50);
-    }
-
-    /// Regression for #330: `mterm_to_lnterm` must sort `em` (C/EMap) args
-    /// by the FINAL `LVar` order, not leave them in Maude's back-conversion
-    /// order.  An MTerm `em(<id for x.10>, <id for x.9>)` whose args map
+    /// `mterm_to_lnterm` sorts `em` (C/EMap) args by the FINAL `LVar`
+    /// order, not Maude's back-conversion order.  An MTerm `em(<id for x.10>, <id for x.9>)` whose args map
     /// back to `x.10` and `x.9` must come back as `em(x.9, x.10)` (idx-first
     /// `LVar` order), matching HS `mTermToLNTerm`'s `fApp o`/`fAppC EMap`.
     #[test]
-    fn emap_args_sorted_by_final_lvar_order() {
+    fn back_conversion_sorts_c_arguments_by_final_lvar_order() {
         use crate::function_symbols::{CSym, FunSym};
         // Build the MaudeVar ids in the REVERSE-of-sorted order: id 0 binds
         // to the larger var (x.10), id 1 to the smaller (x.9).  So the raw

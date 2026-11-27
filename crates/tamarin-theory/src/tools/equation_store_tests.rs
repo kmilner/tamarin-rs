@@ -394,23 +394,19 @@ fn remove_permutations_drops_renamed_variants() {
 }
 
 // =========================================================================
-// Haskell-faithfulness invariants for `add_eqs`.
-//
-// These tests pin the eq-store's orientation choices.  See
-// `tamarin_term::unification::haskell_invariants_tests` for the rationale.
+// Haskell-faithfulness invariants for `add_eqs`: the eq-store's
+// orientation choices.
 // =========================================================================
 
-/// `add_eqs` for AC-free, same-sort var-var input must orient the
-/// resulting subst with LARGER-idx as KEY (Haskell `unifyRaw`
-/// convention, Unification.hs).
+/// `add_eqs` for AC-free, same-sort var-var input orients the resulting
+/// subst with the LARGER index as the key (HS `unifyRaw`, Unification.hs),
+/// and binds it straight to the other variable: no Maude witness `~mw`
+/// appears on either side.
 ///
-/// This is the most important orientation invariant for downstream
-/// `restrict stableVars`: stable pattern vars (small idx) must stay
-/// on the VALUE side so they get filtered out (they're never keys
-/// in Haskell's subst).
-///
-/// **If this test fails, foo_eligibility-class divergences will
-/// silently appear in the corpus.**
+/// Downstream `restrict stableVars` relies on this: stable pattern vars
+/// (small idx) stay on the value side, so they are filtered out (they are
+/// never keys in HS's subst), and fresh-node uniqueness never buckets
+/// nodes by a shared witness.
 #[test]
 fn add_eqs_ac_free_var_var_uses_haskell_orientation() {
     let Some(path) = require_maude_path() else {
@@ -419,9 +415,6 @@ fn add_eqs_ac_free_var_var_uses_haskell_orientation() {
     let sig = tamarin_term::maude_sig::pair_maude_sig();
     let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
 
-    // Mimic the foo_eligibility shape: stable pattern var t.1 unified
-    // with rule-internal var e.10.  Both Msg, same sort.  Haskell
-    // convention: e.10 (larger idx) is the key.
     let t1 = LVar::new("t", LSort::Msg, 1);
     let e10 = LVar::new("e", LSort::Msg, 10);
     use tamarin_term::term::Term;
@@ -434,93 +427,21 @@ fn add_eqs_ac_free_var_var_uses_haskell_orientation() {
         .add_eqs(
             &h,
             &[tamarin_term::rewriting::Equal {
-                lhs: lt1,
+                lhs: lt1.clone(),
                 rhs: le10,
             }],
         )
         .expect("add_eqs");
     assert!(split.is_none(), "var-var unification produces a single mgu");
     assert!(!store.is_false());
-
-    // Haskell-faithful: e.10 (larger idx) is the KEY.
-    assert!(
-        store.subst.image_of(&e10).is_some(),
-        "add_eqs MUST orient same-sort var-var with larger-idx (e.10) \
-                 as KEY.  If this fails, foo_eligibility::eligibility and \
-                 friends will silently diverge from Haskell."
-    );
-    assert!(
-        store.subst.image_of(&t1).is_none(),
-        "smaller-idx (t.1, the stable pattern var) must NOT be a key"
-    );
-}
-
-/// `add_eqs` for an unbinding (`x = y` where neither is in the
-/// existing subst) must NOT introduce a Maude witness ~mw.
-///
-/// We use the local non-AC fast path for AC-free signatures, which
-/// just orients the bind directly.  If we accidentally regress to
-/// the witness-heavy Maude shape (`{x → ~mw, y → ~mw}`), the
-/// downstream `enforce_fresh_node_uniqueness_pass` will bucket
-/// nodes by witness and merge Fresh nodes that should stay
-/// distinct (the TLS_Handshake prem_idx_clash class).
-#[test]
-fn add_eqs_ac_free_var_var_does_not_introduce_witness() {
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let sig = tamarin_term::maude_sig::pair_maude_sig();
-    let h = tamarin_term::maude_proc::MaudeHandle::start(&path, sig).expect("start");
-    let x = LVar::new("x", LSort::Msg, 0);
-    let y = LVar::new("y", LSort::Msg, 0);
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let tx: LNTerm = Term::Lit(Lit::Var(x));
-    let ty: LNTerm = Term::Lit(Lit::Var(y));
-    let mut store = EquationStore::empty();
-    let _ = store
-        .add_eqs(&h, &[tamarin_term::rewriting::Equal { lhs: tx, rhs: ty }])
-        .expect("add_eqs");
-    assert!(
-        !store.subst.is_empty(),
-        "same-sort var-var unification must bind one of the two vars — \
-         an empty subst makes the witness scan below vacuous"
-    );
-
-    // Unifying two free Msg vars must yield a simple orientation
-    // between x and y (HS-faithful var-var orient gives `{y → x}`),
-    // NOT a fresh `~mw`-style witness.  So flag any subst var that is
-    // neither x nor y — that would be a freshly-introduced witness.
-    // (Witness introduction here regressed TLS_Handshake::prem_idx_clash.)
-    // x legitimately appears in the range of `{y → x}`, so the check
-    // below flags any subst var other than x or y, not just non-`x`
-    // values.
-    use tamarin_term::lterm::HasFrees;
-    let mut witness_found = false;
-    for (key, term) in store.subst.to_list() {
-        if key.name != "x" && key.name != "y" {
-            witness_found = true;
-        }
-        term.for_each_free(&mut |v| {
-            if v.name != "x" && v.name != "y" {
-                witness_found = true;
-            }
-        });
-    }
-    assert!(
-        !witness_found,
-        "AC-free var-var unification must NOT introduce ~mw \
-                 witnesses.  Witness introduction here regressed \
-                 TLS_Handshake::prem_idx_clash historically."
-    );
+    assert_eq!(store.subst.to_list(), vec![(e10, lt1)]);
 }
 
 /// `add_eqs` is idempotent for an already-implied equation.
 ///
 /// If the eq-store already has `x → 1`, calling `add_eqs([x = 1])`
-/// must NOT introduce new bindings or witnesses or contradictions.
-/// This is a regression guard for the eq-store's snapshot/apply
-/// chain in `add_eqs_inner` (we apply `self.subst` to inputs first).
+/// must NOT introduce new bindings or witnesses or contradictions:
+/// `add_eqs_inner` applies `self.subst` to its inputs first.
 #[test]
 fn add_eqs_idempotent_for_already_implied_eq() {
     let Some(path) = require_maude_path() else {
@@ -809,11 +730,12 @@ fn simp_minimize_matches_pairwise_dedup() {
     }
 }
 
-/// `simpAbstractFun` (EquationStore.hs) errors when a non-AC operator is
-/// applied at different arities (only `List` can be); it never truncates.
+/// `simpAbstractFun` (EquationStore.hs) errors when `List`, the only
+/// non-AC operator whose arity can vary, appears at different arities; it
+/// never truncates.
 #[test]
 #[should_panic(expected = "simpAbstract: impossible")]
-fn abstract_fun_rejects_non_ac_arity_mismatch() {
+fn abstract_fun_rejects_a_list_arity_mismatch() {
     let Some(path) = require_maude_path() else {
         panic!("simpAbstract: impossible (no maude; skip)");
     };

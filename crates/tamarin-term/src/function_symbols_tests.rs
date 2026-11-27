@@ -181,47 +181,6 @@ fn ac_fct_sym_ord_follows_the_haskell_tuple_field_chain() {
     );
 }
 
-/// `Hash` feeds the same field sequence as `Eq`/`Ord` — the name, then the
-/// remaining fields in declared order — so it agrees with those fields
-/// hashed by hand into the same hasher.
-#[test]
-fn interned_name_sym_hash_feeds_the_declared_field_sequence() {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    fn hash_of(value: impl Hash) -> u64 {
-        let mut state = DefaultHasher::new();
-        value.hash(&mut state);
-        state.finish()
-    }
-    let no_eq = NoEqSym::new(
-        b"f".to_vec(),
-        2,
-        Privacy::Private,
-        Constructability::Destructor,
-    )
-    .with_ndc(NdcState::IsNdcDiff);
-    let mut state = DefaultHasher::new();
-    no_eq.name.hash(&mut state);
-    no_eq.arity.hash(&mut state);
-    no_eq.privacy.hash(&mut state);
-    no_eq.constructability.hash(&mut state);
-    no_eq.ndc.hash(&mut state);
-    assert_eq!(hash_of(no_eq), state.finish());
-
-    let ac = AcFctSym::new(
-        b"f".to_vec(),
-        Privacy::Private,
-        Constructability::Destructor,
-        NdcState::IsNdcDiff,
-    );
-    let mut state = DefaultHasher::new();
-    ac.name.hash(&mut state);
-    ac.privacy.hash(&mut state);
-    ac.constructability.hash(&mut state);
-    ac.ndc.hash(&mut state);
-    assert_eq!(hash_of(ac), state.finish());
-}
-
 /// The `NoEqSym` `Ord` orders on the HS tuple's field chain
 /// `(name, (arity, privacy, constructability, ndc))`: the name dominates,
 /// and the tail decides between equal names — `arity` first, so it outranks

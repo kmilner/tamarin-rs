@@ -319,377 +319,39 @@ impl fmt::Display for LSort {
 mod tests {
     use super::*;
     use crate::function_symbols::{
-        diff_sym, exp_sym, inv_sym, nat_one_sym, pair_sym, Constructability, NoEqSym, Privacy,
+        diff_sym, exp_sym, inv_sym, nat_one_sym, pair_sym, AcFctSym, Constructability, NdcState,
+        NoEqSym, Privacy,
     };
     use crate::lterm::{fresh_term, pub_term, NameTag};
-    use crate::term::{f_app_ac, f_app_c, f_app_no_eq, lit, show_term};
+    use crate::term::{f_app_ac, f_app_c, f_app_list, f_app_no_eq, lit, show_term};
 
-    fn var(name: &str, sort: LSort) -> Term<Lit<Name, LVar>> {
-        lit(Lit::Var(LVar::new(name, sort, 0)))
+    type T = Term<Lit<Name, LVar>>;
+
+    fn var(name: &str, sort: LSort) -> T {
+        var_idx(name, sort, 0)
     }
-    fn var_idx(name: &str, sort: LSort, idx: u64) -> Term<Lit<Name, LVar>> {
+    fn var_idx(name: &str, sort: LSort, idx: u64) -> T {
         lit(Lit::Var(LVar::new(name, sort, idx)))
     }
 
-    #[test]
-    fn pretty_msg_var() {
-        let t = var("x", LSort::Msg);
-        assert_eq!(pretty_lnterm(&t), "x");
-    }
-
-    #[test]
-    fn pretty_fresh_var_with_index() {
-        let t = var_idx("k", LSort::Fresh, 3);
-        assert_eq!(pretty_lnterm(&t), "~k.3");
-    }
-
-    #[test]
-    fn pretty_pub_var_idx0() {
-        let t = var("pk", LSort::Pub);
-        assert_eq!(pretty_lnterm(&t), "$pk");
-    }
-
-    #[test]
-    fn pretty_pub_const_unquoted_outer() {
-        // Haskell renders `'alice'` with surrounding quotes
-        let t: Term<Lit<Name, LVar>> = pub_term("alice");
-        assert_eq!(pretty_lnterm(&t), "'alice'");
-    }
-
-    #[test]
-    fn pretty_fresh_const() {
-        let t: Term<Lit<Name, LVar>> = fresh_term("kAB");
-        assert_eq!(pretty_lnterm(&t), "~'kAB'");
-    }
-
-    #[test]
-    fn pretty_pair_flat() {
-        // <a, b, c> from right-associated nested pairs
-        let a = var("a", LSort::Msg);
-        let b = var("b", LSort::Msg);
-        let c = var("c", LSort::Msg);
-        let inner = f_app_no_eq(pair_sym(), vec![b, c]);
-        let outer = f_app_no_eq(pair_sym(), vec![a, inner]);
-        assert_eq!(pretty_lnterm(&outer), "<a, b, c>");
-    }
-
-    #[test]
-    fn pretty_pair_left_nested_not_flattened() {
-        // HS `split` unrolls only the RIGHT spine: pair(pair(a,b), c)
-        // renders `<<a, b>, c>`, keeping the render round-trippable
-        // (`<a, b, c>` would re-parse as the right-nested pair(a, pair(b,c))).
-        let a = var("a", LSort::Msg);
-        let b = var("b", LSort::Msg);
-        let c = var("c", LSort::Msg);
-        let inner = f_app_no_eq(pair_sym(), vec![a, b]);
-        let outer = f_app_no_eq(pair_sym(), vec![inner, c]);
-        assert_eq!(pretty_lnterm(&outer), "<<a, b>, c>");
-    }
-
-    /// The four builtin AC operators render as HS `ppTerms <op> 1 "(" ")"`
-    /// (Term/Term.hs).  This gives one pair of parentheses around the
-    /// complete application.  The operator appears between the operands only.
-    /// There are no spaces, and no separator at the start or at the end.  The
-    /// arguments come out in AC-sorted order (`a` before `b`), whatever order
-    /// the caller passes them in.
-    #[test]
-    fn pretty_builtin_ac_ops_render_infix() {
-        use crate::function_symbols::AcSym;
-        let a = var("a", LSort::Msg);
-        let b = var("b", LSort::Msg);
-        for (op, expected) in [
-            (AcSym::Mult, "(a*b)"),
-            (AcSym::Xor, "(a\u{2295}b)"),
-            (AcSym::Union, "(a++b)"),
-            (AcSym::NatPlus, "(a%+b)"),
-        ] {
-            let t = f_app_ac(op, vec![b.clone(), a.clone()]);
-            assert_eq!(pretty_lnterm(&t), expected, "{op:?}");
-        }
-        // With three operands the separator appears twice, and never at the
-        // edges.
-        let c = var("c", LSort::Msg);
-        let t = f_app_ac(AcSym::Mult, vec![c, b, a]);
-        assert_eq!(pretty_lnterm(&t), "(a*b*c)");
-    }
-
-    #[test]
-    fn pretty_exp_caret() {
-        let g = var("g", LSort::Msg);
-        let x = var("x", LSort::Msg);
-        let t = f_app_no_eq(exp_sym(), vec![g, x]);
-        assert_eq!(pretty_lnterm(&t), "g^x");
-    }
-
-    #[test]
-    fn pretty_user_ac_parenthesizes_exponent_arguments() {
-        let g = var("g", LSort::Msg);
-        let x = var("x", LSort::Msg);
-        let rest = var("rest", LSort::Msg);
-        let exponent = f_app_no_eq(exp_sym(), vec![g, x]);
-        let t = f_app_ac(user_ac(b"add"), vec![rest, exponent]);
-        assert_eq!(pretty_lnterm(&t), "(rest add (g^x))");
-    }
-
-    /// `diff(a, b)` keeps its prefix spelling, with a space after the comma.
-    /// See the module doc above, and HS `prettyTerm`'s own `s == diffSym`
-    /// case.  The guard on the dedicated arm compares the complete `NoEqSym`,
-    /// so a public `diff/2` is a different symbol.  That symbol falls through
-    /// to the generic `NoEq` arm, which spells a 2-ary application the same
-    /// way.  Both assertions therefore check the one spelling.  They do not
-    /// check a difference between the two arms.
-    #[test]
-    fn pretty_diff_renders_prefix_with_spaced_args() {
-        let x = var("x", LSort::Msg);
-        let y = var("y", LSort::Msg);
-        let t = f_app_no_eq(diff_sym(), vec![x.clone(), y.clone()]);
-        assert_eq!(pretty_lnterm(&t), "diff(x, y)");
-        let public_diff = NoEqSym::new(
-            b"diff".to_vec(),
-            2,
-            Privacy::Public,
-            Constructability::Constructor,
-        );
-        assert_ne!(public_diff, diff_sym());
-        let generic = f_app_no_eq(public_diff, vec![x, y]);
-        assert_eq!(pretty_lnterm(&generic), "diff(x, y)");
-    }
-
-    #[test]
-    fn pretty_inv_normal_function() {
-        let g = var("g", LSort::Msg);
-        let t = f_app_no_eq(inv_sym(), vec![g]);
-        assert_eq!(pretty_lnterm(&t), "inv(g)");
-    }
-
-    #[test]
-    fn pretty_nat_one() {
-        let t: Term<Lit<Name, LVar>> = f_app_no_eq(nat_one_sym(), vec![]);
-        assert_eq!(pretty_lnterm(&t), "%1");
-    }
-
-    #[test]
-    fn pretty_user_function() {
-        // senc(k, m)
-        let senc = NoEqSym::new(
-            b"senc".to_vec(),
-            2,
-            Privacy::Public,
-            Constructability::Constructor,
-        );
-        let k = var("k", LSort::Msg);
-        let m = var("m", LSort::Msg);
-        let t = f_app_no_eq(senc, vec![k, m]);
-        assert_eq!(pretty_lnterm(&t), "senc(k, m)");
-    }
-
-    #[test]
-    fn pretty_user_ac_infix_and_nullary() {
-        use crate::function_symbols::{AcFctSym, AcSym, NdcState};
-        let f = AcFctSym::new(
-            b"f".to_vec(),
-            Privacy::Public,
-            Constructability::Constructor,
-            NdcState::NotNdc,
-        );
-        let a = var("a", LSort::Msg);
-        let b = var("b", LSort::Msg);
-        let t = f_app_ac(AcSym::AcFct(f), vec![a, b]);
-        assert_eq!(pretty_lnterm(&t), "(a f b)");
-        // HS `FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)` (Term/Term.hs):
-        // the bare name, no parens.  `f_app_ac` rejects an empty argument list
-        // (HS `fAppAC` errors likewise), so the arm is reachable only by direct
-        // construction.
-        let nullary: Term<Lit<Name, LVar>> = Term::App(FunSym::Ac(AcSym::AcFct(f)), vec![].into());
-        assert_eq!(pretty_lnterm(&nullary), "f");
-    }
-
-    /// The separator of a user-defined AC symbol depends on its name alone.
-    ///
-    /// Bytes from the oracle on a theory declaring `f/2 [AC]`, `op/2 [AC]`,
-    /// `opq/2 [AC]` and a rule emitting `f(~a,~b)`, `op(~a,~b)`, `opq(~a,~b)`;
-    /// it renders them `(~a f ~b)`, `(~a op ~b)`, `(~a opq ~b)` (HS
-    /// `ppTerms (" " ++ BC.unpack f ++ " ") 1 "(" ")" ts`, Term/Term.hs).
-    #[test]
-    fn ac_fct_separator_is_the_spaced_name() {
-        use crate::function_symbols::{AcFctSym, AcSym, NdcState};
-        let plain = AcFctSym::new(
-            b"op".to_vec(),
-            Privacy::Public,
-            Constructability::Constructor,
-            NdcState::NotNdc,
-        );
-        let decorated = AcFctSym::new(
-            b"op".to_vec(),
-            Privacy::Private,
-            Constructability::Destructor,
-            NdcState::IsNdc,
-        );
-        assert_eq!(ac_op_symbol(AcSym::AcFct(plain)), " op ");
-        assert_eq!(ac_op_symbol(AcSym::AcFct(decorated)), " op ");
-
-        let a = var("a", LSort::Fresh);
-        let b = var("b", LSort::Fresh);
-        let rendered: Vec<String> = [&b"f"[..], b"op", b"opq"]
-            .iter()
-            .map(|n| {
-                let o = AcSym::AcFct(AcFctSym::new(
-                    n.to_vec(),
-                    Privacy::Public,
-                    Constructability::Constructor,
-                    NdcState::NotNdc,
-                ));
-                pretty_lnterm(&f_app_ac(o, vec![a.clone(), b.clone()]))
-            })
-            .collect();
-        assert_eq!(rendered, ["(~a f ~b)", "(~a op ~b)", "(~a opq ~b)"]);
-    }
-
-    #[test]
-    fn display_trait_works() {
-        let t = var("x", LSort::Msg);
-        assert_eq!(format!("{}", t), "x");
-    }
-
-    #[test]
-    fn display_for_lvar() {
-        let v = LVar::new("foo", LSort::Pub, 0);
-        assert_eq!(format!("{}", v), "$foo");
-        let v2 = LVar::new("foo", LSort::Pub, 4);
-        assert_eq!(format!("{}", v2), "$foo.4");
-    }
-
-    /// One sigil per `NameTag`, from HS `instance Show Name`
-    /// (LTerm.hs).  Four of the tags print a quoted form with their
-    /// own prefix character, and the prefix of `Pub` is empty.  `Abbrev`
-    /// prints the bare id with no sigil and no quotes.
-    #[test]
-    fn display_for_name() {
-        for (tag, expected) in [
-            (NameTag::Fresh, "~'kAB'"),
-            (NameTag::Pub, "'kAB'"),
-            (NameTag::Node, "#'kAB'"),
-            (NameTag::Nat, "%'kAB'"),
-            (NameTag::Abbrev, "kAB"),
-        ] {
-            assert_eq!(format!("{}", Name::new(tag, "kAB")), expected, "{tag:?}");
-        }
-    }
-
-    /// `Display for LSort` carries the spelling of HS `sortSuffix` for every
-    /// sort.  It does not carry the constructor names of the derived
-    /// `Show LSort`.
-    #[test]
-    fn lsort_display_matches_sort_suffix() {
-        for s in [
-            LSort::Pub,
-            LSort::Fresh,
-            LSort::Msg,
-            LSort::Node,
-            LSort::Nat,
-        ] {
-            assert_eq!(s.to_string(), crate::lterm::sort_suffix(s));
-        }
-    }
-
-    #[test]
-    fn pretty_empty_pub_name_var() {
-        // Anonymous var prints just the index.
-        let v = LVar::new("", LSort::Msg, 7);
-        let t: Term<Lit<Name, LVar>> = lit(Lit::Var(v));
-        assert_eq!(pretty_lnterm(&t), "7");
-    }
-
-    // =====================================================================
-    // The `ShowLit` impls, through `show_term`.
-    // =====================================================================
-
-    /// The `BLTerm` literal type: `Lit Name (BVar LVar)`.
-    type BLit = Lit<Name, BVar<LVar>>;
-
-    fn bound(i: u64) -> Term<BLit> {
-        lit(Lit::Var(BVar::Bound(i)))
-    }
-
-    /// `show (Bound i)` is the derived `Show (BVar v)` (LTerm.hs):
-    /// the constructor name, a space, the index, no parentheses.  The whole
-    /// offender spelling of a wellformedness report is built from this arm —
-    /// the string here is the one pinned in
-    /// `scripts/divergence_fixtures/expected/formula_terms_offenders.wf.hs.txt`.
-    #[test]
-    fn show_writes_a_bound_variable_as_the_derived_constructor() {
-        assert_eq!(show_term(&bound(1)), "Bound 1");
-        let aaa = NoEqSym::new(
-            b"aaa".to_vec(),
-            2,
-            Privacy::Public,
-            Constructability::Constructor,
-        );
-        let offender: Term<BLit> = f_app_ac(
-            AcSym::Mult,
-            vec![
-                f_app_c(CSym::EMap, vec![bound(1), bound(2)]),
-                f_app_no_eq(aaa, vec![bound(2), bound(1)]),
-            ],
-        );
-        assert_eq!(
-            show_term(&offender),
-            "Mult(aaa(Bound 2,Bound 1),em(Bound 1,Bound 2))"
-        );
-    }
-
-    /// `show (Free v)` is the same derived instance; `Show LVar` is
-    /// hand-written (LTerm.hs), so its sort prefix follows the
-    /// constructor name with no parentheses around it.
-    #[test]
-    fn show_writes_a_free_variable_as_the_derived_constructor() {
-        let x: Term<BLit> = lit(Lit::Var(BVar::Free(LVar::new("x", LSort::Fresh, 0))));
-        assert_eq!(show_term(&x), "Free ~x");
-        let y: Term<BLit> = lit(Lit::Var(BVar::Free(LVar::new("y", LSort::Node, 4))));
-        assert_eq!(show_term(&y), "Free #y.4");
-        // At `Lit Name LVar` there is no `BVar` wrapper, so the same variable
-        // shows as the bare `Show LVar`.
-        let z: Term<Lit<Name, LVar>> = var("z", LSort::Msg);
-        assert_eq!(show_term(&z), "z");
-    }
-
-    /// `show Name` (LTerm.hs) quotes the name id and prefixes the
-    /// tag's sigil; the abbreviation tag carries neither.
-    #[test]
-    fn show_writes_a_name_with_its_tag_sigil() {
-        for (tag, expected) in [
-            (NameTag::Pub, "'n'"),
-            (NameTag::Fresh, "~'n'"),
-            (NameTag::Node, "#'n'"),
-            (NameTag::Nat, "%'n'"),
-            (NameTag::Abbrev, "n"),
-        ] {
-            let c: Term<Lit<Name, LVar>> = lit(Lit::Con(Name::new(tag, "n")));
-            assert_eq!(show_term(&c), expected);
-            let b: Term<BLit> = lit(Lit::Con(Name::new(tag, "n")));
-            assert_eq!(show_term(&b), expected);
-        }
-    }
-
-    // =====================================================================
-    // `pretty_term` / `pretty_nterm`, the Doc printer.
-    // =====================================================================
-
     /// The Doc of `t` laid out on one line: no width is ever exceeded, so no
     /// `fcat`/`fsep` ever breaks.
-    fn flat(t: &Term<Lit<Name, LVar>>) -> String {
+    fn flat(t: &T) -> String {
         pretty_nterm(t).render_with(FLAT_WIDTH, FLAT_WIDTH)
+    }
+
+    fn ac_fct(name: &[u8], privacy: Privacy, ctor: Constructability, ndc: NdcState) -> AcSym {
+        AcSym::AcFct(AcFctSym::new(name.to_vec(), privacy, ctor, ndc))
     }
 
     /// A user-declared AC symbol, whose separator is its name in spaces.
     fn user_ac(name: &[u8]) -> AcSym {
-        use crate::function_symbols::{AcFctSym, NdcState};
-        AcSym::AcFct(AcFctSym::new(
-            name.to_vec(),
+        ac_fct(
+            name,
             Privacy::Public,
             Constructability::Constructor,
             NdcState::NotNdc,
-        ))
+        )
     }
 
     fn user_fun(name: &[u8], arity: usize) -> NoEqSym {
@@ -701,87 +363,192 @@ mod tests {
         )
     }
 
-    /// One term of every arm of the battery above, each with the spelling the
-    /// battery pins for it.
-    fn shape_rows() -> Vec<(Term<Lit<Name, LVar>>, &'static str)> {
+    fn app(name: &str, args: Vec<T>) -> T {
+        f_app_no_eq(user_fun(name.as_bytes(), args.len()), args)
+    }
+
+    /// `<a, b, c>`: HS `fAppPair` is arity 2 (Term/Term.hs), so a tuple is
+    /// the right-nested chain `prettyTerm`'s `split` walks back out.
+    fn tuple(items: Vec<T>) -> T {
+        let mut it = items.into_iter().rev();
+        let mut acc = it.next().expect("a tuple has at least one element");
+        for prev in it {
+            acc = f_app_no_eq(pair_sym(), vec![prev, acc]);
+        }
+        acc
+    }
+
+    /// The term-show table: one term per arm of `prettyTerm` (Term/Term.hs)
+    /// and of the derived-style `Show (Term a)` (Term/Term/Raw.hs), with the
+    /// flat pretty spelling and the `show` spelling of each.
+    ///
+    /// - pretty: builtin AC ops are infix with no spaces and AC-sorted
+    ///   operands; a user AC symbol's separator is its name in spaces,
+    ///   whatever its attributes; a user-AC operand that is an `exp` is
+    ///   parenthesised (tamarin-prover#919); `split` unrolls only the RIGHT
+    ///   pair spine; `diff` keeps its prefix spelling whether or not the
+    ///   symbol is the builtin one.
+    /// - show: `intercalate ","` with no space; an AC head shows its derived
+    ///   `ACSym` constructor name and a user AC symbol its own name; the
+    ///   nullary arms write the bare name; `pair`/`exp` stay prefix.
+    fn shape_rows() -> Vec<(T, &'static str, &'static str)> {
         let a = var("a", LSort::Msg);
         let b = var("b", LSort::Msg);
         let c = var("c", LSort::Msg);
+        let (x, y) = (var("x", LSort::Msg), var("y", LSort::Msg));
+        let (fa, fb) = (var("a", LSort::Fresh), var("b", LSort::Fresh));
+        let g_x = f_app_no_eq(exp_sym(), vec![var("g", LSort::Msg), x.clone()]);
+        let h_xy = app("h", vec![x.clone(), y.clone()]);
+        let pair_ab = f_app_no_eq(pair_sym(), vec![pub_term("a"), pub_term("b")]);
         let mut rows = vec![
-            (var("x", LSort::Msg), "x"),
-            (var_idx("k", LSort::Fresh, 3), "~k.3"),
-            (var("pk", LSort::Pub), "$pk"),
-            (lit(Lit::Var(LVar::new("", LSort::Msg, 7))), "7"),
-            (pub_term("alice"), "'alice'"),
-            (fresh_term("kAB"), "~'kAB'"),
+            (x.clone(), "x", "x"),
+            (var_idx("k", LSort::Fresh, 3), "~k.3", "~k.3"),
+            (var("pk", LSort::Pub), "$pk", "$pk"),
+            (var_idx("foo", LSort::Pub, 4), "$foo.4", "$foo.4"),
+            (var_idx("", LSort::Msg, 7), "7", "7"),
+            (pub_term("alice"), "'alice'", "'alice'"),
+            (fresh_term("kAB"), "~'kAB'", "~'kAB'"),
             (
-                f_app_no_eq(
-                    pair_sym(),
-                    vec![
-                        a.clone(),
-                        f_app_no_eq(pair_sym(), vec![b.clone(), c.clone()]),
-                    ],
-                ),
+                tuple(vec![a.clone(), b.clone(), c.clone()]),
                 "<a, b, c>",
+                "pair(a,pair(b,c))",
             ),
             (
                 f_app_no_eq(
                     pair_sym(),
-                    vec![
-                        f_app_no_eq(pair_sym(), vec![a.clone(), b.clone()]),
-                        c.clone(),
-                    ],
+                    vec![tuple(vec![a.clone(), b.clone()]), c.clone()],
                 ),
                 "<<a, b>, c>",
+                "pair(pair(a,b),c)",
             ),
-            (f_app_ac(AcSym::Mult, vec![b.clone(), a.clone()]), "(a*b)"),
+            (pair_ab.clone(), "<'a', 'b'>", "pair('a','b')"),
+            (
+                f_app_ac(AcSym::Mult, vec![b.clone(), a.clone()]),
+                "(a*b)",
+                "Mult(a,b)",
+            ),
             (
                 f_app_ac(AcSym::Xor, vec![b.clone(), a.clone()]),
                 "(a\u{2295}b)",
+                "Xor(a,b)",
             ),
-            (f_app_ac(AcSym::Union, vec![b.clone(), a.clone()]), "(a++b)"),
+            (
+                f_app_ac(AcSym::Union, vec![b.clone(), a.clone()]),
+                "(a++b)",
+                "Union(a,b)",
+            ),
             (
                 f_app_ac(AcSym::NatPlus, vec![b.clone(), a.clone()]),
                 "(a%+b)",
+                "NatPlus(a,b)",
             ),
             (
                 f_app_ac(AcSym::Mult, vec![c.clone(), b.clone(), a.clone()]),
                 "(a*b*c)",
+                "Mult(a,b,c)",
             ),
             (
                 f_app_ac(user_ac(b"f"), vec![a.clone(), b.clone()]),
                 "(a f b)",
-            ),
-            (Term::App(FunSym::Ac(user_ac(b"f")), vec![].into()), "f"),
-            (
-                f_app_no_eq(exp_sym(), vec![var("g", LSort::Msg), var("x", LSort::Msg)]),
-                "g^x",
+                "f(a,b)",
             ),
             (
-                f_app_no_eq(diff_sym(), vec![var("x", LSort::Msg), var("y", LSort::Msg)]),
-                "diff(x, y)",
+                f_app_ac(user_ac(b"f"), vec![fa.clone(), fb.clone()]),
+                "(~a f ~b)",
+                "f(~a,~b)",
             ),
             (
-                f_app_no_eq(
-                    user_fun(b"diff", 2),
-                    vec![var("x", LSort::Msg), var("y", LSort::Msg)],
+                f_app_ac(user_ac(b"op"), vec![fa.clone(), fb.clone()]),
+                "(~a op ~b)",
+                "op(~a,~b)",
+            ),
+            (
+                f_app_ac(user_ac(b"opq"), vec![fa.clone(), fb.clone()]),
+                "(~a opq ~b)",
+                "opq(~a,~b)",
+            ),
+            (
+                f_app_ac(
+                    ac_fct(
+                        b"op",
+                        Privacy::Private,
+                        Constructability::Destructor,
+                        NdcState::IsNdc,
+                    ),
+                    vec![fa, fb],
                 ),
-                "diff(x, y)",
+                "(~a op ~b)",
+                "op(~a,~b)",
             ),
-            (f_app_no_eq(inv_sym(), vec![var("g", LSort::Msg)]), "inv(g)"),
-            (f_app_no_eq(nat_one_sym(), vec![]), "%1"),
             (
-                f_app_no_eq(
-                    user_fun(b"senc", 2),
-                    vec![var("k", LSort::Msg), var("m", LSort::Msg)],
-                ),
+                f_app_ac(user_ac(b"xorr"), vec![x.clone(), y.clone()]),
+                "(x xorr y)",
+                "xorr(x,y)",
+            ),
+            (
+                f_app_ac(user_ac(b"add"), vec![var("rest", LSort::Msg), g_x.clone()]),
+                "(rest add (g^x))",
+                "add(rest,exp(g,x))",
+            ),
+            // `f_app_ac` rejects an empty argument list (HS `fAppAC` errors
+            // likewise), so the nullary arm is reachable only by direct
+            // construction.
+            (
+                Term::App(FunSym::Ac(user_ac(b"f")), vec![].into()),
+                "f",
+                "f",
+            ),
+            (g_x, "g^x", "exp(g,x)"),
+            (
+                f_app_no_eq(exp_sym(), vec![pair_ab, pub_term("c")]),
+                "<'a', 'b'>^'c'",
+                "exp(pair('a','b'),'c')",
+            ),
+            (
+                f_app_no_eq(diff_sym(), vec![x.clone(), y.clone()]),
+                "diff(x, y)",
+                "diff(x,y)",
+            ),
+            (
+                app("diff", vec![x.clone(), y.clone()]),
+                "diff(x, y)",
+                "diff(x,y)",
+            ),
+            (
+                f_app_no_eq(inv_sym(), vec![var("g", LSort::Msg)]),
+                "inv(g)",
+                "inv(g)",
+            ),
+            (f_app_no_eq(nat_one_sym(), vec![]), "%1", "tone"),
+            (app("g", vec![]), "g", "g"),
+            (
+                app("senc", vec![var("k", LSort::Msg), var("m", LSort::Msg)]),
                 "senc(k, m)",
+                "senc(k,m)",
             ),
-            (f_app_c(CSym::EMap, vec![a.clone(), b.clone()]), "em(a, b)"),
             (
-                crate::term::f_app_list(vec![a.clone(), b.clone()]),
-                "LIST(a, b)",
+                app(
+                    "senc",
+                    vec![
+                        lit(Lit::Con(Name::new(NameTag::Node, "n"))),
+                        var("m", LSort::Msg),
+                    ],
+                ),
+                "senc(#'n', m)",
+                "senc(#'n',m)",
             ),
+            (h_xy.clone(), "h(x, y)", "h(x,y)"),
+            (
+                app("k", vec![h_xy, x.clone(), f_app_list(vec![y.clone()])]),
+                "k(h(x, y), x, LIST(y))",
+                "k(h(x,y),x,LIST(y))",
+            ),
+            (
+                f_app_c(CSym::EMap, vec![b.clone(), a.clone()]),
+                "em(a, b)",
+                "em(a,b)",
+            ),
+            (f_app_list(vec![a, b]), "LIST(a, b)", "LIST(a,b)"),
         ];
         for (tag, expected) in [
             (NameTag::Fresh, "~'kAB'"),
@@ -790,30 +557,220 @@ mod tests {
             (NameTag::Nat, "%'kAB'"),
             (NameTag::Abbrev, "kAB"),
         ] {
-            rows.push((lit(Lit::Con(Name::new(tag, "kAB"))), expected));
+            rows.push((lit(Lit::Con(Name::new(tag, "kAB"))), expected, expected));
         }
         rows
     }
 
-    /// Every shape of the battery, laid out on one line, spells what the
-    /// `String` printer spells.
+    /// Every shape row spells its pretty form flat, through the `String`
+    /// printer and through `Display`, and its `show` form through
+    /// `show_term`.  A literal row's pretty form is also the `Display` of the
+    /// `LVar` or `Name` it holds.
     #[test]
-    fn pretty_nterm_flat_equals_pretty_lnterm() {
-        for (t, expected) in shape_rows() {
-            assert_eq!(flat(&t), expected, "{t:?}");
-            assert_eq!(flat(&t), pretty_lnterm(&t), "{t:?}");
+    fn every_shape_row_prints_its_pretty_and_show_forms() {
+        for (t, pretty, show) in shape_rows() {
+            assert_eq!(flat(&t), pretty, "{t:?}");
+            assert_eq!(pretty_lnterm(&t), pretty, "{t:?}");
+            assert_eq!(t.to_string(), pretty, "{t:?}");
+            assert_eq!(show_term(&t), show, "{t:?}");
+            match &t {
+                Term::Lit(Lit::Var(v)) => assert_eq!(v.to_string(), pretty),
+                Term::Lit(Lit::Con(n)) => assert_eq!(n.to_string(), pretty),
+                Term::App(..) => {}
+            }
         }
     }
 
-    /// The literal printer of `prettyNTerm` is `show`, so a name carries the
-    /// sigil of its tag (LTerm.hs) — `#` for a node name, which the
-    /// Maude skolems of a node-sorted variable carry (`maude_proc`).
+    /// The `BLTerm` literal type: `Lit Name (BVar LVar)`.
+    type BLit = Lit<Name, BVar<LVar>>;
+
+    fn bound(i: u64) -> Term<BLit> {
+        lit(Lit::Var(BVar::Bound(i)))
+    }
+
+    /// The `show` form at `Lit Name (BVar LVar)`.  The variable side is the
+    /// derived `Show (BVar v)` (LTerm.hs): constructor name, a space, then
+    /// the payload with no parentheses (`Show LVar` is hand-written and
+    /// ignores the precedence).  The `Mult(…)` row is the offender spelling
+    /// a wellformedness report prints.
     #[test]
-    fn pretty_nterm_prints_a_node_name_with_its_sigil() {
-        let n: Term<Lit<Name, LVar>> = lit(Lit::Con(Name::new(NameTag::Node, "n")));
-        assert_eq!(flat(&n), "#'n'");
-        let inside = f_app_no_eq(user_fun(b"senc", 2), vec![n, var("m", LSort::Msg)]);
-        assert_eq!(flat(&inside), "senc(#'n', m)");
+    fn every_bound_literal_row_shows_the_derived_constructor() {
+        let free = |name: &str, sort, idx| lit(Lit::Var(BVar::Free(LVar::new(name, sort, idx))));
+        let mut rows: Vec<(Term<BLit>, &str)> = vec![
+            (bound(1), "Bound 1"),
+            (free("x", LSort::Fresh, 0), "Free ~x"),
+            (free("y", LSort::Node, 4), "Free #y.4"),
+            (
+                f_app_ac(
+                    AcSym::Mult,
+                    vec![
+                        f_app_c(CSym::EMap, vec![bound(1), bound(2)]),
+                        f_app_no_eq(user_fun(b"aaa", 2), vec![bound(2), bound(1)]),
+                    ],
+                ),
+                "Mult(aaa(Bound 2,Bound 1),em(Bound 1,Bound 2))",
+            ),
+        ];
+        for (tag, expected) in [
+            (NameTag::Pub, "'n'"),
+            (NameTag::Fresh, "~'n'"),
+            (NameTag::Node, "#'n'"),
+            (NameTag::Nat, "%'n'"),
+            (NameTag::Abbrev, "n"),
+        ] {
+            rows.push((lit(Lit::Con(Name::new(tag, "n"))), expected));
+        }
+        for (t, expected) in rows {
+            assert_eq!(show_term(&t), expected, "{t:?}");
+        }
+    }
+
+    /// Where a wrapped term is laid out: page width and ribbon, the column
+    /// the term starts at (`get1`'s `sl`), the `nest` it sits under, and
+    /// whether it renders as HTML (HS `HtmlDoc` measures escaped widths).
+    struct Layout {
+        width: usize,
+        ribbon: usize,
+        start_col: usize,
+        nest: isize,
+        html: bool,
+    }
+
+    fn render_wrapped(t: &T, at: &Layout) -> String {
+        let _mode = if at.html {
+            HtmlDocGuard::enable()
+        } else {
+            HtmlDocGuard::disable()
+        };
+        let doc = pretty_nterm(t).nest(at.nest);
+        if at.start_col == 0 {
+            doc.render_with(at.width, at.ribbon)
+        } else {
+            doc.render_at(at.width, at.ribbon, at.start_col)
+        }
+    }
+
+    /// The UM_three_pass `/main/cases/raw/0/0` substitution term, as the web
+    /// pane's `prettyEqStore` lays it out under `equations:`/`subst:`.
+    fn um3_subst_term() -> T {
+        let pube = |s: &str| pub_term(s);
+        let a5 = || var_idx("A", LSort::Pub, 5);
+        let b5 = || var_idx("B", LSort::Pub, 5);
+        let y5 = || var_idx("Y", LSort::Msg, 5);
+        let exp = |l: T, r: T| f_app_no_eq(exp_sym(), vec![l, r]);
+        let g_ex5 = || exp(pube("g"), var_idx("ex", LSort::Fresh, 5));
+        let g_eax5 = || {
+            exp(
+                pube("g"),
+                f_app_ac(
+                    AcSym::Mult,
+                    vec![
+                        var_idx("ea", LSort::Fresh, 5),
+                        var_idx("x", LSort::Fresh, 5),
+                    ],
+                ),
+            )
+        };
+        let h_arg = || {
+            tuple(vec![
+                var_idx("z", LSort::Msg, 5),
+                g_eax5(),
+                a5(),
+                b5(),
+                g_ex5(),
+                y5(),
+            ])
+        };
+        let mac = |snd: T| {
+            app(
+                "MAC",
+                vec![app("first", vec![app("h", vec![h_arg()])]), snd],
+            )
+        };
+        let t1 = tuple(vec![pube("1"), g_ex5()]);
+        let t2 = tuple(vec![
+            pube("2"),
+            y5(),
+            mac(tuple(vec![pube("I"), a5(), b5(), g_ex5(), y5()])),
+        ]);
+        let t3 = tuple(vec![
+            pube("3"),
+            mac(tuple(vec![pube("R"), b5(), a5(), y5(), g_ex5()])),
+        ]);
+        tuple(vec![
+            pube("UM3"),
+            a5(),
+            b5(),
+            f_app_ac(AcSym::Union, vec![t1, t2, t3]),
+        ])
+    }
+
+    /// The UM3 term's bytes from HS's cached web response for
+    /// `examples/ake/dh/UM_three_pass.spthy` (`&nbsp;` read as a space,
+    /// `<br/>` as a newline), without the ` <~ {t.1}` tail of its line.
+    const UM3_WEB: &str = "    &lt;&#39;UM3&#39;, $A.5, $B.5, \n     \
+(&lt;&#39;1&#39;, &#39;g&#39;^~ex.5&gt;++\n      \
+&lt;&#39;2&#39;, Y.5, \n       \
+MAC(first(h(&lt;z.5, &#39;g&#39;^(~ea.5*~x.5), $A.5, $B.5, \n                    \
+&#39;g&#39;^~ex.5, Y.5&gt;)),\n           \
+&lt;&#39;I&#39;, $A.5, $B.5, &#39;g&#39;^~ex.5, Y.5&gt;)\n      \
+&gt;++\n      \
+&lt;&#39;3&#39;, \n       \
+MAC(first(h(&lt;z.5, &#39;g&#39;^(~ea.5*~x.5), $A.5, $B.5, \n                    \
+&#39;g&#39;^~ex.5, Y.5&gt;)),\n           \
+&lt;&#39;R&#39;, $B.5, $A.5, Y.5, &#39;g&#39;^~ex.5&gt;)\n      \
+&gt;\n     \
+)\n    \
+&gt;";
+
+    /// Wrapped layouts: the break points of `fcat`/`fsep`/`punctuate` inside
+    /// `prettyTerm`.  The `exp` row keeps `'g'^(` on its first line (`^` is
+    /// `<>`, never a break) while the AC exponent's operands break at `nest
+    /// 1`.
+    #[test]
+    fn every_wrap_row_breaks_where_hs_breaks() {
+        let lf = |n: &str| var(n, LSort::Fresh);
+        let hmac = app(
+            "hmac",
+            vec![
+                f_app_no_eq(
+                    exp_sym(),
+                    vec![
+                        pub_term("g"),
+                        f_app_ac(
+                            AcSym::Mult,
+                            vec![lf("longFreshPrivKeyOne"), lf("longFreshPrivKeyTwo")],
+                        ),
+                    ],
+                ),
+                lf("longSaltArgumentName"),
+            ],
+        );
+        let cli = |start_col| Layout {
+            width: 110,
+            ribbon: 73,
+            start_col,
+            nest: 0,
+            html: false,
+        };
+        let web = Layout {
+            width: 100,
+            ribbon: 67,
+            start_col: 0,
+            nest: 4,
+            html: true,
+        };
+        let rows: Vec<(T, Layout, &str)> = vec![
+            (
+                hmac,
+                cli(30),
+                "hmac('g'^(~longFreshPrivKeyOne*\n                                        ~longFreshPrivKeyTwo),\n                                   ~longSaltArgumentName)",
+            ),
+            (um3_subst_term(), web, UM3_WEB),
+        ];
+        for (t, at, expected) in rows {
+            assert_eq!(render_wrapped(&t, &at), expected, "{t:?}");
+        }
     }
 
     /// HS's `diff` arm is a chain of `<>` (Term/Term.hs), so the comma
@@ -822,7 +779,7 @@ mod tests {
     /// joins its arguments with `fsep`, so the same operands break there.
     #[test]
     fn pretty_nterm_diff_never_breaks() {
-        let wide = |c: char| -> Term<Lit<Name, LVar>> { pub_term(c.to_string().repeat(60)) };
+        let wide = |c: char| -> T { pub_term(c.to_string().repeat(60)) };
         let d = f_app_no_eq(diff_sym(), vec![wide('a'), wide('b')]);
         let rendered = pretty_nterm(&d).render_with(110, 73);
         assert!(rendered.len() > 110, "{rendered}");
@@ -830,23 +787,6 @@ mod tests {
         assert_eq!(rendered, flat(&d));
         let f = f_app_no_eq(user_fun(b"senc", 2), vec![wide('a'), wide('b')]);
         assert!(pretty_nterm(&f).render_with(110, 73).contains('\n'));
-    }
-
-    /// HS `FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)`
-    /// (Term/Term.hs): the bare name, with neither parentheses nor the
-    /// spaced separator the infix arm uses.
-    #[test]
-    fn pretty_nterm_nullary_user_ac_is_the_bare_name() {
-        let f = user_ac(b"f");
-        let nullary: Term<Lit<Name, LVar>> = Term::App(FunSym::Ac(f), vec![].into());
-        assert_eq!(flat(&nullary), "f");
-        assert_eq!(
-            flat(&f_app_ac(
-                f,
-                vec![var("a", LSort::Msg), var("b", LSort::Msg)]
-            )),
-            "(a f b)"
-        );
     }
 
     /// A pair term keeps its raw `<`/`>` under an enclosing HTML render: the
@@ -863,47 +803,19 @@ mod tests {
         );
     }
 
-    /// HS `split` walks the RIGHT spine only (Term/Term.hs), so a
-    /// left-nested pair keeps its inner brackets.
+    /// `Display for LSort` carries the spelling of HS `sortSuffix` for every
+    /// sort.  It does not carry the constructor names of the derived
+    /// `Show LSort`.
     #[test]
-    fn pretty_nterm_left_nested_pair_is_not_flattened() {
-        let a = var("a", LSort::Msg);
-        let b = var("b", LSort::Msg);
-        let c = var("c", LSort::Msg);
-        let left = f_app_no_eq(
-            pair_sym(),
-            vec![
-                f_app_no_eq(pair_sym(), vec![a.clone(), b.clone()]),
-                c.clone(),
-            ],
-        );
-        assert_eq!(flat(&left), "<<a, b>, c>");
-        let right = f_app_no_eq(pair_sym(), vec![a, f_app_no_eq(pair_sym(), vec![b, c])]);
-        assert_eq!(flat(&right), "<a, b, c>");
-    }
-
-    /// `prettyProtoAtom` writes its timepoint positions with `text (show v)`
-    /// (Atom.hs), not with `ppT`.  The two agree on a literal —
-    /// `show (LIT l) = show l` (Term/Term/Raw.hs) —
-    /// which is the shape every constructed timepoint has; on an application
-    /// they part, `show` keeping the prefix form the pretty-printer rewrites.
-    #[test]
-    fn show_term_is_the_prefix_form() {
-        for (t, _) in shape_rows() {
-            if matches!(t, Term::Lit(_)) {
-                assert_eq!(show_term(&t), flat(&t), "{t:?}");
-            }
+    fn lsort_display_matches_sort_suffix() {
+        for s in [
+            LSort::Pub,
+            LSort::Fresh,
+            LSort::Msg,
+            LSort::Node,
+            LSort::Nat,
+        ] {
+            assert_eq!(s.to_string(), crate::lterm::sort_suffix(s));
         }
-        let a = var("a", LSort::Msg);
-        let b = var("b", LSort::Msg);
-        let p = f_app_no_eq(pair_sym(), vec![a.clone(), b.clone()]);
-        assert_eq!(show_term(&p), "pair(a,b)");
-        assert_eq!(flat(&p), "<a, b>");
-        let e = f_app_no_eq(exp_sym(), vec![a.clone(), b.clone()]);
-        assert_eq!(show_term(&e), "exp(a,b)");
-        assert_eq!(flat(&e), "a^b");
-        let m = f_app_ac(AcSym::Mult, vec![a, b]);
-        assert_eq!(show_term(&m), "Mult(a,b)");
-        assert_eq!(flat(&m), "(a*b)");
     }
 }

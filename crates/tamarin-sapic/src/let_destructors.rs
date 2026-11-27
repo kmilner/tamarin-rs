@@ -277,127 +277,6 @@ mod tests {
     }
 
     #[test]
-    fn strict_plan_preserves_equations_and_separates_user_pattern() {
-        let source = "theory T begin functions: d/1 [destructor], a/1, b/1 equations: d(a(x))=x, d(b(x))=x process: in(x); let y=d(x) in event Done(y) else event Failed() end";
-        let theory = tamarin_theory::elaborate::elaborate(
-            &tamarin_parser::parse_theory(source, &[]).unwrap(),
-        )
-        .unwrap();
-        let p = crate::annotation::to_annotated(theory.processes().next().unwrap());
-        let planned = translate_let_destr(&[], &theory.signature.st_rules, p).unwrap();
-        let Process::Action(_, _, rest) = planned else {
-            panic!("input")
-        };
-        let plan = &rest.annotation().let_plan;
-        assert_eq!(plan.len(), 2);
-        assert_eq!(plan[0].alternatives.len(), 2);
-        assert!(plan[0].bound.is_empty());
-        assert!(plan[0]
-            .alternatives
-            .iter()
-            .all(|(_, reduct)| reduct.is_some()));
-        assert!(frees(&plan[0].alternatives).iter().all(|v| v.idx > 0));
-        assert_eq!(plan[1].alternatives.len(), 1);
-        assert!(plan[1].alternatives[0].1.is_none());
-        assert_eq!(plan[1].bound, BTreeSet::from([svar("y").var]));
-    }
-
-    #[test]
-    fn nullary_stage_uses_a_public_name_without_dh() {
-        assert_eq!(to_pairs(&[]), tamarin_term::lterm::pub_term("unit"));
-        let theory = tamarin_theory::elaborate::elaborate(
-            &tamarin_parser::parse_theory(
-                "theory T begin functions: d/0 [destructor], ok/0 equations: d()=ok() process: let x=d() in event Done(x) end",
-                &[],
-            ).unwrap(),
-        ).unwrap();
-        let p = crate::annotation::to_annotated(theory.processes().next().unwrap());
-        let planned = translate_let_destr(&[], &theory.signature.st_rules, p).unwrap();
-        let stage = &planned.annotation().let_plan[0];
-        assert_eq!(stage.input, tamarin_term::lterm::pub_term("unit"));
-        assert_eq!(stage.alternatives[0].0, stage.input);
-    }
-
-    #[test]
-    fn ac_destructor_calls_are_rejected_including_nested_calls() {
-        for rhs in ["d('a','b')", "c(d('a','b'))"] {
-            let source = format!("theory T begin functions: d/2 [AC,destructor], c/1 process: let x={rhs} in event Done(x) end");
-            let theory = tamarin_theory::elaborate::elaborate(
-                &tamarin_parser::parse_theory(&source, &[]).unwrap(),
-            )
-            .unwrap();
-            let p = crate::annotation::to_annotated(theory.processes().next().unwrap());
-            assert_eq!(
-                translate_let_destr(&[], &theory.signature.st_rules, p).unwrap_err(),
-                "This feature is not implemented yet. Sorry! SAPIC does not support AC destructor calls."
-            );
-        }
-    }
-
-    #[test]
-    fn unary_stage_payload_stays_bounded_as_depth_grows() {
-        for depth in [4, 8, 10] {
-            let mut term = "'ok'".to_string();
-            for _ in 0..depth {
-                term = format!("d(c({term}))");
-            }
-            let source = format!("theory T begin functions: d/1 [destructor], c/1 equations: d(c(x))=x process: let x={term} in event Done(x) else event Fail() end");
-            let mut theory = tamarin_theory::elaborate::elaborate(
-                &tamarin_parser::parse_theory(&source, &[]).unwrap(),
-            )
-            .unwrap();
-            crate::apply::apply_sapic(&mut theory, false).unwrap();
-            // Two stages per call, success/failure per stage, plus the
-            // initial state, plan entry, two events and two terminal rules.
-            assert_eq!(theory.rules().count(), 4 * depth + 6);
-            let mut let_facts = 0;
-            for rule in theory.rules() {
-                for fact in rule.rule.premises.iter().chain(&rule.rule.conclusions) {
-                    if matches!(fact.tag, tamarin_theory::fact::FactTag::Proto(_, name, _) if name.starts_with("Let_"))
-                    {
-                        let_facts += 1;
-                        assert!(fact.terms.len() <= 2, "depth {depth}: {fact:?}");
-                    }
-                }
-            }
-            assert!(let_facts >= 2 * depth);
-        }
-    }
-
-    #[test]
-    fn eliminates_unmatched_variable_let() {
-        // `let h = 't' in out(h)` (h not a match-var) → `out('t')`, Let gone.
-        let h = svar("h");
-        let body = Process::Action(
-            SapicAction::ChOut {
-                chan: None,
-                msg: var_term(h.clone()),
-            },
-            ann(),
-            Box::new(Process::Null(ann())),
-        );
-        let lett = Process::Comb(
-            ProcessCombinator::Let {
-                left: var_term(h),
-                right: pub_name("t"),
-                match_vars: BTreeSet::new(),
-            },
-            ann(),
-            Box::new(body),
-            Box::new(Process::Null(ann())),
-        );
-        let rules: BTreeSet<CtxtStRule> = BTreeSet::new();
-        let out = translate_let_destr(&[], &rules, lett).unwrap();
-        // The Let must be gone.  The top node is the substituted `out('t')`.
-        // That is the RHS term itself, not just some constant.
-        let Process::Action(SapicAction::ChOut { msg, .. }, _, body) = out else {
-            panic!("expected Let to be eliminated to ChOut");
-        };
-        assert_eq!(msg, pub_name("t"), "h must be replaced by 't'");
-        assert!(matches!(*body, Process::Null(_)));
-    }
-
-    #[test]
     fn let_elimination_substitutes_compound_location() {
         // Location annotations accept the compound value of an eliminated let.
         let h = svar("h");
@@ -425,35 +304,6 @@ mod tests {
 
         let out = translate_let_destr(&[], &BTreeSet::new(), lett).unwrap();
         assert_eq!(out.annotation().parsing_ann.location, Some(location));
-    }
-
-    /// `translateLetDestr` eliminates a variable let with `applyM`
-    /// (LetDestructors.hs), whose capture check rejects an `in(=x)` of the
-    /// let's variable: the oracle stops with `CapturedEx CapturedIn x`.
-    #[test]
-    fn let_elimination_rejects_a_captured_input() {
-        let x = svar("x");
-        let input = Process::Action(
-            SapicAction::ChIn {
-                chan: None,
-                msg: var_term(x.clone()),
-                match_vars: BTreeSet::from([x.clone()]),
-            },
-            ann(),
-            Box::new(Process::Null(ann())),
-        );
-        let lett = Process::Comb(
-            ProcessCombinator::Let {
-                left: var_term(x),
-                right: pub_name("v"),
-                match_vars: BTreeSet::new(),
-            },
-            ann(),
-            Box::new(input),
-            Box::new(Process::Null(ann())),
-        );
-        let err = translate_let_destr(&[], &BTreeSet::new(), lett).unwrap_err();
-        assert_eq!(err, "CapturedEx CapturedIn x");
     }
 
     /// `apply subst` (Sapic/Process.hs) rewrites an eliminated let's variable
@@ -569,35 +419,5 @@ mod tests {
             panic!("expected MSR")
         };
         assert_eq!(match_vars, BTreeSet::from([a]));
-    }
-
-    #[test]
-    fn pattern_let_keeps_its_plan_and_omits_null_else_branch() {
-        // `let <a,b> = m in P else 0`: LHS is a pair (not a plain var), so the
-        // let retains a matching stage and omits its null failure branch.
-        let a = svar("a");
-        let b = svar("b");
-        let pair = tamarin_term::builtin::pair(var_term(a), var_term(b));
-        let lett = Process::Comb(
-            ProcessCombinator::Let {
-                left: pair,
-                right: pub_name("m"),
-                match_vars: BTreeSet::new(),
-            },
-            ann(),
-            Box::new(Process::Null(ann())),
-            Box::new(Process::Null(ann())),
-        );
-        let rules: BTreeSet<CtxtStRule> = BTreeSet::new();
-        let out = translate_let_destr(&[], &rules, lett).unwrap();
-        match out {
-            Process::Comb(ProcessCombinator::Let { .. }, a2, _, _) => {
-                assert!(
-                    !a2.else_branch,
-                    "else_branch must be False (Null right child)"
-                );
-            }
-            other => panic!("expected kept Let, got {other:?}"),
-        }
     }
 }

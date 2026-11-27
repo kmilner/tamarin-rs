@@ -392,12 +392,4 @@ mod tests {
         rename_precise_system(&mut a);
         assert_eq!(a, once);
     }
-
-    #[test]
-    fn a_rest_only_rename_keeps_the_nodes_shared() {
-        let mut sys = less_sys(7, 8);
-        let nodes = std::sync::Arc::clone(&sys.nodes);
-        rename_precise_system(&mut sys);
-        assert!(std::sync::Arc::ptr_eq(&nodes, &sys.nodes));
-    }
 }

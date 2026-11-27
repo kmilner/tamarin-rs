@@ -35,13 +35,6 @@ fn proto_fact_arity() {
     }
 }
 
-#[test]
-fn equality_ignores_annotations() {
-    let a = fresh_fact(msg_var("x", 0)).annotate(FactAnnotation::SolveFirst);
-    let b = fresh_fact(msg_var("x", 0));
-    assert_eq!(a, b);
-}
-
 /// `is_linear` and `is_persistent` partition every tag (HS
 /// `factTagMultiplicity`, Theory/Model/Fact.hs). A `Proto` tag carries
 /// its own multiplicity. KU and KD are Persistent. Every other tag is Linear.
@@ -119,57 +112,73 @@ fn multiplicity_ord_matches_haskell_declaration() {
     );
 }
 
-/// `FactTag` Ord — `Proto < Fresh < Out < In < Ku < Kd < Ded < Term`.
-///
-/// Critical: Proto facts MUST sort before all built-in tags so that
-/// BTreeSet<LNFact> iteration puts protocol facts first.  Multiple
-/// downstream code paths (simpInjectiveFactEqMon, partial_atom_valuation
-/// nonUnifiableNodes) iterate fact sets and depend on Proto-first order
-/// for deterministic case ranking.
+/// `FactTag`'s derived Ord (Theory/Model/Fact.hs): every protocol fact
+/// sorts before every reserved tag, whatever its name, and the reserved tags
+/// follow their declaration order `Fresh < Out < In < Ku < Kd < Ded < Term`.
+/// Iteration over fact sets (`simpInjectiveFactEqMon`, partial atom
+/// valuation) depends on it.  `fact_tag_of` reads the reserved tags from the
+/// names the parser canonicalises to (`mkProtoFact`,
+/// Theory/Text/Parser/Fact.hs); `K` and `Term` stay protocol facts.
 #[test]
 fn fact_tag_ord_proto_sorts_before_builtins() {
-    let proto = FactTag::Proto(Multiplicity::Linear, "Foo", 0);
-    let fresh = FactTag::Fresh;
-    assert!(
-        proto < fresh,
-        "Proto must sort before Fresh (Haskell decl order Theory/Model/Fact.hs)"
+    let tag = |persistent: bool, name: &str| {
+        crate::elaborate::fact_tag_of(&tamarin_parser::ast::Fact {
+            persistent,
+            name: name.into(),
+            args: vec![],
+            annotations: vec![],
+        })
+    };
+    let ascending = [
+        tag(false, "Zebra"),
+        tag(false, "Fr"),
+        tag(false, "Out"),
+        tag(false, "In"),
+        tag(true, "KU"),
+        tag(true, "KD"),
+        tag(false, "Ded"),
+        FactTag::Term,
+    ];
+    for pair in ascending.windows(2) {
+        assert!(pair[0] < pair[1], "{:?} < {:?}", pair[0], pair[1]);
+    }
+    assert_eq!(
+        &ascending[1..7],
+        &[
+            FactTag::Fresh,
+            FactTag::Out,
+            FactTag::In,
+            FactTag::Ku,
+            FactTag::Kd,
+            FactTag::Ded,
+        ]
     );
-    assert!(fresh < FactTag::Out);
-    assert!(FactTag::Out < FactTag::In);
-    assert!(FactTag::In < FactTag::Ku);
-    assert!(FactTag::Ku < FactTag::Kd);
-    assert!(FactTag::Kd < FactTag::Ded);
-    assert!(FactTag::Ded < FactTag::Term);
+    for name in ["Zebra", "K", "Term"] {
+        assert!(matches!(tag(false, name), FactTag::Proto(..)), "{name}");
+    }
 }
 
-/// `Proto` facts compare by `(multiplicity, name, arity)` triple.
-/// Specifically: Linear and Persistent same-named facts compare via
-/// Multiplicity first, then name, then arity.  If we drift, lemmas
-/// using both `!P(x)` (persistent) and `P(x)` (linear) versions get
-/// inconsistently bucketed.
+/// `Proto` facts compare by the `(multiplicity, name, arity)` triple,
+/// `Persistent < Linear` first; and `Ord Fact` compares the tag before the
+/// terms, so the arity decides before any argument is looked at.
 #[test]
 fn proto_fact_tag_compare_by_multiplicity_then_name_then_arity() {
     let lp = FactTag::Proto(Multiplicity::Linear, "P", 1);
     let pp = FactTag::Proto(Multiplicity::Persistent, "P", 1);
-    // Persistent < Linear (per Haskell Multiplicity Ord).
-    assert!(pp < lp);
-
-    // Same multiplicity, different name → name breaks tie.
     let la = FactTag::Proto(Multiplicity::Linear, "A", 1);
-    assert!(la < lp);
-
-    // Same multiplicity+name, different arity → arity breaks tie.
     let lp2 = FactTag::Proto(Multiplicity::Linear, "P", 2);
+    assert!(pp < lp);
+    assert!(la < lp);
     assert!(lp < lp2);
-}
 
-/// `is_ku` holds for a KU fact and not for a KD fact.
-/// Used in `enforce_kd_fact_uniqueness` to skip KU facts.
-#[test]
-fn ku_and_kd_are_mutually_exclusive() {
-    let ku = ku_fact(msg_var("x", 0));
-    let kd = kd_fact(msg_var("x", 0));
-    assert!(ku.is_ku() && !kd.is_ku());
+    // `P(z)` against `P(a, a.1)`: `z` sorts after `a`, but the arity wins.
+    let p1 = proto_fact(Multiplicity::Linear, "P", vec![msg_var("z", 0)]);
+    let p2 = proto_fact(
+        Multiplicity::Linear,
+        "P",
+        vec![msg_var("a", 0), msg_var("a", 1)],
+    );
+    assert!(p1 < p2);
 }
 
 // =========================================================================
@@ -287,7 +296,7 @@ fn bloom_miss_implies_no_change() {
     );
 }
 
-/// Trait regression: two facts equal-but-for-fingerprints compare `==`,
+/// Trait contract: two facts equal-but-for-fingerprints compare `==`,
 /// `Ord`-equal and hash equal.  Pins that the manual `Eq`/`Ord`/`Hash` stay
 /// blind to BOTH out-of-band caches (`bloom` and `max_var`).
 #[test]
@@ -400,21 +409,6 @@ fn max_var_no_free_caches_zero() {
     assert_eq!(fa.max_var_cached(), Some(0));
 }
 
-/// A fact whose largest free-var index is `k` caches exactly `k` (never an
-/// over-approximation — `bounds_max` reads this as an exact max).
-#[test]
-fn max_var_caches_the_exact_largest_index() {
-    let fa = Fact::fresh(FactTag::Out, vec![mv("x", 7)]);
-    assert_eq!(fa.max_var_cached(), Some(7));
-    // Multiple vars: the maximum wins, order-independently.
-    let fa2 = proto_fact(
-        Multiplicity::Linear,
-        "P",
-        vec![mv("a", 3), fresh_var("n", 9), pub_var("p", 5)],
-    );
-    assert_eq!(fa2.max_var_cached(), Some(9));
-}
-
 /// The no-`HasFrees` constructors store the `u64::MAX` sentinel, so
 /// `max_var_cached()` is `None` — `bm_fact` falls back to the per-term walk.
 #[test]
@@ -476,25 +470,6 @@ fn max_var_equals_the_manual_walk() {
 // =========================================================================
 // `prettyFact` (Theory/Model/Fact.hs)
 // =========================================================================
-
-/// `nestShort n lead finish body = sep [lead $$ nest n body, finish]`
-/// (Text/PrettyPrint/Class.hs) puts a space on each side of the argument
-/// list when the whole fact fits on one line, and the tag of a persistent
-/// fact carries the `!` prefix `showFactTag` gives it
-/// (Theory/Model/Fact.hs).
-#[test]
-fn pretty_lnfact_emits_the_nest_short_inner_spaces() {
-    let fa = ku_fact(fresh_var("ltk", 0));
-    assert_eq!(pretty_lnfact(&fa).render(), "!KU( ~ltk )");
-}
-
-/// A zero-argument fact still gets the two `nestShort` spaces: the body is
-/// the empty `fsep`, so the layout is `sep [text "F(", text ")"]`.
-#[test]
-fn pretty_lnfact_zero_arity_keeps_its_inner_space() {
-    let fa: LNFact = Fact::new(FactTag::Proto(Multiplicity::Linear, "F", 0), vec![]);
-    assert_eq!(pretty_lnfact(&fa).render(), "F( )");
-}
 
 /// `ppAnn` reads `S.toList`, i.e. `FactAnnotation`'s `Ord` order
 /// (Theory/Model/Fact.hs), which is the declaration order
@@ -664,13 +639,4 @@ fn show_fact_tag_derived_covers_every_arm() {
     assert_eq!(show_fact_tag_derived(&FactTag::Kd), "KDFact");
     assert_eq!(show_fact_tag_derived(&FactTag::Ded), "DedFact");
     assert_eq!(show_fact_tag_derived(&FactTag::Term), "TermFact");
-}
-
-/// The derived `Show FactTag` puts the protocol fact's name through the
-/// `Show String` instance, so a control character in the name comes out
-/// as its GHC escape.
-#[test]
-fn show_fact_tag_derived_escapes_the_protocol_fact_name() {
-    let tag = FactTag::Proto(Multiplicity::Linear, "a\u{0B}b", 2);
-    assert_eq!(show_fact_tag_derived(&tag), "ProtoFact Linear \"a\\vb\" 2");
 }

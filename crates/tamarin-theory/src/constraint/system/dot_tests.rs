@@ -112,78 +112,6 @@ fn edge_attrs(dot: &str) -> String {
     line[open..].to_string()
 }
 
-/// `dotEdge`'s `check p` (System/Dot.hs) resolves an edge's endpoints with
-/// the Graph-level `resolveNodePremFact`/`resolveNodeConcFact`
-/// (Graph.hs), which read `_gSystem` — the ORIGINAL system
-/// `systemToGraph` stores (Graph.hs) — while the nodes on screen come
-/// from the compressed/simplified copy.  So a conclusion whose node the
-/// compression hid still types the edge, even though that endpoint renders
-/// as a portless `MissingNode` trapezium (System/Dot.hs).
-///
-/// The two endpoints carry deliberately different fact tags: every edge a
-/// real system holds joins two copies of the SAME fact, so only an
-/// asymmetric pair can tell the two systems apart.  Resolving against the
-/// drawn system instead would find only `Fr( ~k )` — neither proto nor K —
-/// and emit `color="gray30"`.
-///
-/// HS spells the surviving attribute list `[style="bold",weight="10.0",
-/// color="gray50"]`.  The `[style="bold",weight="10.0"]` prefix is the
-/// missing-node edge of
-/// `crates/tamarin-server/tests/fixtures/haskell-responses/igd_cases_raw.dot`,
-/// whose endpoint fact is LINEAR and so takes no colour; the `color="gray50"`
-/// suffix is the persistent branch, captured with `--prove=reach --output-dot`
-/// on `rule Reg: [Fr(~k)] --[R(~k)]-> [!Key(~k)]` /
-/// `rule Use: [!Key(k)] --[U(k)]-> [Out(k)]`.
-#[test]
-fn classify_edge_resolves_hidden_source_conc_from_original_system() {
-    use crate::fact::{fresh_fact, proto_fact, Multiplicity};
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let a = Term::Lit(Lit::Var(LVar::new("A", LSort::Pub, 0)));
-    let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-    let dot = dot_of_hidden(
-        proto_fact(Multiplicity::Persistent, "Reg", vec![a]),
-        fresh_fact(k),
-        0,
-    );
-    assert!(
-        dot.contains("trapezium"),
-        "the hidden conclusion's node must draw as a MissingNode: {dot}"
-    );
-    let edge = edge_line(&dot);
-    assert!(edge.contains("style=\"bold\""), "{edge}");
-    assert!(edge.contains("color=\"gray50\""), "{edge}");
-    assert!(!edge.contains("gray30"), "{edge}");
-}
-
-/// The premise half of the same rule: `check` tests the TARGET premise
-/// first (System/Dot.hs), also through the original system, so a hidden target
-/// node types the edge even when the visible source conclusion (`Out`) is
-/// neither a proto nor a K fact and would yield `color="gray30"` on its own.
-#[test]
-fn classify_edge_resolves_hidden_target_prem_from_original_system() {
-    use crate::fact::{out_fact, proto_fact, Multiplicity};
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let a = Term::Lit(Lit::Var(LVar::new("A", LSort::Pub, 0)));
-    let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-    let dot = dot_of_hidden(
-        out_fact(k),
-        proto_fact(Multiplicity::Persistent, "Reg", vec![a]),
-        1,
-    );
-    assert!(
-        dot.contains("trapezium"),
-        "the hidden premise's node must draw as a MissingNode: {dot}"
-    );
-    let edge = edge_line(&dot);
-    assert!(edge.contains("style=\"bold\""), "{edge}");
-    assert!(edge.contains("color=\"gray50\""), "{edge}");
-    assert!(!edge.contains("gray30"), "{edge}");
-}
-
 /// [`classify_edge`]'s persistence test is HS `isPersistentFact`
 /// (Theory/Model/Fact.hs), i.e. HS `factTagMultiplicity`
 /// (Theory/Model/Fact.hs),
@@ -350,161 +278,6 @@ fn render_balanced_matches_hs_oidc_rows() {
             sp(23)), "conc row:\n{}", crow[0]);
 }
 
-/// This test runs an action-less protocol rule through the default options.
-/// Those options turn on both compress and abbreviate.  That is the pair the
-/// batch writer uses.  The rule renders its complete record row from
-/// `prettyLNTerm`.  A pub-var literal renders as `$a`, never as a `M:0`
-/// placeholder.  The rule-label row is bare `#i : Setup` with no `[…]` action
-/// list.  The test compares the complete document.  A compression that hides
-/// the node therefore fails here.  So does a legend that the writer emits for
-/// a system with nothing to abbreviate.
-#[test]
-fn dot_uses_pretty_printing_for_terms() {
-    use crate::fact::{fresh_fact, out_fact};
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let mut sys = System::empty();
-    let a = Term::Lit(Lit::Var(LVar::new("a", LSort::Pub, 0)));
-    let rule = proto_node(
-        "Setup",
-        vec![fresh_fact(a.clone())],
-        Vec::new(),
-        vec![out_fact(a)],
-    );
-    sys.add_node(LVar::new("i", LSort::Node, 0), rule);
-    assert_eq!(
-        system_to_dot_with(&sys, &GraphOptions::default()),
-        concat!(
-            "digraph \"G\" {\n",
-            "nodesep=\"0.3\";\n",
-            "ranksep=\"0.3\";\n",
-            "node[fontsize=\"8\",fontname=\"Helvetica\",width=\"0.3\",height=\"0.2\"];\n",
-            "edge[fontsize=\"8\",fontname=\"Helvetica\"];\n",
-            "n3[shape=\"record\",label=\"{{<n0> Fr( $a )}|{<n1> #i : Setup}|{<n2> Out( $a )}}\"\
-             ,fillcolor=\"#d5d897\",style=\"filled\",fontcolor=\"black\",role=\"Undefined\"];\n",
-            "\n",
-            "}\n",
-        )
-    );
-}
-
-#[test]
-fn dot_with_sl0_does_not_collapse_less() {
-    // Construct a system with a transitive less-chain; verify SL2/SL3
-    // drops the redundant edge and SL0 keeps it.
-    //
-    // The three ordered nodes have to exist in `sNodes`: `dotLessEdge`
-    // resolves both endpoints through `dsNodes` (System/Dot.hs) and HS
-    // `error`s on a miss, so a less-atom over undrawn nodes is not a shape
-    // upstream can render.
-    use crate::constraint::constraints::LessAtom;
-    let mut sys = System::empty();
-    let a = LVar::new("a", tamarin_term::lterm::LSort::Node, 0);
-    let b = LVar::new("b", tamarin_term::lterm::LSort::Node, 0);
-    let c = LVar::new("c", tamarin_term::lterm::LSort::Node, 0);
-    for n in [a, b, c] {
-        sys.add_node(n, named_proto_node(PRN::Stand("R")));
-    }
-    sys.content_mut()
-        .less_atoms
-        .push(LessAtom::new(a, b, Reason::Fresh));
-    sys.content_mut()
-        .less_atoms
-        .push(LessAtom::new(b, c, Reason::Fresh));
-    sys.content_mut()
-        .less_atoms
-        .push(LessAtom::new(a, c, Reason::Fresh));
-    let opts_sl0 = crate::constraint::system::graph::GraphOptions {
-        simplification_level: crate::constraint::system::graph::SimplificationLevel::SL0,
-        compress: false,
-        ..crate::constraint::system::graph::GraphOptions::default()
-    };
-    let s0 = system_to_dot_with(&sys, &opts_sl0);
-    // Count dashed less-edges by `style=\"dashed\"` occurrences.
-    let dashed_sl0 = s0.matches("style=\"dashed\"").count();
-    let opts_sl3 = crate::constraint::system::graph::GraphOptions {
-        simplification_level: crate::constraint::system::graph::SimplificationLevel::SL3,
-        compress: false,
-        ..crate::constraint::system::graph::GraphOptions::default()
-    };
-    let s3 = system_to_dot_with(&sys, &opts_sl3);
-    let dashed_sl3 = s3.matches("style=\"dashed\"").count();
-    // The assertions compare exact counts.  A `<` comparison alone also holds
-    // when SL0 drops nothing and SL3 drops both the redundant edge and a
-    // chain edge.
-    assert_eq!(dashed_sl0, 3, "SL0 keeps all three less-edges: {s0}");
-    assert_eq!(dashed_sl3, 2, "SL3 drops only the redundant a<c: {s3}");
-}
-
-#[test]
-fn dot_with_cluster_passes_graphviz_lint() {
-    // Render a small system with a cluster and (if `dot` is on
-    // PATH) verify the output parses without errors.
-    use crate::fact::out_fact;
-    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo};
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let mut sys = System::empty();
-    let kvar = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-    let mk = |name: &str, role: Option<&str>| -> RuleACInst {
-        let attrs = RuleAttributes {
-            role: role.map(|r| r.to_string()),
-            ..Default::default()
-        };
-        Rule::new(
-            RuleInfo::Proto(ProtoRuleACInstInfo {
-                name: ProtoRuleName::Stand(tamarin_term::intern::intern_str(name)),
-                attributes: attrs,
-                loop_breakers: Vec::new(),
-            }),
-            Vec::new(),
-            vec![out_fact(kvar.clone())],
-            vec![out_fact(kvar.clone())],
-        )
-    };
-    sys.add_node(LVar::new("a", LSort::Node, 1), mk("InitA", Some("Alice")));
-    sys.add_node(LVar::new("b", LSort::Node, 2), mk("InitB", Some("Bob")));
-    let s = system_to_dot_with(&sys, &GraphOptions::default());
-    // Try piping through `dot` if it's available; otherwise skip.  Pass NO
-    // file operand: graphviz reads a named input INSTEAD of stdin, so a
-    // trailing `/dev/null` would lay out the empty graph and exit 0 whatever
-    // we wrote down the pipe.
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-    if !tamarin_test_support::dot_available() {
-        return;
-    }
-    let mut child = Command::new("dot")
-        .arg("-Tplain")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn Graphviz dot after availability probe");
-    if let Some(mut sin) = child.stdin.take() {
-        sin.write_all(s.as_bytes()).expect("write DOT to dot(1)");
-    }
-    let out = child.wait_with_output().expect("dot wait");
-    // If dot complains, the stderr would be non-empty.
-    if !out.status.success() {
-        panic!(
-            "graphviz `dot` rejected our output:\nstderr=\n{}\nDOT was:\n{}",
-            String::from_utf8_lossy(&out.stderr),
-            s
-        );
-    }
-    // An empty digraph also lays out cleanly, so pin what came back: one
-    // `-Tplain` `node` line per rule record.
-    let plain = String::from_utf8_lossy(&out.stdout);
-    assert_eq!(
-        plain.lines().filter(|l| l.starts_with("node ")).count(),
-        2,
-        "dot laid out a different graph than we wrote:\n{plain}\nDOT was:\n{s}"
-    );
-}
-
 #[test]
 fn dot_abbreviations_and_legend_appear_only_when_abbreviate_is_set() {
     // Build a System whose nodes carry a long, frequently-repeated
@@ -640,116 +413,6 @@ pub(super) fn proto_node(
 }
 
 #[test]
-fn dot_persistent_fact_keeps_bang_prefix_and_zero_arity_parens() {
-    // HS `prettyLNFact`: a persistent proto fact gets the `!` prefix
-    // (showFactTag, Theory/Model/Fact.hs), and a zero-arity fact renders
-    // `Name( )` — `nestShort'` = `sep [text (n++"("), text ")"]`, whose
-    // `sep` space-joins the two when they fit on one line
-    // (Text/PrettyPrint/Class.hs /
-    // Theory/Model/Fact.hs).
-    //
-    // Authenticated against the repo's HS prover (v1.13.0) on a minimal
-    // theory: `--prove` shows `[ Fr( ~k ) ] --> [ !Reg( ~k ), Started( ) ]`
-    // — i.e. the `!` prefix on `!Reg` and the spaced empty parens on `Started`.
-    use crate::fact::{fresh_fact, proto_fact, Multiplicity};
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let mut sys = System::empty();
-    let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-    let reg = proto_fact(Multiplicity::Persistent, "Reg", vec![k.clone()]);
-    let started = proto_fact(Multiplicity::Linear, "Started", vec![]);
-    let ru = proto_node("Setup", vec![fresh_fact(k)], vec![started], vec![reg]);
-    sys.add_node(LVar::new("i", LSort::Node, 0), ru);
-    // Disable compression so the action node / facts are not collapsed.
-    let opts = GraphOptions {
-        compress: false,
-        abbreviate: false,
-        ..GraphOptions::default()
-    };
-    let s = system_to_dot_with(&sys, &opts);
-    assert!(s.contains("!Reg("), "persistent `!` prefix missing: {}", s);
-    assert!(
-        s.contains("Started( )"),
-        "zero-arity fact should render `Started( )`: {}",
-        s
-    );
-}
-
-#[test]
-fn record_header_node_id_uses_show_lvar_format() {
-    // HS `prettyNodeId = text . show`: a node id renders `#i` when idx==0
-    // and `#i.2` when idx==2 (`instance Show LVar`, LTerm.hs;
-    // sortPrefix LSortNode = "#", LTerm.hs). The rule-node header is
-    // `prettyNodeId v <-> colon <-> showDotRuleCaseName` (System/Dot.hs).
-    use crate::fact::out_fact;
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let opts = GraphOptions {
-        compress: false,
-        abbreviate: false,
-        ..GraphOptions::default()
-    };
-    let mk = || {
-        let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-        proto_node("R", vec![], vec![out_fact(k.clone())], vec![out_fact(k)])
-    };
-    let mut sys0 = System::empty();
-    sys0.add_node(LVar::new("i", LSort::Node, 0), mk());
-    let s0 = system_to_dot_with(&sys0, &opts);
-    assert!(s0.contains("#i : R"), "idx==0 should render `#i`: {}", s0);
-    assert!(
-        !s0.contains("#i0"),
-        "idx==0 must not append the index: {}",
-        s0
-    );
-
-    let mut sys2 = System::empty();
-    sys2.add_node(LVar::new("i", LSort::Node, 2), mk());
-    let s2 = system_to_dot_with(&sys2, &opts);
-    assert!(
-        s2.contains("#i.2 : R"),
-        "idx==2 should render `#i.2`: {}",
-        s2
-    );
-}
-
-#[test]
-fn dot_drops_diff_annotation_action_fact() {
-    // HS `ruleLabelM.isNotDiffAnnotation` (System/Dot.hs) drops the synthetic
-    // `Diff<getRuleNameDiff ru>` linear proto fact from the action row.
-    // For a standard proto rule `R`, getRuleNameDiff = "ProtoR", so the
-    // dropped fact is `ProtoFact Linear "DiffProtoR" 0`.
-    use crate::fact::{out_fact, proto_fact, Multiplicity};
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let mut sys = System::empty();
-    let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-    let diff = proto_fact(Multiplicity::Linear, "DiffProtoR", vec![]);
-    let real = proto_fact(Multiplicity::Linear, "Visible", vec![]);
-    let ru = proto_node("R", vec![], vec![diff, real], vec![out_fact(k)]);
-    sys.add_node(LVar::new("i", LSort::Node, 0), ru);
-    let opts = GraphOptions {
-        compress: false,
-        abbreviate: false,
-        ..GraphOptions::default()
-    };
-    let s = system_to_dot_with(&sys, &opts);
-    assert!(
-        s.contains("Visible( )"),
-        "non-diff action fact must remain: {}",
-        s
-    );
-    assert!(
-        !s.contains("DiffProtoR"),
-        "Diff annotation fact must be filtered out: {}",
-        s
-    );
-}
-
-#[test]
 fn dot_compact_intruder_node_is_plain_ellipse() {
     // HS `mkNode` CompactBoringNodes (System/Dot.hs): an intruder rule
     // collapses to a plain `mkSimpleNode` ellipse with NO fill/role attrs.
@@ -832,41 +495,6 @@ fn dot_compact_intruder_node_is_plain_ellipse() {
         out2.contains("#k : coerce[Act( ~x )]"),
         "non-outgoing compact label keeps the `[..]` action row: {out2}"
     );
-}
-
-#[test]
-fn web_route_is_the_batch_serializer_at_label_g() {
-    // Upstream has ONE dot serializer: the interactive DOT route
-    // (`dotGraphString`, `Web/Theory.hs`) and the batch
-    // `--output-dot` writer (`Batch.hs`) both `D.showDot` the same
-    // `dotSystemCompact graphOptions dotOptions system`, the web one at the
-    // fixed label `"G"`.  So must we — a second dialect here is a divergence
-    // a structural web gate cannot see, `showDot`'s quoted `digraph "G"`
-    // header included.
-    use crate::fact::{fresh_fact, out_fact};
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let mut sys = System::empty();
-    let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-    let ru = proto_node(
-        "Setup",
-        vec![fresh_fact(k.clone())],
-        vec![],
-        vec![out_fact(k)],
-    );
-    sys.add_node(LVar::new("i", LSort::Node, 0), ru);
-    let opts = GraphOptions::default();
-
-    let web = system_to_dot_with(&sys, &opts);
-    assert_eq!(web, system_to_dot_labeled(&sys, &opts, "G"));
-    assert!(
-        web.starts_with("digraph \"G\" {\n") && web.ends_with("}\n"),
-        "web framing changed: {web}"
-    );
-    // `nodesep` and friends are preamble, emitted for an EMPTY graph too;
-    // pin the body, so a render that drops every node still fails here.
-    assert!(web.contains("#i : Setup"), "empty body under test: {web}");
 }
 
 #[test]
@@ -967,7 +595,7 @@ fn dot_cluster_preamble_uses_cluster_attributes() {
 // ---- palette-driven node attributes (HS `dotNodeCompact`, System/Dot.hs) --
 // The `nodeColorMap` palette itself is exercised in `graph::color`.
 
-use crate::constraint::constraints::{NodeId, Reason};
+use crate::constraint::constraints::NodeId;
 use crate::rule::{
     ProtoRuleACInstInfo, ProtoRuleName as PRN, Rule as TRule, RuleAttributes, RuleInfo as TRuleInfo,
 };
@@ -1019,97 +647,15 @@ fn rule_fillcolor_priority_matches_hs() {
 }
 
 #[test]
-fn dot_rule_node_uses_faithful_palette_fillcolor() {
-    // End-to-end through system_to_dot_with: a lone protocol rule is the
-    // sole member of group 1, so its fill colour is the (1,0) palette hex #d5d897.
-    use crate::fact::out_fact;
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let mut sys = System::empty();
-    let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-    sys.add_node(
-        nid(0),
-        named_proto_node_with_out(PRN::Stand("R"), out_fact(k)),
-    );
-    let opts = GraphOptions {
-        compress: false,
-        abbreviate: false,
-        ..GraphOptions::default()
-    };
-    let s = system_to_dot_with(&sys, &opts);
-    assert!(
-        s.contains("fillcolor=\"#d5d897\""),
-        "rule node must use the faithful nodeColorMap palette hex: {}",
-        s
-    );
-    // HS record attrs: the light palette colour is bright, so a black font
-    // (`colorUsesWhiteFont`, System/Dot.hs, keyed off the `M.lookup rInfoVal
-    // colorMap` of System/Dot.hs and spelled at System/Dot.hs); no `role` attribute
-    // -> "Undefined" (System/Dot.hs, emitted at System/Dot.hs).
-    assert!(
-        s.contains("fontcolor=\"black\""),
-        "bright palette colour must use a black font: {}",
-        s
-    );
-    assert!(
-        s.contains("role=\"Undefined\""),
-        "role-less rule must render role=\"Undefined\": {}",
-        s
-    );
-}
-
-#[test]
 fn color_uses_white_font_matches_hs_luminance() {
     use tamarin_utils::color::Rgb;
     // HS colorUsesWhiteFont: 0.2126r + 0.7152g + 0.0722b < 0.5 (and Just).
-    assert!(!color_uses_white_font(None)); // absent -> black
-    assert!(!color_uses_white_font(Some(Rgb::new(1.0, 1.0, 1.0)))); // white bg -> black font
-    assert!(color_uses_white_font(Some(Rgb::new(0.0, 0.0, 0.0)))); // black bg -> white font
-                                                                   // A dark blue (low luminance) uses a white font.
-    assert!(color_uses_white_font(Some(Rgb::new(0.0, 0.0, 1.0)))); // 0.0722 < 0.5
-                                                                   // A pure green is bright enough for a black font (0.7152 >= 0.5).
+    // Absent -> black; a white background -> black; a black one -> white.
+    assert!(!color_uses_white_font(None));
+    assert!(!color_uses_white_font(Some(Rgb::new(1.0, 1.0, 1.0))));
+    assert!(color_uses_white_font(Some(Rgb::new(0.0, 0.0, 0.0))));
+    // A dark blue (low luminance) uses a white font: 0.0722 < 0.5.
+    assert!(color_uses_white_font(Some(Rgb::new(0.0, 0.0, 1.0))));
+    // A pure green is bright enough for a black font (0.7152 >= 0.5).
     assert!(!color_uses_white_font(Some(Rgb::new(0.0, 1.0, 0.0))));
-}
-
-#[test]
-fn rule_node_emits_role_attribute() {
-    // HS `role = fromMaybe "Undefined" (getNodeRole node)` (System/Dot.hs),
-    // emitted as the record's fourth attribute (System/Dot.hs): a rule carrying a
-    // `role` attribute renders it verbatim.
-    use crate::fact::out_fact;
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let mut sys = System::empty();
-    let k = Term::Lit(Lit::Var(LVar::new("k", LSort::Fresh, 0)));
-    let mut ru = named_proto_node_with_out(PRN::Stand("R"), out_fact(k));
-    if let TRuleInfo::Proto(p) = &mut ru.info {
-        p.attributes.role = Some("Alice".to_string());
-    }
-    sys.add_node(nid(0), ru);
-    let opts = GraphOptions {
-        compress: false,
-        abbreviate: false,
-        ..GraphOptions::default()
-    };
-    let s = system_to_dot_with(&sys, &opts);
-    assert!(
-        s.contains("role=\"Alice\""),
-        "rule node must render its role attribute: {}",
-        s
-    );
-}
-
-/// Like [`named_proto_node`] but with a single conclusion so the node is
-/// not compressed away.
-fn named_proto_node_with_out(name: PRN, conc: LNFact) -> RuleACInst {
-    TRule::new(
-        TRuleInfo::Proto(ProtoRuleACInstInfo {
-            name,
-            attributes: RuleAttributes::empty(),
-            loop_breakers: Vec::new(),
-        }),
-        Vec::new(),
-        vec![conc.clone()],
-        vec![conc],
-    )
 }

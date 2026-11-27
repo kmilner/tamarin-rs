@@ -141,7 +141,7 @@ fn uses_diff_operator(src: &str) -> bool {
 /// contain a `diff(...)` term, so the manifest is the other evidence of the
 /// intended mode; a manifest that also runs the file without `--diff` marks a
 /// trace theory.
-fn manifest_requests_diff(path: &Path) -> bool {
+pub(crate) fn manifest_requests_diff(path: &Path) -> bool {
     let mut manifest = path.as_os_str().to_owned();
     manifest.push(".test.json");
     let Ok(text) = std::fs::read_to_string(manifest) else {
@@ -162,7 +162,7 @@ fn manifest_requests_diff(path: &Path) -> bool {
 /// then in the other. The two modes accept disjoint item sets, as in HS, so a
 /// file that is valid in either mode loads in exactly that mode; a file valid
 /// in neither stays a load skip, which the census ledgers pin.
-fn parse_source(src: &str, base: Option<PathBuf>, diff: bool) -> Option<p::Theory> {
+pub(crate) fn parse_source(src: &str, base: Option<PathBuf>, diff: bool) -> Option<p::Theory> {
     let plain = |base| tamarin_parser::parser::parse_theory_with_base(src, &[], base).ok();
     let diff_mode = |base| tamarin_parser::parser::parse_diff_theory_with_base(src, &[], base).ok();
     if diff || uses_diff_operator(src) {
@@ -198,44 +198,4 @@ pub fn parse_file(path: &Path) -> Option<Arc<p::Theory>> {
                 .flatten()
         })
         .clone()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{corpus_root_or_skip, manifest_requests_diff, parse_file, parse_source};
-
-    #[test]
-    fn corpus_parser_takes_diff_mode_from_the_test_manifest() {
-        let Some(root) = corpus_root_or_skip("manifest diff mode") else {
-            return;
-        };
-        let path = root.join("regression/negative/diff-side-products.spthy");
-        assert!(manifest_requests_diff(&path));
-        assert!(parse_file(&path).expect("diff mode parses it").is_diff);
-
-        // A manifest that also runs the file in trace mode keeps it there.
-        let path = root.join("regression/trace/dh-products-in-exponents.spthy");
-        assert!(!manifest_requests_diff(&path));
-        assert!(!parse_file(&path).expect("trace mode parses it").is_diff);
-    }
-
-    /// Each file loads in the one mode that accepts it, whatever the evidence
-    /// suggested first; a file neither mode accepts does not load.
-    #[test]
-    fn corpus_parser_settles_on_the_mode_that_accepts_the_file() {
-        let rows: &[(&str, Option<bool>)] = &[
-            ("rule R: [ In(x) ] --> [ Out(diff(x, x)) ]", Some(true)),
-            ("restriction r [left]: \"F\"", Some(true)),
-            (
-                "/* diff(x,y) */ // diff (x,y)\nrule diffuse: [ ] --> [ ]",
-                Some(false),
-            ),
-            ("rule R: [ ] -->", None),
-        ];
-        for &(body, is_diff) in rows {
-            let src = format!("theory D begin\n{body}\nend\n");
-            let parsed = parse_source(&src, None, false).map(|t| t.is_diff);
-            assert_eq!(parsed, is_diff, "{body}");
-        }
-    }
 }

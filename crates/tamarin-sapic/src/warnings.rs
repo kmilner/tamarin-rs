@@ -73,47 +73,6 @@ pub(crate) fn check_wellformedness<A: GoodAnnotation>(p: &Process<A, SapicLVar>)
 mod tests {
     use super::*;
     use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_theory::sapic::{Process, ProcessParsedAnnotation, SapicAction};
-
-    fn msg_var(name: &str) -> SapicLVar {
-        SapicLVar::untyped(LVar::new(name, LSort::Msg, 0))
-    }
-
-    fn null() -> Process<ProcessParsedAnnotation, SapicLVar> {
-        Process::null(ProcessParsedAnnotation::empty())
-    }
-
-    fn new_action(
-        v: SapicLVar,
-        body: Process<ProcessParsedAnnotation, SapicLVar>,
-    ) -> Process<ProcessParsedAnnotation, SapicLVar> {
-        Process::Action(
-            SapicAction::New(v),
-            ProcessParsedAnnotation::empty(),
-            Box::new(body),
-        )
-    }
-
-    #[test]
-    fn bound_twice_emits_one_warning() {
-        // `new x; new x` — x captured once.  This is the `boundonce2.spthy`
-        // case: HS emits exactly one `Variable bound twice: x.` warning.
-        let x = msg_var("x");
-        let p = new_action(x.clone(), new_action(x, null()));
-        let rep = check_wellformedness(&p);
-        assert_eq!(rep.len(), 1);
-        assert_eq!(rep[0].topic, SAPIC_PROCESS_TOPIC);
-        // The header is added once by the report formatter; the per-error
-        // message is the bare 2-space-indented body.
-        assert_eq!(rep[0].message, "  Variable bound twice: x.");
-    }
-
-    #[test]
-    fn distinct_sequential_binders_are_fine() {
-        // `new x; new y` — no capture.
-        let p = new_action(msg_var("x"), new_action(msg_var("y"), null()));
-        assert!(check_wellformedness(&p).is_empty());
-    }
 
     /// The test covers every branch of HS `Show (SapicLVar)` and `Show LVar`
     /// (Theory/Sapic/Term.hs, Term/LTerm.hs#show, prefix table

@@ -418,6 +418,21 @@ mod tests {
             Goal::Subterm((t.clone(), t.clone())).cmp(&Goal::Subterm((t.clone(), u))),
             Ordering::Less
         );
+        // `DisjG` compares its formulas structurally, so a leaf variable that
+        // differs only in sort follows `Ord LSort` (Pub < Fresh), not the
+        // sort's name.
+        let last_of = |sort| {
+            let leaf = tamarin_term::vterm::var_term(tamarin_term::lterm::BVar::Free(LVar::new(
+                "x", sort, 0,
+            )));
+            Goal::Disj(Disj::new(vec![crate::guarded::Guarded::Atom(
+                crate::atom::ProtoAtom::Last(leaf),
+            )]))
+        };
+        assert_eq!(
+            last_of(LSort::Pub).cmp(&last_of(LSort::Fresh)),
+            Ordering::Less
+        );
     }
 
     /// The goal-kind predicates used by production code match their own

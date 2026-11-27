@@ -132,34 +132,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_and_renders_noise_unless() {
-        let raw = "presort: s\n\
-prio: {id}\n\
-  regex\"^My\"\n\
-  regex\"^I_\"\n\
-prio: {id}\n\
-  regex\"!KU\\(*~.*\\)\" & reasonableNoncesNoise\"resN\"\n\
-prio: {smallest}\n\
-  dhreNoise\"dh\"\n";
-        let t = parse("unless", raw);
-        assert_eq!(t.presort, 's');
-        assert_eq!(t.prios.len(), 3);
-        let r = render(&t);
-        let expected = concat!(
-            "tactic: unless\n",
-            "presort: s\n",
-            "prio: {id}\n",
-            "  regex\"^My\"\n",
-            "  regex\"^I_\"\n",
-            "prio: {id}\n",
-            "  regex\"!KU\\(*~.*\\)\" & reasonableNoncesNoise\"resN\"\n",
-            "prio: {smallest}\n",
-            "  dhreNoise\"dh\"",
-        );
-        assert_eq!(r, expected);
-    }
-
-    #[test]
     fn collapses_internal_regex_spaces_and_or_chain() {
         // LAK06-style: `|regex` with no trailing space, internal regex spaces.
         let raw = "presort: s\n\

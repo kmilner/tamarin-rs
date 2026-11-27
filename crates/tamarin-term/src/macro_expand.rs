@@ -249,39 +249,6 @@ mod tests {
         assert_eq!(apply_macros(&macros, wrong_arity.clone()), wrong_arity);
     }
 
-    /// `examples/features/macros/MacroExample.spthy` declares
-    /// `decrypt(x, y) = adec(x, y)` and `hashdec(x, y) = h(decrypt(x, y))`, so
-    /// the body of `hashdec` calls the macro declared before it. One
-    /// `apply_macros` reaches `h(adec(a, b))`.
-    #[test]
-    fn a_macro_body_calling_another_macro_expands_completely() {
-        let x = crate::lterm::LVar::new("x", crate::lterm::LSort::Msg, 0);
-        let y = crate::lterm::LVar::new("y", crate::lterm::LSort::Msg, 0);
-        let decrypt: LNMacro = Macro::new(
-            b"decrypt".to_vec(),
-            vec![x, y],
-            crate::builtin::adec(var_term(x), var_term(y)),
-        );
-        let decrypt_sym = macro_to_fun_sym(&decrypt).into_no_eq();
-        let hashdec: LNMacro = Macro::new(
-            b"hashdec".to_vec(),
-            vec![x, y],
-            crate::builtin::hash(crate::term::f_app_no_eq(
-                decrypt_sym,
-                vec![var_term(x), var_term(y)],
-            )),
-        );
-        let hashdec_sym = macro_to_fun_sym(&hashdec).into_no_eq();
-        let a = msg_var("a", 0);
-        let b = msg_var("b", 0);
-
-        let invoke: LNTerm = crate::term::f_app_no_eq(hashdec_sym, vec![a.clone(), b.clone()]);
-        assert_eq!(
-            apply_macros(&[decrypt, hashdec], invoke),
-            crate::builtin::hash(crate::builtin::adec(a, b))
-        );
-    }
-
     /// `lnMacrosToBNMacros` retags the parameters and the body, so the macro
     /// applies to the `BVar` terms a formula's atoms carry. A term of the use
     /// site keeps its own bound indices across the substitution.

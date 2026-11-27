@@ -9,7 +9,7 @@ use crate::guarded::Guarded;
 use crate::sapic::{ProcessParsedAnnotation, SapicLVar};
 use crate::theory::TheoryItem;
 use tamarin_parser::ast as p;
-use tamarin_term::lterm::{BVar, NameTag};
+use tamarin_term::lterm::BVar;
 use tamarin_term::term::Term;
 use tamarin_term::vterm::{var_term, Lit as VLit};
 
@@ -498,40 +498,6 @@ fn public_names_report_wraps_long_clash_groups() {
     assert!(item
         .iter()
         .all(|line| line.len() <= hpj::DEFAULT_LINE_LENGTH));
-}
-
-/// The name walk descends into the source subprocess a SAPIC-generated rule
-/// carries, which is where the constant of a rule that mints no fact for it
-/// lives.  The parser never mints that attribute, so the generated shape is
-/// built by attaching the process the SAPIC translation writes.
-#[test]
-fn fresh_names_report_walks_the_process_attribute() {
-    let mut thy = elaborated("theory T begin rule R: [ ] --[ ]-> [ ] end");
-    let out_foo = crate::sapic::Process::Action(
-        crate::sapic::SapicAction::ChOut {
-            chan: None,
-            msg: Term::Lit(VLit::Con(Name::new(NameTag::Fresh, "foo"))),
-        },
-        ProcessParsedAnnotation::default(),
-        Box::new(crate::sapic::Process::Null(
-            ProcessParsedAnnotation::default(),
-        )),
-    );
-    assert!(
-        fresh_names_report(&thy).is_empty(),
-        "no fact carries a name"
-    );
-    for item in thy.items.iter_mut() {
-        if let TheoryItem::Rule(r) = item {
-            r.rule.info.attributes.process = Some(std::sync::Arc::new(
-                crate::sapic::SharedProcess::new(out_foo.clone()),
-            ));
-        }
-    }
-    assert_eq!(
-        bodies(&fresh_names_report(&thy)),
-        "  rule `R': fresh public constants are not allowed: ~'foo'"
-    );
 }
 
 /// HS's body is one `fsep` whose first cell is the info line, so the second

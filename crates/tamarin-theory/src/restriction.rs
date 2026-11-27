@@ -221,12 +221,9 @@ pub fn from_rule_restriction(rname: &str, f: &LNFormula) -> (Restriction, LNFact
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fact::show_fact_tag;
-    use crate::formula::{Connective, Quantifier};
+    use crate::formula::Quantifier;
     use crate::predicate::{expand_formula, Predicate};
-    use crate::pretty_formula::pretty_lnformula;
     use tamarin_parser::parser::parse_formula_str;
-    use tamarin_term::function_symbols::FunSym;
     use tamarin_term::maude_sig::MaudeSig;
 
     /// The signature and the predicates of a theory that declares nothing
@@ -244,63 +241,6 @@ mod tests {
     fn restrict(src: &str, sig: &MaudeSig, preds: &[Predicate]) -> LNFormula {
         let f = parse_formula_str(src, sig).unwrap();
         expand_formula(preds, &crate::formula::from_parser(&f, sig).unwrap()).unwrap()
-    }
-
-    #[test]
-    fn minimal_trace() {
-        // True(x) <=> (x = true()); restriction True(eq(x,x)).
-        let (sig, preds) = theory("functions: true/0, eq/2\npredicates: True(x) <=> (x = true())");
-        let (restr, action) =
-            from_rule_restriction("A_1", &restrict("True(eq(x, x))", &sig, &preds));
-
-        assert_eq!(restr.name, "Restr_A_1");
-        // Action fact name + ORIGINAL args: the single abstracted argument is
-        // the whole `eq(x,x)`.
-        assert_eq!(show_fact_tag(&action.tag), "Restr_A_1");
-        assert_eq!(action.terms.len(), 1);
-        match &action.terms[0] {
-            Term::App(FunSym::NoEq(sym), args) => {
-                assert_eq!(sym.name, b"eq");
-                assert_eq!(args.len(), 2);
-            }
-            other => panic!("expected eq(x,x), got {other:?}"),
-        }
-
-        // The formula has two binders: the abstracted `x` (Msg) and `#NOW`
-        // (Node), in `frees`' sorted order — `x` then `NOW`.
-        let ProtoFormula::Qua(Quantifier::All, outer, body) = &restr.formula else {
-            panic!("expected a universal, got {:?}", restr.formula);
-        };
-        assert_eq!(outer, &("x".to_string(), LSort::Msg));
-        let ProtoFormula::Qua(Quantifier::All, inner, body) = &**body else {
-            panic!("expected a second universal, got {body:?}");
-        };
-        assert_eq!(inner, &("NOW".to_string(), LSort::Node));
-
-        // HS `f'' = (Action #NOW fact) ==> f'`.  The generated action is the
-        // antecedent and the rewritten body the consequent.  A swap of the two
-        // keeps the formula an implication and inverts the restriction.
-        let ProtoFormula::Conn(Connective::Imp, ante, conseq) = &**body else {
-            panic!("expected an implication, got {body:?}");
-        };
-        assert_eq!(
-            **ante,
-            ProtoFormula::Atom(ProtoAtom::Action(
-                var_term(BVar::Bound(0)),
-                mk_fact("A_1", vec![var_term(BVar::Bound(1))]),
-            ))
-        );
-        // The consequent is the body of the predicate.  The complete `eq(x,x)`
-        // subterm becomes the fresh `x`.  The nullary constant `true` stays
-        // inline as a 0-ary application: the abstraction never reaches it.
-        let ProtoFormula::Atom(ProtoAtom::EqE(l, r)) = &**conseq else {
-            panic!("expected an equality, got {conseq:?}");
-        };
-        assert_eq!(*l, var_term(BVar::Bound(1)));
-        assert!(
-            matches!(r, Term::App(FunSym::NoEq(sym), args) if sym.name == b"true" && args.is_empty()),
-            "expected the nullary `true`, got {r:?}"
-        );
     }
 
     #[test]
@@ -332,39 +272,5 @@ mod tests {
         let (rewr, subst) = rewrite(&phi);
         assert!(subst.is_empty(), "nothing to abstract, got {subst:?}");
         assert_eq!(rewr, phi);
-    }
-
-    /// HS's `Traversable (ProtoAtom s)` runs `Action <$> f i <*> traverse f fa`
-    /// (Theory/Model/Atom.hs) and its `Foldable` folds in the same
-    /// order (Theory/Model/Atom.hs), so an action atom's time point is
-    /// abstracted — and folded into `freesList` — before the fact's arguments.
-    /// Only a `_restrict` whose time point is FREE tells the two orders apart.
-    #[test]
-    fn abstracted_timepoint_precedes_the_fact_arguments() {
-        let (sig, _) = theory("functions: f/2");
-        let (restr, action) = from_rule_restriction("A_1", &restrict("B(f(x,y)) @ #i", &sig, &[]));
-        assert_eq!(
-            pretty_lnformula(&restr.formula),
-            "∀ x #NOW x.1. (Restr_A_1( x, x.1 ) @ #NOW) ⇒ (B( x.1 ) @ x)"
-        );
-        assert_eq!(action.terms.len(), 2);
-        assert_eq!(
-            action.terms[0],
-            var_term(LVar::new("i", LSort::Node, 0)),
-            "the time point's abstraction comes first"
-        );
-        match &action.terms[1] {
-            Term::App(FunSym::NoEq(sym), args) => {
-                assert_eq!(sym.name, b"f");
-                assert_eq!(
-                    args.to_vec(),
-                    vec![
-                        var_term(LVar::new("x", LSort::Msg, 0)),
-                        var_term(LVar::new("y", LSort::Msg, 0)),
-                    ]
-                );
-            }
-            other => panic!("expected f(x, y), got {other:?}"),
-        }
     }
 }

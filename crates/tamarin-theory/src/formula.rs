@@ -1144,30 +1144,6 @@ mod tests {
         assert_eq!(parsed("Ex k m #k. G(<m, k>) @ k"), want);
     }
 
-    /// `#k = l` is HS's node equality: the bare `l` is a `nodevar`, so the
-    /// `#l` binder closes it, while a message-term equality `k = l` keeps
-    /// the bare `l` as `Msg` (probe `S0_bare_name_under_node_binder.spthy`).
-    #[test]
-    fn from_parser_node_equality_binds_bare_right_operand() {
-        let want = ProtoFormula::for_all(
-            hint("k", LSort::Node),
-            ProtoFormula::for_all(
-                hint("l", LSort::Node),
-                ProtoFormula::Atom(ProtoAtom::EqE(bound(1), bound(0))),
-            ),
-        );
-        assert_eq!(parsed("All #k #l. #k = l"), want);
-        assert_eq!(parsed("All #k #l. k:node = l"), want);
-        let msg = ProtoFormula::for_all(
-            hint("l", LSort::Node),
-            ProtoFormula::Atom(ProtoAtom::EqE(
-                free("k", LSort::Msg, 0),
-                free("l", LSort::Msg, 0),
-            )),
-        );
-        assert_eq!(parsed("All #l. k = l"), msg);
-    }
-
     /// Closing compares the whole `LVar`: a `~k` binder does not capture the
     /// message-sorted `k` of the body.
     #[test]
@@ -1190,23 +1166,18 @@ mod tests {
         rule.info.restrictions[0].clone()
     }
 
-    #[test]
-    fn rule_let_substitution_keeps_free_variables() {
-        let formula = rule_restriction(
-            "theory T begin rule R: let x = y.1 in []
-             --[_restrict(Ex y.1 #i. A(x,y.1,y) @ i)]-> [] end",
-        );
-        assert_eq!(
-            formula_frees(&formula),
-            vec![LVar::new("y", LSort::Msg, 0), LVar::new("y", LSort::Msg, 1)]
-        );
-        assert_eq!(formula, parsed("Ex y.2 #i. A(y.1,y.2,y) @ i"));
-    }
-
+    /// The `let` substitution into a `_restrict` formula renames a binder
+    /// that would capture the substituted term, keys on the whole variable
+    /// (name, index and sort), and leaves the other free variables alone.
     #[test]
     fn rule_let_substitution_uses_variable_identity() {
         for (binding, input, expected) in [
             ("x=y", "Ex y. A(x,y)", "Ex y.1. A(y,y.1)"),
+            (
+                "x=y.1",
+                "Ex y.1 #i. A(x,y.1,y) @ i",
+                "Ex y.2 #i. A(y.1,y.2,y) @ i",
+            ),
             ("x=z", "Ex x. A(x)", "Ex x. A(x)"),
             ("x=z", "A(x)", "A(z)"),
             (

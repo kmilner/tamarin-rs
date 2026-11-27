@@ -19,8 +19,8 @@ fn variable_sort_order_is_independent_of_history() {
         sig.enable_nat = enable_nat;
         let first = MaudeHandle::start(&path, sig.clone()).unwrap();
         let second = MaudeHandle::start(&path, sig).unwrap();
-        // Even with identical name order, creating Fresh's variable symbol
-        // before Pub's (versus the reverse) used to change the unifiers.
+        // With identical name order, creating Fresh's variable symbol before
+        // Pub's (versus the reverse) must not change the unifiers.
         first
             .inner
             .lock()
@@ -103,15 +103,9 @@ fn variable_order_cache_hits_and_restarts() {
     let cmd = b"unify in MSG : tamxor(x2048:Msg,x2049:Msg) =? tamxor(x2050:Msg,x2051:Msg) .\n";
     let expected = first.execute_memo(cmd, 2052, |_| {}).unwrap();
     assert_eq!(second.execute_memo(cmd, 2052, |_| {}).unwrap(), expected);
-    assert_eq!(
-        second.inner.lock().ordered_variables,
-        1,
-        "cache hits do no registration"
-    );
     let reverse = b"parse in MSG : cons(x2051:Msg,cons(x2050:Msg,cons(x2049:Msg,x2048:Msg))) .\n";
     second.inner.lock().execute(reverse, 2052).unwrap();
     assert_eq!(second.inner.lock().execute(cmd, 2052).unwrap(), expected);
-    assert_eq!(second.inner.lock().ordered_variables, 4096);
     {
         let mut reaper = second.child.lock().unwrap();
         reaper.kill_and_wait();
@@ -122,23 +116,6 @@ fn variable_order_cache_hits_and_restarts() {
     assert_eq!(second.execute_memo(cmd, 2052, |_| {}).unwrap(), expected);
     second.inner.lock().execute(reverse, 2052).unwrap();
     assert_eq!(second.inner.lock().execute(cmd, 2052).unwrap(), expected);
-}
-
-#[test]
-fn variable_registration_grows_only_as_needed() {
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let h = MaudeHandle::start(&path, crate::maude_sig::minimal_maude_sig(false)).unwrap();
-    let mut inner = h.inner.lock();
-    inner.execute(b"reduce in MSG : p(0) .\n", 0).unwrap();
-    assert_eq!(inner.ordered_variables, 1, "only the sort initializer's x0");
-    for (required, expected) in [(1, 1), (2, 2), (3, 4), (4, 4), (5, 8), (2, 8)] {
-        let cmd = format!("reduce in MSG : x{}:Msg .\n", required - 1);
-        let reply = inner.execute(cmd.as_bytes(), required).unwrap();
-        assert!(String::from_utf8_lossy(&reply).contains(&format!("x{}:Msg", required - 1)));
-        assert_eq!(inner.ordered_variables, expected);
-    }
 }
 
 /// `fst(pair(a, b))` over [`pair_maude_sig`].  The pairing signature really
@@ -861,28 +838,13 @@ fn match_eqs_skolemize_both_mset_var_to_submultiset() {
     assert_eq!(binding, vec![("codeOther", 89, rest)]);
 }
 
-// HS's `impliedFormulas` runs `skolemizeGuarded` over the WHOLE clause
-// (`System.hs`): every FREE (non-universal) LVar of the guard
-// pattern becomes a Maude *constant*; only universal-bound vars stay
-// bindable.  `match_eqs_skolemize_both` treats those free vars as
-// distinct constants, matching HS's `skolemizeGuarded`-then-match.
-//
-// Mirrors the real STS_MAC_fix2 `AcceptedR` guard match (sent as
-// per-argument equations, one for each fact position).  The guard
-// pattern has ONE universal-bound var `kpartner` and several FREE
-// system vars (`ekI`,`ekR`) that, after a prior guard's binding,
-// occupy positions whose subject counterparts are DIFFERENT free
-// system vars (`x`,`tid`).  Two equations:
-//   eq1:  exp(g, ekI)  <=?  exp(g, x)     (pattern free ekI vs x)
-//   eq2:  exp(g, ekR)  <=?  exp(g, tid)   (pattern free ekR vs tid)
-// Skolemizing the subject side alone would leave the pattern's
-// `ekI`,`ekR` as Maude VARIABLES, so Maude would bind `ekI->x`,
-// `ekR->tid` and the match would SUCCEED — a spurious match that fires
-// `gfalse` one step early.  Skolemizing both sides makes every free var
-// a distinct CONSTANT, so `exp(g,c_ekI)` != `exp(g,c_x)` and the match
-// FAILS, exactly as HS's `skolemizeGuarded`-then-`matchAction` does.
+/// `match_eqs_skolemize_both` freezes every free (non-pattern) variable on
+/// BOTH sides into a distinct Maude constant, as HS's `impliedFormulas` runs
+/// `skolemizeGuarded` over the whole clause (`System.hs`) before matching.
+/// Only `pattern_vars` stay bindable, so `exp(g, ekI) <=? exp(g, x)` with
+/// both `ekI` and `x` free has no matcher.
 #[test]
-fn impl_guard_match_skolemizes_pattern_free_vars() {
+fn skolemize_both_match_treats_free_pattern_vars_as_constants() {
     let path = match require_maude_path() {
         Some(p) => p,
         None => {

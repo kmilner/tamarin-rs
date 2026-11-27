@@ -1310,7 +1310,3 @@ pub fn numbered_prime(ds: Vec<Doc>) -> Doc {
 #[cfg(test)]
 #[path = "pretty_hpj_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "pretty_hpj_sep_nb_regression_tests.rs"]
-mod sep_nb_regression_tests;

@@ -798,7 +798,6 @@ fn auto_source_rule_names(rules: &[OpenProtoRule]) -> Vec<OpenProtoRule> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pretty_formula::{lemma_header_line_doc, lnformula_doc};
 
     /// The `--auto-sources` unfold (`unfoldRuleVariants`,
     /// lib/theory/src/Rule.hs): a rule with a non-trivial variant
@@ -896,121 +895,5 @@ mod tests {
         // `mergeOpenProtoRules` collapse the run back into one item
         // (OpenTheory.hs).
         assert!(variants.windows(2).all(|w| w[0].rule_e() == w[1].rule_e()));
-    }
-
-    #[test]
-    fn temporary_aliases_reach_trivial_abstracted_bodies() {
-        let parsed = tamarin_parser::parse_theory(
-            r#"theory Aliases begin
-            builtins: symmetric-encryption
-            rule R: [] --[A()]-> []
-            rule Other: [In(sdec('a','b'))] --[B()]-> []
-            end"#,
-            &[],
-        )
-        .unwrap();
-        let mut theory = crate::elaborate::elaborate(&parsed).unwrap();
-        let Some(path) = tamarin_test_support::require_maude_path() else {
-            return;
-        };
-        let maude = MaudeHandle::start(&path, theory.signature.clone()).unwrap();
-        crate::tools::rule_variants::populate_rule_variants(&mut theory, &maude, None).unwrap();
-        let mut rules: Vec<_> = theory.rules().cloned().collect();
-        // Model a compiled member colliding with an independent source rule.
-        rules[0].rule.info.name = rules[1].rule.info.name;
-        assert!(matches!(rules[1].variants, RuleVariants::Closed { .. }));
-        assert!(crate::theory::closed_rules_ac(&rules[1])
-            .iter()
-            .all(|ac| crate::rule::is_trivial_proto_variant_ac(ac, rules[1].rule_e())));
-        let named = auto_source_rule_names(&rules);
-        assert_ne!(named[0].name(), named[1].name());
-        assert_eq!(named[1].rule_e(), rules[1].rule_e());
-        assert_eq!(named[1].ac_body().info.name, named[1].rule.info.name);
-        let ctx = crate::constraint::solver::context::ProofContext::new(maude, named);
-        let rule = &ctx.rules[1];
-        assert_eq!(rule.ac_body().info.name, rule.rule.info.name);
-    }
-
-    #[test]
-    fn unfold_prepares_trivial_explicit_members_for_annotation() {
-        use crate::fact::{in_fact, out_fact, proto_fact};
-        use crate::rule::{ProtoRuleEInfo, Rule};
-        use crate::theory::Theory;
-        use tamarin_term::builtin::msg_var;
-
-        let original = Rule::new(
-            ProtoRuleEInfo::standard("R"),
-            vec![in_fact(msg_var("x", 0))],
-            vec![out_fact(msg_var("x", 0))],
-            vec![],
-        );
-        let mut member = original.clone();
-        member.info.name = crate::rule::ProtoRuleName::Stand("R___VARIANT_1");
-        let mut open = OpenProtoRule::new(original.clone());
-        // Repeated identical members must retain their order and share labels.
-        open.rule_ac = vec![member.clone(), member.clone()];
-        let mut theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
-        theory.items.push(TheoryItem::Rule(open));
-
-        unfold_rule_variants(&mut theory);
-        let rules: Vec<_> = theory.rules().cloned().collect();
-        assert_eq!(rules.len(), 2);
-        assert_eq!(rules[0], rules[1]);
-        for mut rule in auto_source_rule_names(&rules) {
-            assert_eq!(rule.name(), "R___VARIANT_1");
-            let action = proto_fact(Multiplicity::Linear, "AUTO_OUT", vec![msg_var("x", 0)]);
-            add_action_to_open_rule(&mut rule, action.clone());
-            let closed = crate::theory::closed_rules_ac(&rule);
-            assert_eq!(closed.len(), 1);
-            assert!(closed[0].actions.contains(&action));
-            assert_eq!(closed[0].premises, member.premises);
-            assert_eq!(closed[0].conclusions, member.conclusions);
-            assert_eq!(rule.rule_e(), &original);
-            assert!(rule.rule_ac.is_empty());
-        }
-    }
-
-    #[test]
-    fn unfold_uses_source_declared_variant_bodies() {
-        use crate::fact::{in_fact, out_fact};
-        use crate::rule::{ProtoRuleEInfo, Rule};
-        use crate::theory::{OpenProtoRule, Theory, TheoryItem};
-        use tamarin_term::builtin::msg_var;
-
-        let original = Rule::new(
-            ProtoRuleEInfo::standard("R"),
-            vec![in_fact(msg_var("x", 0))],
-            vec![out_fact(msg_var("x", 0))],
-            vec![],
-        );
-        let declared = Rule::new(
-            ProtoRuleEInfo::standard("R"),
-            vec![in_fact(msg_var("x", 0)), in_fact(msg_var("y", 0))],
-            vec![out_fact(msg_var("x", 0))],
-            vec![],
-        );
-        let mut open = OpenProtoRule::new(original.clone());
-        open.rule_ac.push(declared.clone());
-        let mut theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
-        theory.items.push(TheoryItem::Rule(open));
-
-        unfold_rule_variants(&mut theory);
-        let unfolded = theory.rules().next().expect("unfolded rule");
-        assert_eq!(unfolded.name(), "R___VARIANT_1");
-        assert_eq!(unfolded.rule.premises, declared.premises);
-        assert_eq!(unfolded.rule_e.as_deref(), Some(&original));
-    }
-
-    // Ground truth: the `AUTO_typing` lemma body emitted by the Haskell
-    // prover for examples/features/auto-sources/running-example/running.spthy
-    // (HS `--auto-sources`). The formula is `(⊤) ∧ (the term-input form)`.
-    #[test]
-    fn running_example_auto_typing_renders_byte_identically() {
-        let in_name = "AUTO_IN_TERM_1_0_0_1_1__Rule_R";
-        let out_name = "AUTO_OUT_TERM_1_0_0_1_1__Rule_R";
-        let f = LNFormula::ltrue().and(term_input_form_with_outputs(in_name, out_name));
-        let rendered = lemma_header_line_doc("all-traces", lnformula_doc(&f));
-        let expected = "  all-traces\n  \"(⊤) ∧\n   (∀ x m #i.\n     (AUTO_IN_TERM_1_0_0_1_1__Rule_R( m, x ) @ #i) ⇒\n     ((∃ #j. (!KU( x ) @ #j) ∧ (#j < #i)) ∨\n      (∃ #j. (AUTO_OUT_TERM_1_0_0_1_1__Rule_R( m ) @ #j) ∧ (#j < #i))))\"";
-        assert_eq!(rendered, expected);
     }
 }

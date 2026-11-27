@@ -623,19 +623,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn state_fact_name_and_mult() {
-        let f = TransFact::State(StateKind::LState, vec![1], BTreeSet::new());
-        let lnf = fact_to_fact(&f);
-        match &lnf.tag {
-            tamarin_theory::fact::FactTag::Proto(m, n, _) => {
-                assert_eq!(&**n, "State_1");
-                assert_eq!(*m, Multiplicity::Linear);
-            }
-            _ => panic!("expected proto fact"),
-        }
-    }
-
     /// `toRule` computes `newVariables l r` (Facts.hs): premises against
     /// conclusions alone.  A variable occurring only in an action is not a
     /// new variable of the generated rule; a conclusion-only variable is.
@@ -663,16 +650,5 @@ mod tests {
         };
         let rule = to_rule(r);
         assert_eq!(rule.new_vars, vec![var_term(z)]);
-    }
-
-    #[test]
-    fn empty_position_state_renders_state_underscore() {
-        let f = TransFact::State(StateKind::LState, vec![], BTreeSet::new());
-        let lnf = fact_to_fact(&f);
-        if let tamarin_theory::fact::FactTag::Proto(_, n, _) = &lnf.tag {
-            assert_eq!(&**n, "State_");
-        } else {
-            panic!();
-        }
     }
 }

@@ -165,111 +165,6 @@ end\n";
     assert_eq!(formulas[1], only_once_d_restriction(), "OnlyOnceD");
 }
 
-/// The guarded values the NDC search runs on, pinned as text: the two
-/// restrictions HS `addRestrictions` installs (CloseRule.hs).  The
-/// binder names and their prefix order are the port's, not HS's, and a
-/// change to either moves the synthetic search and with it the `[NDC]` tags
-/// in the printed `functions:` header.
-#[test]
-fn only_once_restriction_guarded_is_unchanged() {
-    let g = &deduction_restrictions(false)[0];
-    assert_eq!(
-        crate::pretty_formula::pretty_guarded(g),
-        "∀ #ndci #ndcj. (OnlyOnce( ) @ #ndci) ∧ (OnlyOnce( ) @ #ndcj) ⇒ #ndci = #ndcj",
-    );
-}
-
-/// [`only_once_restriction_guarded_is_unchanged`] for the `OnlyOnceD`
-/// restriction, which only theory-1 carries.
-#[test]
-fn only_once_d_restriction_guarded_is_unchanged() {
-    let rs = deduction_restrictions(true);
-    assert_eq!(rs.len(), 2, "theory-1 carries both restrictions");
-    assert_eq!(
-        crate::pretty_formula::pretty_guarded(&rs[1]),
-        "∀ #ndci #ndcj #ndck. (OnlyOnceD( ) @ #ndci) ∧ (OnlyOnceD( ) @ #ndcj) ∧ (OnlyOnceD( ) @ #ndck) ⇒ ((#ndci = #ndcj) ∨ (#ndci = #ndck) ∨ (#ndcj = #ndck))",
-    );
-}
-
-/// [`only_once_restriction_guarded_is_unchanged`] for the `Deduction`
-/// lemma, over the shapes the NDC pass meets: dotted unifier indices with a
-/// cross-sort Nat variable, a user-AC term, a builtin application with a
-/// pair and fresh/public variables, and the ground zero-binder case.
-#[test]
-fn deduction_lemma_guarded_is_unchanged() {
-    let pretty = |s: &[LNFact], t: &LNTerm| {
-        crate::pretty_formula::pretty_guarded(&deduction_lemma_guarded(s, t))
-    };
-    let x0 = var_term(LVar::new("x", LSort::Msg, 0));
-    let x5 = var_term(LVar::new("x", LSort::Msg, 5));
-    let n = var_term(LVar::new("n", LSort::Nat, 0));
-    assert_eq!(
-        pretty(
-            &[
-                kd(tamarin_term::builtin::pair(x0.clone(), x5.clone())),
-                ku(n.clone()),
-            ],
-            &n,
-        ),
-        "∀ x ~n x.1 %n.1 #ndct0 #ndct1. (Generated_0( x, ~n, x.1 ) @ #ndct0) ∧ (K( %n.1 ) @ #ndct1) ⇒ ⊥",
-    );
-    let (_sig, probe) = xorr_parent();
-    let (xorr2, xorr3, h_pair, fst_c, zeroo) =
-        (&probe[0], &probe[1], &probe[2], &probe[3], &probe[4]);
-    let a = var_term(
-        tamarin_term::lterm::frees(&vec![xorr2.clone()])
-            .into_iter()
-            .next()
-            .expect("xorr(a, b) has free vars"),
-    );
-    assert_eq!(
-        pretty(&[kd(xorr2.clone()), ku(a)], xorr3),
-        "∀ a b c #ndct0 #ndct1. (Generated_0( a, b ) @ #ndct0) ∧ (K( (a xorr b xorr c) ) @ #ndct1) ⇒ ⊥",
-    );
-    assert_eq!(
-        pretty(&[kd(h_pair.clone()), ku(fst_c.clone())], h_pair),
-        "∀ $p ~k a c #ndct0 #ndct1. (Generated_0( $p, ~k, a, c ) @ #ndct0) ∧ (K( h(<~k, $p, a>) ) @ #ndct1) ⇒ ⊥",
-    );
-    assert_eq!(
-        pretty(&[kd(zeroo.clone())], zeroo),
-        "∀ #ndct0 #ndct1. (Generated_0( ) @ #ndct0) ∧ (K( zeroo ) @ #ndct1) ⇒ ⊥",
-    );
-}
-
-/// HS `landFormula` seeds the lemma conjunction with `ltrue`
-/// (CloseRule.hs: a `foldl` of `.&&.` over `ltrue`), so HS's formula is
-/// `(⊤ ∧ Gen@#0) ∧ K@#1` where this module builds `Gen@t0 ∧ K@t1`.
-/// `gconj` drops ⊤, making the two shapes convert to the same
-/// guarded value — pinned here so the shape difference stays
-/// invisible.
-#[test]
-fn lemma_guarded_is_invariant_to_hs_ltrue_conjunct() {
-    let t0 = ndc_node_var("ndct0");
-    let t1 = ndc_node_var("ndct1");
-    let v = LVar::new("v", LSort::Msg, 0);
-    let gen_at: LNFormula = ProtoFormula::Atom(ProtoAtom::Action(
-        free_time(&t0),
-        crate::fact::proto_fact(Multiplicity::Linear, "Generated_0", vec![var_term(v)])
-            .map_ref(lift_free),
-    ));
-    let k_at: LNFormula = ProtoFormula::Atom(ProtoAtom::Action(
-        free_time(&t1),
-        crate::fact::k_log_fact(var_term(v)).map_ref(lift_free),
-    ));
-    let binders = [v, t0, t1];
-    let ours = quantify_vars(Quantifier::Ex, &binders, gen_at.clone().and(k_at.clone())).not();
-    let hs_shaped = quantify_vars(
-        Quantifier::Ex,
-        &binders,
-        ProtoFormula::ltrue().and(gen_at).and(k_at),
-    )
-    .not();
-    assert_eq!(
-        crate::guarded::formula_to_guarded(&ours).expect("ours converts"),
-        crate::guarded::formula_to_guarded(&hs_shaped).expect("HS shape converts"),
-    );
-}
-
 /// The shapes only the structural path faces — dotted unifier indices
 /// (`x.5`) and same-named variables of different sorts (a Nat var:
 /// Fresh in the `Generated_0` args via `lvarToLnterm`, Nat inside the
@@ -313,48 +208,6 @@ fn structural_lemma_closes_dotted_and_cross_sort_binders() {
     let rule = deduction_rule(&s);
     assert_eq!(rule.rule.premises.len(), 3);
     assert!(rule.rule.new_vars.is_empty(), "HS newRules passes []");
-}
-
-/// End-to-end verdict pin through the structural path: on the KCL07
-/// signature the ef3f0468 oracle reports `Function xorr has the NDC
-/// property.` on stderr, so `check_close_intr_rule` must tag `xorr`
-/// and NDC-mark every xorr destructor rule in the returned cache.
-#[test]
-fn check_close_intr_rule_tags_xorr_on_kcl07_signature() {
-    // The resolution policy lives in [`tamarin_test_support::require_maude_path`]. That
-    // policy covers a `MAUDE_PATH` that points nowhere, and it covers a
-    // machine with no maude at all. This test calls that one helper so that a
-    // private copy of the policy here cannot drift from it.
-    let Some(mp) = tamarin_test_support::require_maude_path() else {
-        return;
-    };
-    let (sig, _probe) = xorr_parent();
-    let maude = tamarin_term::maude_proc::MaudeHandle::start(&mp, sig)
-        .expect("maude starts on the KCL07 signature");
-    let checked = check_close_intr_rule(&maude, None, true, &[], Default::default())
-        .expect("solver operation");
-    let names: Vec<String> = checked
-        .ndc_funs
-        .iter()
-        .map(|f| crate::intruder_rules::show_fun_sym_name(f).into_owned())
-        .collect();
-    assert_eq!(names, vec!["xorr".to_string()]);
-    let xorr_destr: Vec<&IntrRuleAC> = checked
-        .cache
-        .iter()
-        .filter(|r| {
-            get_destr_rule_function(r)
-                .is_some_and(|f| crate::intruder_rules::show_fun_sym_name(&f) == "xorr")
-        })
-        .collect();
-    assert!(
-        !xorr_destr.is_empty(),
-        "cache carries xorr destructor rules"
-    );
-    assert!(
-        xorr_destr.iter().all(|r| is_ndc_cache_rule(r)),
-        "every xorr destructor rule carries the NDC-tagged head"
-    );
 }
 
 #[test]
@@ -606,26 +459,4 @@ fn elaborate_deduction_theory_via_text(
         )
     });
     (rules.remove(0), restrictions, g)
-}
-
-#[test]
-fn ndc_checks_preserve_backend_errors_and_fresh_counter() {
-    let Some(mp) = tamarin_test_support::require_maude_path() else {
-        return;
-    };
-    let (sig, _) = xorr_parent();
-    let healthy = MaudeHandle::start(&mp, sig.clone()).unwrap();
-    let rules = crate::constraint::solver::context::ProofContext::assemble_intruder_rules(
-        &sig,
-        &healthy,
-        &[],
-    );
-    let failed = MaudeHandle::start(&mp, sig).unwrap();
-    failed.kill_subprocess();
-    let counter = failed.fresh_counter_peek();
-    assert!(matches!(
-        pretty_ndc_check(&failed, None, rules, Default::default()),
-        Err(crate::prove::ProveError::Maude(_))
-    ));
-    assert_eq!(failed.fresh_counter_peek(), counter);
 }

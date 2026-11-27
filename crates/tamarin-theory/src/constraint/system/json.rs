@@ -943,20 +943,31 @@ mod tests {
         );
     }
 
-    // `Data.Aeson.Text.string` short-forms only `\"`, `\\`, `\n`, `\r`
-    // and `\t`; `<`, `>` and `&` all reach the wire literally.  0x08 and 0x0c
-    // take the generic `\u00xx` form rather than JSON's `\b` / `\f`, and the
-    // hex digits are lowercase.
+    /// The label's bytes on the wire, as rows `(label, jgLabel bytes, the
+    /// document is valid JSON)`.  `Data.Aeson.Text.string` short-forms only
+    /// `\"`, `\\`, `\n`, `\r` and `\t`; `<`, `>` and `&` reach the wire
+    /// literally.  0x08 and 0x0c take the generic `\u00xx` form rather than
+    /// JSON's `\b` / `\f`, and the hex digits are lowercase.
+    /// `removePseudoUnicode` is then a raw byte rewrite over the WHOLE
+    /// document, not a string-aware pass: a label holding the six characters
+    /// `\u003c` is escaped to `\\u003c` and the pass eats the tail of that
+    /// escape, leaving the invalid-JSON `\<`.  HS emits exactly this.
     #[test]
     fn escapes_match_data_aeson_text() {
-        let label = "a&b<c>d\"e\\f\ng\rh\ti\u{0}j\u{8}k\u{c}l\u{1f}m";
-        let out = sequents_to_json_pretty(
-            &GraphOptions::default(),
-            &[(label.to_string(), &System::default())],
-        );
-        assert_eq!(
-            out,
-            concat!(
+        let rows = [
+            (
+                "a&b<c>d\"e\\f\ng\rh\ti\u{0}j\u{8}k\u{c}l\u{1f}m",
+                "a&b<c>d\\\"e\\\\f\\ng\\rh\\ti\\u0000j\\u0008k\\u000cl\\u001fm",
+                true,
+            ),
+            ("x\\u003cy\\u003ez", "x\\<y\\>z", false),
+        ];
+        for (label, wire, valid) in rows {
+            let out = sequents_to_json_pretty(
+                &GraphOptions::default(),
+                &[(label.to_string(), &System::default())],
+            );
+            let expected = concat!(
                 "{\n",
                 "    \"graphs\": [\n",
                 "        {\n",
@@ -964,67 +975,20 @@ mod tests {
                 "            \"jgClusters\": [],\n",
                 "            \"jgDirected\": true,\n",
                 "            \"jgEdges\": [],\n",
-                "            \"jgLabel\": \"a&b<c>d\\\"e\\\\f\\ng\\rh\\ti\\u0000j\\u0008k\\u000cl\\u001fm\",\n",
+                "            \"jgLabel\": \"LABEL\",\n",
                 "            \"jgNodes\": [],\n",
                 "            \"jgType\": \"Tamarin prover constraint system\"\n",
                 "        }\n",
                 "    ]\n",
                 "}",
-            )
-        );
-    }
-
-    // The escaper runs over every string in the document, not just the label.
-    // A pub-name literal carrying `&`, `<` and `>` is the reachable route:
-    // `singleQuotedString` (Token.hs) accepts every character but
-    // `'` and newline, and the name lands in `jgnLabel`, `jgnFactShow` and
-    // `jgnConst` alike — all of them literal on the wire.
-    #[test]
-    fn pub_name_specials_reach_the_wire_literally() {
-        use crate::constraint::constraints::Goal;
-        use crate::constraint::system::GoalStatus;
-        let mut sys = System::default();
-        let nid = LVar::new("i", LSort::Node, 0);
-        let fa: LNFact = Fact::new(
-            FactTag::Proto(
-                Multiplicity::Linear,
-                tamarin_term::intern::intern_str("Ev"),
-                1,
-            ),
-            vec![lit(Lit::Con(Name::new(NameTag::Pub, "a&b<c>d")))],
-        );
-        sys.goals_mut()
-            .push((Goal::Action(nid, fa), GoalStatus::default()));
-        let out = sequents_to_json_pretty(&GraphOptions::default(), &[("L".to_string(), &sys)]);
-        assert!(
-            out.contains("\"jgnConst\": \"'a&b<c>d'\""),
-            "jgnConst: {out}"
-        );
-        assert!(
-            out.contains("\"jgnLabel\": \"Ev( 'a&b<c>d' )\""),
-            "jgnLabel: {out}"
-        );
-        assert!(
-            out.contains("\"jgnFactShow\": \"Ev( 'a&b<c>d' )\""),
-            "jgnFactShow: {out}"
-        );
-        // No `\u0026` anywhere: the writer must not have re-grown the
-        // over-escaping the oracle probe disproved.
-        assert!(!out.contains("\\u0026"), "{out}");
-    }
-
-    // `removePseudoUnicode` is a raw byte rewrite over the WHOLE document, not
-    // a string-aware pass: a label holding the six characters `\u003c` is
-    // escaped to `\\u003c` and the pass then eats the tail of that escape,
-    // leaving the invalid-JSON `\<`.  HS emits exactly this.
-    #[test]
-    fn pseudo_unicode_pass_mangles_a_literal_escape_in_the_payload() {
-        let out = sequents_to_json_pretty(
-            &GraphOptions::default(),
-            &[("x\\u003cy\\u003ez".to_string(), &System::default())],
-        );
-        assert!(out.contains("\"jgLabel\": \"x\\<y\\>z\","), "{out}");
-        assert!(serde_json::from_str::<Value>(&out).is_err());
+            );
+            assert_eq!(out, expected.replace("LABEL", wire), "{label}");
+            assert_eq!(
+                serde_json::from_str::<Value>(&out).is_ok(),
+                valid,
+                "{label}"
+            );
+        }
     }
 
     // `roleCluster` groups a rule's nodes under `<role>_Session_<n>`, and
@@ -1100,15 +1064,5 @@ mod tests {
             p < q,
             "clusters must reach the wire in ascending role order:\n{out}"
         );
-    }
-
-    // There are no traces at all.  The empty array stays inline, because
-    // aeson-pretty does not break an empty list over three lines.  The
-    // document also ends without a trailing newline.  These are the same 20
-    // bytes that `--output-json` writes for a theory with nothing solved.
-    #[test]
-    fn empty_graph_list_is_twenty_bytes() {
-        let out = sequents_to_json_pretty(&GraphOptions::default(), &[]);
-        assert_eq!(out, "{\n    \"graphs\": []\n}");
     }
 }

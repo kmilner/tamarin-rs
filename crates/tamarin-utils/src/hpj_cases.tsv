@@ -1,0 +1,24 @@
+name	width	ribbon	doc	expected
+text_verbatim	110	73	text "hello"	hello
+empty_renders_nothing	110	73	empty	
+beside	110	73	text "a" <> text "b"	ab
+beside_space	110	73	text "a" <+> text "b"	a b
+empty_text_keeps_the_right_space	110	73	text "a" <+> text ""	a 
+empty_text_keeps_the_left_space	110	73	text "" <+> text "b"	 b
+empty_is_the_unit_of_beside_space	110	73	text "a" <+> empty	a
+above	110	73	text "a" $$ text "b"	a\nb
+above_overlaps_into_the_nest_gap	110	73	text "a" $$ nest 2 (text "b")	a b
+sep_fits_horizontally	110	73	sep [text "a", text "b", text "c"]	a b c
+sep_goes_vertical_when_no_item_fits	5	5	sep [text "aaaaaa", text "bbbbbb"]	aaaaaa\nbbbbbb
+sep_goes_vertical_at_column_zero	10	10	sep [text "aaaaaaaaaa", text "bbbbbbbbbb"]	aaaaaaaaaa\nbbbbbbbbbb
+sep_wraps_under_nest_zero	50	50	nest 0 (sep [text "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", text "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"])	xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+fsep_fills_greedily	20	20	fsep [text "w0", text "w1", text "w2", text "w3", text "w4", text "w5", text "w6", text "w7", text "w8", text "w9"]	w0 w1 w2 w3 w4 w5 w6\nw7 w8 w9
+nested_sep_width_shrinks_at_the_break	6	6	sep [text "aaa", sep [text "bbb", text "ccc"]]	aaa\nbbb\nccc
+punctuate	110	73	hcat (punctuate (text ",") [text "a", text "b", text "c"])	a,b,c
+nested_binop_width_shrinks_with_depth	50	50	sep [(text "[" <> sep [(text "[" <> sep [(text "[" <> text "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" <> text "]") <+> text "∧", text "y"] <> text "]") <+> text "∧", text "y"] <> text "]") <+> text "∧", text "y"]	[[[xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx] ∧ y] ∧\n y] ∧\ny
+nested_sep_keeps_item_nests	10	10	sep [text "Q.", sep [nest 1 (text "DANTE"), text "c", nest 1 (text "DSUCC")]]	Q.\n DANTE\nc\n DSUCC
+fcat_packs_the_closer_onto_the_last_line	12	12	fcat [text "<", text "aaa,", text "bbb,", text "ccc,", text "ddd", text ">"]	<aaa,bbb,\nccc,ddd>
+tuple_beside_a_numbered_item_breaks_before_its_last_element	110	73	nest 4 (text "3" <> (text ". " <> (text "v" $$ nest 6 (text "=" <+> fcat [text "<", nest 1 (text "x.16" <> text ", "), nest 1 (text "x.17" <> text ", "), nest 1 (text "x.18" <> text ", "), nest 1 (text "x.19" <> text ", "), nest 1 (text "x.20" <> text ", "), nest 1 (text "x.21" <> text ", "), nest 1 (text "x.22" <> text ", "), nest 1 (text "x.23" <> text ", "), nest 1 (text "x.24" <> text ", "), nest 1 (text "x.25" <> text ", "), nest 1 (text "x.26"), text ">"]))))	    3. v     = <x.16, x.17, x.18, x.19, x.20, x.21, x.22, x.23, x.24, x.25, \n                x.26>
+tuple_fill_keeps_an_element_that_ends_past_the_ribbon	110	73	nest 16 (text "solve(" <+> (sep [text "!KU(" $$ nest 5 (fsep (punctuate (char ',') [(text "senc(" <> fsep (punctuate (char ',') [fcat [text "<", nest 1 (text "~CDSK_j_USR_O" <> text ", "), nest 1 (text "MDSK_j_USR_O" <> text ", "), nest 1 (text "KSQ.1" <> text ", "), nest 1 (text "$USR" <> text ", "), nest 1 (text "keystatus" <> text ", "), nest 1 (text "CD_j"), text ">"], text "~UK_i_USR_O"]) <> text ")")])), text ")"] <+> text "@" <+> text "#vk.11") <+> text ")")	                solve( !KU( senc(<~CDSK_j_USR_O, MDSK_j_USR_O, KSQ.1, $USR, keystatus, \n                                  CD_j>,\n                                 ~UK_i_USR_O)\n                       ) @ #vk.11 )
+nested_sep_disjunct_wraps_its_second_item	50	33	text "(" <> sep (punctuate (text " |") [(text "(" <> sep [text "Qx.", sep [nest 1 (text "(" <> text "DANTE" <> text ")"), text "C", nest 1 (sep [(text "(" <> sep [text "F.", sep [nest 1 (text "(" <> text "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" <> text ")"), text "=>", nest 1 (text "RHS")]] <> text ")") <> text " &", (text "(" <> sep [text "F.", sep [nest 1 (text "(" <> text "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" <> text ")"), text "=>", nest 1 (text "RHS")]] <> text ")")])]] <> text ")"), (text "(" <> sep [text "Qy.", sep [nest 1 (text "(" <> text "DANTE" <> text ")"), text "C", nest 1 (sep [(text "(" <> sep [text "F.", sep [nest 1 (text "(" <> text "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA" <> text ")"), text "=>", nest 1 (text "RHS")]] <> text ")") <> text " &", (text "(" <> sep [text "F.", sep [nest 1 (text "(" <> text "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB" <> text ")"), text "=>", nest 1 (text "RHS")]] <> text ")")])]] <> text ")")]) <> text ")"	((Qx.\n   (DANTE)\n  C\n   (F.\n     (AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA)\n    =>\n     RHS) &\n   (F.\n     (BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB)\n    =>\n     RHS)) |\n (Qy.\n   (DANTE)\n  C\n   (F.\n     (AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA)\n    =>\n     RHS) &\n   (F.\n     (BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB)\n    =>\n     RHS)))
+sep_inlines_the_tail_after_a_negative_nest	4	4	sep [nest (-5) (text "ab"), text "cd", text "ef"]	ab   cd\nef
