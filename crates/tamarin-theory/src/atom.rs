@@ -100,7 +100,7 @@ impl<T> SugarTerms<T> for Unit2 {
 impl<T> SugarTerms<T> for SyntacticSugar<T> {
     fn for_each_term<'a>(&'a self, f: &mut dyn FnMut(&'a T)) {
         let SyntacticSugar::Pred(fa) = self;
-        fa.terms.iter().for_each(f);
+        fa.terms().iter().for_each(f);
     }
 }
 
@@ -137,7 +137,7 @@ fn fold_atom_ladder<'a, S, T>(
     match a {
         ProtoAtom::Action(t, fa) => {
             f(t);
-            for x in fa.terms.iter() {
+            for x in fa.terms().iter() {
                 f(x);
             }
         }

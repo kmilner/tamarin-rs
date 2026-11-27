@@ -77,7 +77,7 @@ pub fn mult_restricted_report(elab: &Theory) -> Vec<WfError> {
         let mults: Vec<LNTerm> = ru
             .conclusions
             .iter()
-            .flat_map(|f| f.terms.iter())
+            .flat_map(|f| f.terms().iter())
             .flat_map(mult_terms)
             .collect();
         // HS `unbound ruAbstr \\ unbound ru`: both operands are `frees`
@@ -192,7 +192,7 @@ fn abstract_rule(ru: &ProtoRuleE, irreducible: &BTreeSet<FunSym>) -> ProtoRuleE 
     let mut premises = Vec::with_capacity(ru.premises.len());
     for f in &ru.premises {
         let terms = f
-            .terms
+            .terms()
             .iter()
             .map(|t| abstract_term(t, irreducible, &mut bindings, &mut next_idx))
             .collect();
@@ -203,7 +203,7 @@ fn abstract_rule(ru: &ProtoRuleE, irreducible: &BTreeSet<FunSym>) -> ProtoRuleE 
             .iter()
             .map(|f| {
                 let terms = f
-                    .terms
+                    .terms()
                     .iter()
                     .map(|t| replace_abstracted(t, bindings))
                     .collect();

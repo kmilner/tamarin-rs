@@ -395,7 +395,7 @@ fn rules_contain_pub_const(rules: &[&ProtoRuleE]) -> bool {
             .iter()
             .chain(&r.actions)
             .chain(&r.conclusions)
-            .flat_map(|fa| fa.terms.iter())
+            .flat_map(|fa| fa.terms().iter())
             .any(term_contains_pub_const)
     })
 }
@@ -418,7 +418,7 @@ fn case_tests_instantiated_by_pub_vars(thy: &Theory, rules: &[&ProtoRuleE]) -> b
     let rule_facts = rules_actions(rules);
     for cf in &ct_facts {
         for rf in &rule_facts {
-            if fact_tag_eq(cf, rf) && !free_vars_instantiated_by_pub_vars(&cf.terms, &rf.terms) {
+            if fact_tag_eq(cf, rf) && !free_vars_instantiated_by_pub_vars(cf.terms(), rf.terms()) {
                 return false;
             }
         }

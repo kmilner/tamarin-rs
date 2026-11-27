@@ -459,18 +459,18 @@ fn is_double_premise_rule(r: &IntrRuleAC) -> bool {
     let [first, prems @ ..] = &r.premises[..] else {
         return false;
     };
-    let [t] = &first.terms[..] else {
+    let [t] = first.terms() else {
         return false;
     };
     first.tag == crate::fact::FactTag::Kd
         && r.conclusions
             .iter()
-            .flat_map(|f| f.terms.iter())
+            .flat_map(|f| f.terms().iter())
             .all(|c| frees(c).is_empty())
         && !contains_private(t)
         && !prems
             .iter()
-            .flat_map(|f| f.terms.iter())
+            .flat_map(|f| f.terms().iter())
             .any(contains_private)
         && is_msg_var(t)
         && prems.contains(&crate::fact::ku_fact(t.clone()))
@@ -841,19 +841,19 @@ fn decompose_not_subterm(f: FunSym, rules: &[IntrRuleAC]) -> Vec<IntrRuleAC> {
             continue;
         }
         let (first, other_prems) = match r.premises.split_first() {
-            Some((first, rest)) if first.tag == FactTag::Kd && !first.terms.is_empty() => {
+            Some((first, rest)) if first.tag == FactTag::Kd && !first.terms().is_empty() => {
                 (first, rest)
             }
             _ => continue,
         };
-        let lhs = &first.terms[0];
+        let lhs = &first.terms()[0];
         let tc = match r.conclusions.as_slice() {
-            [c] if c.tag == FactTag::Kd && c.terms.len() == 1 => &c.terms[0],
+            [c] if c.tag == FactTag::Kd && c.arity() == 1 => &c.terms()[0],
             _ => continue,
         };
         // `flhs = FAPP f (lhs : foldMap getFactTerms other_prems)`.
         let args: Vec<LNTerm> = std::iter::once(lhs.clone())
-            .chain(other_prems.iter().flat_map(|p| p.terms.iter().cloned()))
+            .chain(other_prems.iter().flat_map(|p| p.terms().iter().cloned()))
             .collect();
         let flhs: LNTerm = Term::App(f, args.into());
         if let Some(context) = rrule_to_ctxt_st_rule(&RRule::new(flhs, tc.clone())) {
@@ -975,10 +975,10 @@ fn max_applications(
         let kd_prem_t: Option<&LNTerm> = ir
             .premises
             .first()
-            .filter(|f| f.tag == FactTag::Kd && f.terms.len() == 1)
-            .map(|f| &f.terms[0]);
+            .filter(|f| f.tag == FactTag::Kd && f.arity() == 1)
+            .map(|f| &f.terms()[0]);
         let kd_conc_rhs: Option<&LNTerm> = match ir.conclusions.as_slice() {
-            [c] if c.tag == FactTag::Kd && c.terms.len() == 1 => Some(&c.terms[0]),
+            [c] if c.tag == FactTag::Kd && c.arity() == 1 => Some(&c.terms()[0]),
             _ => None,
         };
         if let (Some(t), Some(rhs)) = (kd_prem_t, kd_conc_rhs) {
@@ -1115,7 +1115,7 @@ fn variants_intruder_with(
         .iter()
         .chain(&ru.conclusions)
         .chain(&ru.actions)
-        .flat_map(|f| f.terms.iter().cloned())
+        .flat_map(|f| f.terms().iter().cloned())
         .collect();
     let packed = f_app_list(rule_terms);
     // `frees packed` is the `restrictVFresh` key set and, as the free vars of
@@ -1164,7 +1164,7 @@ fn variants_intruder_with(
                 .map(|f| {
                     // norm/subst rebuild — frees can change; recompute the bloom.
                     let terms: Vec<LNTerm> = f
-                        .terms
+                        .terms()
                         .iter()
                         .map(|t| norm_t(t.clone()))
                         .collect::<Result<_, _>>()?;
@@ -1195,7 +1195,7 @@ fn variants_intruder_with(
         let concs_have_frees = ruvariant
             .conclusions
             .iter()
-            .flat_map(|f| f.terms.iter())
+            .flat_map(|f| f.terms().iter())
             .any(|t| !frees(t).is_empty());
         if !concs_have_frees {
             continue;
@@ -1233,7 +1233,7 @@ fn variants_intruder_with(
         let conc_terms: Vec<&LNTerm> = ruvariant
             .conclusions
             .iter()
-            .flat_map(|f| f.terms.iter())
+            .flat_map(|f| f.terms().iter())
             .collect();
         if conc_terms.len() == 1 && matches!(conc_terms[0], Term::App(FunSym::Ac(AcSym::Mult), _)) {
             continue;
@@ -1607,7 +1607,7 @@ fn bp_variants_intruder(
     // tag KD→KU (keeping the same args/annotations); else the symmetric
     // case where the SECOND premise is the bare-Var KD-fact.
     let is_bare_var_kd = |f: &LNFact| -> bool {
-        f.tag == FactTag::Kd && f.terms.len() == 1 && matches!(f.terms[0], Term::Lit(Lit::Var(_)))
+        f.tag == FactTag::Kd && f.arity() == 1 && matches!(f.terms()[0], Term::Lit(Lit::Var(_)))
     };
     Ok(variants
         .into_iter()

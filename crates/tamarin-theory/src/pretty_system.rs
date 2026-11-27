@@ -414,7 +414,7 @@ fn pretty_source_kind(sk: Option<SourceKind>) -> &'static str {
 /// The flat form here is for the env-gated debug dumps in
 /// `constraint::solver::context`, where one fact per line is the point.
 pub fn pretty_fact(fa: &LNFact) -> String {
-    let args: Vec<String> = fa.terms.iter().map(pretty_lnterm).collect();
+    let args: Vec<String> = fa.terms().iter().map(pretty_lnterm).collect();
     let base = format!("{}({})", show_fact_tag(&fa.tag), args.join(", "));
     // Haskell `ppAnn` (Theory/Model/Fact.hs): when annotations are present,
     // append `[a1, a2]` using `showFactAnnotation` for each.

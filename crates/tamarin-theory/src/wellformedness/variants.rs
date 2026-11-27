@@ -154,7 +154,7 @@ fn added_action_report(maude: &MaudeHandle, member: &ProtoRuleE, inherited: &[LN
         .iter()
         .chain(&member.conclusions)
         .chain(inherited)
-        .flat_map(|f| f.terms.iter())
+        .flat_map(|f| f.terms().iter())
     {
         subterms(t, &mut covered);
     }
@@ -175,7 +175,7 @@ fn added_action_report(maude: &MaudeHandle, member: &ProtoRuleE, inherited: &[LN
         }
     }
     let mut uncovered = vec![];
-    for term in added.iter().flat_map(|f| f.terms.iter()) {
+    for term in added.iter().flat_map(|f| f.terms().iter()) {
         risky(
             term,
             &maude.maude_sig().irreducible_fun_syms,

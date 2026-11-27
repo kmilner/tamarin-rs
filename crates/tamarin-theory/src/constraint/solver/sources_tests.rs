@@ -454,7 +454,7 @@ fn shift_keeps_ac_arg_order() {
     let sys = system_with_a_variable_per_field(product);
 
     let out = rename_system_by(sys.clone(), 1000);
-    let args = match &out.nodes[0].1.premises[0].terms[0] {
+    let args = match &out.nodes[0].1.premises[0].terms()[0] {
         Term::App(_, args) => args.to_vec(),
         _ => unreachable!("the fixture stores an AC application"),
     };

@@ -80,11 +80,8 @@ pub fn fact_fingerprints<T: HasFrees>(terms: &[T]) -> (u64, u64) {
 pub struct Fact<T> {
     pub tag: FactTag,
     pub annotations: BTreeSet<FactAnnotation>,
-    pub terms: Arc<[T]>,
+    terms: Arc<[T]>,
     /// Cached bloom of the terms' free variables, or `u64::MAX` for unknown.
-    /// Not part of the fact's value.  Private so only the constructors and
-    /// `recompute_bloom` set it: a bloom copied across a rebuild that changes
-    /// the free variables would make the skip unsound.
     bloom: u64,
     /// Cached exact maximum free-variable index of the terms (`0` with none),
     /// or `u64::MAX` for unknown.  It must be exact, not a bound: fresh
@@ -164,6 +161,9 @@ impl<T> Fact<T> {
         self.annotations.insert(a);
         self
     }
+    pub fn terms(&self) -> &[T] {
+        &self.terms
+    }
     pub fn arity(&self) -> usize {
         self.terms.len()
     }
@@ -223,14 +223,7 @@ impl<T: HasFrees> Fact<T> {
     /// Constructor that computes both caches, so the bloom skip can fire on
     /// the fact.
     pub fn fresh(tag: FactTag, terms: Vec<T>) -> Self {
-        let (bloom, max_var) = fact_fingerprints(&terms);
-        Fact {
-            tag,
-            annotations: BTreeSet::new(),
-            terms: terms.into(),
-            bloom,
-            max_var,
-        }
+        Self::fresh_annotated(tag, BTreeSet::new(), terms)
     }
     /// Bloom-computing constructor with annotations.
     pub fn fresh_annotated(
@@ -246,13 +239,6 @@ impl<T: HasFrees> Fact<T> {
             bloom,
             max_var,
         }
-    }
-    /// Recompute both caches from the current terms; required after any
-    /// direct `.terms` edit.
-    pub fn recompute_bloom(&mut self) {
-        let (bloom, max_var) = fact_fingerprints(&self.terms);
-        self.bloom = bloom;
-        self.max_var = max_var;
     }
 }
 
@@ -273,14 +259,7 @@ impl<T: HasFrees + Clone> HasFrees for Fact<T> {
             .iter()
             .map(|t| t.clone().map_free_with(f, monotone))
             .collect();
-        let (bloom, max_var) = fact_fingerprints(&terms);
-        Fact {
-            tag: self.tag,
-            annotations: self.annotations,
-            terms: terms.into(),
-            bloom,
-            max_var,
-        }
+        Self::fresh_annotated(self.tag, self.annotations, terms)
     }
 }
 

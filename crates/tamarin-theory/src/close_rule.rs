@@ -224,10 +224,10 @@ fn decompose(facts: &[LNFact]) -> Vec<Vec<LNFact>> {
     };
     let rest_d = decompose(rest);
     if f.tag == FactTag::Ku
-        && f.terms.len() == 1
-        && let Term::App(head, args) = &f.terms[0]
+        && f.arity() == 1
+        && let Term::App(head, args) = &f.terms()[0]
     {
-        let as_kd = Fact::fresh_annotated(FactTag::Kd, f.annotations.clone(), f.terms.to_vec());
+        let as_kd = Fact::fresh_annotated(FactTag::Kd, f.annotations.clone(), f.terms().to_vec());
         let mut out: Vec<Vec<LNFact>> = rest_d
             .iter()
             .map(|l| {
@@ -304,7 +304,7 @@ fn deduction_rule(s: &[LNFact]) -> crate::theory::OpenProtoRule {
         .collect();
     let concs: Vec<LNFact> = s
         .iter()
-        .flat_map(|f| f.terms.iter())
+        .flat_map(|f| f.terms().iter())
         .map(|t| crate::fact::out_fact(msg_to_fresh_terms(t)))
         .collect();
     let gen_args: Vec<LNTerm> = var_d
@@ -532,13 +532,13 @@ fn deduction_check(
     facts: &[LNFact],
 ) -> Result<bool, crate::prove::ProveError> {
     let fact_term = fact
-        .terms
+        .terms()
         .first()
         .expect("deductionCheck: KD facts carry exactly one term");
     let set_d: Vec<Vec<LNFact>> = decompose(facts)
         .into_iter()
         .filter(|s| {
-            let terms: Vec<LNTerm> = s.iter().flat_map(|f| f.terms.iter().cloned()).collect();
+            let terms: Vec<LNTerm> = s.iter().flat_map(|f| f.terms().iter().cloned()).collect();
             !ded_naive(fact_term, &terms)
         })
         .collect();
@@ -659,14 +659,17 @@ fn chained_rules_deduction_test(
     facts.extend_from_slice(get_deconstr_rule_prems_tail(inst_sigma));
     facts.extend_from_slice(get_deconstr_rule_prems_tail(inst1_sigma));
     facts.push(get_deconstr_rule_kd_prem(inst_sigma).clone());
-    let terms: Vec<LNTerm> = facts.iter().flat_map(|f| f.terms.iter().cloned()).collect();
+    let terms: Vec<LNTerm> = facts
+        .iter()
+        .flat_map(|f| f.terms().iter().cloned())
+        .collect();
     let fact_to_deduce = get_conc_fact(inst1_sigma);
-    if !(fact_to_deduce.tag == FactTag::Kd && fact_to_deduce.terms.len() == 1) {
+    if !(fact_to_deduce.tag == FactTag::Kd && fact_to_deduce.arity() == 1) {
         panic!(
             "No Deconstruction Chain Check: This case should not happen, please report it on the github page"
         );
     }
-    if ded_naive(&fact_to_deduce.terms[0], &terms) {
+    if ded_naive(&fact_to_deduce.terms()[0], &terms) {
         return Ok(true);
     }
     deduction_check(maude, intr_modified, fact_to_deduce, &facts)

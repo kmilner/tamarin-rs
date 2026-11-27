@@ -95,17 +95,7 @@ pub fn apply_abbreviations_term(lookup: &dyn Fn(&LNTerm) -> Option<LNTerm>, t: &
 /// Apply abbreviation substitution to all terms of a fact.
 /// Mirror of `applyAbbreviationsFact`.
 pub fn apply_abbreviations_fact(lookup: &dyn Fn(&LNTerm) -> Option<LNTerm>, fa: &LNFact) -> LNFact {
-    let mut new_fa = fa.clone();
-    new_fa.terms = fa
-        .terms
-        .iter()
-        .map(|t| apply_abbreviations_term(lookup, t))
-        .collect();
-    // The `.terms` assignment changes frees (abbreviation vars replace
-    // subterms); refresh the cached bloom so no stale fingerprint escapes
-    // (display-only path, but keep the invariant honest).
-    new_fa.recompute_bloom();
-    new_fa
+    fa.map_ref(|term| apply_abbreviations_term(lookup, term))
 }
 
 // ---------------------------------------------------------------------
@@ -279,7 +269,7 @@ fn dump_rule_info(buf: &mut String, info: &RuleInfo<ProtoRuleACInstInfo, IntrRul
 fn dump_fact(buf: &mut String, fa: &LNFact) {
     use std::fmt::Write as _;
     let _ = write!(buf, "{}", crate::fact::fact_tag_name(&fa.tag));
-    for t in fa.terms.iter() {
+    for t in fa.terms().iter() {
         let _ = write!(buf, "{} ", pretty_lnterm(t));
     }
 }
@@ -331,7 +321,7 @@ fn fact_terms(fa: &LNFact, out: &mut Vec<LNTerm>) {
     // Mirror `getFactTerms fact = filter (not . isPair) $ concatMap getSubTerms
     // $ factTerms fact`, where `getSubTerms t = t : ts` collects the term and
     // its IMMEDIATE arguments only (one level deep, not recursive).
-    for t in fa.terms.iter() {
+    for t in fa.terms().iter() {
         sub_terms_no_pair(t, out);
     }
 }

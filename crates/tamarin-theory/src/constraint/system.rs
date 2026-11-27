@@ -968,7 +968,7 @@ impl System {
                     .flat_map(|(i, ru)| ru.actions.iter().map(move |fa| (*i, fa))),
             )
             .filter(|(_, fa)| fa.is_ku())
-            .filter_map(|(i, fa)| fa.terms.first().map(|m| (i, fa, m)))
+            .filter_map(|(i, fa)| fa.terms().first().map(|m| (i, fa, m)))
     }
 
     /// HS `allKUActions` (System.hs): every `KU(m)` action as
@@ -987,7 +987,7 @@ impl System {
             .into_iter()
             .chain(node_actions)
             .filter(|(_, fa)| fa.is_ku())
-            .filter_map(|(i, fa)| fa.terms.first().map(|m| (i, fa, m)))
+            .filter_map(|(i, fa)| fa.terms().first().map(|m| (i, fa, m)))
             .collect()
     }
 
@@ -1000,7 +1000,7 @@ impl System {
                 ru.conclusions
                     .iter()
                     .filter(|fa| fa.is_kd())
-                    .filter_map(move |fa| fa.terms.first().map(|m| (*i, ru, m)))
+                    .filter_map(move |fa| fa.terms().first().map(|m| (*i, ru, m)))
             })
             .collect()
     }

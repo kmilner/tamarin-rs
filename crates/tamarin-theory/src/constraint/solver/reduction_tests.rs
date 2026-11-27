@@ -97,7 +97,7 @@ fn ku_vars_reads_the_ac_constructor_premise_variables() {
             panic!("{sym:?} construction rule must yield two KU premise vars");
         };
         // Exactly the rule's own premise variables, in premise order.
-        let prem_var = |i: usize| match &*ru.premises[i].terms {
+        let prem_var = |i: usize| match ru.premises[i].terms() {
             [tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(v))] => *v,
             other => panic!("premise {i} is not a single-variable fact: {other:?}"),
         };

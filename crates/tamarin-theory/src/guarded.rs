@@ -1136,7 +1136,7 @@ fn subst_gpair_cow(x: &BLNTerm, y: &BLNTerm, s: &LNSubst) -> Option<(BLNTerm, BL
 }
 
 fn subst_gfact_cow(f: &Fact<BLNTerm>, s: &LNSubst) -> Option<Fact<BLNTerm>> {
-    cow_map_arc(&f.terms, |a| subst_blnterm_cow(a, s)).map(|terms| f.with_terms(terms))
+    cow_map_arc(f.terms(), |a| subst_blnterm_cow(a, s)).map(|terms| f.with_terms(terms))
 }
 
 /// Apply an [`LNSubst`] to a guarded formula: each free leaf in the domain

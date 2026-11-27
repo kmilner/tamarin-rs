@@ -95,7 +95,7 @@ fn check_formula(oracle_type: &str, f: &Guarded) -> Vec<LVar> {
         Some(fa) => fa,
         None => return Vec::new(),
     };
-    let shown_terms = show_term_list(&fact.terms);
+    let shown_terms = show_term_list(fact.terms());
     let pat = if oracle_type == "curve" {
         "grpid,exp\\('g'"
     } else {
@@ -119,7 +119,7 @@ fn check_formula(oracle_type: &str, f: &Guarded) -> Vec<LVar> {
     // Dropping the Bound (vs. matching HS's panic) is intentional: a crash is
     // never the desired `--prove` output.
     let mut acc: Vec<LVar> = Vec::new();
-    for arg in fact.terms.iter() {
+    for arg in fact.terms().iter() {
         // `varsVTerm` is `sortednub` over `Ord (BVar LVar)`; `frees` is that
         // sorted, deduplicated walk restricted to the `Free` leaves.
         acc.extend(tamarin_term::lterm::frees(arg));

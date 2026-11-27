@@ -1222,7 +1222,7 @@ mod tests {
         let ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(fa))) = *body else {
             panic!("expected a predicate atom");
         };
-        match &fa.terms[..] {
+        match fa.terms() {
             [Term::App(FunSym::NoEq(sym), args)] => {
                 assert_eq!(sym.name, b"zero");
                 assert!(args.is_empty());

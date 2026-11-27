@@ -140,7 +140,7 @@ fn try_hide_action(v: &NodeId, sys: RenderSystem) -> Result<RenderSystem, Render
     // Collect KU action atoms at v.
     let ku_actions: Vec<(NodeId, crate::fact::LNFact)> = sys
         .unsolved_action_atoms()
-        .filter(|(n, fa)| n == v && matches!(fa.tag, FactTag::Ku) && !fa.terms.is_empty())
+        .filter(|(n, fa)| n == v && matches!(fa.tag, FactTag::Ku) && !fa.terms().is_empty())
         .map(|(n, fa)| (n, fa.clone()))
         .collect();
     if ku_actions.is_empty() {
@@ -149,7 +149,7 @@ fn try_hide_action(v: &NodeId, sys: RenderSystem) -> Result<RenderSystem, Render
     // All KU terms must be pair, inverse, pub, or nat — otherwise bail.
     if !ku_actions
         .iter()
-        .all(|(_, fa)| fa.terms.first().is_some_and(eligible_term))
+        .all(|(_, fa)| fa.terms().first().is_some_and(eligible_term))
     {
         return Err(sys);
     }

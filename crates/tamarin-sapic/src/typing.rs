@@ -308,7 +308,7 @@ fn type_process(env: &mut TypingEnvironment, p: &PlainProcess) -> Result<PlainPr
             // arguments a second time for the `events` map.  The map is not
             // kept, but that typing still updates `env` and can fail.
             if let SapicAction::Event(f) = ac {
-                for t in f.terms.iter() {
+                for t in f.terms().iter() {
                     type_with(env, t, &None).map_err(|e| e.to_string())?;
                 }
             }
@@ -530,7 +530,7 @@ pub(crate) fn vars_proc<A>(p: &Process<A, SapicLVar>) -> Vec<SapicLVar> {
     }
     fn facts(fas: &[tamarin_theory::sapic::SapicLNFact], out: &mut Vars) {
         fas.iter()
-            .flat_map(|fa| fa.terms.iter())
+            .flat_map(|fa| fa.terms().iter())
             .for_each(|t| term(t, out));
     }
     // The terms, formulas and variables `map_terms_action`/`map_terms_comb`

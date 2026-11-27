@@ -145,8 +145,8 @@ pub fn trace_state_at_path(sys: &crate::constraint::system::System, path: &[Stri
 fn goal_digest(g: &crate::constraint::constraints::Goal) -> String {
     use crate::constraint::constraints::Goal;
     match g {
-        Goal::Action(_, fa) => format!("Action({}/{})", fact_tag_short(&fa.tag), fa.terms.len()),
-        Goal::Premise(_, fa) => format!("Premise({}/{})", fact_tag_short(&fa.tag), fa.terms.len()),
+        Goal::Action(_, fa) => format!("Action({}/{})", fact_tag_short(&fa.tag), fa.arity()),
+        Goal::Premise(_, fa) => format!("Premise({}/{})", fact_tag_short(&fa.tag), fa.arity()),
         Goal::Chain(_, _) => "Chain".to_string(),
         Goal::Split(_) => "Split".to_string(),
         Goal::Disj(d) => format!("Disj[{}]", disj_heads(d)),

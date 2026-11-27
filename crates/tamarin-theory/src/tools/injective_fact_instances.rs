@@ -170,9 +170,9 @@ pub fn trimmed_pair_terms(
     tamarin_term::lterm::LNTerm,
     Vec<(MonotonicBehaviour, tamarin_term::lterm::LNTerm)>,
 )> {
-    let first = fa.terms.first()?.clone();
+    let first = fa.terms().first()?.clone();
     let mut pairs = Vec::new();
-    for (term, behaviour) in fa.terms.iter().skip(1).zip(behaviours.iter()) {
+    for (term, behaviour) in fa.terms().iter().skip(1).zip(behaviours.iter()) {
         let leaves = unfold_pairs(term, behaviour.len());
         if leaves.len() < behaviour.len() {
             return None;
@@ -220,12 +220,12 @@ pub fn simple_injective_fact_instances(
     use MonotonicBehaviour::*;
 
     fn first_term(f: &LNFact) -> Option<&LNTerm> {
-        f.terms.first()
+        f.terms().first()
     }
     fn fresh_premise_for(rule: &ProtoRuleE, t: &LNTerm) -> bool {
         rule.premises
             .iter()
-            .any(|p| p.tag == crate::fact::FactTag::Fresh && p.terms.first() == Some(t))
+            .any(|p| p.tag == crate::fact::FactTag::Fresh && p.terms().first() == Some(t))
     }
     fn copy_premise_for<'a>(
         rule: &'a ProtoRuleE,
@@ -242,7 +242,7 @@ pub fn simple_injective_fact_instances(
         let mut it = rule
             .premises
             .iter()
-            .filter(|p| &p.tag == tag && p.terms.first() == Some(t));
+            .filter(|p| &p.tag == tag && p.terms().first() == Some(t));
         match (it.next(), it.next()) {
             (Some(g), None) => Some(g),
             _ => None,
@@ -252,7 +252,7 @@ pub fn simple_injective_fact_instances(
     // HS `getShape` (InjectiveFactInstances.hs): for each non-first
     // term, `replicate Unspecified (length (getPairTerms term))`.
     fn get_shape(fact: &LNFact) -> Vec<Vec<MonotonicBehaviour>> {
-        fact.terms
+        fact.terms()
             .iter()
             .skip(1)
             .map(|t| vec![Unspecified; unfold_pairs(t, usize::MAX).len()])
@@ -357,7 +357,7 @@ pub fn simple_injective_fact_instances(
                 continue;
             }
             for prem in r.premises.iter().filter(|p| &p.tag == tag) {
-                if conc.terms.is_empty() {
+                if conc.terms().is_empty() {
                     continue;
                 }
                 let shape = combine_shapes(&get_shape(conc), &get_shape(prem));
@@ -434,9 +434,9 @@ pub fn simple_injective_fact_instances(
                 // shape inferred from the conclusions); `unfold_pairs` keeps the
                 // remainder as the last leaf instead.
                 let behaviours = fa_prem
-                    .terms
+                    .terms()
                     .iter()
-                    .zip(fa_conc.terms.iter())
+                    .zip(fa_conc.terms().iter())
                     .skip(1)
                     .zip(default_shape)
                     .map(|((p, c), shape)| {

@@ -335,10 +335,10 @@ fn fresh_fact_arguments(thy: &Theory) -> WfReport {
     let mut out = Vec::new();
     for ru in thy_proto_rules(thy) {
         for fa in &ru.premises {
-            if fa.tag != FactTag::Fresh || fa.terms.len() != 1 {
+            if fa.tag != FactTag::Fresh || fa.arity() != 1 {
                 continue;
             }
-            let m = &fa.terms[0];
+            let m = &fa.terms()[0];
             if is_msg_var(m) || is_fresh_var(m) {
                 continue;
             }

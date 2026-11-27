@@ -124,7 +124,7 @@ pub(crate) fn collect_process_names(p: &crate::sapic::PlainProcess, out: &mut Ve
                 }
                 SA::Delete(a) | SA::Lock(a) | SA::Unlock(a) => collect_names(a, out),
                 SA::Event(fa) => {
-                    for t in fa.terms.iter() {
+                    for t in fa.terms().iter() {
                         collect_names(t, out);
                     }
                 }
@@ -141,7 +141,7 @@ pub(crate) fn collect_process_names(p: &crate::sapic::PlainProcess, out: &mut Ve
                     ..
                 } => {
                     for fa in prems.iter().chain(acts).chain(concs) {
-                        for t in fa.terms.iter() {
+                        for t in fa.terms().iter() {
                             collect_names(t, out);
                         }
                     }

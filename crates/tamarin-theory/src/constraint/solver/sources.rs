@@ -620,7 +620,7 @@ fn k_conc_term_for_chain(
     if !matches!(fact.tag, FactTag::Ku | FactTag::Kd) {
         return None;
     }
-    fact.terms.first().cloned()
+    fact.terms().first().cloned()
 }
 
 /// Refine one case until its surviving branches have no safe goal or eligible
@@ -1181,10 +1181,10 @@ pub(super) fn source_goal_may_match(
         (Goal::Action(_, source_fact), Goal::Action(_, live_fact))
             if source_fact.tag == FactTag::Ku
                 && live_fact.tag == FactTag::Ku
-                && source_fact.terms.len() == 1
-                && live_fact.terms.len() == 1 =>
+                && source_fact.arity() == 1
+                && live_fact.arity() == 1 =>
         {
-            match (&source_fact.terms[0], &live_fact.terms[0]) {
+            match (&source_fact.terms()[0], &live_fact.terms()[0]) {
                 (Term::App(source_head, _), Term::App(live_head, _)) => source_head == live_head,
                 // Do not reject a non-Fresh live term for the abstract
                 // `t:Fresh` source here.  Current Haskell checks
@@ -1230,7 +1230,7 @@ fn prepare_source_match(
             }
             _ => return Ok(None),
         };
-    if live_fact.tag != abstract_fact.tag || live_fact.terms.len() != abstract_fact.terms.len() {
+    if live_fact.tag != abstract_fact.tag || live_fact.arity() != abstract_fact.arity() {
         return Ok(None);
     }
 
@@ -1253,13 +1253,13 @@ fn prepare_source_match(
         .max(shifted_cases_max.unwrap_or(0))
         .saturating_add(1);
 
-    let mut pairs = Vec::with_capacity(live_fact.terms.len() + 1);
+    let mut pairs = Vec::with_capacity(live_fact.arity() + 1);
     pairs.extend(
         live_fact
-            .terms
+            .terms()
             .iter()
             .cloned()
-            .zip(renamed_abstract_fact.terms.iter().cloned()),
+            .zip(renamed_abstract_fact.terms().iter().cloned()),
     );
     pairs.push((
         tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(live_node)),
@@ -1628,7 +1628,7 @@ fn var_occurrences_nodes(
             seg: Seg::shared(&crate::fact::show_fact_tag_derived(&f.tag)),
             parent: Some(ctx),
         };
-        for (i, t) in f.terms.iter().enumerate() {
+        for (i, t) in f.terms().iter().enumerate() {
             let sub = Ctx {
                 seg: idx_seg(i),
                 parent: Some(&tag_ctx),

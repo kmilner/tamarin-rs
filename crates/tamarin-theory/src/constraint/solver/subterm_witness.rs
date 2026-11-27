@@ -106,7 +106,7 @@ pub(super) fn finished_subterms(sig: &MaudeSig, sys: &System) -> bool {
                 .filter(|st| get_var(&st.big) != Some(x))
                 .all(|st| !occurs_free(x, &st.big))
             && node_facts.iter().chain(&action_goals).all(|fact| {
-                fact.terms
+                fact.terms()
                     .iter()
                     .all(|t| below_free_constructors(t, x, sig))
             })
@@ -125,13 +125,13 @@ pub(super) fn finished_subterms(sig: &MaudeSig, sys: &System) -> bool {
                     };
                     actions.iter().any(|fact| {
                         pattern.tag == fact.tag
-                            && pattern.terms.len() == fact.terms.len()
-                            && fact.terms.iter().any(|t| occurs_free(x, t))
+                            && pattern.arity() == fact.arity()
+                            && fact.terms().iter().any(|t| occurs_free(x, t))
                             && (has_equation
                                 || pattern
-                                    .terms
+                                    .terms()
                                     .iter()
-                                    .zip(fact.terms.iter())
+                                    .zip(fact.terms().iter())
                                     .any(|(p, t)| guard_inspects(p, t, x)))
                     })
                 })

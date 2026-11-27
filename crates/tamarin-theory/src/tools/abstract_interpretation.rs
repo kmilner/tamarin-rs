@@ -107,7 +107,7 @@ fn abs_fact(fa: &LNFact) -> LNFact {
                 counter: 0,
                 bindings: Vec::new(),
             };
-            let terms: Vec<LNTerm> = fa.terms.iter().map(|t| abs_term(t, &mut st)).collect();
+            let terms: Vec<LNTerm> = fa.terms().iter().map(|t| abs_term(t, &mut st)).collect();
             LNFact::fresh_annotated(fa.tag, fa.annotations.clone(), terms)
         }
     }

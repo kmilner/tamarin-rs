@@ -195,7 +195,7 @@ fn rule_terms(ru: &ProtoRuleE) -> impl Iterator<Item = &LNTerm> {
         .iter()
         .chain(&ru.actions)
         .chain(&ru.conclusions)
-        .flat_map(|f| f.terms.iter())
+        .flat_map(|f| f.terms().iter())
 }
 
 /// Port of HS `natWellSortedReport` (Wellformedness.hs) over its rule
@@ -310,7 +310,7 @@ fn rule_names(ru: &ProtoRuleE) -> Vec<Name> {
         for_each_formula_term(phi, &mut |t| collect_names(t, &mut out));
     }
     for fa in ru.premises.iter().chain(&ru.conclusions).chain(&ru.actions) {
-        for t in fa.terms.iter() {
+        for t in fa.terms().iter() {
             collect_names(t, &mut out);
         }
     }

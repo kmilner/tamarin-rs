@@ -179,7 +179,7 @@ fn has_non_normal_terms(
             .chain(&rule.conclusions)
             .chain(&rule.actions)
         {
-            for t in f.terms.iter() {
+            for t in f.terms().iter() {
                 if any_non_nf(&ctx.maude, &sig, irreducible, &mut memo, t).map_err(failed)? {
                     return Ok(true);
                 }
@@ -565,7 +565,9 @@ fn has_forbidden_kd(sys: &System) -> bool {
             if !matches!(fa.tag, FactTag::Kd) {
                 continue;
             }
-            let Some(t) = fa.terms.first() else { continue };
+            let Some(t) = fa.terms().first() else {
+                continue;
+            };
             if never_contains_fresh_priv(t) {
                 return true;
             }
@@ -1286,12 +1288,12 @@ enum KDir {
 }
 fn k_fact_view(fa: &crate::fact::LNFact) -> Option<(KDir, &tamarin_term::lterm::LNTerm)> {
     use crate::fact::FactTag;
-    if fa.terms.len() != 1 {
+    if fa.arity() != 1 {
         return None;
     }
     match fa.tag {
-        FactTag::Ku => Some((KDir::Up, &fa.terms[0])),
-        FactTag::Kd => Some((KDir::Dn, &fa.terms[0])),
+        FactTag::Ku => Some((KDir::Up, &fa.terms()[0])),
+        FactTag::Kd => Some((KDir::Dn, &fa.terms()[0])),
         _ => None,
     }
 }
@@ -1482,7 +1484,7 @@ fn injective_interference_candidates_with_graph<'a>(
         if !ctxt.is_injective_tag(&k_fa_prem.tag) {
             continue;
         }
-        let k_term = k_fa_prem.terms.first();
+        let k_term = k_fa_prem.terms().first();
         // Reachable set from i.
         let reach = reachable(&mut reach_cache, adj, &i);
         for j in reach.iter() {
@@ -1495,7 +1497,7 @@ fn injective_interference_candidates_with_graph<'a>(
             };
             // Conflicting fact in j's prems or concs.
             let conflicting = |fa: &crate::fact::LNFact| -> bool {
-                fa.tag == k_fa_prem.tag && fa.terms.first() == k_term
+                fa.tag == k_fa_prem.tag && fa.terms().first() == k_term
             };
             let has_conflict = j_rule.premises.iter().any(conflicting)
                 || j_rule.conclusions.iter().any(conflicting);
@@ -1562,7 +1564,7 @@ pub fn maybe_non_normal_terms_nodes(
             .chain(&rule.conclusions)
             .chain(&rule.actions)
         {
-            for t in f.terms.iter() {
+            for t in f.terms().iter() {
                 maybe_not_nf_subterms(irreducible, t, &mut candidates);
             }
         }

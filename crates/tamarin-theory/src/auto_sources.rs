@@ -321,7 +321,7 @@ pub(crate) fn add_auto_sources_lemma(
         let Some(conc_fact) = c_rule.conclusions.get(conc.1 .0) else {
             continue;
         };
-        let Some(v) = conc_fact.terms.first().cloned() else {
+        let Some(v) = conc_fact.terms().first().cloned() else {
             continue;
         };
 
@@ -489,11 +489,11 @@ pub(crate) fn add_auto_sources_lemma(
                 }
                 Matched::Fact { fact, outs } => {
                     let (in_name, out_name) = auto_names(m, pos, rin_name);
-                    let in_arity = fact.terms.len();
+                    let in_arity = fact.arity();
                     if outs.is_empty() {
                         fact_input_form_no_outputs(&in_name, in_arity)
                     } else {
-                        let out_arity = outs[0].1.terms.len();
+                        let out_arity = outs[0].1.arity();
                         fact_input_form_with_outputs(&in_name, &out_name, in_arity, out_arity)
                     }
                 }
@@ -527,12 +527,12 @@ pub(crate) fn add_auto_sources_lemma(
                     let (in_name, out_name) = auto_names(m, pos, rin_name);
                     grp.push((
                         rin_name.to_string(),
-                        ln_proto(&in_name, fact.terms.to_vec()),
+                        ln_proto(&in_name, fact.terms().to_vec()),
                     ));
                     for (rout_i, fout) in outs {
                         grp.push((
                             rules[*rout_i].name().to_string(),
-                            ln_proto(&out_name, fout.terms.to_vec()),
+                            ln_proto(&out_name, fout.terms().to_vec()),
                         ));
                     }
                 }
@@ -879,7 +879,7 @@ mod tests {
         // the bodies differ pairwise.
         let has_fst = |r: &OpenProtoRule| {
             r.rule.conclusions.iter().any(|f| {
-                f.terms.iter().any(|t| {
+                f.terms().iter().any(|t| {
                     matches!(t, tamarin_term::term::Term::App(sym, _)
                         if *sym == tamarin_term::function_symbols::FunSym::NoEq(
                             tamarin_term::function_symbols::fst_sym()))

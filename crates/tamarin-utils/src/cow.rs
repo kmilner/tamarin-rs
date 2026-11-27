@@ -63,10 +63,10 @@ pub fn cow_pair<T: Clone, U: Clone>(x: &T, fx: Option<T>, y: &U, fy: Option<U>) 
 /// slice with the unchanged prefix cloned and changed elements rebuilt.
 #[inline]
 pub fn cow_map_arc<T: Clone>(
-    xs: &std::sync::Arc<[T]>,
+    xs: &[T],
     f: impl FnMut(&T) -> Option<T>,
 ) -> Option<std::sync::Arc<[T]>> {
-    cow_map_vec(&xs[..], f).map(std::sync::Arc::from)
+    cow_map_vec(xs, f).map(std::sync::Arc::from)
 }
 
 #[cfg(test)]

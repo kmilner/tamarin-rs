@@ -786,7 +786,7 @@ fn eq_fact(t1: &SapicTerm, t2: &SapicTerm) -> tamarin_theory::fact::LNFact {
 
 /// `fromList $ getFactVariables fa` — the set of variables occurring in a fact.
 fn fact_vars(f: &tamarin_theory::fact::LNFact) -> BTreeSet<LVar> {
-    f.terms
+    f.terms()
         .iter()
         .flat_map(tamarin_term::vterm::vars_vterm)
         .collect()

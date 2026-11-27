@@ -380,7 +380,7 @@ fn map_fact_name(f: &LNFact, prefix: &str) -> LNFact {
         ),
         other => *other,
     };
-    tamarin_theory::fact::Fact::new(tag, f.terms.to_vec()).with_annotations(f.annotations.clone())
+    tamarin_theory::fact::Fact::new(tag, f.terms().to_vec()).with_annotations(f.annotations.clone())
 }
 
 /// `proto_fact` is fixed to `Linear`; the state fact needs an explicit

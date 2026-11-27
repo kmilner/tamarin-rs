@@ -893,9 +893,7 @@ impl ProofContext {
                 .flat_map(|rule| &rule.rule.actions)
                 .chain(intruder_rules.iter().flat_map(|rule| &rule.actions))
             {
-                *counts
-                    .entry((action.tag, action.terms.len()))
-                    .or_insert(0usize) += 1;
+                *counts.entry((action.tag, action.arity())).or_insert(0usize) += 1;
             }
             counts
                 .into_iter()
@@ -1029,7 +1027,7 @@ pub(crate) fn annotate_loop_breakers(
                 });
                 // freshToFree rename + apply — frees change; recompute the bloom.
                 let terms: Vec<tamarin_term::lterm::LNTerm> = fa
-                    .terms
+                    .terms()
                     .iter()
                     .map(|t| tamarin_term::subst::apply_vterm(&free, t.clone()))
                     .collect();

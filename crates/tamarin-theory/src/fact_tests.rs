@@ -248,10 +248,10 @@ fn bloom_is_superset_of_frees_and_content_deterministic() {
             );
         });
         // Recomputing from the same terms is identical (content-deterministic).
-        let b2 = fact_fingerprints(&fa.terms).0;
+        let b2 = fact_fingerprints(fa.terms()).0;
         assert_eq!(b, b2);
         // A structurally-equal rebuild gets an equal bloom.
-        let fa2 = Fact::fresh(fa.tag, fa.terms.to_vec());
+        let fa2 = Fact::fresh(fa.tag, fa.terms().to_vec());
         assert_eq!(fa.bloom(), fa2.bloom());
     }
 }
@@ -282,7 +282,7 @@ fn bloom_miss_implies_no_change() {
         let dom_bloom = subst.dom().fold(0u64, |b, v| b | var_bit(v));
         if fa.bloom() & dom_bloom == 0 {
             fired += 1;
-            for t in fa.terms.iter() {
+            for t in fa.terms().iter() {
                 assert!(
                     t.apply_changed(&subst).is_none(),
                     "skip fired but subst changed a term — UNSOUND: fact={fa:?}"
@@ -345,7 +345,7 @@ fn fact_equal_values_hash_equal() {
         let a = rand_fact(&mut r);
         // An independently built structural copy, with the annotations and the
         // fingerprints deliberately drawn differently.
-        let b = Fact::new(a.tag, a.terms.to_vec()).annotate(FactAnnotation::SolveLast);
+        let b = Fact::new(a.tag, a.terms().to_vec()).annotate(FactAnnotation::SolveLast);
         assert_eq!(a, b);
         assert_eq!(
             tamarin_utils::fx_hash_one(&a),
@@ -420,17 +420,6 @@ fn max_var_new_and_map_are_sentinel() {
     assert_eq!(mapped.max_var_cached(), None);
 }
 
-/// `recompute_bloom` refreshes BOTH fingerprints from the current terms.
-#[test]
-fn recompute_bloom_refreshes_both_fingerprints() {
-    let mut fa = Fact::fresh(FactTag::Out, vec![mv("x", 2)]);
-    assert_eq!(fa.max_var_cached(), Some(2));
-    fa.terms = vec![mv("y", 11), mv("z", 4)].into();
-    fa.recompute_bloom();
-    assert_eq!(fa.max_var_cached(), Some(11));
-    assert_eq!(fa.bloom(), fact_fingerprints(&fa.terms).0);
-}
-
 /// A `map_free_with` rebuild recomputes the max over the RENAMED terms
 /// (never copies the stale source max).
 #[test]
@@ -456,7 +445,7 @@ fn max_var_equals_the_manual_walk() {
     for _ in 0..2000 {
         let fa = rand_fact(&mut r);
         let mut walked = 0u64;
-        for t in fa.terms.iter() {
+        for t in fa.terms().iter() {
             term_max_idx(t, &mut walked);
         }
         assert_eq!(

@@ -292,7 +292,7 @@ fn json_fact(id: String, f: &LNFact) -> Value {
         ("jgnFactTag", Value::String(tag)),
         (
             "jgnFactTerms",
-            Value::Array(f.terms.iter().map(|t| json_term(t, true)).collect()),
+            Value::Array(f.terms().iter().map(|t| json_term(t, true)).collect()),
         ),
     ])
 }

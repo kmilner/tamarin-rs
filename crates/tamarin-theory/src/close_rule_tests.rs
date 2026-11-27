@@ -30,7 +30,7 @@ fn xorr_parent() -> (tamarin_term::maude_sig::MaudeSig, Vec<LNTerm>) {
     let parsed = tamarin_parser::parse_theory(XORR_PARENT, &[]).expect("parent parses");
     let elab = crate::elaborate::elaborate(&parsed).expect("parent elaborates");
     let rule = elab.rules().next().expect("Seed rule present");
-    let probe = rule.rule.actions[0].terms.to_vec();
+    let probe = rule.rule.actions[0].terms().to_vec();
     assert_eq!(probe.len(), 5, "Probe carries five terms");
     (elab.signature, probe)
 }
@@ -300,7 +300,7 @@ fn render_deduction_theory(
     // Conclusions: `map (outFact . msgToFreshTerms) (concatMap factTerms s)`.
     let concs: Vec<LNFact> = s
         .iter()
-        .flat_map(|f| f.terms.iter())
+        .flat_map(|f| f.terms().iter())
         .map(|t| crate::fact::out_fact(msg_to_fresh_terms(t)))
         .collect();
     // Actions: Generated_0 over the retyped vars, plus OnlyOnce.

@@ -1339,7 +1339,7 @@ fn match_atom_via_maude_pattern_with_pair_against_pair() {
 }
 
 /// `match_atom_via_maude` does NOT itself filter on arity — its caller
-/// does (`simplify.rs`'s `g_fact_subst.args.len() != fa_sys.terms.len()`
+/// does (`simplify.rs`'s `g_fact_subst.args.len() != fa_sys.arity()`
 /// guard just above the call).  With no subject args the pairwise
 /// equation list is empty, so the function short-circuits to the single
 /// time-only substitution and never reaches Maude.  Pinned so that a

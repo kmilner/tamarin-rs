@@ -271,7 +271,7 @@ pub fn variants_proto_rule(
         .iter()
         .chain(&rule.actions)
         .chain(&rule.conclusions)
-        .flat_map(|fact| fact.terms.iter())
+        .flat_map(|fact| fact.terms().iter())
         .chain(rule.new_vars.iter())
         .any(reducible);
     // Rust-only short cut: with nothing reducible, only variables are
@@ -357,7 +357,7 @@ pub fn variants_proto_rule(
     ) -> Fact<LNTerm> {
         // Abstraction rewrite — frees change; recompute the bloom.
         let terms: Vec<LNTerm> = f
-            .terms
+            .terms()
             .iter()
             .map(|t| abstr_term(t, irreducible, bindings, maude))
             .collect();
@@ -427,13 +427,13 @@ pub fn variants_proto_rule(
             .premises
             .iter()
             .filter(|f| matches!(f.tag, crate::fact::FactTag::Fresh))
-            .filter_map(|f| f.terms.first().cloned())
+            .filter_map(|f| f.terms().first().cloned())
             .collect();
         let premise_terms_for_filter: Vec<LNTerm> = rule
             .premises
             .iter()
             .filter(|f| !matches!(f.tag, crate::fact::FactTag::Fresh))
-            .flat_map(|f| f.terms.iter().cloned())
+            .flat_map(|f| f.terms().iter().cloned())
             .collect();
         if freshly_introduced.is_empty() || premise_terms_for_filter.is_empty() {
             raw_substs
@@ -544,12 +544,12 @@ fn identity_is_fresh_redundant(rule: &ProtoRuleE) -> bool {
         .premises
         .iter()
         .filter(|f| !matches!(f.tag, crate::fact::FactTag::Fresh))
-        .flat_map(|f| f.terms.iter())
+        .flat_map(|f| f.terms().iter())
         .collect();
     rule.premises
         .iter()
         .filter(|f| matches!(f.tag, crate::fact::FactTag::Fresh))
-        .filter_map(|f| f.terms.first())
+        .filter_map(|f| f.terms().first())
         .any(|ft| {
             premise_terms
                 .iter()
@@ -680,7 +680,7 @@ mod tests {
         let (renamed, renamed_substs) = rename_precise_rule_with_variants(rule, substs);
 
         assert_eq!(renamed_substs[0].to_list(), vec![(mvar(0), mterm(7))]);
-        assert_eq!(renamed.premises[0].terms[0], mterm(1));
+        assert_eq!(renamed.premises[0].terms()[0], mterm(1));
     }
 
     /// HS keeps `Just []`: an empty disjunction is closed as is, and unfolds

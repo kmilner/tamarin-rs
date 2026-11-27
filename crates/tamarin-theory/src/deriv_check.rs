@@ -336,7 +336,7 @@ fn synthesise_probe(rule: &ProtoRuleE, idx: usize, free_vars: &[LVar]) -> Probe 
     let out_concs: Vec<LNFact> = rule
         .premises
         .iter()
-        .flat_map(|f| f.terms.iter().cloned())
+        .flat_map(|f| f.terms().iter().cloned())
         .map(|t| out_fact(rename_term_to_probe(t, &rename)))
         .collect();
     // `Rule::new` leaves `new_vars` empty, which is the `[]` HS's

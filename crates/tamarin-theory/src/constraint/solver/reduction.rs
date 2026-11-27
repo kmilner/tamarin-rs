@@ -492,7 +492,7 @@ impl<'ctx> Reduction<'ctx> {
                 return false;
             };
             fact.tag == crate::fact::FactTag::Ku
-                && fact.terms.first().is_some_and(|term| {
+                && fact.terms().first().is_some_and(|term| {
                     (tamarin_term::lterm::is_msg_var(term) || is_product_or_union(term))
                         && term.apply_changed(&pass).is_some_and(|new| new != *term)
                 })
@@ -708,7 +708,7 @@ impl<'ctx> Reduction<'ctx> {
         // a fresh node ordered before it.
         if let Goal::Action(node_id, fa) = &g
             && fa.tag == crate::fact::FactTag::Ku
-            && let Some(top) = fa.terms.first()
+            && let Some(top) = fa.terms().first()
             && let Some(sub_terms) = ku_decomp_subterms(top)
         {
             let outer_node = *node_id;
@@ -1128,7 +1128,7 @@ pub enum IsAcConstructor {
 fn ku_vars(rule: &crate::rule::RuleACInst) -> IsAcConstructor {
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
-    let ku_var = |f: &crate::fact::LNFact| match &*f.terms {
+    let ku_var = |f: &crate::fact::LNFact| match f.terms() {
         [Term::Lit(Lit::Var(v))] if f.tag == crate::fact::FactTag::Ku => Some(*v),
         _ => None,
     };
@@ -1427,7 +1427,7 @@ impl<'ctx> Reduction<'ctx> {
         eqs: &[tamarin_term::rewriting::Equal<crate::fact::LNFact>],
     ) -> Result<SystemOutcome, crate::prove::ProveError> {
         for e in eqs {
-            if e.lhs.tag != e.rhs.tag || e.lhs.terms.len() != e.rhs.terms.len() {
+            if e.lhs.tag != e.rhs.tag || e.lhs.arity() != e.rhs.arity() {
                 // Set eq_store.is_false so the SolveGoal-arm mzero
                 // proxy filter (the SolveGoal-arm eq_store.is_false()
                 // case-drop in `exec_proof_method`, proof_method.rs)
@@ -1440,7 +1440,7 @@ impl<'ctx> Reduction<'ctx> {
         }
         let mut flat = Vec::new();
         for e in eqs {
-            flatten_list_eq(&e.lhs.terms, &e.rhs.terms, &mut flat);
+            flatten_list_eq(e.lhs.terms(), e.rhs.terms(), &mut flat);
         }
         self.solve_term_eqs_ac(strategy, is_ac, &flat)
     }
@@ -1831,10 +1831,10 @@ fn illegal_coerce(p_rule: &RuleACInst, fa_conc: &crate::fact::LNFact) -> bool {
     if !is_coerce_rule_inst(p_rule) {
         return false;
     }
-    if fa_conc.terms.len() != 1 {
+    if fa_conc.arity() != 1 {
         return false;
     }
-    let t = &fa_conc.terms[0];
+    let t = &fa_conc.terms()[0];
     tamarin_term::term::is_pair(t)
         || tamarin_term::term::is_inverse(t)
         || tamarin_term::term::is_product(t)
@@ -1865,7 +1865,7 @@ pub(crate) fn bm_term(t: &tamarin_term::lterm::LNTerm, max: &mut u64) {
 #[inline(always)]
 pub(crate) fn bm_fact(fa: &crate::fact::LNFact, max: &mut u64) {
     // Per-fact cached max-var-idx fast-path: `Fact::fresh`/`fresh_annotated`
-    // compute the EXACT max free-var idx of `fa.terms` in the same
+    // compute the EXACT max free-var idx of `fa.terms()` in the same
     // `for_each_free` walk that builds the bloom (fact.rs `fact_fingerprints`),
     // and the value survives every unchanged pass.  On a cache hit fold that
     // single `u64` — a cached `0` (no frees, or a free var at idx 0) folds to
@@ -1878,7 +1878,7 @@ pub(crate) fn bm_fact(fa: &crate::fact::LNFact, max: &mut u64) {
             }
         }
         None => {
-            for t in fa.terms.iter() {
+            for t in fa.terms().iter() {
                 bm_term(t, max);
             }
         }
@@ -2236,7 +2236,7 @@ pub fn chain_direct_case_name(fa_conc: &crate::fact::LNFact) -> Option<String> {
     if !matches!(fa_conc.tag, FactTag::Kd) {
         return None;
     }
-    let m = fa_conc.terms.first()?;
+    let m = fa_conc.terms().first()?;
     Some(match m {
         Term::Lit(Lit::Var(v)) => {
             // Haskell `showLitName (Var (LVar v s i))`:
@@ -2442,7 +2442,7 @@ impl<'ctx> Reduction<'ctx> {
         idx: crate::rule::PremIdx,
         fa: &crate::fact::LNFact,
     ) -> Result<(), crate::prove::ProveError> {
-        let m = match fa.terms.first() {
+        let m = match fa.terms().first() {
             Some(t) => t.clone(),
             None => return Ok(()),
         };
@@ -2503,7 +2503,7 @@ impl<'ctx> Reduction<'ctx> {
         idx: crate::rule::PremIdx,
         fa: &crate::fact::LNFact,
     ) -> Result<(), crate::prove::ProveError> {
-        let m = match fa.terms.first() {
+        let m = match fa.terms().first() {
             Some(t) => t.clone(),
             None => return Ok(()),
         };
@@ -2645,17 +2645,16 @@ impl<'ctx> Reduction<'ctx> {
                 self.maude.ensure_above(avoid_max);
                 let fork_base = self.maude.fresh_counter_peek();
                 let goal_ac_headed = matches!(fa.tag, crate::fact::FactTag::Ku)
-                    && fa.terms.len() == 1
+                    && fa.arity() == 1
                     && matches!(
-                        fa.terms[0],
+                        fa.terms()[0],
                         tamarin_term::term::Term::App(
                             tamarin_term::function_symbols::FunSym::Ac(_),
                             _
                         )
                     );
-                let matches_goal = |act: &crate::fact::LNFact| {
-                    act.tag == fa.tag && act.terms.len() == fa.terms.len()
-                };
+                let matches_goal =
+                    |act: &crate::fact::LNFact| act.tag == fa.tag && act.arity() == fa.arity();
                 let mut cases: Vec<GoalBranch> = Vec::new();
                 for rule in self.ctx.classified_rules.non_silent() {
                     // A rule with no action of the goal's shape dies in
@@ -2757,7 +2756,7 @@ impl<'ctx> Reduction<'ctx> {
         // The fresh `t` lets the Out premise unify with any protocol
         // output; `solveChain` later closes the chain.
         if matches!(fa_prem.tag, crate::fact::FactTag::Kd) {
-            if fa_prem.terms.is_empty() {
+            if fa_prem.terms().is_empty() {
                 return Ok(GoalCases::Contradictory);
             }
             let i_learn = self.fresh_lvar("vl", tamarin_term::lterm::LSort::Node);
@@ -2787,9 +2786,8 @@ impl<'ctx> Reduction<'ctx> {
         let avoid_max = bounds_max(&self.sys);
         let new_node = self.fresh_lvar("vr", tamarin_term::lterm::LSort::Node);
         let fork_base = self.maude.fresh_counter_peek();
-        let matches_prem = |fc: &crate::fact::LNFact| {
-            fc.tag == fa_prem.tag && fc.terms.len() == fa_prem.terms.len()
-        };
+        let matches_prem =
+            |fc: &crate::fact::LNFact| fc.tag == fa_prem.tag && fc.arity() == fa_prem.arity();
         let mut cases: Vec<GoalBranch> = Vec::new();
         for rule in rules.protocol.iter().chain(&rules.construct) {
             // A rule with no conclusion of the premise's shape dies in
@@ -2881,14 +2879,14 @@ impl<'ctx> Reduction<'ctx> {
         // Extend by one destructor step, in saturation as well
         // (`contradictoryIf (isMsgVar m)` skips an open chain).
         let conc_term_is_msg_var = fa_conc
-            .terms
+            .terms()
             .first()
             .map(tamarin_term::lterm::is_msg_var)
             .unwrap_or(false);
         // A multiset union `KD(t1 ++ ... ++ tn)` uses the bespoke rules
         // `mkDUnionRule args arg_i`, whose premise is the message itself, so
         // there is no AC unification and one case per component.
-        let funion_args: Option<Vec<tamarin_term::lterm::LNTerm>> = match fa_conc.terms.first() {
+        let funion_args: Option<Vec<tamarin_term::lterm::LNTerm>> = match fa_conc.terms().first() {
             Some(tamarin_term::term::Term::App(
                 tamarin_term::function_symbols::FunSym::Ac(
                     tamarin_term::function_symbols::AcSym::Union,
@@ -2965,7 +2963,7 @@ impl<'ctx> Reduction<'ctx> {
                 // both before labelling.
                 let keep = |ru: &RuleACInst| {
                     ru.premises.first().is_some_and(|prem0| {
-                        prem0.tag == fa_conc.tag && prem0.terms.len() == fa_conc.terms.len()
+                        prem0.tag == fa_conc.tag && prem0.arity() == fa_conc.arity()
                     }) && !forbidden_edge(&c_rule, ru)
                         && !ru.conclusions.is_empty()
                 };

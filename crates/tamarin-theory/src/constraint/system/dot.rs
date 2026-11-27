@@ -172,7 +172,7 @@ fn is_not_diff_annotation(diff_fact_name: &str, fa: &LNFact) -> bool {
     let is_diff = matches!(&fa.tag,
         FactTag::Proto(crate::fact::Multiplicity::Linear, n, 0)
             if **n == *diff_fact_name)
-        && fa.terms.is_empty();
+        && fa.terms().is_empty();
     !is_diff
 }
 

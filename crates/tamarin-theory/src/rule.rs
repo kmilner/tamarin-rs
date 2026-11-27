@@ -797,7 +797,7 @@ pub fn rule_products_outside_exponents<I>(rule: &Rule<I>) -> Vec<LNTerm> {
         .iter()
         .chain(&rule.actions)
         .chain(&rule.conclusions)
-        .flat_map(|f| f.terms.iter())
+        .flat_map(|f| f.terms().iter())
     {
         products(term, &mut out);
     }
@@ -905,7 +905,7 @@ pub fn equal_rule_up_to_renaming_ignoring_names(
         if f1.tag != f2.tag {
             return Ok(false);
         }
-        for (a, b) in f1.terms.iter().zip(f2.terms.iter()) {
+        for (a, b) in f1.terms().iter().zip(f2.terms().iter()) {
             term_eqs.push(Equal {
                 lhs: a.clone(),
                 rhs: b.clone(),
@@ -1065,10 +1065,10 @@ fn fact_term_eqs<'a>(
 ) -> Option<Vec<Equal<LNTerm>>> {
     let mut eqs = Vec::new();
     for (a, b) in pairs {
-        if a.tag != b.tag || a.terms.len() != b.terms.len() {
+        if a.tag != b.tag || a.arity() != b.arity() {
             return None;
         }
-        eqs.extend(a.terms.iter().zip(b.terms.iter()).map(|(x, y)| Equal {
+        eqs.extend(a.terms().iter().zip(b.terms().iter()).map(|(x, y)| Equal {
             lhs: x.clone(),
             rhs: y.clone(),
         }));
@@ -1267,7 +1267,7 @@ fn pretty_named_rule<I>(
     let is_diff_annotation = |fa: &LNFact| {
         matches!(&fa.tag, FactTag::Proto(Multiplicity::Linear, n, 0) if *n == diff_label)
             && fa.annotations.is_empty()
-            && fa.terms.is_empty()
+            && fa.terms().is_empty()
     };
     let filtered: Option<Vec<LNFact>> = ru.actions.iter().any(&is_diff_annotation).then(|| {
         ru.actions

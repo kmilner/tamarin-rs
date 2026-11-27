@@ -209,10 +209,10 @@ pub fn expand_formula(
 fn apply_at_use_site(pr: &Predicate, fa: &Fact<BLNTerm>) -> LNFormula {
     let pairs: Vec<(LVar, BLNTerm)> = pr
         .fact
-        .terms
+        .terms()
         .iter()
         .copied()
-        .zip(fa.terms.iter().cloned())
+        .zip(fa.terms().iter().cloned())
         .collect();
     map_atoms(pr.formula.clone(), &mut |i, a| {
         let s: Subst<Name, BVar<LVar>> = Subst::from_list(
@@ -292,7 +292,7 @@ mod tests {
             FactTag::Proto(Multiplicity::Linear, "Smaller", 2),
             "linear, named `Smaller`, arity 2"
         );
-        assert_eq!(f.terms.to_vec(), vec![x, y], "operands keep source order");
+        assert_eq!(f.terms().to_vec(), vec![x, y], "operands keep source order");
     }
 
     /// The built-in body is `∃ z. y = (x ++ z)` with `z` abstracted, and the

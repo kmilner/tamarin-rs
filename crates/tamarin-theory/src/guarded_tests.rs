@@ -711,7 +711,7 @@ fn applying_a_substitution_to_a_guarded_formula_leaves_bound_leaves_alone() {
         Guarded::GGuarded { body, .. } => match &*body {
             Guarded::Atom(ProtoAtom::Action(_, fa)) => {
                 // Walk the body atom and verify the `k` slot is still Bound(0).
-                match &fa.terms[0] {
+                match &fa.terms()[0] {
                     Term::Lit(Lit::Var(BVar::Bound(0))) => {}
                     other => panic!("expected Bound(0), got {:?}", other),
                 }

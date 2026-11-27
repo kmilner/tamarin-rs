@@ -298,12 +298,12 @@ fn non_injective_fact_instances_pairs(
         if !ctxt.is_injective_tag(&k_fa_prem.tag) {
             continue;
         }
-        let k_term = match k_fa_prem.terms.first() {
+        let k_term = match k_fa_prem.terms().first() {
             Some(t) => t,
             None => continue,
         };
         let conflicting = |fa: &crate::fact::LNFact| -> bool {
-            fa.tag == k_fa_prem.tag && fa.terms.first() == Some(k_term)
+            fa.tag == k_fa_prem.tag && fa.terms().first() == Some(k_term)
         };
         for (j, j_rule) in &nodes_sorted {
             if j == &i || j == &k {
@@ -803,7 +803,7 @@ pub(crate) fn try_match_all_guards(
                     .unwrap_or(&[]);
                 for &ai in tag_group {
                     let (i, fa_sys) = &sys_actions[ai as usize];
-                    if g_fact_subst.terms.len() != fa_sys.terms.len() {
+                    if g_fact_subst.arity() != fa_sys.arity() {
                         continue;
                     }
                     // Each AC matcher is its own candidate (`candidateSubsts`).
@@ -814,7 +814,7 @@ pub(crate) fn try_match_all_guards(
                         &g_fact_subst,
                         &g_time_subst,
                         i,
-                        &fa_sys.terms,
+                        fa_sys.terms(),
                     )?;
                     for subst_here in substs_here {
                         let Some(combined) = combine_substs(acc, &subst_here) else {
@@ -972,7 +972,7 @@ fn match_atom_via_maude(
     let pairs = sys_args
         .iter()
         .cloned()
-        .zip(g_fact.terms.iter().cloned())
+        .zip(g_fact.terms().iter().cloned())
         .collect();
     Ok(match_skolemized(maude, pattern_vars, pairs)?
         .into_iter()
@@ -1326,14 +1326,12 @@ fn collect_unique_action_candidates(
     }
 
     let is_unique = |fa: &LNFact| -> bool {
-        for t in fa.terms.iter() {
+        for t in fa.terms().iter() {
             if has_funion_head(t) {
                 return false;
             }
         }
-        red.ctx
-            .unique_action_shapes
-            .contains(&(fa.tag, fa.terms.len()))
+        red.ctx.unique_action_shapes.contains(&(fa.tag, fa.arity()))
     };
 
     let mut candidates: Vec<(crate::constraint::constraints::NodeId, LNFact)> = red
@@ -1483,7 +1481,7 @@ pub(crate) fn enforce_fresh_ordering_pass(
             if !matches!(prem.tag, FactTag::Fresh) {
                 continue;
             }
-            if let Some(Term::Lit(Lit::Var(v))) = prem.terms.first()
+            if let Some(Term::Lit(Lit::Var(v))) = prem.terms().first()
                 && v.sort == tamarin_term::lterm::LSort::Fresh
             {
                 suppliers.push((*id, *v));
@@ -1563,7 +1561,7 @@ pub(crate) fn enforce_fresh_ordering_pass(
         .map(|(_, rule)| {
             let mut out = tamarin_utils::FastSet::default();
             for fact in rule.premises.iter().chain(rule.actions.iter()) {
-                for term in fact.terms.iter() {
+                for term in fact.terms().iter() {
                     crate::tools::subterm_store::collect_fresh_vars_not_below_reducible(
                         reducible, term, &mut out,
                     );
@@ -1581,7 +1579,7 @@ pub(crate) fn enforce_fresh_ordering_pass(
                 rule.premises
                     .iter()
                     .chain(rule.actions.iter())
-                    .flat_map(|fact| fact.terms.iter())
+                    .flat_map(|fact| fact.terms().iter())
                     .collect()
             })
             .collect()

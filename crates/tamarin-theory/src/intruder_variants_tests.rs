@@ -64,7 +64,7 @@ fn one_is_var_when_no_dh_builtin_in_maude_sig() {
     let rules = parse_intruder_rules(&pair_maude_sig(), "<no-dh>", src)
         .expect("parse_intruder_rules under pair_maude_sig");
     assert_eq!(rules.len(), 1);
-    let action_term = &rules[0].actions[0].terms[0];
+    let action_term = &rules[0].actions[0].terms()[0];
     match action_term {
         Term::Lit(Lit::Var(v)) => {
             assert_eq!(

@@ -949,7 +949,7 @@ fn eval_leaf(leaf: &crate::tactic::SelectorLeaf, g: &AnnotatedGoal, sys: &System
         "reasonableNoncesNoise" => {
             let oracle_type = head(0);
             let fact_terms: &[LNTerm] = match &g.goal {
-                Goal::Action(_, fa) => &fa.terms,
+                Goal::Action(_, fa) => fa.terms(),
                 _ => &[],
             };
             let mut sys_pattern = vec!["~n".to_string()];
@@ -1003,8 +1003,8 @@ fn eval_leaf(leaf: &crate::tactic::SelectorLeaf, g: &AnnotatedGoal, sys: &System
         "isInFactTerms" => {
             let s = head(0);
             match &g.goal {
-                Goal::Action(_, fa) if fa.terms.len() == 1 => {
-                    regex_is_match(s, &tamarin_term::term::show_term(&fa.terms[0]))
+                Goal::Action(_, fa) if fa.arity() == 1 => {
+                    regex_is_match(s, &tamarin_term::term::show_term(&fa.terms()[0]))
                 }
                 _ => false,
             }
@@ -1438,7 +1438,7 @@ fn collect_one_case_syms(
         if fact.tag != FactTag::Ku {
             return None;
         }
-        match fact.terms.first()? {
+        match fact.terms().first()? {
             Term::App(FunSym::NoEq(symbol), _) => Some(symbol.name),
             _ => None,
         }
@@ -1512,7 +1512,7 @@ fn is_msg_one_case_goal(
     if !matches!(fa.tag, FactTag::Ku) {
         return false;
     }
-    let Some(t) = fa.terms.first() else {
+    let Some(t) = fa.terms().first() else {
         return false;
     };
     if let Term::App(FunSym::NoEq(s), _) = t {
@@ -1752,7 +1752,7 @@ fn insert_action_first_key_has_prefix(a: &AnnotatedGoal, prefix: &str) -> bool {
         return false;
     }
     // HS `viewTerm2 -> FPair`: `pairSym` itself.
-    let Some(t @ Term::App(_, args)) = fa.terms.first() else {
+    let Some(t @ Term::App(_, args)) = fa.terms().first() else {
         return false;
     };
     if !tamarin_term::term::is_pair(t) {
@@ -1944,7 +1944,7 @@ fn is_auth_out_fact(fa: &crate::fact::LNFact) -> bool {
 ///   msgPremise (ActionG _ fa) = do (UpK, m) <- kFactView fa; return m
 fn msg_premise(g: &Goal) -> Option<&tamarin_term::lterm::LNTerm> {
     match g {
-        Goal::Action(_, fa) if fa.is_ku() => fa.terms.first(),
+        Goal::Action(_, fa) if fa.is_ku() => fa.terms().first(),
         _ => None,
     }
 }
@@ -1964,7 +1964,7 @@ fn chain_kd_conc_term(
     if fact.tag != FactTag::Kd {
         return None;
     }
-    fact.terms.first().cloned()
+    fact.terms().first().cloned()
 }
 
 /// True iff some KU action for `term` is always-before `target`: HS
@@ -2029,7 +2029,7 @@ pub(crate) fn is_open_in_sys(
     match g {
         Goal::Disj(Disj(items)) if items.is_empty() => false,
         Goal::Action(i, fa) if matches!(fa.tag, FactTag::Ku) => {
-            let Some(m) = fa.terms.first() else {
+            let Some(m) = fa.terms().first() else {
                 return true;
             };
             if is_pub_or_nat_term(m) {
@@ -2222,7 +2222,7 @@ pub(crate) fn goal_usefulness_with_adj(
         if has_ku_guards {
             return Usefulness::Useful;
         }
-        if let Some(m) = fa.terms.first() {
+        if let Some(m) = fa.terms().first() {
             // Order matters — `currentlyDeducible` subsumes
             // `probablyConstructible` for Pub/Nat-only terms but
             // also catches the `extractible` case.
@@ -2325,7 +2325,9 @@ fn extractible(
             if !matches!(fa.tag, FactTag::Out | FactTag::Kd) {
                 continue;
             }
-            let Some(t) = fa.terms.first() else { continue };
+            let Some(t) = fa.terms().first() else {
+                continue;
+            };
             if contains_toplevel_term(t, m) {
                 return true;
             }
