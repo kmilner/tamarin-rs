@@ -4196,10 +4196,11 @@ impl MaudeHandle {
         // Native hands every request to the same route: the Maude backend
         // sends each one to Maude.
         #[cfg(feature = "lean-unification")]
-        if self.backend == AlgebraBackend::Native && !self.reference.variants {
-            if let Some(answers) = self.variants_as_maude(t)? {
-                return Ok(answers);
-            }
+        if self.backend == AlgebraBackend::Native
+            && !self.reference.variants
+            && let Some(answers) = self.variants_as_maude(t)?
+        {
+            return Ok(answers);
         }
         #[cfg(feature = "lean-unification")]
         if !self.backend.uses_maude() {
