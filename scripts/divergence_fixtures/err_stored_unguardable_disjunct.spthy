@@ -1,0 +1,14 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// A stored proof goal whose disjunct cannot be converted to a guarded
+// formula.
+// No corpus theory fails this way.
+
+theory StoredUnguardable begin
+rule R: [ ] --[ A( ) ]-> [ ]
+lemma unguarded:
+  exists-trace
+  "∃ #i. A( ) @ #i"
+solve( (∀ x. ⊥) ∥ (last(#t1)) )
+  by sorry
+end

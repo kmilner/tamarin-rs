@@ -393,13 +393,12 @@ impl MaudeSig {
 
     /// Add a macro symbol.
     ///
-    /// HS `addMacroSym funsym msig = msig <> mempty {macroNames=...}`
-    /// (Term/Maude/Signature.hs) routes through the monoid `<>`, which
-    /// rebuilds from `mempty` (eqConvergent=False; preserved by
-    /// `maudeSig`) and so RESETS eqConvergent to false — match that.
+    /// Unlike a `functions:` block, a `macros:` block after
+    /// `equations [convergent]:` leaves the flag set: the pinned oracle
+    /// echoes `equations [convergent]:` for that theory
+    /// (divergence fixture `sig_convergent_then_macros`).
     pub fn add_macro_sym(mut self, sym: NoEqSym) -> Self {
         self.macro_names.insert(sym);
-        self.eq_convergent = false;
         self.refresh()
     }
 

@@ -1,0 +1,21 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// A heuristic naming a tactic the theory never defines: proving dies with
+// the tactic error, listing the `default` tactic HS falls back to;
+// `@bound` shows the bound does not avoid it.
+// No corpus theory fails this way.
+
+// Category: proof corners no corpus proof reaches — a heuristic naming a
+// tactic the theory never defines.
+//
+// The oracle evaluates rankings lazily: the `@bound` row cuts the proof at
+// depth 1 before any goal is ranked, so it prints `sorry` instead of an
+// error; the `@prove` row has to rank goals to replace the stored `sorry`
+// and dies with "No tactic has been written in the theory file".  No corpus
+// theory names a missing tactic.
+
+theory MissingTactic begin
+heuristic: {missing}
+rule R: [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]
+lemma open: exists-trace "Ex k #i. A(k) @ #i" by sorry
+end

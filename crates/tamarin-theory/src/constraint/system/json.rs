@@ -814,48 +814,6 @@ mod tests {
         assert_eq!(json_term(&t, false).get("jgnShow"), None);
     }
 
-    // `jgnFactShow` is `pps (prettyLNFact f)`: the fact is rendered through
-    // HughesPJ at 100/67, so a wide fact WRAPS, and `cleanString` then folds
-    // the wrapped output back onto one line with single spaces.  Expected
-    // strings captured from the Haskell oracle for a fact whose one-line form
-    // is 341 columns wide.
-    #[test]
-    fn wide_fact_render_is_flattened_back_to_one_line() {
-        // `g(f(~x, f(~x, … f(~x, ~x)…)))` with 20 nested `f` applications.
-        let nest = |x: &LNTerm| -> LNTerm {
-            let mut t = x.clone();
-            for _ in 0..20 {
-                t = f_app_no_eq(sym("f", 2), vec![x.clone(), t]);
-            }
-            f_app_no_eq(sym("g", 1), vec![t])
-        };
-        let x0 = var("x", LSort::Fresh);
-        let x1 = lit(Lit::Var(LVar::new("x", LSort::Fresh, 1)));
-        let (t0, t1) = (nest(&x0), nest(&x1));
-        assert_eq!(
-            show_term(&t0),
-            "g(f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,\
-             f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,~x)))))))))))))))))))))"
-        );
-        let fa: LNFact = Fact::new(
-            FactTag::Proto(
-                Multiplicity::Linear,
-                tamarin_term::intern::intern_str("Done"),
-                2,
-            ),
-            vec![t0, t1],
-        );
-        assert_eq!(
-            pps(fact_doc_of(&fa)),
-            "Done( g(f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, \
-             f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, \
-             ~x))))))))))))))))))))), g(f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, \
-             f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, \
-             f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, \
-             ~x.1))))))))))))))))))))))"
-        );
-    }
-
     // The document reaches the wire as its own UTF-8, so the `⊕` an xor term's
     // pretty form carries is the three bytes `E2 8A 95` — not the `C3 A2 C2 8A
     // C2 95` a `String` round-trip would produce.

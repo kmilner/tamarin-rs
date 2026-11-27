@@ -1,0 +1,8 @@
+theory Cfg
+configuration: "--bogus"
+begin
+
+rule Init:
+  [ Fr(~x) ] --> [ Out(~x) ]
+
+end

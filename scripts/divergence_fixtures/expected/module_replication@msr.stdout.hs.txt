@@ -1,0 +1,61 @@
+theory Replication
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+heuristic: p
+
+lemma onlyOneSecret:
+  exists-trace
+  "∃ #i #j x y. ((Secret( x ) @ #i) ∧ (Secret( y ) @ #j)) ∧ (¬(x = y))"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ #i #j x y. (Secret( x ) @ #i) ∧ (Secret( y ) @ #j) ∧ ¬(x = y)"
+*/
+by sorry
+
+rule (modulo E) Init[color=#ffffff, process="!", issapicrule,
+                     role='Process']:
+   [ ] --[ Init( ) ]-> [ State_( ) ]
+
+rule (modulo E) p_0_[color=#ffffff, process="!", issapicrule,
+                     role='Process']:
+   [ State_( ) ] --> [ !Semistate_1( ) ]
+
+rule (modulo E) p_1_[color=#ffffff, process="!", issapicrule,
+                     role='Process']:
+   [ !Semistate_1( ) ] --> [ State_1( ) ]
+
+rule (modulo E) news_0_1[color=#ffffff, process="new s.1;", issapicrule,
+                         role='Process']:
+   [ State_1( ), Fr( s.1 ) ] --> [ State_11( s.1 ) ]
+
+rule (modulo E) eventSecrets_0_11[color=#ffffff,
+                                  process="event Secret( s.1 );", issapicrule, role='Process']:
+   [ State_11( s.1 ) ] --[ Secret( s.1 ) ]-> [ State_111( s.1 ) ]
+
+rule (modulo E) outs_0_111[color=#ffffff, process="out(s.1);",
+                           issapicrule, role='Process']:
+   [ State_111( s.1 ) ] --> [ State_1111( s.1 ), Out( s.1 ) ]
+
+rule (modulo E) p_0_1111[color=#ffffff, process="0", issapicrule,
+                         role='Process']:
+   [ State_1111( s.1 ) ] --> [ ]
+
+restriction single_session:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+/* All wellformedness checks were successful. */
+
+/*
+Generated from:
+Tamarin version 1.13.0
+Maude version 3.5.1
+*/
+
+end

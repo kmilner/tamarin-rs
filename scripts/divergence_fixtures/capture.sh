@@ -27,11 +27,10 @@ set -eu
 
 record_rs=0
 case "${1:-}" in
-    '')           ;;
-    --record-rs)  record_rs=1 ;;
+    --record-rs)  record_rs=1; shift ;;
     -h|--help)    sed -n '2,${/^#/!q;s/^# \{0,1\}//p;}' "$0"; exit 0 ;;
-    *)            die "unknown option: $1" ;;
 esac
+[ "$#" -eq 0 ] || die "usage: capture.sh [--record-rs]"
 
 find_hs_bin() {
     local c
@@ -57,41 +56,43 @@ mkdir -p "$expected"
 # The directory and the manifest must agree before the oracle runs.
 census_fixture_dir
 
-# `cut_slices <raw-file> <name> <slices> <side>` — write one expected file per
+# `cut_slices <outdir> <name> <slices> <side>` — write one expected file per
 # slice.  An empty slice means the fixture stopped producing the block it
 # exists to pin.  Such a file must not go into the repository as a reference.
 # The redirection has already created the file at that point, so the script
 # unlinks the file before it calls die.
 cut_slices() {
-    local raw="$1" name="$2" slices="$3" side="$4" sl dest
+    local out="$1" name="$2" slices="$3" side="$4" sl dest
     for sl in $(slices_of "$slices"); do
         dest="$expected/$name.$sl.$side.txt"
-        slice "$sl" < "$raw" > "$dest"
+        slice "$sl" "$out" > "$dest"
         [ -s "$dest" ] \
-            || { rm -f "$dest"; die "$side side produced an EMPTY $sl slice for $name.spthy"; }
-        printf '  %-24s %-6s %-2s %s lines\n' "$name" "$sl" "$side" "$(wc -l < "$dest")"
+            || { rm -f "$dest"; die "$side side produced an EMPTY $sl slice for $name"; }
+        printf '  %-32s %-7s %-2s %s lines\n' "$name" "$sl" "$side" "$(wc -l < "$dest")"
     done
 }
 
 capture_one() {
-    local name="$1" slices="$2" mode="$3" flags="$4" raw
-    raw="$(mktemp)"
-    load "$HS_PATH" "$name" "$flags" "${hs_rts[@]}" > "$raw" \
-        || { rm -f "$raw"; die "oracle failed or timed out on $name.spthy"; }
-    cut_slices "$raw" "$name" "$slices" hs
-    rm -f "$raw"
+    local name="$1" slices="$2" mode="$3" flags="$4" input="$5" out
+    out="$(mktemp -d)"
+    run_row "$HS_PATH" "$input" "$slices" "$flags" "$out" "${hs_rts[@]}" \
+        || { rm -rf "$out"; die "unexpected oracle outcome for $name"; }
+    cut_slices "$out" "$name" "$slices" hs
+    rm -rf "$out"
 
     [ "$mode" = diverge ] && [ "$record_rs" = 1 ] || return 0
     [ -x "$RS_PATH" ] || die "no port binary at $RS_PATH (cargo build --release)"
-    raw="$(mktemp)"
-    load "$RS_PATH" "$name" "$flags" > "$raw" \
-        || { rm -f "$raw"; die "the port failed or timed out on $name.spthy"; }
-    cut_slices "$raw" "$name" "$slices" rs
-    rm -f "$raw"
+    out="$(mktemp -d)"
+    run_row "$RS_PATH" "$input" "$slices" "$flags" "$out" \
+        || { rm -rf "$out"; die "the port failed or timed out on $name"; }
+    cut_slices "$out" "$name" "$slices" rs
+    rm -rf "$out"
     echo "  ^ RECORDED port side — review before committing"
 }
 
 echo "capturing with $HS_PATH (revision $pin)"
+# A failed or interrupted rewrite leaves the set unstamped.
+rm -f "$expected/oracle_rev"
 for_each_fixture capture_one
 printf '%s' "$pin" > "$expected/oracle_rev"
 echo "done — review: git diff scripts/divergence_fixtures/expected/"

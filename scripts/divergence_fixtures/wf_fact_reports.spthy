@@ -1,0 +1,80 @@
+// Category: how the wellformedness report renders the facts it quotes.
+//
+// The Special facts and Fr-fact entries print a fact with `prettyLNFact`;
+// the Fact arity entry of a LEMMA fact prints the derived `Show` of the
+// formula's `Fact` (`factTag = …, factTerms = […]`, with De Bruijn `Bound`s).
+// One rule or lemma per shape:
+//   - AC1…AC8: user AC symbols infix (`p add q`), flattened and sorted, among
+//     the builtin AC heads in their tier order; a unary `add(x)` collapses;
+//   - Pair1…Pair3: `pair(..)` spellings render in angle form, nested right;
+//   - FrPair, Fr1…Fr6: an `Fr` argument renders as the whole fact;
+//   - NestPair: a lemma fact `B(<x,y,z>)` shows its pairs nested right;
+//   - Show1…Show14: lemma facts whose terms canonicalise AC and C heads
+//     (`Mult(..)`, `Union(..)`, `em(..)`) before they are shown;
+//   - MacroLemma: a lemma fact is shown from the PRE-macro formula
+//     (`MAC(Bound 1)`), not its expansion;
+//   - the two `c_senc` intruder rules feed their `Foo` facts into the fact
+//     usage check, named by `showRuleCaseName`.
+// Products outside exponents abort a plain load before the report prints,
+// so the row runs under -m=msr, which only warns.  No corpus theory trips
+// these topics with such terms.
+
+theory WfFactReports
+begin
+
+builtins: multiset, xor, bilinear-pairing, natural-numbers, hashing, symmetric-encryption
+
+functions: add/2 [AC], mix/2 [AC], zz/1
+
+macros: MAC(x) = h(x)
+
+rule AC1: [ Out( add(p,q) ++ z ) ] --[ ]-> [ ]
+rule AC2: [ Out( (p add q) ++ z ) ] --[ ]-> [ ]
+rule AC3: [ Out( add(p,q,r) ++ z ) ] --[ ]-> [ ]
+rule AC4: [ Out( add(x) ++ z ) ] --[ ]-> [ ]
+rule AC5: [ Out( add(add(b,a),c) ++ z ) ] --[ ]-> [ ]
+rule AC6: [ Out( add(q,p) ++ mix(s,r) ++ z ) ] --[ ]-> [ ]
+rule AC7: [ Out( add( mix(a,b), zz(c) ) ) ] --[ ]-> [ ]
+rule AC8: [ Out( (x*y) ++ (a XOR b) ++ (c^d) ++ (%e %+ %f) ++ add(p,q) ++ mix(r,s) ++ zz(u) ) ] --[ ]-> [ ]
+
+rule Pair1: [ Out( pair(a,b) ++ <c,d> ++ fst(<e,f>) ) ] --[ ]-> [ ]
+rule Pair2: [ Out( pair(pair(a,b),c) ), Out( <a, <b,c>> ), Out( <pair(a,b), c> ) ] --[ ]-> [ ]
+rule Pair3: [ Out( pair(a, <b,c>) ), Out( <a, pair(b,c)> ), Out( pair(a,b) ) ] --[ ]-> [ ]
+
+rule FrPair: [ Fr( pair(a,b) ) ] --[ ]-> [ ]
+rule Fr1: [ In(<a,b,c>), Fr( (a*b)*c ) ] --> [ ]
+rule Fr2: [ In(<a,b,c>), Fr( add(add(b,a),c) ) ] --> [ ]
+rule Fr3: [ In(<a,b,c>), Fr( zz(b*a) ) ] --> [ ]
+rule Fr4: [ In(<a,b,c>), Fr( em(b,a) ) ] --> [ ]
+rule Fr5: [ In(<a,b,c>), Fr( $y.2 ) ] --> [ ]
+rule Fr6: [ In(<a,b,c>), Fr( zz(x.1) ) ] --> [ ]
+
+rule NestPair: [ ] --[ B(x, y) ]-> [ ]
+lemma NestPair: exists-trace "Ex #i. B(<x,y,z>) @ i"
+
+rule Show: [ Fr(~n) ] --[ A(~n) ]-> [ Out(~n) ]
+lemma Show1: all-traces "All a b #i. A(a*b, 'p') @ i ==> F"
+lemma Show2: all-traces "All a b c #i. A((a*b)*c, 'p') @ i ==> F"
+lemma Show3: all-traces "All a b c #i. A(add(add(b,a),c), 'p') @ i ==> F"
+lemma Show4: all-traces "All a #i. A(add(a), 'p') @ i ==> F"
+lemma Show5: all-traces "All a #i. A(x*a, 'p') @ i ==> F"
+lemma Show6: all-traces "All a #i. A('c'*a, 'p') @ i ==> F"
+lemma Show7: all-traces "All a #i. A(~'f'*a*'c', 'p') @ i ==> F"
+lemma Show8: all-traces "All a #i. A(a*1, 'p') @ i ==> F"
+lemma Show9: all-traces "All a b #i. A(zz(a)*b, 'p') @ i ==> F"
+lemma Show10: all-traces "All a b #i. A((a*b) ++ (a XOR b), 'p') @ i ==> F"
+lemma Show11: all-traces "All a b #i. A(em(a,b), 'p') @ i ==> F"
+lemma Show12: all-traces "All a b #i. A(em(zz(a),b), 'p') @ i ==> F"
+lemma Show13: all-traces "All a b #i. A(<b,a>*a, 'p') @ i ==> F"
+lemma Show14: all-traces "All a b #i. A((a^b)*a, 'p') @ i ==> F"
+
+rule MacroOne: [ ] --[ C(x) ]-> [ ]
+rule MacroTwo: [ ] --[ C(x, y) ]-> [ ]
+lemma MacroLemma: exists-trace "Ex x #i. C(MAC(x)) @ i"
+
+rule (modulo AC) c_senc:
+  [ !KU(x) ] --> [ Foo(x) ]
+rule (modulo AC) c_senc:
+  [ !KU(x), !KU(y) ] --> [ Foo(x, y) ]
+
+end

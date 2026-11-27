@@ -1,0 +1,79 @@
+WARNING: the following wellformedness checks failed!
+
+Multiplication restriction of rules
+===================================
+
+  The following rule is not multiplication restricted:
+    rule (modulo E) Both:
+       [ In( fst(x) ), Fr( ~a ), Fr( ~b ) ]
+      --[ Go( x ) ]->
+       [ Out( <x, (~a*~b)> ) ]
+  
+  After replacing reducible function symbols in lhs with variables:
+    rule (modulo E) Both:
+       [ In( x.1 ), Fr( ~a ), Fr( ~b ) ]
+      --[ Go( x ) ]->
+       [ Out( <x, (~a*~b)> ) ]
+  
+    Terms with multiplication:  (~a*~b)
+    Variables that occur only in rhs:  x
+  
+  The following rule is not multiplication restricted:
+    rule (modulo E) RFresh:
+       [ In( fst(~x) ) ] --[ Go( 'a' ) ]-> [ Out( ~x ) ]
+  
+  After replacing reducible function symbols in lhs with variables:
+    rule (modulo E) RFresh:
+       [ In( x.1 ) ] --[ Go( 'a' ) ]-> [ Out( ~x ) ]
+  
+    Variables that occur only in rhs:  ~x
+  
+  The following rule is not multiplication restricted:
+    rule (modulo E) RShared:
+       [ In( fst(z) ), In( fst(z) ), In( snd(w) ) ]
+      --[ Go( 'c' ) ]->
+       [ Out( <z, w> ) ]
+  
+  After replacing reducible function symbols in lhs with variables:
+    rule (modulo E) RShared:
+       [ In( x.1 ), In( x.1 ), In( x.2 ) ]
+      --[ Go( 'c' ) ]->
+       [ Out( <z, w> ) ]
+  
+    Variables that occur only in rhs:  w, z
+  
+  The following rule is not multiplication restricted:
+    rule (modulo E) Attrs[color=#ff00aa, no_derivcheck, issapicrule,
+                          role='Alice']:
+       [ In( fst(x) ) ] --[ Go( x ) ]-> [ Out( x ) ]
+  
+  After replacing reducible function symbols in lhs with variables:
+    rule (modulo E) Attrs[color=#ff00aa, no_derivcheck, issapicrule,
+                          role='Alice']:
+       [ In( x.1 ) ] --[ Go( x ) ]-> [ Out( x ) ]
+  
+    Variables that occur only in rhs:  x
+  
+  The following rule is not multiplication restricted:
+    rule (modulo E) InfstxGoxOutx_0_[color=#ffffff,
+                                     process=" [ In( fst(x.1) ) ] --[ Go( x.1 ) ]-> [ Out( x.1 ) ];",
+                                     issapicrule, role='Process']:
+       [ State_( ), In( fst(x.1) ) ]
+      --[ Go( x.1 ) ]->
+       [ State_1( x.1 ), Out( x.1 ) ]
+  
+  After replacing reducible function symbols in lhs with variables:
+    rule (modulo E) InfstxGoxOutx_0_[color=#ffffff,
+                                     process=" [ In( fst(x.1) ) ] --[ Go( x.1 ) ]-> [ Out( x.1 ) ];",
+                                     issapicrule, role='Process']:
+       [ State_( ), In( x.2 ) ]
+      --[ Go( x.1 ) ]->
+       [ State_1( x.1 ), Out( x.1 ) ]
+  
+    Variables that occur only in rhs:  x.1
+
+Unsupported multiplication outside exponents
+============================================
+
+  Rule Both has products outside exponents: (~a*~b)
+*/

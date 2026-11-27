@@ -1,0 +1,22 @@
+WARNING: the following wellformedness checks failed!
+
+Multiplication restriction of rules
+===================================
+
+  The following rule is not multiplication restricted:
+    rule (modulo E) ConclusionProduct:
+       [ In( x ), In( y ) ] --> [ Out( (x*y) ) ]
+  
+  After replacing reducible function symbols in lhs with variables:
+    rule (modulo E) ConclusionProduct:
+       [ In( x ), In( y ) ] --> [ Out( (x*y) ) ]
+  
+    Terms with multiplication:  (x*y)
+
+Unsupported multiplication outside exponents
+============================================
+
+  Rule ActionProduct has products outside exponents: (x*y)
+  
+  Rule ConclusionProduct has products outside exponents: (x*y)
+*/

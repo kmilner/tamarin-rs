@@ -1,0 +1,25 @@
+theory ManualVariants
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: f/1, fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) R:
+   [ In( x ) ] --[ R( f(x) ) ]-> [ Out( f(x) ) ]
+ variants
+  rule (modulo AC) R___VARIANT_1:
+     [ In( f(y) ) ] --[ R( f(f(y)) ) ]-> [ Out( f(f(y)) ) ]
+  ,
+  rule (modulo AC) R___VARIANT_2:
+     [ In( 'c' ) ] --[ R( f('c') ) ]-> [ Out( f('c') ) ]
+
+rule (modulo E) S:
+   [ In( z ) ] --[ S( z ) ]-> [ ]
+ variants
+  rule (modulo AC) S___VARIANT_1:
+     [ In( 'd' ) ] --[ S( 'd' ) ]-> [ ]
+
+end

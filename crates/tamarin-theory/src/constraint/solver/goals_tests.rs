@@ -422,25 +422,6 @@ fn tactic_ranking_keeps_the_braced_name() {
 }
 
 #[test]
-fn an_unknown_tactic_fails_when_its_ranking_is_selected() {
-    use crate::constraint::solver::context::ProofContext;
-    use tamarin_term::maude_sig::pair_maude_sig;
-
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let ranking = parse_heuristic_str_with_tactics("{missing}", "t.spthy", &[]);
-    let handle = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    let mut ctx = ProofContext::new(handle, Vec::new());
-    ctx.heuristic = Some(ranking);
-    let err = rank_goals_with(&System::empty(), &ctx, 0).unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "goal ranking: No tactic has been written in the theory file"
-    );
-}
-
-#[test]
 fn runtime_fallibility_scans_the_whole_round_robin_heuristic() {
     use std::sync::Arc;
 

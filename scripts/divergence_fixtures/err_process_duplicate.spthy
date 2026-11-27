@@ -1,0 +1,9 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// Two definitions of one process: `duplicate process`.
+// No corpus theory fails this way.
+
+theory ProcessDuplicate begin
+let P = 0
+let P = 0
+end

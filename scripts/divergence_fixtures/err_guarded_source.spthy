@@ -1,0 +1,19 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// An unguardable sources lemma under --precompute-only dies at the GHC
+// exception boundary (`unguarded variable`).
+// No corpus theory fails this way.
+
+theory GuardedSource
+begin
+
+rule A:
+  [] --[ A() ]-> []
+
+lemma typing [sources]:
+  "All x #i. A() @ #i ==> x = x"
+
+lemma ok: exists-trace
+  "Ex #i. A() @ #i"
+
+end

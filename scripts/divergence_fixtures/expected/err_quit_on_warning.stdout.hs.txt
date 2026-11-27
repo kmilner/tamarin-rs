@@ -1,0 +1,8 @@
+
+WARNING: the following wellformedness checks failed!
+
+Wellformedness-error in Process
+  Variable bound twice: x.
+  
+  Variable bound twice: counter.
+

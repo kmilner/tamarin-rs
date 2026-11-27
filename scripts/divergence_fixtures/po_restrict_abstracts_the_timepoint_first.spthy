@@ -1,0 +1,22 @@
+// Category: the --parse-only open-theory printer (`prettyOpenTheory`),
+// which no corpus gate runs: the gates load and close every theory.
+//
+// A `_restrict` action atom whose time point is FREE.  HS's `Traversable
+// (ProtoAtom s)` is `Action <$> f i <*> traverse f fa`
+// (Theory/Model/Atom.hs) and its `Foldable` folds in the same order
+// (Theory/Model/Atom.hs), so `rewrite` abstracts the time point into
+// the first fresh variable and `freesList` puts it first in the generated
+// fact: the restriction reads `Restr_A_1( x, x.1 )` over `B( x.1 ) @ x`, and
+// the rule's appended action reads `Restr_A_1( #i, f(x, y) )`.  A `_restrict`
+// whose time point is bound mints no fresh variable for it and cannot tell
+// the two orders apart.
+
+theory RestrictTimepoint
+begin
+
+functions: f/2
+
+rule A:
+  [ Fr(~k), In(x), In(y) ] --[ _restrict(B(f(x,y)) @ #i), S(~k) ]-> [ Out(~k) ]
+
+end

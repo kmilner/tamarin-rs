@@ -322,28 +322,4 @@ mod tests {
         // `x` at position [0] inside arg 0, then the whole `h(x)` from arg 1.
         assert_eq!(ctxt.rhs.positions, vec![vec![0i64], Vec::<i64>::new()]);
     }
-
-    /// A literal LHS with a ground RHS (`equations: x = c`) is rejected as
-    /// not-a-subterm-rule, which elaboration reports as "Not a correct
-    /// equation" — the same clean failure both engines produce for the
-    /// non-ground sibling `x = h(x)` ("Not a correct equation: RRule x h(x)"
-    /// from the pinned oracle).  HS instead ABORTS on the ground case
-    /// (non-exhaustive `constantPositions`, SubtermRule.hs under
-    /// `-fno-warn-incomplete-patterns`); the port deliberately diverges from
-    /// that documented upstream bug.
-    #[test]
-    fn literal_lhs_ground_equation_is_rejected_not_crashed() {
-        use crate::function_symbols::{Constructability, NoEqSym, Privacy};
-        use crate::term::f_app_no_eq;
-        let c_sym = NoEqSym::new(
-            b"c".to_vec(),
-            0,
-            Privacy::Public,
-            Constructability::Constructor,
-        );
-        let lhs = msg_var("x", 0); // literal (Var) LHS
-        let rhs: LNTerm = f_app_no_eq(c_sym, vec![]); // ground RHS `c`
-        let rule = RRule::new(lhs, rhs);
-        assert!(rrule_to_ctxt_st_rule(&rule).is_none());
-    }
 }

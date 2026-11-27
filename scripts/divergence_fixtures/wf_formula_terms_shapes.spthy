@@ -1,0 +1,50 @@
+// Category: the Formula terms check (`checkTerms`, Theory/Tools/
+// Wellformedness.hs) — which formula terms it allows, and the `Show` form of
+// each offender it prints.
+//
+// One lemma per shape:
+//   - SecretF: a private nullary function is allowed;
+//   - Destructor: a reducible destructor is an offender, printed with its
+//     De Bruijn indices (`snd(sdec(Bound 3,Bound 2))`);
+//   - SurplusHash: unary `h` applied to two arguments is allowed (it folds);
+//   - BareUse: a bare `x` does not bind to the node binder `#x`;
+//   - FreeMsg / FreeNode: free message and free node variables, each shown
+//     with its sort (`Free x`, `Free #i`);
+//   - BuiltinAC: xor and multiset arguments flattened and sorted;
+//   - UserAC1 / UserAC2: a user AC symbol written prefix, flattened and
+//     sorted around a reducible operand;
+//   - EmAlgApp: `em{a}b` is the NoEq `em`, not the bilinear map.
+// Corpus lemmas never trip checkTerms, so no corpus wf block has a Formula
+// terms header; formula_terms_offenders pins two other offender shapes.
+
+theory WfFormulaTermsShapes
+begin
+
+builtins: symmetric-encryption, hashing, xor, multiset, bilinear-pairing
+
+functions: priv0/0 [private], uac/2 [AC], red/2, f/2
+
+equations: red(x, y) = x
+
+lemma SecretF: "All #i. K(priv0) @ i ==> F"
+
+lemma Destructor:
+  "All x #i. K(x) @ i ==> Ex body key #j #k. K(body) @ j & key = snd(sdec(body, key)) & j < i & k < i"
+
+lemma SurplusHash: "All x y #i. K(h(x, y)) @ i ==> F"
+
+lemma BareUse: "All #x. (K(x) @ #x) ==> F"
+
+lemma FreeMsg: "All #i. K(x) @ i ==> F"
+
+lemma FreeNode: "All #j. K('c') @ i ==> F"
+
+lemma BuiltinAC: "All #i. Test(('b' ++ 'a') ++ ('c' XOR 'd')) @ #i ==> F"
+
+lemma UserAC1: "All #i. Test(uac(red('b','a'), 'a')) @ #i ==> F"
+
+lemma UserAC2: "All #i. Test(uac(uac('z','a'), red('b','c'))) @ #i ==> F"
+
+lemma EmAlgApp: "All #i. Test(em{'g'}'h' * f('g', 'h')) @ #i ==> F"
+
+end

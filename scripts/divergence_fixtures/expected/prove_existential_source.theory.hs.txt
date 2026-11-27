@@ -1,0 +1,36 @@
+theory GuardedSource
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) A:
+   [ ] --[ A( ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+lemma typing [sources]:
+  exists-trace "∀ x #i. (A( ) @ #i) ⇒ (x = x)"
+/*
+conversion to guarded formula failed:
+  unguarded variable(s) 'x' in the subformula
+    "∀ x #i. (A( ) @ #i) ⇒ (x = x)"
+  in the formula
+    "∀ x #i. (A( ) @ #i) ⇒ (x = x)"
+*/
+by sorry
+
+lemma ok:
+  exists-trace "∃ #i. A( ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ #i. (A( ) @ #i)"
+*/
+by sorry
+
+
+
+end

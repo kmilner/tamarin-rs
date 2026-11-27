@@ -1,0 +1,27 @@
+// Category: the --parse-only open-theory printer (`prettyOpenTheory`),
+// which no corpus gate runs: the gates load and close every theory.
+//
+// A predicate use site whose argument names a variable the predicate body
+// also binds.  HS `expandFormula` (Theory/Syntactic/Predicate.hs)
+// splices the body under `compSubst`'s De Bruijn shift and renames nothing,
+// so the two stay apart — the body's binder is an index, the use-site `z` is
+// free — and the printer gives the binder the next display index, `z.1`.
+// The multiset `(<)` reaches the same expansion through the built-in
+// `Smaller` predicate (Theory/Text/Parser/Formula.hs), whose body binds
+// `z` as well.  Both the quoted lemma formula and its guarded block carry
+// that spelling.
+
+theory S6PredCapture
+begin
+
+builtins: multiset
+
+predicates: P(x) <=> Ex z #i. Act(x, z) @ #i
+
+lemma cap:
+  "All z #j. Start(z) @ #j ==> P(z)"
+
+lemma mset:
+  "All y #j. Start(y) @ #j ==> Smaller(z, y)"
+
+end

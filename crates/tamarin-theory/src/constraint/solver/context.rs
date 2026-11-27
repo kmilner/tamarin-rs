@@ -656,7 +656,7 @@ impl ProofContext {
         // and making us mechanism-identical to HS.  The runtime
         // generator (`dh_intruder_rules`) is retained as the regenerator
         // (callable when one wants to refresh the cache from local
-        // Maude); a bridge test in `tests/intruder_variants_render.rs` flags any
+        // Maude); the `variants` row of the prover's cli_refs table flags any
         // divergence.
         //
         // Ordering matches HS exactly: DH BEFORE BP, both AFTER
@@ -1198,70 +1198,8 @@ pub fn annotate_theory_loop_breakers(
 
 #[cfg(test)]
 mod tests {
-    use super::{Arc, IntrRuleCache, ProofContext, ProveError, SourceSlot};
+    use super::{Arc, IntrRuleCache, ProveError, SourceSlot};
     use crate::rule::IntrRuleAC;
-    use tamarin_test_support::require_maude_path;
-
-    #[test]
-    fn injectivity_analysis_uses_original_rules_after_unfolding() {
-        use crate::fact::{FactTag, Multiplicity};
-        use crate::tools::injective_fact_instances::MonotonicBehaviour;
-        let Some(path) = require_maude_path() else {
-            return;
-        };
-        for first_argument in ["~id", "projection(~id)"] {
-            let source = format!(
-                r#"theory UnfoldedInjectivity begin
-macros: projection(x) = fst(<x, 'c'>)
-rule Init: [Fr(~id), In(x)] --> [S({first_argument}, x)]
-rule Update: [S(~id, x)] --> [S(~id, projection(x))]
-end"#
-            );
-            let theory =
-                crate::elaborate::elaborate(&tamarin_parser::parse_theory(&source, &[]).unwrap())
-                    .unwrap();
-            let maude =
-                tamarin_term::maude_proc::MaudeHandle::start(&path, theory.signature.clone())
-                    .unwrap();
-            // Model the normalized executable members while retaining the
-            // original E halves. The CLI regression covers actual unfolding.
-            let compiled = crate::elaborate::elaborate(&tamarin_parser::parse_theory(
-                "theory Compiled begin rule Init: [Fr(~id), In(x)] --> [S(~id,x)] rule Update: [S(~id,x)] --> [S(~id,x)] end",
-                &[],
-            ).unwrap()).unwrap();
-            let rules = theory
-                .rules()
-                .zip(compiled.rules())
-                .map(|(original, member)| {
-                    let mut rule = original.clone();
-                    rule.rule_e = Some(Box::new(original.rule_e().clone()));
-                    rule.rule = member.rule.clone();
-                    rule
-                })
-                .collect();
-            let ctx = ProofContext::with_options(
-                maude,
-                rules,
-                super::ProofContextOptions {
-                    macros: theory.macros().cloned().collect(),
-                    ..Default::default()
-                },
-            );
-            let expected: Vec<_> = (first_argument == "~id")
-                .then(|| {
-                    (
-                        FactTag::Proto(Multiplicity::Linear, "S", 2),
-                        vec![vec![MonotonicBehaviour::Unstable]],
-                    )
-                })
-                .into_iter()
-                .collect();
-            assert_eq!(
-                ctx.injective_fact_insts.iter().cloned().collect::<Vec<_>>(),
-                expected
-            );
-        }
-    }
 
     /// A small Maude-free rule list: the special intruder rules
     /// (`coerce`, `pub`, `fresh`, `isend`, `irecv`).

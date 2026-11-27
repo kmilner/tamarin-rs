@@ -35,18 +35,6 @@ fn maude() -> Option<MaudeHandle> {
     maude_with(pair_maude_sig())
 }
 
-/// Parses `tests/fixtures/<name>`.  The fixture is committed next to this
-/// crate.  A read failure therefore means a broken checkout.  It is never a
-/// reason to skip the test.
-fn fixture_theory(name: &str) -> tamarin_parser::ast::Theory {
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("tests/fixtures")
-        .join(name);
-    let src =
-        std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
-    tamarin_parser::parse_theory(&src, &[]).expect("parse")
-}
-
 /// Elaborates a parsed theory into the internal theory the prover entry
 /// points take.
 fn elaborated(pt: &tamarin_parser::ast::Theory) -> crate::theory::Theory {
@@ -242,78 +230,6 @@ fn guarded_conversion_errors_use_haskell_default_width() {
         guarded_or_error(formula),
         Err(ProveError::Guarded(expected))
     );
-}
-
-/// With the elaborated `MaudeSig` (hashing), the simplify loop must
-/// converge.  It must not loop forever on edges that are already canonical.
-///
-/// The fixture records the upstream verdict for `recentalive` ("FINDS PROOF
-/// AUTOMATICALLY"), that is `verified`.  The oracle proves this all-traces
-/// lemma.  The negation therefore dead-ends, and the port's verdict is
-/// `Contradictory`.  The bound on the elapsed time guards against
-/// non-convergence.  A simplify loop that makes no more progress runs
-/// forever here instead of returning any verdict.
-#[test]
-fn cr_external_recentalive_converges_and_holds() {
-    let pt = fixture_theory("CR_external.spthy");
-    let elab = crate::elaborate::elaborate(&pt).expect("elaborate");
-    let Some(h) = maude_with(elab.signature.clone()) else {
-        return;
-    };
-    let t0 = std::time::Instant::now();
-    let root = prove_lemma(std::sync::Arc::new(elab), "recentalive", h, 200).expect("prove");
-    let dt = t0.elapsed();
-    assert_eq!(root.status, NodeStatus::Contradictory);
-    assert!(
-        dt < std::time::Duration::from_secs(60),
-        "recentalive ran {:?}, expected ≤60s (simplify-loop converges)",
-        dt
-    );
-}
-
-/// `All k #i. A(k) @ #i ==> A(k) @ #i` is a tautology.  Its negation
-/// therefore reduces to ⊥, and the search closes as `Contradictory`.  The
-/// test proves the lemma against the elaborated `MaudeSig` of the theory
-/// itself, which adds `h/1`, and not against the pair-only signature.  A
-/// signature that grows must not change the verdict.
-#[test]
-fn sig_minimal_tautology_is_contradictory() {
-    let pt = fixture_theory("sig_minimal.spthy");
-    let elab = crate::elaborate::elaborate(&pt).expect("elaborate");
-    let Some(h) = maude_with(elab.signature.clone()) else {
-        return;
-    };
-    let root = prove_lemma(std::sync::Arc::new(elab), "a_self", h, 50).expect("prove");
-    assert_eq!(root.status, NodeStatus::Contradictory);
-}
-
-/// The rule has two `Fr` premises.  A single rule instance must solve both
-/// fresh-node premises before the two-variable existential can close.
-#[test]
-fn two_fresh_premises_in_one_rule_reach_solved() {
-    let Some(h) = maude() else { return };
-    let pt = fixture_theory("needs_constructor_simple.spthy");
-    let root =
-        prove_lemma(std::sync::Arc::new(elaborated(&pt)), "sent_exists", h, 200).expect("prove");
-    assert_eq!(root.status, NodeStatus::Solved);
-}
-
-/// The adversary must build `<a, b>` from two fresh values, each sent out by
-/// its own `Out` fact, to satisfy `In(<x, y>)`.  Without the
-/// pair-construction intruder rule, this existential no longer closes.  The
-/// same holds without the `!KU` chain that feeds that rule.
-#[test]
-fn intruder_pair_construction_reaches_solved() {
-    let Some(h) = maude() else { return };
-    let pt = fixture_theory("needs_constructor.spthy");
-    let root = prove_lemma(
-        std::sync::Arc::new(elaborated(&pt)),
-        "pair_arrives",
-        h,
-        2000,
-    )
-    .expect("prove");
-    assert_eq!(root.status, NodeStatus::Solved);
 }
 
 /// HS `gatherReusableLemmas` (CloseRule.hs) collects the lemmas that
@@ -979,31 +895,6 @@ rule R: [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]\n\
 lemma open: all-traces \"All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j\" by sorry\n\
 lemma terminal: all-traces \"All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j\" by contradiction\n\
 end";
-
-#[test]
-fn replacing_stored_sorry_reports_unresolved_ranking() {
-    let Some(session) = session_from(
-        "theory T begin\n\
-heuristic: {missing}\n\
-rule R: [ Fr(~k) ] --[ A(~k) ]-> [ Out(~k) ]\n\
-lemma open: exists-trace \"Ex k #i. A(k) @ #i\" by sorry\n\
-end",
-    ) else {
-        return;
-    };
-
-    let error = prove_lemma_in_session(&session, "open", usize::MAX)
-        .expect_err("auto-proving the stored sorry must resolve its ranking");
-    assert!(
-        matches!(
-            &error,
-        ProveError::Ranking(
-            crate::constraint::solver::goals::RankingError(message)
-        ) if message == "No tactic has been written in the theory file"
-        ),
-        "unexpected error: {error:?}"
-    );
-}
 
 /// `parse_config_block` records what cmdargs records, rejection strings
 /// byte-pinned against the oracle (`configuration: "<cfg>"` under

@@ -1,0 +1,210 @@
+WARNING: the following wellformedness checks failed!
+
+Formula terms
+=============
+
+  Lemma `L1' uses terms of the wrong form: `Free #i'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+
+Formula guardedness
+===================
+
+  Lemma `L1' cannot be converted to a guarded formula:
+    unguarded variable(s) '#j' in the subformula
+      "∀ #j. (K( 'c' ) @ #i) ⇒ (⊥)"
+    in the formula
+      "∀ #j. (K( 'c' ) @ #i) ⇒ (⊥)"
+
+Formula terms
+=============
+
+  Lemma `L2' uses terms of the wrong form: `Xor('a','b')'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+  
+  Lemma `L3' uses terms of the wrong form:
+    `Union('a','b',Xor('c','d'))'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+  
+  Lemma `L4' uses terms of the wrong form:
+    `pair(Bound 1,pair('b',~'n'))'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+
+Quantifier sorts
+================
+
+  Lemma `q1' uses quantifiers with wrong sort: ("n",LSortFresh)
+  
+  Lemma `q2' uses quantifiers with wrong sort: ("a",LSortPub)
+  
+  Lemma `manybad' uses quantifiers with wrong sort:
+    ("aaaaaaaaaaaa",LSortFresh), ("bbbbbbbbbbbb",LSortPub),
+    ("cccccccccccc",LSortFresh), ("dddddddddddd",LSortPub),
+    ("eeeeeeeeeeee",LSortFresh), ("ffffffffffff",LSortPub)
+
+Formula terms
+=============
+
+  Lemma `manybad' uses terms of the wrong form: `Free x'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+
+Formula guardedness
+===================
+
+  Lemma `manybad' cannot be converted to a guarded formula:
+    unguarded variable(s) '~aaaaaaaaaaaa', '$bbbbbbbbbbbb',
+    '~cccccccccccc', '$dddddddddddd', '~eeeeeeeeeeee', '$ffffffffffff'
+    in the subformula
+      "∀ ~aaaaaaaaaaaa $bbbbbbbbbbbb ~cccccccccccc $dddddddddddd
+         ~eeeeeeeeeeee $ffffffffffff #i.
+        (A( x ) @ #i) ⇒ (⊥)"
+    in the formula
+      "∀ ~aaaaaaaaaaaa $bbbbbbbbbbbb ~cccccccccccc $dddddddddddd
+         ~eeeeeeeeeeee $ffffffffffff #i.
+        (A( x ) @ #i) ⇒ (⊥)"
+
+Quantifier sorts
+================
+
+  Lemma `idx' uses quantifiers with wrong sort: ("n",LSortFresh)
+  
+  Lemma `suff' uses quantifiers with wrong sort: ("m",LSortFresh)
+
+Formula terms
+=============
+
+  Lemma `lB' uses terms of the wrong form: `exp(Bound 1,Bound 1)'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+
+Quantifier sorts
+================
+
+  Lemma `lD' uses quantifiers with wrong sort: ("r",LSortFresh)
+
+Formula guardedness
+===================
+
+  Lemma `nested' cannot be converted to a guarded formula:
+    unguarded variable(s) '~outer' in the subformula
+      "∀ ~outer ~inner. (~inner = 'a') ⇒ (⊥)"
+    in the formula
+      "∀ ~outer ~inner. (~inner = 'a') ⇒ (⊥)"
+
+Quantifier sorts
+================
+
+  Lemma `existential' uses quantifiers with wrong sort:
+    ("n",LSortFresh)
+
+Formula guardedness
+===================
+
+  Lemma `existential' cannot be converted to a guarded formula:
+    unguarded variable(s) '~n' in the subformula
+      "∃ ~n. (~n = 'a') ⇒ (⊥)"
+    in the formula
+      "∃ ~n. (~n = 'a') ⇒ (⊥)"
+
+Formula terms
+=============
+
+  Lemma `lm' uses terms of the wrong form: `exp(Bound 1,Bound 1)'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+
+Quantifier sorts
+================
+
+  Lemma `lp' uses quantifiers with wrong sort: ("s",LSortFresh)
+
+Formula terms
+=============
+
+  Lemma `lp' uses terms of the wrong form: `exp(Bound 3,Bound 3)'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+
+Formula guardedness
+===================
+
+  Lemma `last_l' cannot be converted to a guarded formula:
+    unguarded variable(s) '#i' in the subformula
+      "∃ #i. last(#i)"
+    in the formula
+      "¬(∃ #i. last(#i))"
+
+Last atom usage
+===============
+
+  Lemma `last_l' contains last atom
+
+Formula terms
+=============
+
+  Restriction `rA' uses terms of the wrong form:
+    `exp(Bound 1,Bound 1)'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+
+Quantifier sorts
+================
+
+  Restriction `rC' uses quantifiers with wrong sort: ("q",LSortFresh)
+  
+  Restriction `r1' uses quantifiers with wrong sort: ("m",LSortFresh)
+
+Formula guardedness
+===================
+
+  Restriction `last_r' cannot be converted to a guarded formula:
+    unguarded variable(s) '#i' in the subformula
+      "∀ #i. (last(#i)) ⇒ (⊥)"
+    in the formula
+      "∀ #i. (last(#i)) ⇒ (⊥)"
+
+Last atom usage
+===============
+
+  Restriction `last_r' contains last atom
+*/

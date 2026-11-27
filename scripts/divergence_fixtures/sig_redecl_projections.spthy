@@ -1,0 +1,20 @@
+// Category: redeclarations of builtin-owned names.
+//
+//   - `fst/1 [AC]` and `snd/1 [destructor, NDC, NDC-diff]` redeclare the
+//     pair projections without `dest-pairing`: the declaration short-circuits
+//     and every attribute is dropped, so the `functions:` echo shows the
+//     builtin's own options;
+//   - `exp/3` beside `diffie-hellman`: an enable-flag builtin reserves no
+//     names, so another arity of `exp` is accepted (and echoed) beside it.
+// No corpus theory redeclares a projection or `exp`.
+
+theory SigRedeclProjections
+begin
+
+builtins: diffie-hellman
+
+functions: fst/1 [AC], snd/1 [destructor, NDC, NDC-diff], exp/3
+
+rule R: [ In(<x, y>) ] --[ A(snd(<x, y>)) ]-> [ Out(fst(<x, y>)) ]
+
+end

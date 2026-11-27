@@ -1,0 +1,21 @@
+// Category: the --parse-only open-theory printer (`prettyOpenTheory`),
+// which no corpus gate runs: the gates load and close every theory.
+//
+// SAPIC theory: `--parse-only` does NOT translate — `let` defs and the
+// `process:` block are pretty-printed (prettySapic'), calls shown un-inlined.
+
+theory SapicProc
+begin
+
+builtins: symmetric-encryption
+
+let P(x) = out(x); 0
+
+process:
+new k; !(P(k) | in(y); event Recv(y))
+
+lemma triv:
+  exists-trace
+  "Ex y #i. Recv(y) @ i"
+
+end

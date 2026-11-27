@@ -255,18 +255,10 @@ fn make_let_subst(svar: &SapicLVar, t2: &SapicTerm) -> Subst<Name, SapicLVar> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::annotation::ProcessAnnotation;
     use std::collections::BTreeSet;
     use tamarin_term::lterm::{LSort, NameTag};
     use tamarin_term::vterm::var_term;
-    use tamarin_theory::sapic::{ProcessParsedAnnotation, SapicAction};
-
-    fn ann() -> ProcessAnnotation<LVar> {
-        ProcessAnnotation {
-            parsing_ann: ProcessParsedAnnotation::empty(),
-            ..Default::default()
-        }
-    }
+    use tamarin_theory::sapic::SapicAction;
 
     fn svar(name: &str) -> SapicLVar {
         SapicLVar::untyped(LVar::new(name, LSort::Msg, 0))
@@ -274,99 +266,6 @@ mod tests {
 
     fn pub_name(s: &str) -> SapicTerm {
         VTerm::Lit(Lit::Con(Name::new(NameTag::Pub, s)))
-    }
-
-    #[test]
-    fn let_elimination_substitutes_compound_location() {
-        // Location annotations accept the compound value of an eliminated let.
-        let h = svar("h");
-        let location = tamarin_term::builtin::pair(pub_name("site"), pub_name("device"));
-        let mut body_ann = ann();
-        body_ann.parsing_ann.location = Some(var_term(h.clone()));
-        let body = Process::Action(
-            SapicAction::ChOut {
-                chan: None,
-                msg: pub_name("payload"),
-            },
-            body_ann,
-            Box::new(Process::Null(ann())),
-        );
-        let lett = Process::Comb(
-            ProcessCombinator::Let {
-                left: var_term(h),
-                right: location.clone(),
-                match_vars: BTreeSet::new(),
-            },
-            ann(),
-            Box::new(body),
-            Box::new(Process::Null(ann())),
-        );
-
-        let out = translate_let_destr(&[], &BTreeSet::new(), lett).unwrap();
-        assert_eq!(out.annotation().parsing_ann.location, Some(location));
-    }
-
-    /// `apply subst` (Sapic/Process.hs) rewrites an eliminated let's variable
-    /// in embedded MSR restrictions as well as fact rows.
-    #[test]
-    fn let_elimination_substitutes_into_an_msr_restriction() {
-        use tamarin_theory::atom::ProtoAtom;
-        use tamarin_theory::formula::ProtoFormula;
-
-        let h = svar("h");
-        // `[ ] --[ Ev(h) ]-> [ ]` restricted by `h = 'b'`.
-        let ev = tamarin_theory::fact::Fact::new(
-            tamarin_theory::fact::FactTag::Proto(
-                tamarin_theory::fact::Multiplicity::Linear,
-                "Ev",
-                1,
-            ),
-            vec![var_term(h.clone())],
-        );
-        let restr = ProtoFormula::Atom(ProtoAtom::EqE(
-            var_term(tamarin_term::lterm::BVar::Free(h.clone())),
-            VTerm::Lit(Lit::Con(Name::new(NameTag::Pub, "b"))),
-        ));
-        let msr = Process::Action(
-            SapicAction::Msr {
-                prems: Vec::new(),
-                acts: vec![ev],
-                concs: Vec::new(),
-                rest: vec![restr],
-                match_vars: BTreeSet::new(),
-            },
-            ann(),
-            Box::new(Process::Null(ann())),
-        );
-        // `let h = 't' in <msr>` substitutes `'t'` throughout the embedded rule.
-        let lett = Process::Comb(
-            ProcessCombinator::Let {
-                left: var_term(h),
-                right: pub_name("t"),
-                match_vars: BTreeSet::new(),
-            },
-            ann(),
-            Box::new(msr),
-            Box::new(Process::Null(ann())),
-        );
-        let rules: BTreeSet<CtxtStRule> = BTreeSet::new();
-        let out = translate_let_destr(&[], &rules, lett).unwrap();
-        let Process::Action(SapicAction::Msr { acts, rest, .. }, _, _) = out else {
-            panic!("expected Let to be eliminated to the MSR");
-        };
-        assert_eq!(
-            acts[0].terms[0],
-            pub_name("t"),
-            "the action row is rewritten"
-        );
-        assert_eq!(
-            rest[0],
-            ProtoFormula::Atom(ProtoAtom::EqE(
-                VTerm::Lit(Lit::Con(Name::new(NameTag::Pub, "t"))),
-                VTerm::Lit(Lit::Con(Name::new(NameTag::Pub, "b"))),
-            )),
-            "and so is the embedded restriction"
-        );
     }
 
     #[test]

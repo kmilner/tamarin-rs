@@ -1,7 +1,7 @@
-# Oracle-pinned CLI-flag cases.  ONE source of truth, read by BOTH sides:
+# Oracle-pinned CLI cases.  ONE source of truth, read by BOTH sides:
 #
-#   * tests/cli_e2e.rs   runs `tamarin-rs` on the row's argv and byte-compares
-#                        the result against cli_refs/<name>.stdout;
+#   * tests/cli_refs.rs  runs `tamarin-rs` on the row's argv and compares the
+#                        result with cli_refs/<name>.stdout;
 #   * scripts/capture_cli_refs.sh
 #                        runs the HASKELL oracle on the SAME argv and writes
 #                        that file.
@@ -11,58 +11,97 @@
 # scripts/capture_cli_refs.sh — the test HARD-FAILS (never skips) on a row
 # whose ref is missing.
 #
-# Columns (tab-separated):
+# Columns (tab-separated, `-` for an empty cell):
 #   name       ref basename; <name>.stdout holds the RAW oracle stdout
-#   theory     fixture under tests/fixtures/
+#   inputs     space-separated input paths, relative to tests/fixtures/ or
+#              starting `{EXAMPLES}/` (the submodule's examples); `-` for a
+#              subcommand that reads no theory, which then finds maude on
+#              $PATH as the oracle's does
 #   relation   how this row's ref must relate to another row's, compared after
 #              both are normalized (build info / processing time / analyzed
 #              path dropped).  `-` = unconstrained, `!=other` = must DIFFER,
 #              `=other` = must be IDENTICAL.  This is the anti-vacuity check:
 #              a `!=` row proves the flag actually changed the run, and an `=`
 #              row states, on the record, that it did not.
-#   args       flags, space-separated, before the theory path.  `{FIXTURES}`
-#              expands to tests/fixtures.
+#   rc         the exit code both engines return
+#   args       flags, space-separated, before the inputs.  `{FIXTURES}`
+#              expands to tests/fixtures, `{EXAMPLES}` to the examples.
+#   stderr     PORT-only stderr fragments, `|`-separated; a leading `!` means
+#              the fragment must be absent, and `\n` stands for a newline.
+#              Stderr is not oracle-compared
+#              (see tests/cli_refs.rs), so this column holds the port's own
+#              markers for a flag whose only observable is on stderr.
 #
-# `--derivcheck-timeout=300` is on every row on purpose: the default is 5s, and
-# a derivation check that times out under load adds a wellformedness entry to
-# stdout, which would make these refs flaky rather than wrong.
+# `--derivcheck-timeout=300` is on every proving row on purpose: the default
+# is 5s, and a derivation check that times out under load adds a
+# wellformedness entry to stdout, which would make these refs flaky rather
+# than wrong.
 #
 # ---- --lemma / --bound (theory: two lemmas, one verified one falsified) -----
-basic_plain	cli_flags_basic.spthy	-	--derivcheck-timeout=300 --prove
-basic_lemma_reach	cli_flags_basic.spthy	!=basic_plain	--derivcheck-timeout=300 --prove --lemma=reach
-basic_bound_10	cli_flags_basic.spthy	=basic_plain	--derivcheck-timeout=300 --prove -b=10
-basic_bound_1	cli_flags_basic.spthy	!=basic_plain	--derivcheck-timeout=300 --prove -b=1
+basic_plain	cli_flags_basic.spthy	-	0	--derivcheck-timeout=300 --prove	-
+basic_lemma_reach	cli_flags_basic.spthy	!=basic_plain	0	--derivcheck-timeout=300 --prove --lemma=reach	-
+basic_bound_10	cli_flags_basic.spthy	=basic_plain	0	--derivcheck-timeout=300 --prove -b=10	-
+basic_bound_1	cli_flags_basic.spthy	!=basic_plain	0	--derivcheck-timeout=300 --prove -b=1	-
 # ---- --precompute-only (the prettyPrecomputation stats document; with --prove
 # it appends ppWf's second warning line, run.rs's 9-space variant) ------------
-basic_precompute	cli_flags_basic.spthy	!=basic_lemma_reach	--derivcheck-timeout=300 --precompute-only --prove --lemma=reach
+basic_precompute	cli_flags_basic.spthy	!=basic_lemma_reach	0	--derivcheck-timeout=300 --precompute-only --prove --lemma=reach	-
 # ---- --bound reaching the PARALLEL sibling expansion.  cli_flags_tutorial is
 # a byte-copy of the submodule's examples/Tutorial.spthy: its proofs fan out
 # (>= 2 cases under Dfs), so `-b=6` cuts inside rayon workers — the pin that
 # fails if a worker's `Search` copy loses `proof_bound` (search.rs) ----------
-tutorial_plain	cli_flags_tutorial.spthy	-	--derivcheck-timeout=300 --prove
-tutorial_bound_6	cli_flags_tutorial.spthy	!=tutorial_plain	--derivcheck-timeout=300 --prove -b=6
+tutorial_plain	cli_flags_tutorial.spthy	-	0	--derivcheck-timeout=300 --prove	-
+tutorial_bound_6	cli_flags_tutorial.spthy	!=tutorial_plain	0	--derivcheck-timeout=300 --prove -b=6	-
 # ---- --stop-on-trace (exists-trace search: dfs cuts, none explores; bfs and
 # sorry are the two other non-default strategies that reach the solver) -------
-chan_stop_none	cli_flags_chan.spthy	!=chan_plain	--derivcheck-timeout=300 --prove --stop-on-trace=none
-chan_stop_bfs	cli_flags_chan.spthy	!=chan_plain	--derivcheck-timeout=300 --prove --stop-on-trace=bfs
-chan_stop_sorry	cli_flags_chan.spthy	!=chan_plain	--derivcheck-timeout=300 --prove --stop-on-trace=sorry
+chan_stop_none	cli_flags_chan.spthy	!=chan_plain	0	--derivcheck-timeout=300 --prove --stop-on-trace=none	-
+chan_stop_bfs	cli_flags_chan.spthy	!=chan_plain	0	--derivcheck-timeout=300 --prove --stop-on-trace=bfs	-
+chan_stop_sorry	cli_flags_chan.spthy	!=chan_plain	0	--derivcheck-timeout=300 --prove --stop-on-trace=sorry	-
 # ---- -D/--defines (theory: an #ifdef FOO rule + lemma) ----------------------
-ifdef_plain	cli_flags_ifdef.spthy	-	--derivcheck-timeout=300 --parse-only
-ifdef_defined	cli_flags_ifdef.spthy	!=ifdef_plain	--derivcheck-timeout=300 --parse-only -D=FOO
+ifdef_plain	cli_flags_ifdef.spthy	-	0	--derivcheck-timeout=300 --parse-only	-
+ifdef_defined	cli_flags_ifdef.spthy	!=ifdef_plain	0	--derivcheck-timeout=300 --parse-only -D=FOO	-
 # ---- --heuristic / --saturation / --open-chains -----------------------------
-chan_plain	cli_flags_chan.spthy	-	--derivcheck-timeout=300 --prove
-chan_heuristic_i	cli_flags_chan.spthy	!=chan_plain	--derivcheck-timeout=300 --prove --heuristic=i
+chan_plain	cli_flags_chan.spthy	-	0	--derivcheck-timeout=300 --prove	!Saturation aborted
+chan_heuristic_i	cli_flags_chan.spthy	!=chan_plain	0	--derivcheck-timeout=300 --prove --heuristic=i	-
 # cli_flags_chan_heur is the chan fixture plus an in-file `heuristic: i`
 # header; the CLI flag must override it (cli.rs's load-bearing bare-flag
 # semantic, HS `apDefaultHeuristic <|> pcHeuristic`)
-chan_heur_plain	cli_flags_chan_heur.spthy	-	--derivcheck-timeout=300 --prove
-chan_heur_override	cli_flags_chan_heur.spthy	!=chan_heur_plain	--derivcheck-timeout=300 --prove --heuristic=s
-chan_saturation_1	cli_flags_chan.spthy	=chan_plain	--derivcheck-timeout=300 --prove --saturation=1
-chan_open_chains_0	cli_flags_chan.spthy	!=chan_plain	--derivcheck-timeout=300 --prove --open-chains=0
+chan_heur_plain	cli_flags_chan_heur.spthy	-	0	--derivcheck-timeout=300 --prove	-
+chan_heur_override	cli_flags_chan_heur.spthy	!=chan_heur_plain	0	--derivcheck-timeout=300 --prove --heuristic=s	-
+chan_saturation_1	cli_flags_chan.spthy	=chan_plain	0	--derivcheck-timeout=300 --prove --saturation=1	[Saturating Sources] Saturation aborted, more than 1 iterations. (Limit can be changed with -s=)
+chan_open_chains_0	cli_flags_chan.spthy	!=chan_plain	0	--derivcheck-timeout=300 --prove --open-chains=0	[Open Chains] Too many chain constraints, stopping precomputation. Open Chains limits (can be changed with -c=): 0
+# The same cap under translate-only derivation checks: auxiliary closes
+# suppress the saturation diagnostics (Sources.hs), on both engines.
+chan_msr_open_chains_0	cli_flags_chan.spthy	-	0	--derivcheck-timeout=300 --output-module=msr --open-chains=0	Derivation checks started | Derivation checks ended | ![Open Chains]
 # ---- --oraclename / --oracle-only -------------------------------------------
-chan_oracle_pick_last	cli_flags_chan.spthy	!=chan_plain	--derivcheck-timeout=300 --prove --heuristic=o --oraclename={FIXTURES}/cli_oracle_pick_last.sh
+chan_oracle_pick_last	cli_flags_chan.spthy	!=chan_plain	0	--derivcheck-timeout=300 --prove --heuristic=o --oraclename={FIXTURES}/cli_oracle_pick_last.sh	-
 # `=chan_plain` on the record: a rank-nothing oracle degenerates to goal-number
 # order, which coincides with the default ranking on this fixture — the spawn
 # proof is chan_oracle_pick_last, the flag proof is chan_oracle_only.
-chan_oracle_rank_none	cli_flags_chan.spthy	=chan_plain	--derivcheck-timeout=300 --prove --heuristic=o --oraclename={FIXTURES}/cli_oracle_rank_none.sh
-chan_oracle_only	cli_flags_chan.spthy	!=chan_oracle_rank_none	--derivcheck-timeout=300 --prove --heuristic=o --oraclename={FIXTURES}/cli_oracle_rank_none.sh --oracle-only
+chan_oracle_rank_none	cli_flags_chan.spthy	=chan_plain	0	--derivcheck-timeout=300 --prove --heuristic=o --oraclename={FIXTURES}/cli_oracle_rank_none.sh	-
+chan_oracle_only	cli_flags_chan.spthy	!=chan_oracle_rank_none	0	--derivcheck-timeout=300 --prove --heuristic=o --oraclename={FIXTURES}/cli_oracle_rank_none.sh --oracle-only	-
+# ---- --quiet: the stdout is unchanged; the markers stay on stderr --------
+basic_quiet	cli_flags_basic.spthy	=basic_plain	0	--derivcheck-timeout=300 --prove --quiet	[Theory CliFlagsBasic] Theory loaded | [Theory CliFlagsBasic] Theory closed
+# ---- --prove naming no lemma: every lemma stays `by sorry`, and the
+# presence check reports the name -------------------------------------------
+basic_prove_nonexistent	cli_flags_basic.spthy	!=basic_plain	0	--derivcheck-timeout=300 --prove=nonexistent	-
+# An invalid --heuristic that no proven lemma forces stays inert (HS ranks
+# lazily); the port's own rejection of invalid values is in cli_port.
+basic_heuristic_inert	cli_flags_basic.spthy	-	0	--derivcheck-timeout=300 --prove=zzz --heuristic=x	-
+# ---- --stop-on-trace=sorry together with a binding --bound ------------------
+chan_stop_sorry_bound_1	cli_flags_chan.spthy	!=chan_stop_sorry	0	--derivcheck-timeout=300 --prove --stop-on-trace=sorry -b=1	-
+# ---- --parse-only prints the open theory and wins over -m and PE -----------
+sr_parse_only	single_recv.spthy	-	0	--parse-only	[Theory SingleRecv] Theory loaded | !Theory translated
+sr_parse_only_m_msr	single_recv.spthy	=sr_parse_only	0	--parse-only -m=msr	-
+pe_parse_only	single_recv.spthy	=sr_parse_only	0	--parse-only --partial-evaluation=summary	-
+# A translate-only run ends after translation: no `Theory closed` marker.
+sr_module_spthy	single_recv.spthy	-	0	--derivcheck-timeout=300 -m=spthy	[Theory SingleRecv] Theory translated | !Theory closed
+# ---- --partial-evaluation: the abstract-state report in the echo, the step
+# trace on stderr; verbose differs from summary on stderr only --------------
+pe_summary	single_recv.spthy	-	0	--derivcheck-timeout=300 --partial-evaluation=summary	[Theory SingleRecv] Theory closed\n partial evaluation: step 0 added 1 facts
+pe_verbose	single_recv.spthy	=pe_summary	0	--derivcheck-timeout=300 --partial-evaluation=verbose	 partial evaluation: step 0 added 1 facts\n\n  1. Out( z )
+# ---- several inputs: one document per file, the markers before them; the
+# axiom deprecation warning is printed once per process ---------------------
+two_docs_parse_only	single_recv.spthy cli_flags_basic.spthy	-	0	--parse-only	[Theory SingleRecv] Theory loaded\n[Theory CliFlagsBasic] Theory loaded
+legacy_axioms	legacy_axiom_one.spthy legacy_axiom_two.spthy	-	0	--parse-only	Deprecation Warning: using 'axiom' is retired notation, replace all uses of 'axiom' by 'restriction'.\n[Theory AxOne] Theory loaded\n[Theory AxTwo] Theory loaded
+# ---- the `variants` subcommand: the DH and BP intruder rules -----------------
+variants	-	-	0	variants	-

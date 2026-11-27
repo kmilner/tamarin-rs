@@ -1,0 +1,38 @@
+theory Typing
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: multiset
+functions: f/1, fst/1, g/1, h/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+process:
+  (new x.2:lol;
+   out(x.2:lol)) | (new x.3:lol;
+                    new x.4:lol;
+                    event Run( x.3:lol, x.4:lol );
+                    out(<x.3:lol, x.4:lol>))
+
+lemma sanity:
+  exists-trace "∃ x y #i. (Run( x, y ) @ #i) ∧ (¬(x = y))"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ x y #i. (Run( x, y ) @ #i) ∧ ¬(x = y)"
+*/
+by sorry
+
+function: g (lol) : lol
+
+function: f (bitstring) : bitstring
+
+/* All wellformedness checks were successful. */
+
+/*
+Generated from:
+Tamarin version 1.13.0
+Maude version 3.5.1
+*/
+
+end

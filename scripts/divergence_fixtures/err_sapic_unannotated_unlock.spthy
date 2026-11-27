@@ -1,0 +1,8 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// An `unlock` of a term no `lock` holds: not implemented.
+// No corpus theory fails this way.
+
+theory SapicUnannotatedUnlock begin
+process: lock 's'; unlock 'other'
+end

@@ -1,0 +1,21 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// Products outside exponents abort before proof search (stdout carries
+// the report); -m=msr only warns.
+// No corpus theory fails this way.
+
+theory UnsupportedProducts
+begin
+
+builtins: diffie-hellman
+
+rule ActionProduct:
+  [ In(x), In(y) ] --[ Product(x*y) ]-> []
+
+rule ConclusionProduct:
+  [ In(x), In(y) ] --> [ Out(x*y) ]
+
+lemma must_not_prove:
+  "T"
+
+end

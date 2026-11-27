@@ -1,0 +1,33 @@
+theory NdcXorr
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1, zeroo/0, xorr/2 [AC]
+equations:
+    fst(<x.1, x.2>) = x.1,
+    snd(<x.1, x.2>) = x.2,
+    (x xorr x) = zeroo,
+    (x xorr x xorr y) = y,
+    (x xorr zeroo) = x
+
+rule (modulo E) Setup:
+   [ Fr( ~k ), In( a ) ] --[ Probe( (~k xorr a) ) ]-> [ Out( (~k xorr a) ) ]
+
+  /*
+  rule (modulo AC) Setup:
+     [ Fr( ~k ), In( a ) ] --[ Probe( z ) ]-> [ Out( z ) ]
+    variants (modulo AC)
+    1. ~k    = ~k.4
+       a     = a.4
+       z     = (~k.4 xorr a.4)
+    
+    2. ~k    = ~k.4
+       a     = zeroo
+       z     = ~k.4
+  */
+
+
+
+end

@@ -1,0 +1,73 @@
+// Category: wellformedness report layout — where the HughesPJ `fsep` fill of
+// a report entry breaks.
+//
+// Every entry body of `prettyWfErrorReport` (Theory/Tools/Wellformedness.hs)
+// is a `fsep` of comma-punctuated cells nested 4 under its heading, rendered
+// at the default 100/67 style.  The rules below probe the fill boundaries:
+//   - Fill20: twenty short cells fill to the 67-column ribbon;
+//   - Fit67 / Break68: two cells that end exactly at, and one past, the
+//     ribbon (the second cell goes to its own line only in Break68);
+//   - Lead57: an over-wide FIRST cell, then a short one;
+//   - Mixed / Alternating: cells of two widths, so the break position moves
+//     with each cell's width rather than at a fixed count;
+//   - Overwide58 / Overwide80: a cell wider than the ribbon drops its closing
+//     paren to the next line (`sep` of the fact's own Doc fails to fit);
+//   - Refill: an over-wide pair refills its own argument list inside the cell;
+//   - Reserved: the unbound-variable list and the reserved-name list of one
+//     rule fill at the same ribbon.
+// Corpus fact lists are short, so no corpus wf block reaches a fill break.
+
+theory WfReportLayout
+begin
+
+rule Fill20:
+  [ Out( a01 ), Out( a02 ), Out( a03 ), Out( a04 ), Out( a05 ), Out( a06 ), Out( a07 ), Out( a08 ), Out( a09 ), Out( a10 ), Out( a11 ), Out( a12 ), Out( a13 ), Out( a14 ), Out( a15 ), Out( a16 ), Out( a17 ), Out( a18 ), Out( a19 ), Out( a20 ) ]
+  --[ ]->
+  [ ]
+
+rule Fit67:
+  [ Out( a ), Out( 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' ) ]
+  --[ ]->
+  [ ]
+
+rule Break68:
+  [ Out( a ), Out( 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb' ) ]
+  --[ ]->
+  [ ]
+
+rule Lead57:
+  [ Out( 'ccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' ), Out( a ) ]
+  --[ ]->
+  [ ]
+
+rule Mixed:
+  [ Out( 'c0z' ), Out( 'c1zzzzzzzzzzzzzzz' ), Out( 'c2z' ), Out( 'c3zzzzzzzzzzzzzzz' ), Out( 'c4z' ), Out( 'c5zzzzzzzzzzzzzzz' ), Out( 'c6z' ), Out( 'c7zzzzzzzzzzzzzzz' ), Out( 'c8z' ), Out( 'c9zzzzzzzzzzzzzzz' ), Out( 'c10' ), Out( 'c11zzzzzzzzzzzzzz' ) ]
+  --[ ]->
+  [ ]
+
+rule Alternating:
+  [ Out( 'c0z' ), Out( 'w0zzzzzzzzzzzzzzz' ), Out( 'c1z' ), Out( 'w1zzzzzzzzzzzzzzz' ), Out( 'c2z' ), Out( 'w2zzzzzzzzzzzzzzz' ), Out( 'c3z' ), Out( 'w3zzzzzzzzzzzzzzz' ), Out( 'c4z' ), Out( 'w4zzzzzzzzzzzzzzz' ), Out( 'c5z' ), Out( 'w5zzzzzzzzzzzzzzz' ) ]
+  --[ ]->
+  [ ]
+
+rule Overwide58:
+  [ Out( 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' ), Out( a ) ]
+  --[ ]->
+  [ ]
+
+rule Overwide80:
+  [ Out( 'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc' ), Out( a ) ]
+  --[ ]->
+  [ ]
+
+rule Refill:
+  [ Out( <v01, v02, v03, v04, v05, v06, v07, v08, v09, v10, v11, v12, v13, v14, v15, v16, v17, v18, v19, v20, v21, v22, v23, v24, v25, v26, v27, v28, v29, v30> ), Out( a ), Out( b ), Out( c ) ]
+  --[ ]->
+  [ ]
+
+rule Reserved:
+  [ ]
+  --[ K( a01 ), K( a02 ), K( a03 ), K( a04 ), K( a05 ), K( a06 ), K( a07 ), K( a08 ), K( a09 ), K( a10 ), K( a11 ), K( a12 ), K( a13 ), K( a14 ), K( a15 ), K( a16 ), K( a17 ), K( a18 ), K( a19 ), K( a20 ) ]->
+  [ ]
+
+end

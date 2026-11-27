@@ -1,0 +1,8 @@
+summary of summaries:
+
+
+  
+  induction_counterexample (all-traces): falsified - found trace (5 steps)
+  AUTO_typing (all-traces): verified (8 steps)
+
+==============================================================================

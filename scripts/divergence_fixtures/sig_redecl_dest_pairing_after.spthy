@@ -1,0 +1,15 @@
+// Category: redeclarations of builtin-owned names.
+//
+// `builtins: dest-pairing` BEFORE `functions: fst/1 [destructor]`: the
+// matching redeclaration is accepted and the projection stays a destructor.
+// sig_redecl_dest_pairing is the other order.  No corpus theory redeclares
+// a projection.
+
+theory SigRedeclDestPairingAfter
+begin
+
+builtins: dest-pairing
+
+functions: fst/1 [destructor]
+
+end

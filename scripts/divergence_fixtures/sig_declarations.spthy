@@ -1,0 +1,49 @@
+// Category: function declarations that redeclare or collide — which
+// declaration owns which options, and how the echo prints the result.
+//
+// A name declared twice, once AC and once NoEq, is two symbols that share a
+// name (see dual_declared_names).  One rule per probe, each on its own name:
+//   - PEqvar (f): the AC declaration's `destructor, NDC` stay on the AC
+//     symbol; the plain declaration and the equation own the NoEq one;
+//   - PPrivNoEq (g): `private, destructor` stay on the NoEq symbol;
+//   - ONdcDiff (h): `NDC-diff` stays on its own declaration;
+//   - PExpAC (exp): an AC-only private `exp` leaves the DH caret alone;
+//   - PDupAC (k): two AC declarations resolve to one declared operator;
+//   - AlgApp / UserAC: `myac{'a'}'b'` stays AC without a NoEq collision, and
+//     a lemma applying a user AC symbol is allowed by the Formula terms check.
+// No corpus theory declares a name twice.
+
+theory SigDeclarations
+begin
+
+builtins: diffie-hellman
+
+functions: f/2 [AC, destructor, NDC], f/2, g/2 [AC], g/2 [private, destructor], h/2 [AC], h/2 [NDC-diff], exp/2 [AC, private], k/2 [AC], k/2 [AC, private], myac/2 [AC]
+
+equations: f(x, y) = x, g(x, y) = x
+
+rule PEqvar:
+  [ In(z) ] --[ A(f(z,'b')), B('a' f z) ]-> [ Out(f('c', z)) ]
+
+rule PPrivNoEq:
+  [ In(z) ] --[ A(g(z,'b')), B('a' g z) ]-> [ Out(g('c', z)) ]
+
+rule ONdcDiff:
+  [ ] --[ A(h('a','b')), B('a' h 'b') ]-> [ ]
+
+rule PExpAC:
+  [ ] --[ A(exp('a','b')), B('a' exp 'b') ]-> [ ]
+
+rule PDupAC:
+  [ ] --[ A(k('a','b')), B('a' k 'b') ]-> [ ]
+
+rule AlgApp:
+  [ ] --[ A(myac{'a'}'b') ]-> [ ]
+
+rule UserAC:
+  [ ] --[ A(myac('a', 'b')) ]-> [ ]
+
+lemma UserAC:
+  exists-trace "Ex #i. A(myac('a', 'b')) @ i"
+
+end

@@ -1,0 +1,73 @@
+theory SapicTranslationItems
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: check_rep/2 [destructor], f/1, fst/1, get_rep/1 [destructor],
+           pair/2, rep/2 [private,constructor], report/1, snd/1
+equations:
+    check_rep(rep(x.1, x.2), x.2) = x.1,
+    fst(<x.1, x.2>) = x.1,
+    get_rep(rep(x.1, x.2)) = x.1,
+    snd(<x.1, x.2>) = x.2
+
+heuristic: p
+
+predicate: Report( x, y )<=>¬(y = 'loc')
+
+restriction Restr_ReportRule_1:
+  "∀ x #NOW. (Restr_ReportRule_1( x ) @ #NOW) ⇒ (¬(x = 'loc'))"
+  // safety formula
+
+rule (modulo E) ReportRule[color=#ffffff, process="|", issapicrule,
+                           role='Process']:
+   [ In( <x, loc> ) ]
+  --[ Restr_ReportRule_1( loc ) ]->
+   [ Out( rep(x, loc) ) ]
+
+rule (modulo E) Init[color=#ffffff, process="|", issapicrule,
+                     role='Process']:
+   [ ] --[ Init( ) ]-> [ State_( ) ]
+
+rule (modulo E) p_0_[color=#ffffff, process="|", issapicrule,
+                     role='Process']:
+   [ State_( ) ] --> [ State_1( ), State_2( ) ]
+
+rule (modulo E) newc_0_1[color=#ffffff, process="new c.1;", issapicrule,
+                         role='Process']:
+   [ State_1( ), Fr( c.1 ) ] --> [ State_11( c.1 ) ]
+
+rule (modulo E) outfclol_0_11[color=#ffffff, process="out(f(c.1:lol));",
+                              issapicrule, role='Process']:
+   [ State_11( c.1 ) ] --> [ State_111( c.1 ), Out( f(c.1) ) ]
+
+rule (modulo E) p_0_111[color=#ffffff, process="0", issapicrule,
+                        role='Process']:
+   [ State_111( c.1 ) ] --> [ ]
+
+rule (modulo E) Ploc_0_2[color=#ffffff, process="P('loc');", issapicrule,
+                         role='Process']:
+   [ State_2( ) ] --> [ State_21( ) ]
+
+rule (modulo E) outpayload_0_21[color=#6c8040, process="out('payload');",
+                                issapicrule, role='P']:
+   [ State_21( ) ] --> [ State_211( ), Out( 'payload' ) ]
+
+rule (modulo E) p_0_211[color=#6c8040, process="0", issapicrule,
+                        role='P']:
+   [ State_211( ) ] --> [ ]
+
+restriction single_session:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+/* All wellformedness checks were successful. */
+
+/*
+Generated from:
+Tamarin version 1.13.0
+Maude version 3.5.1
+*/
+
+end

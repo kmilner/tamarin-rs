@@ -40,7 +40,7 @@ use tamarin_theory::pretty_theory::format_wf_block;
 /// accepts any matched pair, so it alone cannot detect a mass truncation of
 /// the expectation directory.  This floor fails the test as soon as the
 /// number of pinned reports drops below it.
-const MIN_REPORTS: usize = 18;
+const MIN_REPORTS: usize = 24;
 
 fn fixtures_dir() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

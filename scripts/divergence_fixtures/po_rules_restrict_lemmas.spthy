@@ -1,0 +1,28 @@
+// Category: the --parse-only open-theory printer (`prettyOpenTheory`),
+// which no corpus gate runs: the gates load and close every theory.
+//
+// `_restrict` lifting (Restr_A_1 inserted BEFORE the rule), rule attributes
+// attached without a space, restriction `// safety formula`, lemma guarded
+// blocks + `by sorry`.
+
+theory RulesAttrs
+begin
+
+rule A [color=#123456]:
+  [ Fr(~k) ] --[ _restrict(Ex #i. B() @ i), S(~k) ]-> [ Out(~k) ]
+
+rule B [issapicrule]:
+  [ ] --[ B() ]-> [ ]
+
+restriction unique:
+  "All x #i #j. S(x) @ i & S(x) @ j ==> #i = #j"
+
+lemma foo [sources, reuse]:
+  all-traces
+  "All k #i. S(k) @ i ==> Ex #j. B() @ j"
+
+lemma bar:
+  exists-trace
+  "Ex k #i. S(k) @ i"
+
+end

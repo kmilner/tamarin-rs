@@ -1,0 +1,17 @@
+// Category: the `-m`/`--output-module` documents — redeclared pair
+// projections.
+//
+// `fst/1 [destructor]` and `snd/1 [destructor]` redeclare the projections;
+// the `-m=spthy` echo drops the requested attributes.  No corpus theory
+// redeclares a projection.
+theory FstSndAttrs
+begin
+
+functions: fst/1 [destructor], snd/1 [destructor], dec/2 [destructor],
+           g/1 [private]
+
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2, dec(g(x.1), x.2) = x.1
+
+rule R: [ In( x ) ] --> [ Out( fst(x) ) ]
+
+end

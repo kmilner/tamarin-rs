@@ -1,0 +1,11 @@
+// A case test named like a declared predicate reports the conflicting
+// predicate, including the sort of its argument.
+
+theory AccDupPred begin
+predicates:
+  PubLog(y) <=> y = y
+rule L:
+  [ ] --[ Log( $p ) ]-> [ ]
+test PubLog:
+  "Ex #i. Log($p)@i"
+end

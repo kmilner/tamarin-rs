@@ -252,6 +252,8 @@ fn bound_space_separated_is_positional() {
     let a = parse(&["-b", "10", "x.spthy"]);
     assert_eq!(a.bound, Some(5));
     assert_eq!(a.in_files, vec!["10", "x.spthy"]);
+    // A glued `-b10` is rejected rather than read as `-b=10`.
+    parse_err(&["-b10", "x.spthy"]);
 }
 
 #[test]
@@ -516,6 +518,9 @@ fn output_module_parsed_and_validated() {
     // Canonical clap: an unknown module is rejected up front (HS accepted
     // it at parse time and died at load time).
     let e = parse_err(&["-m=fortran", "x.spthy"]);
+    assert_eq!(e.kind(), clap::error::ErrorKind::InvalidValue);
+    // So is an empty one.
+    let e = parse_err(&["--output-module=", "x.spthy"]);
     assert_eq!(e.kind(), clap::error::ErrorKind::InvalidValue);
 }
 

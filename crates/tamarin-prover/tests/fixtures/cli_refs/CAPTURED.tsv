@@ -3,15 +3,19 @@
 # hs_fp	2ac1a1e8b711f55e3fc508de9129cbeb536e081b5029e3300067fdccfa196b89
 # hs_rev	a75fec7ff13cbfcbb0a67813afb16707e981c06e (verified: revision and setup attestation match the submodule pin)
 # maude	3.5.1
-# captured	2026-11-23T10:17:45Z
+# captured	2026-11-27T11:46:03Z
 basic_bound_1	1494
 basic_bound_10	1564
+basic_heuristic_inert	1755
 basic_lemma_reach	1799
 basic_plain	1564
 basic_precompute	213
+basic_prove_nonexistent	1763
+basic_quiet	1573
 chan_heur_override	2335
 chan_heur_plain	2267
 chan_heuristic_i	2244
+chan_msr_open_chains_0	1336
 chan_open_chains_0	2856
 chan_oracle_only	2017
 chan_oracle_pick_last	2174
@@ -21,7 +25,17 @@ chan_saturation_1	2312
 chan_stop_bfs	2384
 chan_stop_none	2580
 chan_stop_sorry	2354
+chan_stop_sorry_bound_1	1988
 ifdef_defined	484
 ifdef_plain	259
+legacy_axioms	757
+pe_parse_only	502
+pe_summary	1432
+pe_verbose	1432
+sr_module_spthy	733
+sr_parse_only	502
+sr_parse_only_m_msr	502
 tutorial_bound_6	6246
 tutorial_plain	6250
+two_docs_parse_only	1210
+variants	16238

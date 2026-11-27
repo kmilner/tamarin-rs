@@ -1,0 +1,253 @@
+theory SapicLetsReliable_plain
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: d/1 [destructor], fst/1, pair/2, snd/1, wrap/1
+equations: d(wrap(x)) = x, fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+heuristic: p
+
+rule (modulo E) MessageIDRule[color=#ffffff, process="in('r',x.1);",
+                              issapicrule, role='Process']:
+   [ Fr( ~mid_ ) ] --> [ MID_Receiver( ~mid_ ), MID_Sender( ~mid_ ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Init[color=#ffffff, process="in('r',x.1);", issapicrule,
+                     role='Process']:
+   [ ] --[ Init( ) ]-> [ State_( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) inrx_0_[color=#ffffff, process="in('r',x.1);",
+                        issapicrule, role='Process']:
+   [ State_( ), In( x.1 ), MID_Receiver( ~mid_ ) ]
+  --[ Receive( ~mid_, x.1 ) ]->
+   [ State_1( x.1 ) ]
+
+  /*
+  rule (modulo AC) inrx_0_[color=#ffffff, process="in('r',x.1);",
+                           issapicrule, role='Process']:
+     [ State_( ), In( x ), MID_Receiver( ~mid_ ) ]
+    --[ Receive( ~mid_, x ) ]->
+     [ State_1( x ) ]
+  */
+
+rule (modulo E) letyddx_0_1[color=#ffffff, process="let y.1=d(d(x.1))",
+                            issapicrule, role='Process']:
+   [ State_1( x.1 ) ] --> [ Let_11( x.1, x.1 ) ]
+
+  /*
+  rule (modulo AC) letyddx_0_1[color=#ffffff, process="let y.1=d(d(x.1))",
+                               issapicrule, role='Process']:
+     [ State_1( x ) ] --> [ Let_11( x, x ) ]
+  */
+
+rule (modulo E) letyddx_1_1[color=#ffffff, process="let y.1=d(d(x.1))",
+                            no_derivcheck, issapicrule, role='Process']:
+   [ Let_11( wrap(x.2), x.1 ) ] --> [ Let_101( x.2, x.1 ) ]
+
+  /*
+  rule (modulo AC) letyddx_1_1[color=#ffffff, process="let y.1=d(d(x.1))",
+                               no_derivcheck, issapicrule, role='Process']:
+     [ Let_11( wrap(x), x.1 ) ] --> [ Let_101( x, x.1 ) ]
+  */
+
+restriction Restr_letyddx_2_1_1:
+  "∀ x #NOW.
+    (Restr_letyddx_2_1_1( x ) @ #NOW) ⇒ (∀ x.1. (wrap(x.1) = x) ⇒ (⊥))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #NOW.
+    (Restr_letyddx_2_1_1( x ) @ #NOW) ⇒ (∀ x.1. (wrap(x.1) = x) ⇒ (⊥))"
+  */
+
+rule (modulo E) letyddx_2_1[color=#ffffff, process="let y.1=d(d(x.1))",
+                            issapicrule, role='Process']:
+   [ Let_11( x.1, x.1 ) ]
+  --[ Restr_letyddx_2_1_1( x.1 ) ]->
+   [ State_12( x.1 ) ]
+
+  /*
+  rule (modulo AC) letyddx_2_1[color=#ffffff, process="let y.1=d(d(x.1))",
+                               issapicrule, role='Process']:
+     [ Let_11( x, x ) ] --[ Restr_letyddx_2_1_1( x ) ]-> [ State_12( x ) ]
+  */
+
+rule (modulo E) letyddx_3_1[color=#ffffff, process="let y.1=d(d(x.1))",
+                            issapicrule, role='Process']:
+   [ Let_101( destructor.4, x.1 ) ]
+  -->
+   [ Let_102( destructor.4, x.1, destructor.4 ) ]
+
+  /*
+  rule (modulo AC) letyddx_3_1[color=#ffffff, process="let y.1=d(d(x.1))",
+                               issapicrule, role='Process']:
+     [ Let_101( destructor, x ) ] --> [ Let_102( destructor, x, destructor ) ]
+  */
+
+restriction Restr_letyddx_4_1_1:
+  "∀ x #NOW.
+    (Restr_letyddx_4_1_1( x ) @ #NOW) ⇒
+    (∀ destructor. (destructor = x) ⇒ (⊥))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #NOW.
+    (Restr_letyddx_4_1_1( x ) @ #NOW) ⇒
+    (∀ destructor. (destructor = x) ⇒ (⊥))"
+  */
+
+rule (modulo E) letyddx_4_1[color=#ffffff, process="let y.1=d(d(x.1))",
+                            issapicrule, role='Process']:
+   [ Let_101( destructor.5, x.1 ) ]
+  --[ Restr_letyddx_4_1_1( destructor.5 ) ]->
+   [ State_12( x.1 ) ]
+
+  /*
+  rule (modulo AC) letyddx_4_1[color=#ffffff, process="let y.1=d(d(x.1))",
+                               issapicrule, role='Process']:
+     [ Let_101( destructor, x ) ]
+    --[ Restr_letyddx_4_1_1( destructor ) ]->
+     [ State_12( x ) ]
+  */
+
+rule (modulo E) letyddx_5_1[color=#ffffff, process="let y.1=d(d(x.1))",
+                            no_derivcheck, issapicrule, role='Process']:
+   [ Let_102( wrap(x.2), x.1, destructor.4 ) ] --> [ Let_103( x.2, x.1 ) ]
+
+  /*
+  rule (modulo AC) letyddx_5_1[color=#ffffff, process="let y.1=d(d(x.1))",
+                               no_derivcheck, issapicrule, role='Process']:
+     [ Let_102( wrap(x), x.1, destructor ) ] --> [ Let_103( x, x.1 ) ]
+  */
+
+restriction Restr_letyddx_6_1_1:
+  "∀ x #NOW.
+    (Restr_letyddx_6_1_1( x ) @ #NOW) ⇒ (∀ x.1. (wrap(x.1) = x) ⇒ (⊥))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #NOW.
+    (Restr_letyddx_6_1_1( x ) @ #NOW) ⇒ (∀ x.1. (wrap(x.1) = x) ⇒ (⊥))"
+  */
+
+rule (modulo E) letyddx_6_1[color=#ffffff, process="let y.1=d(d(x.1))",
+                            issapicrule, role='Process']:
+   [ Let_102( destructor.4, x.1, destructor.4 ) ]
+  --[ Restr_letyddx_6_1_1( destructor.4 ) ]->
+   [ State_12( x.1 ) ]
+
+  /*
+  rule (modulo AC) letyddx_6_1[color=#ffffff, process="let y.1=d(d(x.1))",
+                               issapicrule, role='Process']:
+     [ Let_102( destructor, x, destructor ) ]
+    --[ Restr_letyddx_6_1_1( destructor ) ]->
+     [ State_12( x ) ]
+  */
+
+rule (modulo E) letyddx_7_1[color=#ffffff, process="let y.1=d(d(x.1))",
+                            issapicrule, role='Process']:
+   [ Let_103( y.1, x.1 ) ] --> [ State_11( x.1, y.1 ) ]
+
+  /*
+  rule (modulo AC) letyddx_7_1[color=#ffffff, process="let y.1=d(d(x.1))",
+                               issapicrule, role='Process']:
+     [ Let_103( y, x ) ] --> [ State_11( x, y ) ]
+  */
+
+restriction Restr_letyddx_8_1_1:
+  "∀ x #NOW. (Restr_letyddx_8_1_1( x ) @ #NOW) ⇒ (∀ y. (y = x) ⇒ (⊥))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #NOW. (Restr_letyddx_8_1_1( x ) @ #NOW) ⇒ (∀ y. (y = x) ⇒ (⊥))"
+  */
+
+rule (modulo E) letyddx_8_1[color=#ffffff, process="let y.1=d(d(x.1))",
+                            issapicrule, role='Process']:
+   [ Let_103( destructor.6, x.1 ) ]
+  --[ Restr_letyddx_8_1_1( destructor.6 ) ]->
+   [ State_12( x.1 ) ]
+
+  /*
+  rule (modulo AC) letyddx_8_1[color=#ffffff, process="let y.1=d(d(x.1))",
+                               issapicrule, role='Process']:
+     [ Let_103( destructor, x ) ]
+    --[ Restr_letyddx_8_1_1( destructor ) ]->
+     [ State_12( x ) ]
+  */
+
+rule (modulo E) outry_0_11[color=#ffffff, process="out('r',y.1);",
+                           issapicrule, role='Process']:
+   [ MID_Sender( ~mid_11 ), State_11( x.1, y.1 ) ]
+  --[ Send( ~mid_11, y.1 ) ]->
+   [ Out( y.1 ), State_111( x.1, y.1 ) ]
+
+  /*
+  rule (modulo AC) outry_0_11[color=#ffffff, process="out('r',y.1);",
+                              issapicrule, role='Process']:
+     [ MID_Sender( ~mid_11 ), State_11( x, y ) ]
+    --[ Send( ~mid_11, y ) ]->
+     [ Out( y ), State_111( x, y ) ]
+  */
+
+rule (modulo E) p_0_111[color=#ffffff, process="0", issapicrule,
+                        role='Process']:
+   [ State_111( x.1, y.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_111[color=#ffffff, process="0", issapicrule,
+                           role='Process']:
+     [ State_111( x, y ) ] --> [ ]
+  */
+
+rule (modulo E) eventFailed_0_12[color=#ffffff,
+                                 process="event Failed( );", issapicrule, role='Process']:
+   [ State_12( x.1 ) ] --[ Failed( ) ]-> [ State_121( x.1 ) ]
+
+  /*
+  rule (modulo AC) eventFailed_0_12[color=#ffffff,
+                                    process="event Failed( );", issapicrule, role='Process']:
+     [ State_12( x ) ] --[ Failed( ) ]-> [ State_121( x ) ]
+  */
+
+rule (modulo E) p_0_121[color=#ffffff, process="0", issapicrule,
+                        role='Process']:
+   [ State_121( x.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_121[color=#ffffff, process="0", issapicrule,
+                           role='Process']:
+     [ State_121( x ) ] --> [ ]
+  */
+
+restriction single_session:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  */
+
+restriction reliable:
+  "∀ #i x y.
+    (Send( x, y ) @ #i) ⇒ (∃ #j. (Receive( x, y ) @ #j) ∧ (#i < #j))"
+
+  /*
+  expanded formula:
+  "∀ #i x y.
+    (Send( x, y ) @ #i) ⇒ (∃ #j. (Receive( x, y ) @ #j) ∧ (#i < #j))"
+  */
+
+
+
+end

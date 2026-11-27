@@ -1,0 +1,30 @@
+// Category: the --parse-only open-theory printer (`prettyOpenTheory`),
+// which no corpus gate runs: the gates load and close every theory.
+//
+// Embedded proof skeletons echo with cases in SORTED (Data.Map) order —
+// `case A` before `case Zed` despite source order — `solve(...)` goals
+// re-rendered, `by sorry /* comment */` reasons dropped, `SOLVED` gains
+// `// trace found`.
+
+theory CaseOrder
+begin
+
+rule A:
+  [ Fr(~k) ] --[ S(~k) ]-> [ Out(~k) ]
+
+rule Zed:
+  [ Fr(~k) ] --[ S(~k) ]-> [ Out(~k) ]
+
+lemma chain:
+  exists-trace
+  "Ex k #i. S(k) @ i"
+simplify
+solve( S( k ) @ #i )
+  case Zed
+  by sorry /* dropped-comment */
+next
+  case A
+  SOLVED
+qed
+
+end

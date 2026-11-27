@@ -1,0 +1,21 @@
+theory Sig
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: diffie-hellman
+functions: f/2, fst/1, g/1 [private,constructor], h/1, mac/2, pair/2,
+           sdec/2, senc/2, snd/1, unwrap/1 [destructor]
+equations:
+    fst(<x.1, x.2>) = x.1,
+    sdec(senc(x.1, x.2), x.2) = x.1,
+    snd(<x.1, x.2>) = x.2,
+    unwrap(f(x, y)) = x
+
+macros: m1( x ) =  h(x)
+
+rule (modulo E) A:
+   [ Fr( ~k ) ] --[ Key( h(~k) ) ]-> [ Out( senc(m1(~k), h(~k)) ) ]
+
+end

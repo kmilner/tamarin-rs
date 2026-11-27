@@ -1,0 +1,18 @@
+// Category: the `-m`/`--output-module` documents — SAPIC typing.
+//
+// A copy of examples/sapic/fast/basic/typing4.spthy: `-m=spthytyped` prints
+// the inferred types, `-m=msr` the translated rules.  module_sweep.sh covers
+// the corpus file only locally.
+theory Typing
+begin
+functions: f(bitstring):bitstring, g(lol):lol,
+            h/1 // implicitely typed
+builtins: multiset
+process:
+        new x:lol;
+        out(x) |         new x:lol; new x.1:lol; event Run(x,x.1);
+        out(<x,x.1>)
+lemma sanity:
+ exists-trace
+ "Ex x y #i. Run(x,y)@i & not(x=y)"
+end

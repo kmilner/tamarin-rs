@@ -1,0 +1,16 @@
+theory Loc
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: f/4, fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+process:
+  (out('hello_world_hello_world'))@f('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+                                     'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
+
+end

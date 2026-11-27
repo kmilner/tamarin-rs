@@ -1,0 +1,18 @@
+// Category: the `[convergent]` equation flag across later declarations.
+//
+// HS `addFunSym` rebuilds the signature through the monoid `<>`
+// (Term/Maude/Signature.hs), whose `mempty` has the flag off, so a
+// `functions:` block AFTER `equations [convergent]:` drops the flag: the
+// echo prints `equations:`.  sig_convergent_then_macros is the `macros:`
+// twin.  No corpus theory declares functions after convergent equations.
+
+theory SigConvergentThenFunctions
+begin
+
+functions: f/1, a/0
+
+equations [convergent]: f(x) = a
+
+functions: g/1
+
+end

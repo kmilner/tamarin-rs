@@ -1805,6 +1805,9 @@ impl<'a> Parser<'a> {
 
     /// Tactic function values are deliberately not Haskell string literals:
     /// every character except the closing quote is literal, including `\\`.
+    /// The opening quote is HS's `symbol "\""` (`doubleQuoted`,
+    /// Theory/Text/Parser/Token.hs), a lexeme, so whitespace right after it
+    /// is not part of the value.
     fn tactic_function_param(&mut self) -> Option<String> {
         self.skip_ws();
         let start = self.save();
@@ -1812,6 +1815,7 @@ impl<'a> Parser<'a> {
             self.restore(start);
             return None;
         }
+        self.skip_ws();
         let mut param = String::new();
         loop {
             match self.lx.peek() {

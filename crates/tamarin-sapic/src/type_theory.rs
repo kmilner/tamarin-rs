@@ -176,7 +176,3 @@ fn type_process_def(
         .collect::<Result<Vec<_>, _>>()?;
     Ok((Some(vars), *body))
 }
-
-#[cfg(test)]
-#[path = "type_theory_tests.rs"]
-mod tests;

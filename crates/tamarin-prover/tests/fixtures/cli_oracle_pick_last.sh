@@ -1,5 +1,5 @@
 #!/bin/sh
-# Deterministic test oracle for the `--oraclename` pin in tests/cli_e2e.rs.
+# Deterministic test oracle for the `--oraclename` pin in tests/fixtures/cli_refs/cases.tsv.
 #
 # Contract (HS `oracleRanking`, ProofMethod.hs): argv[1] is the lemma
 # name, stdin carries one `<index>: <goal>` line per open goal, and stdout is

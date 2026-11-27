@@ -388,7 +388,9 @@ pub(crate) fn base_trans_action(
         //   (Basetranslation.hs).
         SapicAction::Unlock(t) => {
             let Some(an_v) = &an.unlock else {
-                return Err("baseTransAction: Unannotated unlock".to_string());
+                return Err(
+                    "This feature is not implemented yet. Sorry! Unannotated unlock".to_string(),
+                );
             };
             let v = an_v.0;
             let lt = to_ln_term(t);
@@ -1032,11 +1034,6 @@ pub(crate) fn res_locking(has_unlock: bool, v: &LVar) -> tamarin_theory::restric
 mod tests {
     use super::*;
     use tamarin_term::lterm::LSort;
-    use tamarin_theory::sapic::ProcessCombinator;
-
-    fn lv(name: &str, idx: u64) -> LVar {
-        LVar::new(name, LSort::Msg, idx)
-    }
 
     /// Direct builders and parsed formulas agree on connective associativity,
     /// quantifier order and shadowed binders in state and locking restrictions.
@@ -1129,48 +1126,5 @@ mod tests {
             "All p pp l x lp #t1 #t3. Lock_7(p, l, x)@t1 & Lock(pp, lp, x)@t3 ==>\n\
              #t3<#t1 | #t1=#t3",
         );
-    }
-
-    /// `sapicvar` defaults node-sorted binders to type `node`, so quantified
-    /// `#j` binds the corresponding `sapicnodevar` occurrence.
-    #[test]
-    fn a_quantified_timepoint_in_a_cond_is_bound_by_its_binder() {
-        let msig = tamarin_term::maude_sig::pair_maude_sig();
-        let cond = |src: &str| {
-            let parsed = tamarin_parser::parse_theory(
-                &format!("theory T begin process: if {src} then 0 end"),
-                &[],
-            )
-            .unwrap();
-            let condition = parsed
-                .items
-                .iter()
-                .find_map(|item| match item {
-                    tamarin_parser::TheoryItem::TopLevelProcess(
-                        tamarin_parser::Process::Comb {
-                            comb: tamarin_parser::ProcessComb::Cond(condition),
-                            ..
-                        },
-                    ) => Some(condition),
-                    _ => None,
-                })
-                .unwrap();
-            let tamarin_parser::Condition::Formula(f) = condition else {
-                panic!("expected a formula condition")
-            };
-            ProcessCombinator::Cond(tamarin_theory::formula::sapic_from_parser(f, &msig).unwrap())
-        };
-        let an = ProcessAnnotation::<LVar>::empty();
-        let pos: Vec<i64> = vec![];
-        // tildex binds only `x`.
-        let mut tx = BTreeSet::new();
-        tx.insert(lv("x", 0));
-
-        // A message binder does close its occurrences — both the binder and
-        // the occurrence take `sapicvar`.  That is what makes the assertion
-        // below discriminating.
-        assert!(base_trans_comb(&cond("Ex y. Eq(y, x)"), &an, &pos, &tx).is_ok());
-
-        assert!(base_trans_comb(&cond("Ex #j. Foo(x) @ #j"), &an, &pos, &tx).is_ok());
     }
 }

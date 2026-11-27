@@ -814,21 +814,6 @@ fn subst_blnterm_cow_reports_a_domain_hit() {
 // Opened binders
 // =============================================================================
 
-/// HS `noUnguardedVars` names the survivors of the prefix `openFormulaPrefix`
-/// drew (Guarded.hs), and `avoidPrecise` seeds that supply from the
-/// free variables (LTerm.hs), so a free `x.3` puts the
-/// binder `x` at index 4.  The expected bytes are the pinned oracle's, as
-/// `tests/guarded_unguarded_freshening.rs` records them.
-#[test]
-fn reports_the_unguarded_variable_under_its_freshened_name() {
-    let e =
-        g("Foo(x.3) @ #i ==> (All x z. (<x, z> = x) ==> F)").expect_err("x and z are unguarded");
-    assert_eq!(
-        e.message,
-        "unguarded variable(s) 'x.4', 'z' in the subformula"
-    );
-}
-
 // =============================================================================
 // openGuarded (Guarded.hs)
 // =============================================================================

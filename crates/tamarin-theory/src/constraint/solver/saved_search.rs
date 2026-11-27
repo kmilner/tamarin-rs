@@ -246,58 +246,6 @@ mod tests {
     }
 
     #[test]
-    fn bfs_replay_preserves_nested_stale_saved_branches() {
-        let Some(path) = tamarin_test_support::require_maude_path() else {
-            return;
-        };
-        let parsed = tamarin_parser::parse_theory(
-            r#"theory StaleBfs begin
-            rule Emit1: [Fr(~x)] --[A(~x)]-> []
-            rule Emit2: [Fr(~x)] --[A(~x)]-> []
-            lemma witness: exists-trace
-              "Ex x #i. A(x) @ i"
-            simplify
-            case stale
-              simplify
-              simplify
-              by sorry
-            qed
-            end"#,
-            &[],
-        )
-        .unwrap();
-        let theory = crate::elaborate::elaborate(&parsed).unwrap();
-        let maude =
-            tamarin_term::maude_proc::MaudeHandle::start(&path, theory.signature.clone()).unwrap();
-        let (theory, _) = crate::closed_theory::close_theory(theory, &maude, None).unwrap();
-        let session = crate::prove::ProverSession::build(
-            &theory,
-            maude,
-            crate::prove::ProverSessionOptions {
-                cut: CutStrategy::Bfs,
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let proof = crate::prove::prove_lemma_in_session(&session, "witness", 30).unwrap();
-        assert_eq!(proof_status(&proof), ProofStatus::TraceFound);
-        let mut stale = &proof.children["stale"];
-        for _ in 0..2 {
-            assert!(!stale.annotated);
-            assert!(matches!(stale.method, ProofMethod::Simplify));
-            assert_eq!(stale.children.len(), 1);
-            stale = stale.children.values().next().unwrap();
-        }
-        assert!(!stale.annotated);
-        assert!(matches!(stale.method, ProofMethod::Sorry(None)));
-        assert!(stale.children.is_empty());
-        fn steps(node: &ProofNode) -> usize {
-            1 + node.children.values().map(steps).sum::<usize>()
-        }
-        assert_eq!(steps(&proof), 7);
-    }
-
-    #[test]
     fn checked_saved_witness_uses_case_order_before_search_depth() {
         let Some(mut ctx) = context() else {
             return;

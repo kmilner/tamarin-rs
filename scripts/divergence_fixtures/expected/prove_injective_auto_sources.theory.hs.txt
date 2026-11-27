@@ -1,0 +1,126 @@
+theory MacroInjectiveAuto
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, sdec/2, senc/2, snd/1
+equations:
+    fst(<x.1, x.2>) = x.1,
+    sdec(senc(x.1, x.2), x.2) = x.1,
+    snd(<x.1, x.2>) = x.2
+
+tactic: prem
+presort: S
+prio: {id}
+  regex"last\(#j\)"
+prio: {id}
+  regex"▶₀#j"
+
+macros: projection( x ) =  fst(<x, 'c'>)
+
+rule (modulo E) Create:
+   [ Fr( ~id ) ] --[ Cr( ~id ) ]-> [ S( projection(~id) ), Once( ~id ) ]
+ variants
+  rule (modulo AC) Create___VARIANT_1:
+     [ Fr( ~id ) ] --[ Cr( ~id ) ]-> [ S( ~id ), Once( ~id ) ]
+
+rule (modulo E) Use:
+   [ S( id ), Once( id ) ] --[ Use( id ) ]-> [ S( id ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Fin:
+   [ S( id ) ] --[ Fin( id ), FinArgument( id, $x ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Key:
+   [ Fr( ~k ) ] --> [ !Key( ~k ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Dec:
+   [ !Key( ~k ), In( x ) ] --[ Dec( sdec(x, ~k) ) ]-> [ Out( sdec(x, ~k) ) ]
+ variants
+  rule (modulo AC) Dec___VARIANT_1:
+     [ !Key( ~k.1 ), In( x.2 ) ]
+    --[ Dec( sdec(x.2, ~k.1) ) ]->
+     [ Out( sdec(x.2, ~k.1) ) ]
+  ,
+  rule (modulo AC) Dec___VARIANT_2:
+     [ !Key( ~k.1 ), In( senc(z.2, ~k.1) ) ]
+    --[
+    AUTO_IN_TERM_1_0_0__Dec___VARIANT_2( senc(z.2, ~k.1), z.2 ), Dec( z.2 )
+    ]->
+     [ Out( z.2 ) ]
+
+lemma induction_counterexample [use_induction, heuristic={prem}]:
+  all-traces
+  "∀ id #i #j #k.
+    ((((((Cr( id ) @ #i) ∧ (Fin( id ) @ #j)) ∧ (Fin( id ) @ #k)) ∧
+       (#i < #j)) ∧
+      (#i < #k)) ∧
+     (¬(∃ #u. Use( id ) @ #u))) ⇒
+    (⊥)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ id #i #j #k.
+  (Cr( id ) @ #i) ∧ (Fin( id ) @ #j) ∧ (Fin( id ) @ #k)
+ ∧
+  (#i < #j) ∧ (#i < #k) ∧ (∀ #u. (Use( id ) @ #u) ⇒ ⊥)"
+*/
+induction
+  case non_empty_trace
+  solve( (last(#j))  ∥ (∃ #u. (Use( ~id ) @ #u) ∧ ¬(last(#u))) )
+    case case_1
+    solve( S( ~id ) ▶₀ #j )
+      case Create___VARIANT_1
+      solve( (last(#k))  ∥ (∃ #u. (Use( ~id ) @ #u) ∧ ¬(last(#u))) )
+        case case_1
+        SOLVED // trace found
+      qed
+    qed
+  qed
+qed
+
+lemma AUTO_typing [sources]:
+  all-traces
+  "(⊤) ∧
+   (∀ x m #i.
+     (AUTO_IN_TERM_1_0_0__Dec___VARIANT_2( m, x ) @ #i) ⇒
+     (∃ #j. (!KU( x ) @ #j) ∧ (#j < #i)))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ x m #i.
+  (AUTO_IN_TERM_1_0_0__Dec___VARIANT_2( m, x ) @ #i)
+ ∧
+  ∀ #j. (!KU( x ) @ #j) ⇒ ¬(#j < #i)"
+*/
+induction
+  case empty_trace
+  by contradiction /* from formulas */
+next
+  case non_empty_trace
+  solve( (last(#i))  ∥
+         (∃ #j. (!KU( x ) @ #j) ∧ (¬(last(#j))) ∧ (#j < #i)) )
+    case case_1
+    solve( !Key( ~k ) ▶₀ #i )
+      case Key
+      solve( !KU( senc(x, ~k) ) @ #vk )
+        case Dec___VARIANT_2
+        by contradiction /* cyclic */
+      next
+        case c_senc
+        by contradiction /* from formulas */
+      qed
+    qed
+  next
+    case case_2
+    by contradiction /* from formulas */
+  qed
+qed
+
+
+
+end

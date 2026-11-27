@@ -465,50 +465,6 @@ fn term_is_free_var(t: &BLNTerm) -> bool {
 mod tests {
     use super::*;
 
-    /// A case test whose predicate fact tag is already declared is HS's
-    /// `DuplicateItem (PredicateItem pr)`, shown as `render (prettyFact
-    /// prettyLVar fact)` (Exceptions.hs): each argument keeps its sort sigil.
-    #[test]
-    fn duplicate_case_test_predicate_renders_the_fact_like_hs() {
-        const DUP_SRC: &str = "theory AccDupPred\n\
-begin\n\
-predicates:\n  PubLog(y) <=> y = y\n\
-rule L:\n  [ ] --[ Log( $p ) ]-> [ ]\n\
-test PubLog:\n  \"Ex #i. Log($p)@i\"\n\
-end\n";
-        let parsed = tamarin_parser::parse_theory(DUP_SRC, &[]).expect("theory parses");
-        let mut elaborated =
-            tamarin_theory::elaborate::elaborate(&parsed).expect("theory elaborates");
-        let err = translate(&mut elaborated).expect_err("the predicate is declared twice");
-        assert_eq!(err.to_string(), "duplicate predicate: PubLog( $p )");
-    }
-
-    /// HS `required \\ defined`: missing idents keep their order and
-    /// repeats, and a case test declared after the lemma is undefined for it.
-    #[test]
-    fn undefined_case_tests_lists_each_missing_ident() {
-        const SRC: &str = "theory AccUndefined\n\
-begin\n\
-rule L:\n  [ ] --[ Log( $p ) ]-> [ ]\n\
-test a:\n  \"Ex #i. Log($p)@i\"\n\
-lemma acc: a, b, a, c, c account for \"All #i p. Log(p)@i ==> F\"\n\
-test c:\n  \"Ex #i. Log($p)@i\"\n\
-end\n";
-        let parsed = tamarin_parser::parse_theory(SRC, &[]).expect("theory parses");
-        let mut elaborated =
-            tamarin_theory::elaborate::elaborate(&parsed).expect("theory elaborates");
-        let Err(AccError::CaseTestsUndefined(undef)) = translate(&mut elaborated) else {
-            panic!("expected undefined case tests");
-        };
-        assert_eq!(
-            undef,
-            [(
-                "acc".to_string(),
-                vec!["b".to_string(), "c".to_string(), "c".to_string()]
-            )]
-        );
-    }
-
     #[test]
     fn included_accountability_heuristic_keeps_its_oracle_origin() {
         let root =

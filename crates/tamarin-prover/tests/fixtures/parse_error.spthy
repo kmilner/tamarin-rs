@@ -1,0 +1,7 @@
+theory Broken
+begin
+
+rule R:
+  [ Fr(~x) ] --> [ Out(~x) 
+
+end

@@ -1,0 +1,30 @@
+// Category: SAPIC translation corners of `let`, with the
+// translation-progress option (sapic_lets_plain is the twin).
+//
+//   - a destructor `let` whose else-branch fails: only the rules that
+//     merely match an equation skip the derivation checks (the wf block runs
+//     them; sapic_lets_reliable_* repeat this over a reliable channel);
+//   - a nullary destructor whose equation and failure premises coincide:
+//     both rules share the derivation attributes;
+//   - a pattern `let` with the else branch omitted keeps its failure
+//     restriction;
+//   - an embedded MSR step's `_restrict` survives rule compression.
+// No corpus theory has translation-progress with an embedded restriction,
+// and the corpus derivation-check regression covers the plain wrapper only.
+
+theory SapicLets_progress
+begin
+
+options: translation-progress
+
+functions: d/1 [destructor], wrap/1, d0/0 [destructor], ok/0
+
+equations: d(wrap(x)) = x
+
+process:
+  ( in(x); let y = d(d(x)) in out(y) else event Failed() )
+  || ( let y0 = d0() in event Seen(y0) else event Wrong() )
+  || ( in(x2); let <a, b> = x2 in event A(a, b) )
+  || ( [ ] --[ _restrict(F) ]-> [ ]; event E() )
+
+end

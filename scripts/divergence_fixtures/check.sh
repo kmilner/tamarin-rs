@@ -33,7 +33,7 @@ stamped="$(cat "$expected/oracle_rev")"
     || die "expected/ was captured from oracle $stamped but the submodule pin is now $pin — re-run capture.sh and review the diff"
 
 fail=0
-report() { printf '  %-24s %-6s %-8s %s\n' "$1" "$2" "$3" "$4"; }
+report() { printf '  %-32s %-7s %-8s %s\n' "$1" "$2" "$3" "$4"; }
 
 # The directory and the manifest must agree before anything is loaded.
 census_fixture_dir
@@ -47,18 +47,18 @@ divergence_shape() {
     esac
 }
 
-# `check_slice <name> <slice> <mode> < raw` — compare one block of one load.
+# `check_slice <name> <slice> <mode> <outdir>` — compare one block of one load.
 # A reference must be non-empty (`-s`, not `-f`).  An empty reference matches
 # an engine that printed nothing at all.  That is the one way this comparison
 # can pass while it asserts nothing.  capture.sh writes each reference by
 # redirection, and it unlinks the file again when the slice comes out empty.
 # A 0-byte file here is therefore a capture that was killed in between.
 check_slice() {
-    local name="$1" sl="$2" mode="$3" hs="$expected/$1.$2.hs.txt" ref got
+    local name="$1" sl="$2" mode="$3" out="$4" hs="$expected/$1.$2.hs.txt" ref got
     if [ ! -s "$hs" ]; then
         report "$name" "$sl" FAIL "no captured oracle bytes — run capture.sh"; fail=1; return 0
     fi
-    got="$(mktemp)"; slice "$sl" > "$got"
+    got="$(mktemp)"; slice "$sl" "$out" > "$got"
 
     ref="$hs"
     if [ "$mode" = diverge ]; then
@@ -89,15 +89,17 @@ check_slice() {
 }
 
 check_one() {
-    local name="$1" slices="$2" mode="$3" flags="$4" raw sl
-    raw="$(mktemp)"
-    if ! load "$RS_PATH" "$name" "$flags" > "$raw"; then
-        rm -f "$raw"
-        for sl in $(slices_of "$slices"); do report "$name" "$sl" FAIL "the port failed or timed out"; done
-        fail=1; return 0
+    local name="$1" slices="$2" mode="$3" flags="$4" input="$5" out sl
+    out="$(mktemp -d)"
+    if ! run_row "$RS_PATH" "$input" "$slices" "$flags" "$out"; then
+        for sl in $(slices_of "$slices"); do
+            report "$name" "$sl" FAIL "unexpected exit status $(cat "$out/rc")"
+        done
+        sed -n '1,10p' "$out/stderr" >&2
+        rm -rf "$out"; fail=1; return 0
     fi
-    for sl in $(slices_of "$slices"); do check_slice "$name" "$sl" "$mode" < "$raw"; done
-    rm -f "$raw"
+    for sl in $(slices_of "$slices"); do check_slice "$name" "$sl" "$mode" "$out"; done
+    rm -rf "$out"
 }
 
 echo "divergence fixtures ($RS_PATH vs expected/ captured at $stamped)"

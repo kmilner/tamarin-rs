@@ -1,0 +1,43 @@
+theory SapicTranslationItems
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: check_rep/2 [destructor], f/1, fst/1, get_rep/1 [destructor],
+           pair/2, rep/2 [private,constructor], report/1, snd/1
+equations:
+    check_rep(rep(x.1, x.2), x.2) = x.1,
+    fst(<x.1, x.2>) = x.1,
+    get_rep(rep(x.1, x.2)) = x.1,
+    snd(<x.1, x.2>) = x.2
+
+builtins: locations-report
+
+predicate: Report( x, y )<=>¬(y = 'loc')
+
+let  P (l) = (out('payload'))@l
+
+equivLemma:
+  (new a:lol;
+   out(f(a)))
+  (new b;
+   out(f(b)))
+
+export queries : "
+query attacker(x).
+"
+
+process:
+  (new c;
+   out(f(c))) | P('loc')
+
+/* All wellformedness checks were successful. */
+
+/*
+Generated from:
+Tamarin version 1.13.0
+Maude version 3.5.1
+*/
+
+end

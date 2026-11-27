@@ -126,7 +126,7 @@ tools. `divergence_fixtures/_common.sh` keeps its own small setup.
 
 `capture_cli_refs.sh` deliberately does not use the shared maude resolver: it
 walks the RS test harness's ladder because its captures must use the maude
-`cli_e2e.rs` will.
+`cli_refs.rs` will.
 
 ## Primary gates — run these before trusting a change
 
@@ -403,7 +403,7 @@ walks the RS test harness's ladder because its captures must use the maude
   `test.sh --help` for the public corpus runner.
 - **`capture_cli_refs.sh`** — captures the ORACLE's stdout for every row of
   `crates/tamarin-prover/tests/fixtures/cli_refs/cases.tsv`, which is the argv
-  table `cli_e2e.rs`'s flag pins read as well — adding a pin is "add a row,
+  table `cli_refs.rs` reads as well — adding a pin is "add a row,
   re-run this". Deliberately serial and proving: the oracle's `--prove` output
   is nondeterministic under parallel load, and a flaky reference is worse than
   none. Writes `<name>.stdout` (raw bytes; both sides normalise build info,

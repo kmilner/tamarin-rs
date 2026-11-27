@@ -38,57 +38,6 @@ fn wire_index_covers_every_emitted_signature_symbol() {
     }
 }
 
-/// HS `addFunSym`/`addMacroSym` route through the monoid `<>`
-/// (Term/Maude/Signature.hs), which rebuilds from `mempty`
-/// (eqConvergent=False) and so RESETS eqConvergent to false.
-///
-/// Probed against the real prover (v1.13.0): a `functions:` block placed
-/// AFTER an `equations [convergent]:` block prints `equations:` (the
-/// convergent flag is dropped), whereas `functions:` BEFORE keeps
-/// `equations [convergent]:`.  `add_ctxt_st_rule` must NOT reset, since
-/// elaborate.rs sets eq_convergent before the rule loop (mirroring the HS
-/// parser's explicit re-set AFTER `foldl addCtxtStRule`,
-/// Theory/Text/Parser/Signature.hs).
-#[test]
-fn add_fun_sym_resets_eq_convergent() {
-    use crate::function_symbols::{Constructability, NoEqSym, Privacy};
-    let sig = MaudeSig {
-        eq_convergent: true,
-        ..MaudeSig::default()
-    };
-    let g = NoEqSym::new(
-        b"g".to_vec(),
-        1,
-        Privacy::Public,
-        Constructability::Constructor,
-    );
-    let sig = sig.add_fun_sym(UserDefinedSym::NoEqUser(g));
-    assert!(
-        !sig.eq_convergent,
-        "add_fun_sym must reset eq_convergent (HS monoid <>)"
-    );
-}
-
-#[test]
-fn add_macro_sym_resets_eq_convergent() {
-    use crate::function_symbols::{Constructability, NoEqSym, Privacy};
-    let sig = MaudeSig {
-        eq_convergent: true,
-        ..MaudeSig::default()
-    };
-    let m = NoEqSym::new(
-        b"m".to_vec(),
-        1,
-        Privacy::Private,
-        Constructability::Destructor,
-    );
-    let sig = sig.add_macro_sym(m);
-    assert!(
-        !sig.eq_convergent,
-        "add_macro_sym must reset eq_convergent (HS monoid <>)"
-    );
-}
-
 /// An `[AC]` symbol goes to `st_ac_fun_syms` and reaches the derived
 /// signature as `AC (ACfct …)` (HS `maudeSig`'s
 /// `S.union S.map (AC . ACfct) stACFunSyms`).

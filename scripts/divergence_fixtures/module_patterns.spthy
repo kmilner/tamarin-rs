@@ -1,0 +1,22 @@
+// Category: the `-m`/`--output-module` documents — pattern-match markers.
+//
+// The spthy and spthytyped echoes keep the `=x` markers of patterns in `in`
+// and in embedded MSR steps; the msr module's `process=` attributes drop
+// them.  No corpus theory reaches the -m modules in a CI gate.
+theory Patterns
+begin
+
+process:
+in(x); // allowed
+in(=x); // allowed
+/* in(<=x,x>); // disallowed because ambigous */
+/* in(x); // disallowed because x is bound in top-level process */
+/* in(<y,y>); // disallowed, because unclear semantics... */
+in(<=x,=x>); // allowed, because clear semantics...
+[In(z)]-->[]; // allowed
+/* [In(z)]-->[]; // disallowed because z is bound */
+[In(=z)]-->[]; // allowed
+0
+
+
+end

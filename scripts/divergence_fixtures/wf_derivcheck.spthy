@@ -1,0 +1,29 @@
+// Category: the Message Derivation Checks block (`checkVariableDeducability`,
+// Theory/Tools/MessageDerivationChecks.hs), which every other fixture turns
+// off with --derivcheck-timeout=0.
+//
+// Two copies of one shape differ only in whether the destructor is private:
+//   - RevealPriv receives `encp(m, k)` and `k`, but `decp` is private, so the
+//     intruder cannot derive `m` and the check reports it;
+//   - RevealPub is the same rule over a public `dec`, and stays silent.
+// NoVariants has no variants (`In(~x)` before `Fr(~x)`), so closing drops it,
+// but HS runs the check on the OPEN theory and still reports its `n`.
+// No corpus wf block carries a "Failed to derive" entry.
+
+theory WfDerivcheck
+begin
+
+functions: decp/2 [private], encp/2, dec/2, enc/2
+
+equations: decp(encp(m, k), k) = m, dec(enc(m, k), k) = m
+
+rule RevealPriv:
+  [ In(encp(m, k)), In(k) ] --[ GotPriv(m) ]-> [ Out(decp(encp(m, k), k)) ]
+
+rule RevealPub:
+  [ In(enc(m, k)), In(k) ] --[ GotPub(m) ]-> [ Out(dec(enc(m, k), k)) ]
+
+rule NoVariants:
+  [ Fr(~x), In(~x), In(encp(n, ~x)) ] --> [ Out(n) ]
+
+end

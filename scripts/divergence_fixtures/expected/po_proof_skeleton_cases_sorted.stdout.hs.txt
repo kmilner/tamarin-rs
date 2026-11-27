@@ -1,0 +1,31 @@
+theory CaseOrder
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) A:
+   [ Fr( ~k ) ] --[ S( ~k ) ]-> [ Out( ~k ) ]
+
+rule (modulo E) Zed:
+   [ Fr( ~k ) ] --[ S( ~k ) ]-> [ Out( ~k ) ]
+
+lemma chain:
+  exists-trace "∃ k #i. S( k ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ k #i. (S( k ) @ #i)"
+*/
+simplify
+solve( S( k ) @ #i )
+  case A
+  SOLVED // trace found
+next
+  case Zed
+  by sorry
+qed
+
+end

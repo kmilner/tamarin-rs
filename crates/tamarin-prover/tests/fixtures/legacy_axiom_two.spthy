@@ -1,0 +1,8 @@
+theory AxTwo
+begin
+
+axiom Bx1: "All x #i. D(x) @ i ==> F"
+
+rule S: [ ] --[ D('y') ]-> [ ]
+
+end

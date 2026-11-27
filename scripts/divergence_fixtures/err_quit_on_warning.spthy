@@ -1,0 +1,18 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// --quit-on-warning in translate mode prints the report block and aborts.
+// No corpus theory fails this way.
+
+theory issue331
+
+begin
+
+process:
+    insert 'bla', 'toto'
+    |
+    lookup 'bla' as counter in
+     in(counter) // give warning before rewriting variable
+    |
+        in(x); in(x) // same error
+
+end

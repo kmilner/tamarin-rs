@@ -1,0 +1,26 @@
+theory IfElse
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, sdec/2, senc/2, snd/1
+equations:
+    fst(<x.1, x.2>) = x.1,
+    sdec(senc(x.1, x.2), x.2) = x.1,
+    snd(<x.1, x.2>) = x.2
+
+process:
+  in(x);
+  if x='a' then
+      (event Yes( );
+       out('y'))
+  else
+      event No( );
+      insert 'st',x;
+      lock 'st';
+      unlock 'st';
+      lookup 'st' as z in
+          event Got( z )
+
+end

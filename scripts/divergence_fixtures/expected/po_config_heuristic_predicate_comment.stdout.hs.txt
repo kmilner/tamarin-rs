@@ -1,0 +1,33 @@
+theory Misc
+
+configuration: "--auto-sources"
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+heuristic: p
+
+predicate: Both( x, y )<=>∃ #i #j. (A( ) @ #i) ∧ (A( ) @ #j)
+
+section{* a formal comment *}
+
+restriction rst:
+  "∀ #i #j. ((A( ) @ #i) ∧ (A( ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+rule (modulo E) A:
+   [ ] --[ A( ) ]-> [ ]
+
+lemma withproof:
+  exists-trace "∃ #i. A( ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ #i. (A( ) @ #i)"
+*/
+by sorry
+
+end

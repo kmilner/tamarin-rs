@@ -1,0 +1,19 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// An unguardable sources lemma aborts the proving run, even for a lemma
+// simplification alone would close.
+// No corpus theory fails this way.
+
+// Category: proof corners no corpus proof reaches — a malformed `[sources]`
+// lemma.
+//
+// The sources lemma cannot be converted to a guarded formula, but `done` is
+// closed by simplification alone, which never forces the sources: the
+// oracle proves `done` and leaves the sources lemma unproven.  No corpus
+// theory has an unguardable sources lemma.
+
+theory MalformedSources begin
+rule R: [] --[ A() ]-> []
+lemma typing [sources]: "All x #i. A() @ #i ==> x = x"
+lemma done: "All #i. A() @ #i ==> A() @ #i"
+end

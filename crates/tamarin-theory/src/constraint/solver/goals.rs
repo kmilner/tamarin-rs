@@ -264,6 +264,19 @@ pub fn parse_heuristic_str_with_tactics(
             }
             // HS's `noneOf` keeps a space written before the closing brace in
             // the name, and `chosenTactic` compares it verbatim.
+            // HS `selectTactic` (Theory/Proof.hs) falls back to the one
+            // `defaultTactic` (System.hs) when the theory declares none.
+            let fallback = [crate::tactic::Tactic {
+                name: "default".into(),
+                presort: 's',
+                prios: Vec::new(),
+                deprios: Vec::new(),
+            }];
+            let tactics = if tactics.is_empty() {
+                &fallback[..]
+            } else {
+                tactics
+            };
             let declared = tactics.iter().find(|t| t.name == name);
             let tactic = crate::tactic::Tactic {
                 name,
@@ -272,21 +285,17 @@ pub fn parse_heuristic_str_with_tactics(
                 deprios: declared.map(|t| t.deprios.clone()).unwrap_or_default(),
             };
             let resolution_error = declared.is_none().then(|| {
-                if tactics.is_empty() {
-                    std::sync::Arc::from("No tactic has been written in the theory file")
-                } else {
-                    let names = tactics
-                        .iter()
-                        .rev()
-                        .map(|t| t.name.as_str())
-                        .collect::<Vec<_>>()
-                        .join(",");
-                    std::sync::Arc::from(format!(
-                        "The tactic specified ( {:?} ) is not written in the theory file, \
-                         please chose among the following: {:?}",
-                        tactic.name, names
-                    ))
-                }
+                let names = tactics
+                    .iter()
+                    .rev()
+                    .map(|t| t.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(",");
+                std::sync::Arc::from(format!(
+                    "The tactic specified ( {:?} ) is not written in the theory file, \
+                     please chose among the following: {:?}",
+                    tactic.name, names
+                ))
             });
             out.push(GoalRanking::Tactic {
                 quit_on_empty: false,

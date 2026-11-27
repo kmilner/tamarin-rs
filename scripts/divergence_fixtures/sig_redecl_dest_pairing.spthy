@@ -1,0 +1,15 @@
+// Category: redeclarations of builtin-owned names.
+//
+// `functions: fst/1` BEFORE `builtins: dest-pairing`: the builtin's arm
+// check exempts the projection, so the later builtin turns it into the
+// destructor the echo prints.  sig_redecl_dest_pairing_after is the other
+// order.  No corpus theory redeclares a projection.
+
+theory SigRedeclDestPairing
+begin
+
+functions: fst/1
+
+builtins: dest-pairing
+
+end

@@ -620,7 +620,3 @@ fn fact_lhs_occur_no_rhs(thy: &Theory) -> Vec<WfError> {
 
     vec![WfError::new(title, s)]
 }
-
-#[cfg(test)]
-#[path = "facts_tests.rs"]
-mod tests;

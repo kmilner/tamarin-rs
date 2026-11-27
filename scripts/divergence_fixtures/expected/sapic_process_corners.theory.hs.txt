@@ -1,0 +1,413 @@
+theory SapicProcessCorners
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: check_rep/2 [destructor], f/1, fst/1, get_rep/1 [destructor],
+           h/1, pair/2, rep/2 [private,constructor], report/1, snd/1, add/2 [AC]
+equations:
+    check_rep(rep(x.1, x.2), x.2) = x.1,
+    fst(<x.1, x.2>) = x.1,
+    get_rep(rep(x.1, x.2)) = x.1,
+    snd(<x.1, x.2>) = x.2
+
+heuristic: p
+
+predicate: Report( x, y )<=>¬(y = 'loc')
+
+lemma weird:
+  all-traces "(∃ #i. A( ) @ #i) ⇔ (∃ #j. K( 'a' ) @ #j)"
+/*
+guarded formula characterizing all counter-examples:
+"(((∃ #i. (A( ) @ #i)) ∧ (∀ #j. (K( 'a' ) @ #j) ⇒ ⊥)) ∨
+  ((∃ #j. (K( 'a' ) @ #j)) ∧ (∀ #i. (A( ) @ #i) ⇒ ⊥)))"
+*/
+by sorry
+
+restriction Restr_ReportRule_1:
+  "∀ x #NOW. (Restr_ReportRule_1( x ) @ #NOW) ⇒ (¬(x = 'loc'))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #NOW. (Restr_ReportRule_1( x ) @ #NOW) ⇒ (¬(x = 'loc'))"
+  */
+
+rule (modulo E) ReportRule[color=#ffffff, process="|", issapicrule,
+                           role='Process']:
+   [ In( <x, loc> ) ]
+  --[ Restr_ReportRule_1( loc ) ]->
+   [ Out( rep(x, loc) ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Init[color=#ffffff, process="|", issapicrule,
+                     role='Process']:
+   [ ] --[ Init( ) ]-> [ State_( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) p_0_[color=#ffffff, process="|", issapicrule,
+                     role='Process']:
+   [ State_( ) ] --> [ State_1( ), State_2( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) p_0_1[color=#ffffff, process="|", issapicrule,
+                      role='Process']:
+   [ State_1( ) ] --> [ State_11( ), State_12( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) p_0_11[color=#ffffff, process="|", issapicrule,
+                       role='Process']:
+   [ State_11( ) ] --> [ State_111( ), State_112( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) p_0_111[color=#ffffff, process="|", issapicrule,
+                        role='Process']:
+   [ State_111( ) ] --> [ State_1111( ), State_1112( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) p_0_1111[color=#ffffff, process="|", issapicrule,
+                         role='Process']:
+   [ State_1111( ) ] --> [ State_11111( ), State_11112( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) p_0_11111[color=#ffffff, process="|", issapicrule,
+                          role='Process']:
+   [ State_11111( ) ] --> [ State_111111( ), State_111112( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) p_0_111111[color=#ffffff, process="|", issapicrule,
+                           role='Process']:
+   [ State_111111( ) ] --> [ State_1111111( ), State_1111112( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) p_0_1111111[color=#ffffff, process="|", issapicrule,
+                            role='Process']:
+   [ State_1111111( ) ] --> [ State_11111111( ), State_11111112( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) inx_0_11111111[color=#ffffff, process="in(x.1);",
+                               issapicrule, role='Process']:
+   [ State_11111111( ), In( x.1 ) ] --> [ State_111111111( x.1 ) ]
+
+  /*
+  rule (modulo AC) inx_0_11111111[color=#ffffff, process="in(x.1);",
+                                  issapicrule, role='Process']:
+     [ State_11111111( ), In( x ) ] --> [ State_111111111( x ) ]
+  */
+
+restriction Restr_ifjFooxj_0_111111111_1:
+  "∀ x #NOW.
+    (Restr_ifjFooxj_0_111111111_1( x ) @ #NOW) ⇒ (∃ #j. Foo( x ) @ #j)"
+
+  /*
+  expanded formula:
+  "∀ x #NOW.
+    (Restr_ifjFooxj_0_111111111_1( x ) @ #NOW) ⇒ (∃ #j. Foo( x ) @ #j)"
+  */
+
+rule (modulo E) ifjFooxj_0_111111111[color=#ffffff,
+                                     process="if ∃ #j. Foo( x.1 ) @ #j", issapicrule, role='Process']:
+   [ State_111111111( x.1 ) ]
+  --[ Restr_ifjFooxj_0_111111111_1( x.1 ) ]->
+   [ State_1111111111( x.1 ) ]
+
+  /*
+  rule (modulo AC) ifjFooxj_0_111111111[color=#ffffff,
+                                        process="if ∃ #j. Foo( x.1 ) @ #j", issapicrule, role='Process']:
+     [ State_111111111( x ) ]
+    --[ Restr_ifjFooxj_0_111111111_1( x ) ]->
+     [ State_1111111111( x ) ]
+  */
+
+restriction Restr_ifjFooxj_1_111111111_1:
+  "∀ x #NOW.
+    (Restr_ifjFooxj_1_111111111_1( x ) @ #NOW) ⇒ (¬(∃ #j. Foo( x ) @ #j))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #NOW.
+    (Restr_ifjFooxj_1_111111111_1( x ) @ #NOW) ⇒ (¬(∃ #j. Foo( x ) @ #j))"
+  */
+
+rule (modulo E) ifjFooxj_1_111111111[color=#ffffff,
+                                     process="if ∃ #j. Foo( x.1 ) @ #j", issapicrule, role='Process']:
+   [ State_111111111( x.1 ) ]
+  --[ Restr_ifjFooxj_1_111111111_1( x.1 ) ]->
+   [ State_1111111112( x.1 ) ]
+
+  /*
+  rule (modulo AC) ifjFooxj_1_111111111[color=#ffffff,
+                                        process="if ∃ #j. Foo( x.1 ) @ #j", issapicrule, role='Process']:
+     [ State_111111111( x ) ]
+    --[ Restr_ifjFooxj_1_111111111_1( x ) ]->
+     [ State_1111111112( x ) ]
+  */
+
+rule (modulo E) p_0_1111111111[color=#ffffff, process="0", issapicrule,
+                               role='Process']:
+   [ State_1111111111( x.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_1111111111[color=#ffffff, process="0", issapicrule,
+                                  role='Process']:
+     [ State_1111111111( x ) ] --> [ ]
+  */
+
+rule (modulo E) p_0_1111111112[color=#ffffff, process="0", issapicrule,
+                               role='Process']:
+   [ State_1111111112( x.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_1111111112[color=#ffffff, process="0", issapicrule,
+                                  role='Process']:
+     [ State_1111111112( x ) ] --> [ ]
+  */
+
+rule (modulo E) outpayload_0_11111112[color=#ffffff,
+                                      process="out('payload');", issapicrule, role='Process']:
+   [ State_11111112( ) ] --> [ State_111111121( ), Out( 'payload' ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) p_0_111111121[color=#ffffff, process="0", issapicrule,
+                              role='Process']:
+   [ State_111111121( ) ] --> [ ]
+
+  /* has exactly the trivial AC variant */
+
+restriction Restr_Evtrestricttb_0_1111112_1:
+  "∀ #NOW. (Restr_Evtrestricttb_0_1111112_1( ) @ #NOW) ⇒ ('t' = 'b')"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ #NOW. (Restr_Evtrestricttb_0_1111112_1( ) @ #NOW) ⇒ ('t' = 'b')"
+  */
+
+rule (modulo E) Evtrestricttb_0_1111112[color=#ffffff,
+                                        process=" [ ] --[ Ev( 't' ), _restrict('t' = 'b') ]-> [ ];",
+                                        issapicrule, role='Process']:
+   [ State_1111112( ) ]
+  --[ Ev( 't' ), Restr_Evtrestricttb_0_1111112_1( ) ]->
+   [ State_11111121( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) p_0_11111121[color=#ffffff, process="0", issapicrule,
+                             role='Process']:
+   [ State_11111121( ) ] --> [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) outhrepcloc_0_111112[color=#ffffff,
+                                     process="out(h(rep('c', 'loc')));", issapicrule, role='Process']:
+   [ State_111112( ) ] --> [ State_1111121( ), Out( h(rep('c', 'loc')) ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) p_0_1111121[color=#ffffff, process="0", issapicrule,
+                            role='Process']:
+   [ State_1111121( ) ] --> [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ifrepclocrepcloc_0_11112[color=#ffffff,
+                                         process="if rep('c', 'loc')=rep('c', 'loc')", issapicrule,
+                                         role='Process']:
+   [ State_11112( ) ]
+  --[ Pred_Eq( rep('c', 'loc'), rep('c', 'loc') ) ]->
+   [ State_111121( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) ifrepclocrepcloc_1_11112[color=#ffffff,
+                                         process="if rep('c', 'loc')=rep('c', 'loc')", issapicrule,
+                                         role='Process']:
+   [ State_11112( ) ]
+  --[ Pred_Not_Eq( rep('c', 'loc'), rep('c', 'loc') ) ]->
+   [ State_111122( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) p_0_111121[color=#ffffff, process="0", issapicrule,
+                           role='Process']:
+   [ State_111121( ) ] --> [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) p_0_111122[color=#ffffff, process="0", issapicrule,
+                           role='Process']:
+   [ State_111122( ) ] --> [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Ploca_0_1112[color=#ffffff, process="P(<'loc', 'a'>);",
+                             issapicrule, role='Process']:
+   [ State_1112( ) ] --> [ State_11121( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) outpayload_0_11121[color=#6c8040,
+                                   process="out('payload');", issapicrule, role='P']:
+   [ State_11121( ) ] --> [ State_111211( ), Out( 'payload' ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) p_0_111211[color=#6c8040, process="0", issapicrule,
+                           role='P']:
+   [ State_111211( ) ] --> [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Qab_0_112[color=#ffffff, process="Q('a', 'b');",
+                          issapicrule, role='Process']:
+   [ State_112( ) ] --> [ State_1121( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) outa_0_1121[color=#807140, process="out('a');",
+                            issapicrule, role='Q']:
+   [ State_1121( ) ] --> [ State_11211( ), Out( 'a' ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) p_0_11211[color=#807140, process="0", issapicrule,
+                          role='Q']:
+   [ State_11211( ) ] --> [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) newk_0_12[color=#ffffff, process="new k.1;", issapicrule,
+                          role='Process']:
+   [ State_12( ), Fr( k.1 ) ] --> [ State_121( k.1 ) ]
+
+  /*
+  rule (modulo AC) newk_0_12[color=#ffffff, process="new k.1;",
+                             issapicrule, role='Process']:
+     [ State_12( ), Fr( k ) ] --> [ State_121( k ) ]
+  */
+
+restriction Restr_Evaaddkrestrictaaddkk_0_121_1:
+  "∀ x #NOW x.1.
+    (Restr_Evaaddkrestrictaaddkk_0_121_1( x, x.1 ) @ #NOW) ⇒ (x = x.1)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #NOW x.1.
+    (Restr_Evaaddkrestrictaaddkk_0_121_1( x, x.1 ) @ #NOW) ⇒ (x = x.1)"
+  */
+
+rule (modulo E) Evaaddkrestrictaaddkk_0_121[color=#ffffff,
+                                            process=" [ ]
+--[ Ev2( ('a' add k.1) ), _restrict(('a' add k.1) = k.1) ]->
+ [ ];",
+                                            issapicrule, role='Process']:
+   [ State_121( k.1 ) ]
+  --[
+  Ev2( ('a' add k.1) ),
+  Restr_Evaaddkrestrictaaddkk_0_121_1( ('a' add k.1), k.1 )
+  ]->
+   [ State_1211( k.1 ) ]
+
+  /*
+  rule (modulo AC) Evaaddkrestrictaaddkk_0_121[color=#ffffff,
+                                               process=" [ ]
+--[ Ev2( ('a' add k.1) ), _restrict(('a' add k.1) = k.1) ]->
+ [ ];",
+                                               issapicrule, role='Process']:
+     [ State_121( k ) ]
+    --[
+    Ev2( ('a' add k) ), Restr_Evaaddkrestrictaaddkk_0_121_1( ('a' add k), k )
+    ]->
+     [ State_1211( k ) ]
+  */
+
+rule (modulo E) p_0_1211[color=#ffffff, process="0", issapicrule,
+                         role='Process']:
+   [ State_1211( k.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_1211[color=#ffffff, process="0", issapicrule,
+                            role='Process']:
+     [ State_1211( k ) ] --> [ ]
+  */
+
+rule (modulo E) inx_0_2[color=#ffffff, process="in(x5.1);", issapicrule,
+                        role='Process']:
+   [ State_2( ), In( x5.1 ) ] --> [ State_21( x5.1 ) ]
+
+  /*
+  rule (modulo AC) inx_0_2[color=#ffffff, process="in(x5.1);", issapicrule,
+                           role='Process']:
+     [ State_2( ), In( x5 ) ] --> [ State_21( x5 ) ]
+  */
+
+rule (modulo E) StxEvxnoprecompOutx_0_21[color=#ffffff,
+                                         process=" [ St( x5.2 )[+] ] --[ Ev3( x5.2 )[no_precomp] ]-> [ Out( x5.2 ) ];",
+                                         issapicrule, role='Process']:
+   [ State_21( x5.1 ), St( x5.2 )[+] ]
+  --[ Ev3( x5.2 )[no_precomp] ]->
+   [ State_211( x5.1, x5.2 ), Out( x5.2 ) ]
+
+  /*
+  rule (modulo AC) StxEvxnoprecompOutx_0_21[color=#ffffff,
+                                            process=" [ St( x5.2 )[+] ] --[ Ev3( x5.2 )[no_precomp] ]-> [ Out( x5.2 ) ];",
+                                            issapicrule, role='Process']:
+     [ State_21( x5 ), St( x5.1 )[+] ]
+    --[ Ev3( x5.1 )[no_precomp] ]->
+     [ State_211( x5, x5.1 ), Out( x5.1 ) ]
+  */
+
+rule (modulo E) p_0_211[color=#ffffff, process="0", issapicrule,
+                        role='Process']:
+   [ State_211( x5.1, x5.2 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_211[color=#ffffff, process="0", issapicrule,
+                           role='Process']:
+     [ State_211( x5, x5.1 ) ] --> [ ]
+  */
+
+restriction predicate_eq:
+  "∀ #i a b. (Pred_Eq( a, b ) @ #i) ⇒ (a = b)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ #i a b. (Pred_Eq( a, b ) @ #i) ⇒ (a = b)"
+  */
+
+restriction predicate_not_eq:
+  "∀ #i a b. (Pred_Not_Eq( a, b ) @ #i) ⇒ (¬(a = b))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ #i a b. (Pred_Not_Eq( a, b ) @ #i) ⇒ (¬(a = b))"
+  */
+
+restriction single_session:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  */
+
+
+
+end

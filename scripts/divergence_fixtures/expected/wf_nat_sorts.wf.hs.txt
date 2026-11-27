@@ -1,0 +1,100 @@
+WARNING: the following wellformedness checks failed!
+
+Unbound variables
+=================
+
+  rule `NatLit' has unbound variables: 
+    %y
+
+Formula terms
+=============
+
+  Lemma `NatL' uses terms of the wrong form:
+    `NatPlus('bad',Free %x)', `Free %x'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+  
+  Restriction `NatR' uses terms of the wrong form:
+    `NatPlus('also_bad',Free %y)', `Free %y'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+
+Multiplication restriction of rules
+===================================
+
+  The following rule is not multiplication restricted:
+    rule (modulo E) Canon1:
+       [ In( <a, b, c> ) ] --> [ Out( (%1%+(a*b*c)) ) ]
+  
+  After replacing reducible function symbols in lhs with variables:
+    rule (modulo E) Canon1:
+       [ In( <a, b, c> ) ] --> [ Out( (%1%+(a*b*c)) ) ]
+  
+    Terms with multiplication:  (a*b*c)
+  
+  The following rule is not multiplication restricted:
+    rule (modulo E) Canon4:
+       [ In( <a, b, c> ) ] --> [ Out( (%1%+zz((a*b))) ) ]
+  
+  After replacing reducible function symbols in lhs with variables:
+    rule (modulo E) Canon4:
+       [ In( <a, b, c> ) ] --> [ Out( (%1%+zz((a*b))) ) ]
+  
+    Terms with multiplication:  (a*b)
+  
+  The following rule is not multiplication restricted:
+    rule (modulo E) Canon7:
+       [ In( <a, b, c> ) ] --> [ Out( (c%+%1%+(a*b)) ) ]
+  
+  After replacing reducible function symbols in lhs with variables:
+    rule (modulo E) Canon7:
+       [ In( <a, b, c> ) ] --> [ Out( (c%+%1%+(a*b)) ) ]
+  
+    Terms with multiplication:  (a*b)
+
+Unsupported multiplication outside exponents
+============================================
+
+  Rule Canon1 has products outside exponents: (a*b*c)
+  
+  Rule Canon4 has products outside exponents: (a*b)
+  
+  Rule Canon7 has products outside exponents: (a*b)
+
+Nat Sorts
+=========
+
+  %'a' in term (%'a'%+%y) must be of sort nat
+  
+  (a*b*c) in term (%1%+(a*b*c)) must be of sort nat
+  
+  (a add b add c) in term (%1%+(a add b add c)) must be of sort nat
+  
+  em(a, b) in term (%1%+em(a, b)) must be of sort nat
+  
+  zz((a*b)) in term (%1%+zz((a*b))) must be of sort nat
+  
+  a in term (a%+%1) must be of sort nat
+  
+  a^b in term (a^b%+%1) must be of sort nat
+  
+  c in term (c%+%1%+(a*b)) must be of sort nat
+  
+  (a*b) in term (c%+%1%+(a*b)) must be of sort nat
+  
+  x in term (x%+<a, b>) must be of sort nat
+  
+  <a, b> in term (x%+<a, b>) must be of sort nat
+  
+  'bad' in term ('bad'%+%x) must be of sort nat
+  
+  'also_bad' in term ('also_bad'%+%y) must be of sort nat
+*/

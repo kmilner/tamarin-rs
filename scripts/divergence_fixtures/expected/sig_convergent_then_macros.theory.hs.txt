@@ -1,0 +1,17 @@
+theory SigConvergentThenMacros
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: a/0, f/1, fst/1, pair/2, snd/1
+equations [convergent]:
+    f(x) = a,
+    fst(<x.1, x.2>) = x.1,
+    snd(<x.1, x.2>) = x.2
+
+macros: m( x ) =  f(x)
+
+
+
+end

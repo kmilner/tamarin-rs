@@ -552,7 +552,10 @@ touch startup-resumed
     if fail {
         // The last lemma is still queued, so only the peer error can cancel startup.
         let error = result.unwrap_err().to_string();
-        assert!(error.contains("No tactic has been written"), "{error}");
+        assert!(
+            error.contains("is not written in the theory file"),
+            "{error}"
+        );
     } else {
         let threads = result.unwrap();
         assert_eq!(threads.len(), 3);

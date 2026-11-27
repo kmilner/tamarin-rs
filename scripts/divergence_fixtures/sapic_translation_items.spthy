@@ -1,0 +1,31 @@
+// Category: SAPIC translation items in the `-m` documents.
+//
+// The `-m=spthy` row echoes every translation item with its header —
+// `builtins: locations-report`, the `let` definition, the `process:` and an
+// `export` block — while `-m=msr` prints the translated rules and none of
+// those items.  The `equivLemma` processes are typed before the top-level
+// process, whose `out(f(c))` then carries the lemma's `lol` type.  No corpus theory uses `equivLemma` or `export`, and the -m
+// modules are gated only locally (module_sweep.sh).
+
+theory SapicTranslationItems
+begin
+
+builtins: locations-report
+
+functions: f/1
+
+predicates: Report(x, y) <=> not (y = 'loc')
+
+let P(l) = (out('payload'))@l
+
+equivLemma: (new a:lol; out(f(a))) (new b; out(f(b)))
+
+export queries:
+"
+query attacker(x).
+"
+
+process:
+  new c; out(f(c)) || P('loc')
+
+end

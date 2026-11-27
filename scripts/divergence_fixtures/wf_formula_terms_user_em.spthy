@@ -1,0 +1,19 @@
+// Category: the Formula terms check (`checkTerms`, Theory/Tools/
+// Wellformedness.hs) — a user-declared `em` without bilinear pairing.
+//
+// Without the `bilinear-pairing` builtin, `em/2` is an ordinary NoEq symbol
+// and the product with it is allowed: the lemma has no offender, so the
+// block is the success line.  With the builtin (wf_formula_terms_shapes,
+// formula_terms_offenders) the same `em` is the reducible bilinear map.  No
+// corpus theory declares its own `em`.
+
+theory WfFormulaTermsUserEm
+begin
+
+builtins: diffie-hellman
+
+functions: em/2, f/2
+
+lemma L1: "All #i. Test(em('g', 'h') * f('g', 'h')) @ #i ==> F"
+
+end

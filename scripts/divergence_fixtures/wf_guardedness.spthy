@@ -1,0 +1,51 @@
+// Category: the Formula guardedness report and the restriction safety
+// comment.
+//
+// `formulaToGuarded` (Theory/Constraint/System/Guarded.hs) threads ONE
+// fresh-name supply across a whole formula and reports the unguarded
+// survivors under their freshened names (see guarded_freshened_names):
+//   - L4: a free `x.3` seeds the supply, so the binder reads 'x.4';
+//   - L5: a free `#x.2` of another sort still consumes the name `x`;
+//   - L6: `x.1` under `∀ x` is a different variable (index-aware capture);
+//   - L8: `#x` and `x` are different variables (sort-aware capture);
+//   - with_predicate: the quoted formula wraps at the report's nesting;
+//   - many: the unguarded-name list wraps between names.
+// The restrictions are all guardable, since the oracle dies printing an
+// unguardable one: Closed and Existential carry the `// safety formula`
+// comment, FreeVar (a free `x`) does not, and also adds a Formula terms
+// entry.  No corpus theory has an unguardable lemma or a non-closed
+// restriction.
+
+theory WfGuardedness
+begin
+
+rule A: [ In(x) ] --[ Foo(x), Bar(x), AA(x, x), BB(x) ]-> [ ]
+
+lemma L4:
+  "Foo(x.3) @ #i ==> (All x z. (<x, z> = x) ==> F)"
+
+lemma L5:
+  "Foo(y) @ #x.2 ==> (All x z. (<x, z> = x) ==> F)"
+
+lemma L6:
+  "(All x #i. Foo(x) @ #i ==> Bar(x.1) @ #i) & (All x z. (<x, z> = x) ==> F)"
+
+lemma L8:
+  "(All x. (Foo(x) @ #x ==> F)) & (All x z. (<x, z> = x) ==> F)"
+
+lemma with_predicate:
+  "All xx yy zz #i. AA(xx, yy) @ i ==> (Ex #ii #jj. AA(xx, yy) @ ii & BB(zz) @ jj & #ii < #jj) & (Ex #ii #jj. AA(zz, yy) @ ii & BB(xx) @ jj & #ii < #jj)"
+
+lemma many:
+  "All x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20 x21 x22 x23 x24 x25 #i. AA(x1, x1) @ i ==> F"
+
+restriction Closed:
+  "All x #i. Foo(x) @ #i ==> F"
+
+restriction FreeVar:
+  "All #i. Foo(x) @ #i ==> F"
+
+restriction Existential:
+  "All x #i. Foo(x) @ #i ==> (Ex #j. Bar(x) @ #j)"
+
+end

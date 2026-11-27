@@ -99,7 +99,7 @@ Rust tests each resolve their dependencies explicitly:
   also prepended to `PATH` for subprocesses.
 
   `capture_cli_refs.sh` uses the Rust test harness's resolution order so its
-  captures and `cli_e2e.rs` use the same Maude installation.
+  captures and `cli_refs.rs` use the same Maude installation.
 
   Web servers resolve `dot` through `PATH`. If Graphviz is installed through
   linuxbrew and that directory is absent from `PATH`, add it before running:
@@ -203,7 +203,7 @@ fast gates do need the oracle binary present to address it.**
 | `cargo fmt --all --check` | formatting (CI enforces it) | seconds |
 | `cargo clippy --workspace --all-targets -- -D warnings` | lints (CI enforces it) | seconds warm |
 | `MAUDE_PATH=$(command -v maude) cargo test --profile ci --workspace` | Rust unit + integration suites | minutes |
-| `scripts/divergence_fixtures/check.sh` | 55 corner fixtures vs committed oracle captures (CI runs this too) | ~10 s |
+| `scripts/divergence_fixtures/check.sh` | every corner row in `fixtures.tsv` vs committed oracle captures (CI runs this too) | ~50 s |
 | `scripts/wf_gate.sh` | wellformedness block, canonical corpus, vs the shared load cache | load-only; depends on cache warmth |
 | `scripts/pretty_gate.sh` | `theory … end` echo, canonical corpus, vs the same load cache | load-only; depends on cache warmth |
 
@@ -225,9 +225,9 @@ fast gates do need the oracle binary present to address it.**
 | `scripts/bench.sh` | performance tables (see [results](docs/PERFORMANCE.md)) |
 
 **CI enforces `cargo fmt`, clippy,
-`cargo test --workspace`, the 18-file wellformedness roster,
+`cargo test --workspace`, the 24-file wellformedness roster,
 `scripts/divergence_fixtures/check.sh`, and `rs_ref_check.sh check`.** It runs
-no live Haskell binary. The divergence step compares 55 corner cases with
+no live Haskell binary. The divergence step compares every corner row with
 committed oracle captures (and rejects a submodule bump without a recapture),
 while wellformedness and several unit suites also pin committed oracle output.
 `rs_ref_check.sh` compares this branch's hashes with `ci_ref_fast.tsv`, whose
@@ -368,7 +368,7 @@ that capture automatically after rebuilding the testing oracle. `SKIP_BUILD=1`
 also skips the capture and prints a warning, so that exceptional workflow must
 build the oracle and run the capture explicitly before testing or committing.
 
-`crates/tamarin-prover`'s `cli_e2e` suite byte-compares flag pins against
+`crates/tamarin-prover`'s `cli_refs` table byte-compares flag pins against
 committed oracle stdout under `tests/fixtures/cli_refs/`. Both sides read one
 argv table, `cli_refs/cases.tsv`, so adding a pin is "add a row, re-run the
 capture":
@@ -642,7 +642,7 @@ the oracle and port.
 ## Corner fixtures (no oracle, no proving)
 
 ```bash
-scripts/divergence_fixtures/check.sh          # ~10 s, 55 fixtures
+scripts/divergence_fixtures/check.sh          # ~50 s, 180 rows
 ```
 
 Behaviour that no theory under the submodule's `examples/` tree reaches, so
@@ -655,10 +655,21 @@ currently all require a match. The manifest also supports `diverge` rows, which
 must reproduce recorded port bytes while remaining different from the oracle;
 this preserves both sides of a deliberate divergence when one exists.
 
+A row pins one or more slices of one load (`fixtures.tsv` documents them):
+the wf block, the theory echo and the run summary that the corpus gates
+compare, the whole stdout (`--parse-only` and `-m` documents), the
+`--output-dot`/`--output-json` files (`traces`), and the outcome of a fatal
+run (`error`). An `error` slice records the exit code and a normalised error
+kind, never stderr bytes or positions: the port renders parse errors through
+codespan by design. A row named `<fixture>@<variant>` loads the same theory
+under other flags, and a fixture may ship `#include`d or oracle siblings
+(`<fixture>.inc`, `<fixture>.oracle`, `<fixture>.d/`). `capture.sh <row>...`
+recaptures only the named rows.
+
 It is the cheapest real assertion in the tree, and the only oracle-byte
 comparison CI makes: the `test` job's `Divergence fixtures` step builds
 `--profile ci --bin tamarin-rs`, puts `/opt/maude` on `PATH` (the port's own
-probe does not read `MAUDE_PATH`) and runs it, ~5–10 s. `cargo test` does not.
+probe does not read `MAUDE_PATH`) and runs it, ~50 s. `cargo test` does not.
 
 ## Flag-parity sweeps
 

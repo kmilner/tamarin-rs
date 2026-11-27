@@ -1,0 +1,28 @@
+// Category: the --parse-only open-theory printer (`prettyOpenTheory`),
+// which no corpus gate runs: the gates load and close every theory.
+//
+// `tactic:` header block, `export:` item, user `[AC]` function typing line,
+// xor builtin, `hide_lemma=`/`heuristic={...}` lemma attributes.
+
+theory Mixed
+begin
+
+builtins: xor
+functions: uni/2 [AC], pw/1 [private]
+
+export queries:
+  "some export body"
+
+tactic: mytac
+presort: C
+prio:
+  regex ".*S\(.*"
+
+lemma hid [hide_lemma=chain, heuristic={mytac}]:
+  exists-trace
+  "Ex k #i. S(k) @ i"
+
+rule A:
+  [ Fr(~k) ] --[ S(~k) ]-> [ Out(~k XOR uni(~k, ~k)) ]
+
+end

@@ -1,0 +1,21 @@
+// Category: the --parse-only open-theory printer (`prettyOpenTheory`),
+// which no corpus gate runs: the gates load and close every theory.
+//
+// Open lemma: the guarded-formula block keeps the MACRO form (`m1('a')`) —
+// macros are applied at translation, after `--parse-only` stops (the closed
+// print shows `h('a')`).
+
+theory MacroLem
+begin
+
+functions: h/1
+macros: m1(x) = h(x)
+
+rule A:
+  [ ] --[ A(m1('a')) ]-> [ ]
+
+lemma lem:
+  exists-trace
+  "Ex z #i. A(z) @ i & A(m1('a')) @ i"
+
+end

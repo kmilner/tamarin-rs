@@ -1,0 +1,19 @@
+theory MacroRst
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, h/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+macros: m1( x ) =  h(x)
+
+rule (modulo E) A:
+   [ ] --[ A( m1('a') ) ]-> [ ]
+
+restriction rst:
+  "∀ z #i. (A( z ) @ #i) ⇒ (A( m1('a') ) @ #i)"
+  // safety formula
+
+end

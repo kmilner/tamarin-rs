@@ -134,55 +134,6 @@ pub fn apply_sapic(thy: &mut Theory, user_set_heuristic: bool) -> Result<Vec<WfE
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tamarin_theory::rule::ProtoRuleName;
-
-    /// Under progress, path compression absorbs the `_restrict` step into
-    /// `Init`.  `mergeInfo` keeps the first name and concatenates the
-    /// `_preRestriction` lists (Compression.hs), so the oracle still emits
-    /// `Restr_Init_1` and the `Restr_Init_1( )` action on `Init`.
-    #[test]
-    fn compression_keeps_the_absorbed_rule_restriction() {
-        let src = "theory T begin\n\
-            options: translation-progress\n\
-            process:\n\
-              [] --[ _restrict(F) ]-> []; event E()\n\
-            end";
-        let parsed = tamarin_parser::parse_theory(src, &[]).unwrap();
-        let mut thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
-        apply_sapic(&mut thy, false).unwrap();
-        assert!(thy.lookup_restriction("Restr_Init_1").is_some());
-        let init = thy
-            .rules()
-            .find(|r| r.rule.info.name == ProtoRuleName::Stand("Init"))
-            .expect("rule missing");
-        assert!(init
-            .rule
-            .actions
-            .iter()
-            .any(|f| tamarin_theory::fact::show_fact_tag(&f.tag) == "Restr_Init_1"));
-    }
-
-    /// Haskell types the whole theory before translating (`typeTheory >=>
-    /// translate`), so the function types an `equivLemma` process teaches
-    /// reach the top-level process: the oracle names the output rule
-    /// `outfclol_0_1`, with `process="out(f(c.1:lol));"`.
-    #[test]
-    fn earlier_processes_type_the_translated_process() {
-        let src = "theory T begin\n\
-            functions: f/1\n\
-            equivLemma: (new a:lol; out(f(a))) (new b; out(f(b)))\n\
-            process:\n\
-              new c; out(f(c))\n\
-            end";
-        let parsed = tamarin_parser::parse_theory(src, &[]).unwrap();
-        let mut thy = tamarin_theory::elaborate::elaborate(&parsed).unwrap();
-        apply_sapic(&mut thy, false).unwrap();
-        assert!(
-            thy.rules()
-                .any(|r| r.rule.info.name == ProtoRuleName::Stand("outfclol_0_1")),
-            "the top-level process was typed without the equivLemma's types"
-        );
-    }
 
     /// `translation-state-optimisation` forces the pure-state facts injective
     /// only through a translated process: `translate` returns an MSR theory

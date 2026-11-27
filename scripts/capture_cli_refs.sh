@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Capture the HASKELL oracle's stdout for every row of
 # crates/tamarin-prover/tests/fixtures/cli_refs/cases.tsv, so
-# tests/cli_e2e.rs can byte-compare the port against it.
+# tests/cli_refs.rs can byte-compare the port against it.
 #
 # The argv lives in cases.tsv, NOT here and NOT in the test: both sides read
 # that one table, so a reference can never be captured with flags the test
@@ -16,11 +16,11 @@
 #                   at comparison time, so nothing is stripped here)
 #   CAPTURED.tsv    provenance (which oracle binary, its fingerprint, the
 #                   submodule pin it must match, the maude, the date) plus one
-#                   `<name>\t<bytes>` row per capture.  cli_e2e.rs asserts this
+#                   `<name>\t<bytes>` row per capture.  cli_refs.rs asserts this
 #                   lists exactly the rows in cases.tsv, so a partial capture
 #                   cannot masquerade as a complete one.
 #
-# This is a PROVING run (every row carries --prove).  It is deliberately
+# Most rows are PROVING runs.  The capture is deliberately
 # SERIAL: the oracle's `--prove` output is nondeterministic under parallel
 # load (see the PE+prove flakiness note in the campaign ledger), and a flaky
 # reference is worse than none.
@@ -29,8 +29,8 @@
 #      row), ALLOW_ORACLE_REV_MISMATCH=1 (capture against an oracle that is
 #      not the submodule pin — records the mismatch and continues).
 #
-# Exit: 0 only when every requested row was captured, non-empty, and satisfies
-#       the `relation` column of its case.  The DONE line repeats the verdict.
+# Exit: 0 only when every requested row was captured, non-empty, exited with
+#       the row's `rc`, and satisfies the `relation` column of its case.  The DONE line repeats the verdict.
 set -u
 
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -38,13 +38,14 @@ repo_root="$(cd "$script_dir/.." && pwd)"
 # Shared gate plumbing (gate_common.sh): OOM prologue, strip_env, the oracle
 # fingerprint recipe.  (The maude ladder below is deliberately NOT the shared
 # resolver: it mirrors the RS test harness's own probe order, so captures use
-# the maude cli_e2e.rs will.)
+# the maude cli_refs.rs will.)
 [ -r "$script_dir/gate_common.sh" ] || { echo "capture_cli_refs: missing $script_dir/gate_common.sh (owns the shared gate helpers)" >&2; exit 2; }
 . "$script_dir/gate_common.sh"
 # OOM discipline: a prover that explodes dies alone, it does not take the
 # session with it.  Every subprocess below inherits these.
 oom_prologue 16777216
 FIXTURES="$repo_root/crates/tamarin-prover/tests/fixtures"
+EXAMPLES="$repo_root/tamarin-prover/examples"
 REFS="$FIXTURES/cli_refs"
 CASES="$REFS/cases.tsv"
 MANIFEST="$REFS/CAPTURED.tsv"
@@ -57,7 +58,7 @@ HS_PATH=$(resolve_hs_oracle "$repo_root") || exit 2
 [ -x "$HS_PATH" ] || { echo "capture_cli_refs: HS_PATH '$HS_PATH' is not executable" >&2; exit 2; }
 
 # --- maude -------------------------------------------------------------------
-# Same ladder the test harness walks (crates/tamarin-prover/tests/common/mod.rs):
+# Same ladder the test harness walks (crates/tamarin-test-support):
 # the two /usr candidates, then $PATH, then this workspace's linuxbrew install.
 if [ -z "${MAUDE:-}" ]; then
     for c in /usr/local/bin/maude /usr/bin/maude; do
@@ -85,7 +86,7 @@ selected() {
 }
 
 # strip_env (gate_common.sh) drops the machine- or run-local lines before
-# COMPARING two captures (the files themselves keep them; cli_e2e.rs
+# COMPARING two captures (the files themselves keep them; cli_refs.rs
 # normalizes both sides).
 
 mkdir -p "$REFS"
@@ -99,24 +100,39 @@ declare -A ROW_NAME=()
 
 echo "capture_cli_refs: oracle=$HS_PATH fp=$HS_FP maude=$MAUDE timeout=${FILE_TIMEOUT}s (serial)"
 
-while IFS=$'\t' read -r name theory relation args; do
+expand() { local v="${1//\{FIXTURES\}/$FIXTURES}"; printf '%s' "${v//\{EXAMPLES\}/$EXAMPLES}"; }
+
+while IFS=$'\t' read -r name inputs relation want_rc args _stderr; do
     case "$name" in ''|\#*) continue;; esac
     rows=$((rows + 1))
     ROW_NAME["$name"]=1
     selected "$name" || continue
-    if [ ! -f "$FIXTURES/$theory" ]; then
-        echo "  MISSING-THEORY $name ($theory)"; bad="${bad:+$bad }MISSING-THEORY=$name"; continue
+    # `-` reads no theory: the subcommand finds maude on $PATH (the oracle's
+    # `variants` takes no --with-maude flag), so put the resolved one first.
+    paths=(); maude_flag=(--with-maude="$MAUDE"); run_path="$PATH"
+    if [ "$inputs" = - ]; then
+        maude_flag=(); run_path="$(dirname "$MAUDE"):$PATH"
+    else
+        missing=''
+        for p in $inputs; do
+            p="$(expand "$p")"; case "$p" in /*) ;; *) p="$FIXTURES/$p";; esac
+            [ -f "$p" ] || missing="$p"
+            paths+=("$p")
+        done
+        if [ -n "$missing" ]; then
+            echo "  MISSING-INPUT  $name ($missing)"; bad="${bad:+$bad }MISSING-INPUT=$name"; continue
+        fi
     fi
-    argv=${args//\{FIXTURES\}/$FIXTURES}
+    argv=$(expand "$args")
     out="$REFS/$name.stdout"
     tmp=$(mktemp)
     # Word splitting on $argv is intended: cases.tsv holds a flag list.
-    timeout "$FILE_TIMEOUT" "$HS_PATH" --with-maude="$MAUDE" $argv "$FIXTURES/$theory" \
+    PATH="$run_path" timeout "$FILE_TIMEOUT" "$HS_PATH" "${maude_flag[@]}" $argv "${paths[@]}" \
         >"$tmp" 2>/dev/null
     rc=$?
-    if [ "$rc" != 0 ]; then
+    if [ "$rc" != "$want_rc" ]; then
         rm -f "$tmp"
-        echo "  FAIL           $name (oracle exit $rc)"
+        echo "  FAIL           $name (oracle exit $rc, the row says $want_rc)"
         bad="${bad:+$bad }EXIT=$name:$rc"; continue
     fi
     if [ ! -s "$tmp" ]; then
@@ -179,7 +195,7 @@ done
 
 # --- manifest ----------------------------------------------------------------
 # Written only for a FULL capture: a partial run must not leave a manifest that
-# claims to describe the whole set (cli_e2e.rs compares it against cases.tsv).
+# claims to describe the whole set (cli_refs.rs compares it against cases.tsv).
 if [ ${#want[@]} -eq 0 ] && [ -z "$bad" ]; then
     { echo "# capture_cli_refs.sh provenance — regenerate with: scripts/capture_cli_refs.sh"
       echo "# hs_bin	$HS_PATH"

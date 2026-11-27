@@ -1,0 +1,14 @@
+// Fixture: triggers `Fact arity issues` through LEMMA facts, which the
+// report prints in their derived `Show` form: `B(x, 'c')` at another arity
+// than the rule's, and an annotated `A(x)[+, no_precomp]`, whose annotation
+// set shows its constructors in `Ord` order.
+theory FactArityLemmaShow
+begin
+
+rule R: [ Fr(~x) ] --[ A(~x, ~x), B(~x) ]-> [ Out(~x) ]
+
+lemma LB: "All x #i. B(x, 'c') @ i ==> F"
+
+lemma LA: "All x #i. A(x)[+, no_precomp] @ i ==> F"
+
+end

@@ -1,0 +1,10 @@
+
+ERROR: unsupported rule semantics in err_unsupported_products.spthy:
+
+Unsupported multiplication outside exponents
+============================================
+
+  Rule ActionProduct has products outside exponents: (x*y)
+  
+  Rule ConclusionProduct has products outside exponents: (x*y)
+

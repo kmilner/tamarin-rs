@@ -1,0 +1,9 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// A SAPIC condition over an undefined predicate.
+// No corpus theory fails this way.
+
+theory SapicUndefinedPredicate begin
+process:
+  in(x); if Foo(x) then out('a')
+end

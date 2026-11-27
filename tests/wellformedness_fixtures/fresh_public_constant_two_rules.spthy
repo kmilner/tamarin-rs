@@ -1,0 +1,10 @@
+// Fixture: triggers `Fresh public constants` in two rules, which the report
+// lists as two entries under one header.
+theory FreshPublicConstantTwoRules
+begin
+
+rule R1: [ ] --> [ Out(~'one') ]
+
+rule R2: [ ] --> [ Out(~'two') ]
+
+end

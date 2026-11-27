@@ -1,0 +1,28 @@
+# source: oracle a75fec7f, --derivcheck-timeout=0
+/*
+WARNING: the following wellformedness checks failed!
+
+Fact arity issues
+=================
+
+Same fact is used with different arities, i.e., Fact('A','B') is different from Fact('A'). 
+Check the arguments of your facts.
+  
+
+  Fact `a':
+
+    1. Rule `R', arity 2
+         A( ~x, ~x )
+    
+    2. Lemma `LA', arity 1
+         Fact {factTag = ProtoFact Linear "A" 1, factAnnotations = fromList [SolveFirst,NoSources], factTerms = [Bound 1]}
+  
+  Fact `b':
+
+    1. Rule `R', arity 1
+         B( ~x )
+    
+    2. Lemma `LB', arity 2
+         Fact {factTag = ProtoFact Linear "B" 2, factAnnotations = fromList [], factTerms = [Bound 1,'c']}
+  
+*/

@@ -1,0 +1,19 @@
+// Category: the `-m`/`--output-module` documents — SAPIC typing over
+// channels.  A copy of examples/sapic/fast/basic/channels4.spthy under
+// `-m=spthytyped`; module_sweep.sh covers the corpus file only locally.
+theory ChannelsTestOne
+begin
+
+let P = new a; event Secret(a); out (c, a)
+let Q = in(c, x); event Received(x)
+
+process:
+new c; (P || Q)
+
+lemma secret :
+      "All x #i. ( Secret(x) @ i ==> not (Ex #j. K(x) @ j) )"
+
+lemma received : exists-trace
+      "Ex x #i. Received(x) @ i"
+
+end

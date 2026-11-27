@@ -1,0 +1,29 @@
+WARNING: the following wellformedness checks failed!
+
+Unbound variables
+=================
+
+  rule `Evmrestrictkb_0_1' has unbound variables: 
+    k.5
+
+Fact arity issues
+=================
+
+Same fact is used with different arities, i.e., Fact('A','B') is different from Fact('A'). 
+Check the arguments of your facts.
+  
+
+  Fact `st':
+
+    1. Rule `ArityR', arity 1
+         St( ~x )
+    
+    2. Rule `ArityR2', arity 2
+         St( ~x, ~y )
+  
+
+Facts occur in the left-hand-side but not in any right-hand-side 
+=================================================================
+
+  1. in rule "ArityR2":  factName `St' arity: 2 multiplicity: Linear. Perhaps you want to use the fact in rule "ArityR":  factName `St' arity: 1 multiplicity: Linear
+*/

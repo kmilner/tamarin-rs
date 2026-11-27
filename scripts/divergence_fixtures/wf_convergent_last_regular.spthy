@@ -1,0 +1,22 @@
+// Category: the Subterm Convergence Warning (`checkSubtermConvergence`,
+// Theory/Tools/Wellformedness.hs) and the `[convergent]` equation flag.
+//
+// The flag lives on the signature, and every `equations:` block overwrites
+// it, so the LAST block decides.  Here a plain block comes last and the
+// warning stays on for `f(x) = g(x)` (wf_convergent_last_convergent is the
+// mirror).  `ff(x, y) = pair(x, y)` shows a pair-headed right-hand side in
+// angle form.  The eight corpus theories that use `[convergent]` have a
+// single equations block.
+
+theory WfConvergentLastRegular
+begin
+
+functions: f/1, g/1, a/0, b/0, ff/2
+
+equations [convergent]: g(y) = a
+
+equations: f(x) = g(x), ff(x, y) = pair(x, y)
+
+rule Test: [ ] --[ ]-> [ ]
+
+end

@@ -1,0 +1,11 @@
+// Category: the `--precompute-only` statistics document under source
+// options.  A manual `[sources]` lemma closes the deconstructions on its
+// own and disables auto-sources unfolding, so the `@plain` and `@auto` rows
+// print the same document (compare precompute_auto_sources).
+
+theory ManualSources begin
+builtins: symmetric-encryption
+rule Setup: [Fr(~k)] --> [!Key(~k)]
+rule Dec: [!Key(~k), In(x)] --[Dec(sdec(x,~k))]-> [Out(sdec(x,~k))]
+lemma manually_closed [sources]: "All x #i. Dec(x)@i ==> F"
+end

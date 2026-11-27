@@ -1,0 +1,3 @@
+Multiset rewriting rules: 3
+Raw sources: 3 cases, deconstructions complete
+Refined sources: 3 cases, deconstructions complete

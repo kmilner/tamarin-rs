@@ -1,0 +1,38 @@
+theory RestrictBinderIdentity
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+restriction Restr_Mixed_1:
+  "∀ x #NOW. (Restr_Mixed_1( x ) @ #NOW) ⇒ (∀ #i. A( x ) @ #i)"
+
+  /*
+  expanded formula:
+  "∀ x #NOW. (Restr_Mixed_1( x ) @ #NOW) ⇒ (∀ #i. A( x ) @ #i)"
+  */
+
+rule (modulo E) Mixed:
+   [ In( i ) ] --[ A( i ), Restr_Mixed_1( i ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+restriction Restr_Bound_1:
+  "∀ #NOW. (Restr_Bound_1( ) @ #NOW) ⇒ (∀ x #i. A( x ) @ #i)"
+
+  /*
+  expanded formula:
+  "∀ #NOW. (Restr_Bound_1( ) @ #NOW) ⇒ (∀ x #i. A( x ) @ #i)"
+  */
+
+rule (modulo E) Bound:
+   [ In( x ) ] --[ A( x ), Restr_Bound_1( ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+
+
+end

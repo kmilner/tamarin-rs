@@ -211,42 +211,6 @@ mod tests {
     }
 
     #[test]
-    fn reports_follow_source_rule_order_and_number_single_computed_members() {
-        let Some(path) = tamarin_test_support::require_maude_path() else {
-            return;
-        };
-        let parsed = tamarin_parser::parse_theory(
-            r#"theory ReportOrder begin
-            rule Impossible: [In(~x), Fr(~x)] --> [Out(~x)]
-            rule R: [] --[A()]-> []
-            variants
-            rule (modulo AC) R___VARIANT_1: [] --[A()]-> [],
-            rule (modulo AC) R___VARIANT_2: [] --[A()]-> []
-            lemma witness: exists-trace "Ex #i. A()@i"
-            end"#,
-            &[],
-        )
-        .unwrap();
-        let mut theory = crate::elaborate::elaborate(&parsed).unwrap();
-        let maude = MaudeHandle::start(&path, theory.signature.clone()).unwrap();
-        crate::tools::rule_variants::populate_rule_variants(&mut theory, &maude, None).unwrap();
-        let report = super::super::check_wellformedness(&theory, Some(&maude)).unwrap();
-        assert_eq!(
-            report.iter().map(|r| r.topic.as_str()).collect::<Vec<_>>(),
-            ["Rule has no variants", "Variants"]
-        );
-        let recomputed = report[1]
-            .message
-            .split_once("Recomputed variants:")
-            .unwrap()
-            .1;
-        assert!(
-            recomputed.contains("rule (modulo AC) R___VARIANT_1:"),
-            "{recomputed}"
-        );
-    }
-
-    #[test]
     fn public_wellformedness_requires_maude_for_every_explicit_family() {
         let mut theory = manual_family();
         for member_count in [2, 1] {
@@ -260,25 +224,6 @@ mod tests {
                 Err(VariantsError::MissingMaudeForExplicitVariants)
             ));
         }
-    }
-
-    #[test]
-    fn public_wellformedness_validates_explicit_families_with_maude() {
-        let Some(path) = tamarin_test_support::require_maude_path() else {
-            return;
-        };
-        let mut theory = manual_family();
-        let maude = MaudeHandle::start(&path, theory.signature.clone()).unwrap();
-        crate::tools::rule_variants::populate_rule_variants(&mut theory, &maude, None).unwrap();
-        let report = crate::wellformedness::check_wellformedness(&theory, Some(&maude)).unwrap();
-        assert!(fatal_wf_errors(&report).is_empty(), "{report:?}");
-        for item in &mut theory.items {
-            if let crate::theory::TheoryItem::Rule(rule) = item {
-                rule.rule_ac.truncate(1);
-            }
-        }
-        let report = crate::wellformedness::check_wellformedness(&theory, Some(&maude)).unwrap();
-        assert!(report.iter().any(|e| e.topic == "Variants"), "{report:?}");
     }
 
     #[test]

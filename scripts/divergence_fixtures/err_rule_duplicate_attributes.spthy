@@ -1,0 +1,10 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// Two rules under one name that differ only in attributes: `duplicate
+// rule`.
+// No corpus theory fails this way.
+
+theory RuleDuplicateAttributes begin
+rule R1[color=ff0000]: [ ] --> [ ]
+rule R1[color=00ff00]: [ ] --> [ ]
+end

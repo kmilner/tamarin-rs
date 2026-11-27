@@ -1,0 +1,21 @@
+// Category: the variant checks the batch driver splices into the
+// wellformedness report after the static pass (they need Maude).
+//
+//   - NoVar: `In(~x)` and `Fr(~x)` contradict, so the rule has no variants;
+//     the closed theory reports it ("Rule has no variants") and drops it
+//     from the echo;
+//   - Ok: an ordinary rule with a reducible conclusion keeps its variants.
+// No corpus theory has a rule without variants.
+
+theory WfRuleVariants
+begin
+
+builtins: symmetric-encryption
+
+rule NoVar:
+  [ In(~x), Fr(~x) ] --[ N(~x) ]-> [ ]
+
+rule Ok:
+  [ Fr(~k), In(c) ] --[ O(~k) ]-> [ Out(sdec(c, ~k)) ]
+
+end

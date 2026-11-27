@@ -1,0 +1,19 @@
+// Category: the No Deconstruction Chain pass, which annotates user AC symbols
+// with NDC when their equations allow no deconstruction chain; `--no-ndc`
+// skips the pass.  The `@no_ndc` row runs the same theory without it, so
+// the echo prints `xorr/2 [AC,NDC]` on one row and `[AC]` on the other.  No
+// gate passes --no-ndc.
+
+theory NdcXorr
+begin
+
+functions: xorr/2 [AC], zeroo/0
+equations:
+    xorr(xorr(x, y), x) = y,
+    xorr(x, x) = zeroo,
+    xorr(x, zeroo) = x
+
+rule Setup:
+  [ Fr( ~k ), In( a ) ] --[ Probe( xorr(a, ~k) ) ]-> [ Out( xorr(a, ~k) ) ]
+
+end
