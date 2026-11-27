@@ -140,198 +140,106 @@ pub fn rule_name_by_node(n: &GNode) -> Option<String> {
     None
 }
 
-/// Mirror of `groupBySimilarName` — group nodes by their rule's base name.
-/// Module-private, as in `GraphRepr.hs`.
-fn group_by_similar_name<'a>(nodes: &'a [GNode]) -> BTreeMap<String, Vec<&'a GNode>> {
-    let mut out: BTreeMap<String, Vec<&'a GNode>> = BTreeMap::new();
-    for n in nodes {
-        if let Some(rn) = rule_name_by_node(n)
-            && let Some(base) = extract_base_name(&rn)
-        {
-            out.entry(base).or_default().push(n);
+impl GEdge {
+    fn endpoints(&self) -> (NodeId, NodeId) {
+        match self {
+            Self::System(s, t) | Self::UnsolvedChain(s, t) => (s.0, t.0),
+            Self::Less(la) => (la.smaller, la.larger),
         }
     }
-    out
 }
 
-/// Filter edges keeping only those whose endpoints are both in `node_ids`.
-/// Mirror of `filterEdgesForCluster`, which `GraphRepr.hs` keeps
-/// module-private.
-fn filter_edges_for_cluster(node_ids: &BTreeSet<NodeId>, edges: &[GEdge]) -> Vec<GEdge> {
-    edges
-        .iter()
-        .filter(|e| match e {
-            GEdge::System(s, t) | GEdge::UnsolvedChain(s, t) => {
-                node_ids.contains(&s.0) && node_ids.contains(&t.0)
-            }
-            GEdge::Less(la) => node_ids.contains(&la.smaller) && node_ids.contains(&la.larger),
-        })
-        .cloned()
-        .collect()
-}
-
-/// Group `nodes` into weakly-connected components under the projection
-/// from `edges`.  Mirror of `findConnectedComponents`, which `GraphRepr.hs`
-/// keeps module-private.
-fn find_connected_components<'a>(nodes: &'a [&'a GNode], edges: &[GEdge]) -> Vec<Vec<&'a GNode>> {
-    // Build undirected adjacency.  Mirror of `expandCluster`, which walks
-    // ONLY `SystemEdge`s for connectivity — `LessEdge`/`UnsolvedChain`
-    // edges are not matched and so never join two nodes into one component.
-    let mut adj: BTreeMap<NodeId, BTreeSet<NodeId>> = BTreeMap::new();
-    for e in edges {
-        if let GEdge::System(s, t) = e {
-            let (a, b) = (s.0, t.0);
-            adj.entry(a).or_default().insert(b);
-            adj.entry(b).or_default().insert(a);
-        }
-    }
-    let mut visited: BTreeSet<NodeId> = BTreeSet::new();
-    let mut components: Vec<Vec<&'a GNode>> = Vec::new();
-    let by_id: BTreeSet<NodeId> = nodes.iter().map(|n| n.id).collect();
-    for n in nodes {
-        if visited.contains(&n.id) {
-            continue;
-        }
-        let mut stack = vec![n.id];
-        let mut comp_set: BTreeSet<NodeId> = BTreeSet::new();
-        while let Some(cur) = stack.pop() {
-            if !visited.insert(cur) {
-                continue;
-            }
-            comp_set.insert(cur);
-            if let Some(neighbors) = adj.get(&cur) {
-                for nb in neighbors {
-                    if !visited.contains(nb) && by_id.contains(nb) {
-                        stack.push(*nb);
-                    }
+/// Within a group only system edges establish connectivity. Components are
+/// numbered in reverse discovery order, with nodes in their input order.
+fn connected_components(
+    nodes: Vec<GNode>,
+    neighbors: &BTreeMap<NodeId, Vec<NodeId>>,
+) -> Vec<Vec<GNode>> {
+    let mut unseen: BTreeSet<_> = nodes.iter().map(|n| n.id).collect();
+    let mut component_of = BTreeMap::new();
+    let mut components = Vec::new();
+    for node in &nodes {
+        if unseen.remove(&node.id) {
+            let mut stack = vec![node.id];
+            while let Some(id) = stack.pop() {
+                component_of.insert(id, components.len());
+                if let Some(adjacent) = neighbors.get(&id) {
+                    stack.extend(adjacent.iter().copied().filter(|n| unseen.remove(n)));
                 }
             }
-        }
-        // HS `component = filter (\node -> get nNodeId node `elem` componentIds)
-        // (n:ns)` (GraphRepr.hs): component nodes are kept in the ORIGINAL
-        // `nodes` order, not DFS discovery order.  Filtering the full `nodes`
-        // slice is safe because each node belongs to exactly one component
-        // (globally `visited`), so the per-component relative order matches HS.
-        let comp: Vec<&'a GNode> = nodes
-            .iter()
-            .copied()
-            .filter(|n| comp_set.contains(&n.id))
-            .collect();
-        if !comp.is_empty() {
-            components.push(comp);
+            components.push(Vec::new());
         }
     }
-    // Haskell `go (n:ns) components = go remainingNodes (component : components)`
-    // PREPENDS each newly-discovered component, so the returned list is in
-    // reverse-discovery order.  We discover in the same node order but append,
-    // so reverse here to match before downstream `zipWith [1..]` numbering.
+    for node in nodes {
+        components[component_of[&node.id]].push(node);
+    }
     components.reverse();
     components
 }
 
-/// Bucket key for a [`GEdge`]: variant tag plus both endpoints' node id and
-/// index.  Structurally equal edges always share it — the endpoint pairs are
-/// compared in full by `GEdge`'s derived `PartialEq`, and `LessAtom`'s
-/// hand-written one compares exactly `smaller`/`larger` — so bucketing by it
-/// never separates two edges that compare equal.
-type EdgeKey = (u8, NodeId, usize, NodeId, usize);
-
-fn edge_key(e: &GEdge) -> EdgeKey {
-    match e {
-        GEdge::System((s, si), (t, ti)) => (0, *s, si.0, *t, ti.0),
-        GEdge::Less(la) => (1, la.smaller, 0, la.larger, 0),
-        GEdge::UnsolvedChain((s, si), (t, ti)) => (2, *s, si.0, *t, ti.0),
+fn add_clusters(repr: &mut GraphRepr, group_name: impl Fn(&GNode) -> Option<String>) {
+    let mut groups = BTreeMap::<_, Vec<_>>::new();
+    for node in std::mem::take(&mut repr.nodes) {
+        if let Some(name) = group_name(&node) {
+            groups.entry(name).or_default().push(node);
+        } else {
+            repr.nodes.push(node);
+        }
     }
-}
 
-/// Generic `addCluster` from `GraphRepr.hs`.  Given a grouping
-/// of nodes (one group per cluster), it:
-///   1. computes connected components within each group,
-///   2. emits one cluster per component named `<group><suffix><N>`,
-///   3. removes those nodes and the intra-cluster edges from the
-///      top-level `GraphRepr` fields,
-///   4. leaves cross-cluster + non-clustered nodes/edges in place.
-///
-/// `group` receives the nodes moved out of `repr` (grouping them in place would
-/// alias `repr.nodes`); their un-clustered remainder is put back at the end.
-/// Module-private, as in `GraphRepr.hs`: the two `addClusterBy*` wrappers are
-/// the exported entry points.
-fn add_cluster(
-    repr: &mut GraphRepr,
-    group: impl for<'a> Fn(&'a [GNode]) -> BTreeMap<String, Vec<&'a GNode>>,
-    name_suffix: &str,
-) {
-    let nodes = std::mem::take(&mut repr.nodes);
-    let nodes_by_group = group(&nodes);
-    // Taken, not cloned: nothing reads `repr.edges` again before the
-    // `remaining_edges` write-back below.
-    let all_edges = std::mem::take(&mut repr.edges);
-    let mut sub_clusters: Vec<Cluster> = Vec::new();
-    for (group_name, group_nodes) in &nodes_by_group {
-        let group_node_ids: BTreeSet<NodeId> = group_nodes.iter().map(|n| n.id).collect();
-        let edges_for_group = filter_edges_for_cluster(&group_node_ids, &all_edges);
-        let components = find_connected_components(group_nodes, &edges_for_group);
-        for (i, comp) in components.into_iter().enumerate() {
-            let comp_ids: BTreeSet<NodeId> = comp.iter().map(|n| n.id).collect();
-            let edges_in_comp = filter_edges_for_cluster(&comp_ids, &all_edges);
-            sub_clusters.push(Cluster {
-                name: format!("{}{}{}", group_name, name_suffix, i + 1),
-                nodes: comp.into_iter().cloned().collect(),
-                edges: edges_in_comp,
+    repr.clusters.clear();
+    if groups.is_empty() {
+        return;
+    }
+
+    let mut neighbors = BTreeMap::<_, Vec<_>>::new();
+    for edge in &repr.edges {
+        if let GEdge::System(s, t) = edge {
+            neighbors.entry(s.0).or_default().push(t.0);
+            neighbors.entry(t.0).or_default().push(s.0);
+        }
+    }
+
+    let mut memberships = BTreeMap::<NodeId, BTreeSet<usize>>::new();
+    for (name, nodes) in groups {
+        for (i, nodes) in connected_components(nodes, &neighbors)
+            .into_iter()
+            .enumerate()
+        {
+            let index = repr.clusters.len();
+            for node in &nodes {
+                memberships.entry(node.id).or_default().insert(index);
+            }
+            repr.clusters.push(Cluster {
+                name: format!("{name}_Session_{}", i + 1),
+                nodes,
+                edges: Vec::new(),
             });
         }
     }
-    // Index the nodes and edges absorbed by `sub_clusters` so each top-level
-    // element is compared only against the absorbed ones sharing its key: the
-    // key narrows the candidates, the `==` inside the bucket decides.
-    //
-    // Both filters have to decide by STRUCTURAL equality.  The cloned cluster
-    // edges live at different addresses than the elements of `all_edges`, so
-    // pointer identity is not available.  And HS `remainingNodes = filter
-    // (`notElem` clusteredNodes) grNodes` (GraphRepr.hs)
-    // is by value too: a node id can appear TWICE in `grNodes` with different
-    // types — the last-atom id is pushed both as a `SystemNode` and as a free
-    // `LastAction` ellipse (see `compute_basic_graph_repr`) — and when the
-    // SystemNode is clustered, an id-keyed filter would silently drop the free
-    // ellipse that HS keeps at top level (it is not an element of the cluster).
-    let mut absorbed_nodes: BTreeMap<NodeId, Vec<&GNode>> = BTreeMap::new();
-    for n in sub_clusters.iter().flat_map(|c| c.nodes.iter()) {
-        absorbed_nodes.entry(n.id).or_default().push(n);
-    }
-    let mut absorbed_edges: BTreeMap<EdgeKey, Vec<&GEdge>> = BTreeMap::new();
-    for e in sub_clusters.iter().flat_map(|c| c.edges.iter()) {
-        absorbed_edges.entry(edge_key(e)).or_default().push(e);
-    }
-    let remaining_edges: Vec<GEdge> = all_edges
-        .into_iter()
-        .filter(|e| {
-            !absorbed_edges
-                .get(&edge_key(e))
-                .is_some_and(|bucket| bucket.contains(&e))
-        })
-        .collect();
-    let remaining_nodes: Vec<GNode> = nodes
-        .iter()
-        .filter(|n| {
-            !absorbed_nodes
-                .get(&n.id)
-                .is_some_and(|bucket| bucket.contains(n))
-        })
-        .cloned()
-        .collect();
-    repr.clusters = sub_clusters;
-    repr.edges = remaining_edges;
-    repr.nodes = remaining_nodes;
+
+    repr.edges.retain(|edge| {
+        let (source, target) = edge.endpoints();
+        let (Some(left), Some(right)) = (memberships.get(&source), memberships.get(&target)) else {
+            return true;
+        };
+        let mut clustered = false;
+        for &index in left.intersection(right) {
+            clustered = true;
+            repr.clusters[index].edges.push(edge.clone());
+        }
+        !clustered
+    });
 }
 
-/// Mirror of `addClusterByRole` — wrap `add_cluster` over role groupings.
+/// Group connected rule instances with the same role into sessions.
 pub fn add_cluster_by_role(repr: &mut GraphRepr) {
-    add_cluster(repr, group_nodes_by_role, "_Session_");
+    add_clusters(repr, |node| node_role(node).map(str::to_owned));
 }
 
-/// Mirror of `addIntelligentClusterUsingSimilarNames`.
+/// Group connected rule instances with the same base name into sessions.
 pub fn add_intelligent_cluster_using_similar_names(repr: &mut GraphRepr) {
-    add_cluster(repr, group_by_similar_name, "_Session_");
+    add_clusters(repr, |node| extract_base_name(&rule_name_by_node(node)?));
 }
 
 // ---------------------------------------------------------------------
@@ -639,6 +547,11 @@ mod tests {
             id: nid("i", 3),
             ty: NodeType::System(proto_rule("Init2", Some("Alice"))),
         });
+        // A last-action marker may share a rule id while remaining outside the cluster.
+        repr.nodes.push(GNode {
+            id: nid("i", 1),
+            ty: NodeType::LastAction,
+        });
         // Edge connecting the two Alice nodes via a SystemEdge
         repr.edges.push(GEdge::System(
             (nid("i", 1), ConcIdx(0)),
@@ -649,6 +562,14 @@ mod tests {
         assert_eq!(repr.clusters.len(), 1);
         assert_eq!(repr.clusters[0].nodes.len(), 2);
         assert_eq!(repr.clusters[0].edges.len(), 1);
+        assert!(repr.edges.is_empty());
+        assert!(matches!(
+            &repr.nodes[..],
+            [GNode {
+                ty: NodeType::LastAction,
+                ..
+            }]
+        ));
     }
 
     // HS `findConnectedComponents` keeps each component's nodes in the
@@ -670,15 +591,17 @@ mod tests {
             ty: NodeType::System(proto_rule("A", None)),
         };
         // Input order is deliberately [B, C, A].
-        let input: Vec<&GNode> = vec![&b, &c, &a];
-        // A links to both B and C via SystemEdges.
-        let edges = vec![
-            GEdge::System((nid("i", 1), ConcIdx(0)), (nid("i", 2), PremIdx(0))),
-            GEdge::System((nid("i", 1), ConcIdx(0)), (nid("i", 3), PremIdx(0))),
-        ];
-        let comps = find_connected_components(&input, &edges);
-        assert_eq!(comps.len(), 1);
-        let ids: Vec<NodeId> = comps[0].iter().map(|n| n.id).collect();
+        let mut repr = GraphRepr {
+            nodes: vec![b, c, a],
+            edges: vec![
+                GEdge::System((nid("i", 1), ConcIdx(0)), (nid("i", 2), PremIdx(0))),
+                GEdge::System((nid("i", 1), ConcIdx(0)), (nid("i", 3), PremIdx(0))),
+            ],
+            clusters: vec![],
+        };
+        add_clusters(&mut repr, |_| Some("session".to_owned()));
+        assert_eq!(repr.clusters.len(), 1);
+        let ids: Vec<_> = repr.clusters[0].nodes.iter().map(|n| n.id).collect();
         // Original order [B, C, A], NOT DFS order [B, A, C].
         assert_eq!(ids, vec![nid("i", 2), nid("i", 3), nid("i", 1)]);
     }
