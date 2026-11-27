@@ -22,7 +22,6 @@ use std::time::Instant;
 use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_theory::constraint::solver::search::{ProofNode, ProofStatus};
 use tamarin_theory::constraint::system::System;
-use tamarin_theory::elaborate::elaborate_with_in_file;
 use tamarin_theory::module::ModuleType;
 
 use tamarin_server::theory_loader::{
@@ -1250,8 +1249,8 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
         let base_dir = std::path::Path::new(in_file)
             .parent()
             .map(|p| p.to_path_buf());
-        // HS `loadTheory`: prints `Theory loaded` in every mode,
-        // `--parse-only` included.
+        // HS `loadTheory`'s parse; its `Theory loaded` marker follows the
+        // elaboration below, in every mode, `--parse-only` included.
         let parsed = match load_theory(&opts, &src, base_dir) {
             Ok(thy) => thy,
             Err(e) => {
@@ -1264,9 +1263,8 @@ fn run_batch(args: &Args) -> Result<i32, RunError> {
             // HS `--parse-only` (Batch.hs): `prettyOpenTheory` of the parsed
             // theory, with no checks, Maude, output files or summary.
             // Elaboration only builds the parse-time signature.
-            let elaborated = elaborate_with_in_file(&parsed, in_file).map_err(|e| {
-                RunError::Regular(format!("elaboration error in {}: {}", in_file, e.message))
-            })?;
+            let elaborated = tamarin_server::theory_loader::elaborate_loaded(&parsed, in_file, &[])
+                .map_err(|e| RunError::load(e, in_file))?;
             let body = tamarin_theory::pretty_theory::pretty_open_theory(&elaborated);
             parse_only_docs.push(body);
             continue;

@@ -178,12 +178,11 @@ pub fn theory_marker(theory_name: &str, msg: &str) {
 
 thread_local! {
     /// Progress-marker lines the panic hook must print BEFORE a marked HS
-    /// `error` block. GHC leaves ill-formed rule terms unforced through
-    /// translation, so `Term.fAppAC: empty argument list` (Raw.hs) escapes
-    /// only after the `Theory translated` marker and, unless `--no-ndc`, the
-    /// two `No Deconstruction Chain checks` markers. The port's elaboration
-    /// builds those terms eagerly, so [`TheoryPipeline::new`] parks the
-    /// pending lines here for the span of that call.
+    /// `error` block. GHC leaves ill-formed rule terms unforced past
+    /// `loadTheory`, so `Term.fAppAC: empty argument list` (Raw.hs) escapes
+    /// only once a later stage forces them; the port's elaboration builds
+    /// those terms eagerly, so [`elaborate_loaded`] parks the markers HS
+    /// prints first here for the span of that call.
     static DEFERRED_HS_ERROR_MARKERS: std::cell::Cell<Option<String>> =
         const { std::cell::Cell::new(None) };
 }
@@ -195,19 +194,45 @@ pub fn take_deferred_hs_error_markers() -> Option<String> {
     DEFERRED_HS_ERROR_MARKERS.take()
 }
 
-/// HS `loadTheory` up to `addParamsOptions` (which [`TheoryPipeline::new`]
-/// applies): parse `src` with the options' parser flags, resolving
-/// `#include` against `base_dir` (HS `takeDirectory inFile`), and print
-/// `Theory loaded`.
+/// The parsing half of HS `loadTheory`: parse `src` with the options'
+/// parser flags, resolving `#include` against `base_dir` (HS `takeDirectory
+/// inFile`). HS's parser also performs what the port's elaboration checks,
+/// so `Theory loaded` follows elaboration ([`TheoryPipeline::new`], or
+/// [`elaborate_loaded`] for `--parse-only`): an elaboration error is an HS
+/// parse error, which no marker precedes.
 pub fn load_theory(
     opts: &TheoryLoadOptions,
     src: &str,
     base_dir: Option<PathBuf>,
 ) -> Result<tamarin_parser::Theory, tamarin_parser::ParseError> {
-    let parsed =
-        tamarin_theory::elaborate::parse_theory_checked(src, &opts.parser_flags(), base_dir)?;
-    theory_marker(&parsed.name, "Theory loaded");
-    Ok(parsed)
+    tamarin_theory::elaborate::parse_theory_checked(src, &opts.parser_flags(), base_dir)
+}
+
+/// Elaborate `parsed` and print `Theory loaded`, which ends HS `loadTheory`.
+///
+/// `forced_after` names the markers HS prints after `Theory loaded` and
+/// before the first stage that forces the rule terms: none under
+/// `--parse-only` (the echo forces them), `Theory translated` in close mode
+/// (the wellformedness report `rejectUnsupported` inspects), and in
+/// translate mode also the NDC markers, as nothing forces the report there
+/// before `checkCloseIntrRule`. An eager elaboration panic prints them.
+pub fn elaborate_loaded(
+    parsed: &tamarin_parser::Theory,
+    in_file: &str,
+    forced_after: &[&str],
+) -> Result<Theory, LoadError> {
+    let name = &parsed.name;
+    let mut lines = format!("[Theory {name}] Theory loaded\n");
+    for marker in forced_after {
+        lines.push_str(&format!("[Theory {name}] {marker}\n"));
+    }
+    DEFERRED_HS_ERROR_MARKERS.set(Some(lines));
+    let elaborated = tamarin_theory::elaborate::elaborate_with_in_file(parsed, in_file);
+    DEFERRED_HS_ERROR_MARKERS.take();
+    let theory = elaborated
+        .map_err(|e| LoadError::Other(format!("elaboration error in {in_file}: {}", e.message)))?;
+    theory_marker(name, "Theory loaded");
+    Ok(theory)
 }
 
 /// A loaded theory: open until [`TheoryPipeline::check_translated_theory`]
@@ -316,35 +341,28 @@ fn effective_cut(opts: &TheoryLoadOptions, config: &ConfigBlock) -> Result<CutSt
 }
 
 impl<'a> TheoryPipeline<'a> {
-    /// Read the configuration block ([`read_config_block`]), elaborate and
-    /// apply HS `addParamsOptions`.
+    /// Elaborate ([`elaborate_loaded`], which ends HS `loadTheory`), read the
+    /// configuration block ([`read_config_block`]) and apply HS
+    /// `addParamsOptions`.
     pub fn new(
         opts: &'a TheoryLoadOptions,
         parsed: tamarin_parser::Theory,
         in_file: &str,
         translate_module: Option<TranslateModule>,
     ) -> Result<Self, LoadError> {
+        let mut forced_after = vec!["Theory translated"];
+        if translate_module.is_some() && opts.ndc_check {
+            forced_after.extend([
+                "No Deconstruction Chain checks started",
+                "No Deconstruction Chain checks ended",
+            ]);
+        }
+        let mut theory = elaborate_loaded(&parsed, in_file, &forced_after)?;
+
+        // HS reads the configuration block after `loadTheory`.
         let config = read_config_block(&parsed, translate_module)?;
         let cut = effective_cut(opts, &config)?;
         let auto_sources = opts.auto_sources || config.auto_sources;
-
-        let theory_name = parsed.name.clone();
-        DEFERRED_HS_ERROR_MARKERS.set(Some({
-            let mut lines = format!("[Theory {theory_name}] Theory translated\n");
-            if opts.ndc_check {
-                for suffix in ["started", "ended"] {
-                    lines.push_str(&format!(
-                        "[Theory {theory_name}] No Deconstruction Chain checks {suffix}\n"
-                    ));
-                }
-            }
-            lines
-        }));
-        let elaborated = tamarin_theory::elaborate::elaborate_with_in_file(&parsed, in_file);
-        DEFERRED_HS_ERROR_MARKERS.take();
-        let mut theory = elaborated.map_err(|e| {
-            LoadError::Other(format!("elaboration error in {in_file}: {}", e.message))
-        })?;
 
         // HS `addParamsOptions`: `addNdcOption` and `addLemmaToProve`.
         theory.options.deduction_chain_check = opts.ndc_check;
