@@ -20,7 +20,7 @@ name = "repeated_variable_bench"
 required-features = ["lean-unification"]
 
 [dependencies]
-tamarin-algebra-sys = { git = "https://github.com/kmilner/tamarin-algebra.git", rev = "e975b72f3904743d0275b3aa3c55222b5d8b2aaf", optional = true }
+tamarin-algebra-sys = { git = "https://github.com/kmilner/tamarin-algebra.git", rev = "aa9671a12c0553ff6fd7b19074d1f867eff9c0a8", optional = true }
 tamarin-utils = { workspace = true }
 parking_lot = "0.13"
 rustc-hash = { workspace = true }
