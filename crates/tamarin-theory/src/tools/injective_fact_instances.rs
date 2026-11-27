@@ -142,7 +142,7 @@ fn unfold_pairs(t: &tamarin_term::lterm::LNTerm, n: usize) -> Vec<&tamarin_term:
             tamarin_term::term::Term::App(
                 tamarin_term::function_symbols::FunSym::NoEq(s),
                 args,
-            ) if *s == tamarin_term::function_symbols::pair_sym() && args.len() == 2 => {
+            ) if s.is_pair_sym() && args.len() == 2 => {
                 out.push(&args[0]);
                 cur = &args[1];
             }

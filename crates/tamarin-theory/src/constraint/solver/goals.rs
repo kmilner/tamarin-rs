@@ -1611,9 +1611,9 @@ fn is_signature_goal(a: &AnnotatedGoal) -> bool {
 ///
 /// True when the KU action goal's term is `exp(_, mult(...))` — i.e.
 /// a DH exponentiation whose exponent is itself an AC product.
-/// HS's `viewTerm2` only treats `FAPP (NoEq exp)` (arity 2) as `FExp`,
+/// HS's `viewTerm2` only treats `FAPP (NoEq expSym)` (arity 2) as `FExp`,
 /// and `FAPP (AC Mult)` as `FMult` (Raw.hs); we mirror by
-/// matching `Term::App(NoEq(name="exp"), [_, App(Ac(Mult), _)])`.
+/// matching `Term::App(NoEq(expSym), [_, App(Ac(Mult), _)])`.
 ///
 /// Used by smartRanking's `solveFirst` slot 11 (between `isSignatureGoal`
 /// at slot 10 and `isNoLargeSplitGoal` at slot 12).  Without this,
@@ -1622,12 +1622,10 @@ fn is_signature_goal(a: &AnnotatedGoal) -> bool {
 /// JKL_TS2 / MTI_C0 where HS picks `KU(g^(~lkR*~x))` and RS picks
 /// `KU(hkI^~ekR)`.
 fn is_double_exp_goal(a: &AnnotatedGoal) -> bool {
-    use tamarin_term::function_symbols::{AcSym, FunSym, NoEqSym};
+    use tamarin_term::function_symbols::{AcSym, FunSym};
     use tamarin_term::term::Term;
     match msg_premise(&a.goal) {
-        Some(Term::App(FunSym::NoEq(NoEqSym { name, .. }), args))
-            if &**name == b"exp" && args.len() == 2 =>
-        {
+        Some(Term::App(FunSym::NoEq(s), args)) if s.is_exp_sym() && args.len() == 2 => {
             matches!(&args[1], Term::App(FunSym::Ac(AcSym::Mult), _))
         }
         _ => false,
@@ -1735,7 +1733,6 @@ fn is_standard_action_goal_but_not_insert(a: &AnnotatedGoal) -> bool {
 /// public-name constant; true iff that name string has the given prefix.
 fn insert_action_first_key_has_prefix(a: &AnnotatedGoal, prefix: &str) -> bool {
     use crate::fact::FactTag;
-    use tamarin_term::function_symbols::{FunSym, NoEqSym};
     use tamarin_term::lterm::NameTag;
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
@@ -1745,10 +1742,11 @@ fn insert_action_first_key_has_prefix(a: &AnnotatedGoal, prefix: &str) -> bool {
     if !matches!(&fa.tag, FactTag::Proto(_, n, _) if &**n == "Insert") {
         return false;
     }
-    let Some(Term::App(FunSym::NoEq(NoEqSym { name, .. }), args)) = fa.terms.first() else {
+    // HS `viewTerm2 -> FPair`: `pairSym` itself.
+    let Some(t @ Term::App(_, args)) = fa.terms.first() else {
         return false;
     };
-    if &**name != b"pair" || args.len() != 2 {
+    if !tamarin_term::term::is_pair(t) {
         return false;
     }
     matches!(&args[0], Term::Lit(Lit::Con(c))
@@ -2329,29 +2327,22 @@ fn extractible(
 
 /// Test membership in `toplevelTerms t` (`Goals.hs`)
 /// without materializing that list. Walks pair/inv at the top level only
-/// (other function applications are leaves).
+/// (other function applications are leaves); HS matches `viewTerm2 ->
+/// FPair`/`FInv`, i.e. `pairSym`/`invSym` themselves.
 fn contains_toplevel_term(
     t: &tamarin_term::lterm::LNTerm,
     needle: &tamarin_term::lterm::LNTerm,
 ) -> bool {
-    use tamarin_term::function_symbols::{FunSym, NoEqSym};
-    use tamarin_term::term::Term;
+    use tamarin_term::term::{is_inverse, is_pair, Term};
     if t == needle {
         return true;
     }
-    if let Term::App(FunSym::NoEq(NoEqSym { name, .. }), args) = t {
-        match &**name {
-            b"pair" if args.len() == 2 => {
-                return contains_toplevel_term(&args[0], needle)
-                    || contains_toplevel_term(&args[1], needle);
-            }
-            b"inv" if args.len() == 1 => {
-                return contains_toplevel_term(&args[0], needle);
-            }
-            _ => {}
+    match t {
+        Term::App(_, args) if is_pair(t) || is_inverse(t) => {
+            args.iter().any(|a| contains_toplevel_term(a, needle))
         }
+        _ => false,
     }
-    false
 }
 
 /// The `rawLessRel` adjacency (System.hs): less atoms, edges and

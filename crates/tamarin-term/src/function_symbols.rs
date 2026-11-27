@@ -471,6 +471,9 @@ pub type UserDefinedSig = BTreeSet<UserDefinedSym>;
 // Symbol-name string constants (matching the Haskell `*SymString` family).
 // =============================================================================
 
+/// HS has no `pairSymString`: `pairSym` spells the literal
+/// (FunctionSymbols.hs).
+pub const PAIR_SYM_STRING: &[u8] = b"pair";
 pub const DIFF_SYM_STRING: &[u8] = b"diff";
 pub const MUN_SYM_STRING: &[u8] = b"mun";
 pub const EXP_SYM_STRING: &[u8] = b"exp";
@@ -501,7 +504,7 @@ pub(crate) fn priv_ctor(name: &[u8], arity: usize) -> NoEqSym {
 }
 
 pub fn pair_sym() -> NoEqSym {
-    pub_ctor(b"pair", 2)
+    pub_ctor(PAIR_SYM_STRING, 2)
 }
 pub fn diff_sym() -> NoEqSym {
     priv_ctor(DIFF_SYM_STRING, 2)
@@ -532,6 +535,76 @@ pub fn zero_sym() -> NoEqSym {
 }
 pub fn nat_one_sym() -> NoEqSym {
     pub_ctor(NAT_ONE_SYM_STRING, 0)
+}
+
+// -- Builtin-symbol identity --------------------------------------------------
+//
+// HS recognises a builtin free symbol by comparing the COMPLETE `NoEqSym`
+// tuple (e.g. `o == invSym` in `viewTerm2`, Term/Term/Raw.hs), never its name
+// alone: a user-declared `inv/1 [private]` or `tone/0 [private]` is an opaque
+// symbol, while a public constructor `inv/1` is `invSym` itself.  These
+// predicates are that comparison, field by field, so the hot paths that call
+// them skip interning the builtin's name.
+
+impl NoEqSym {
+    /// `*self == NoEqSym::new(name, arity, privacy, Constructor)`.
+    #[inline]
+    fn is_builtin_ctor(&self, name: &[u8], arity: usize, privacy: Privacy) -> bool {
+        self.arity == arity
+            && self.privacy == privacy
+            && self.constructability == Constructability::Constructor
+            && self.ndc == NdcState::NotNdc
+            && self.name == name
+    }
+    /// `== pairSym`.
+    pub fn is_pair_sym(&self) -> bool {
+        self.is_builtin_ctor(PAIR_SYM_STRING, 2, Privacy::Public)
+    }
+    /// `== diffSym`.
+    pub fn is_diff_sym(&self) -> bool {
+        self.is_builtin_ctor(DIFF_SYM_STRING, 2, Privacy::Private)
+    }
+    /// `== expSym`.
+    pub fn is_exp_sym(&self) -> bool {
+        self.is_builtin_ctor(EXP_SYM_STRING, 2, Privacy::Public)
+    }
+    /// `== invSym`.
+    pub fn is_inv_sym(&self) -> bool {
+        self.is_builtin_ctor(INV_SYM_STRING, 1, Privacy::Public)
+    }
+    /// `== oneSym`.
+    pub fn is_one_sym(&self) -> bool {
+        self.is_builtin_ctor(ONE_SYM_STRING, 0, Privacy::Public)
+    }
+    /// `== dhNeutralSym`.
+    pub fn is_dh_neutral_sym(&self) -> bool {
+        self.is_builtin_ctor(DH_NEUTRAL_SYM_STRING, 0, Privacy::Public)
+    }
+    /// `== pmultSym`.
+    pub fn is_pmult_sym(&self) -> bool {
+        self.is_builtin_ctor(PMULT_SYM_STRING, 2, Privacy::Public)
+    }
+    /// `== zeroSym`.
+    pub fn is_zero_sym(&self) -> bool {
+        self.is_builtin_ctor(ZERO_SYM_STRING, 0, Privacy::Public)
+    }
+    /// `== natOneSym`.
+    pub fn is_nat_one_sym(&self) -> bool {
+        self.is_builtin_ctor(NAT_ONE_SYM_STRING, 0, Privacy::Public)
+    }
+    /// One of the free symbols `viewTerm2` (Term/Term/Raw.hs) gives a
+    /// dedicated view (`FExp`, `FPMult`, `FPair`, `FDiff`, `FInv`, `One`,
+    /// `NatOne`, `DHNeutral`) instead of `FAppNoEq`.
+    pub fn is_view_term2_special(&self) -> bool {
+        self.is_exp_sym()
+            || self.is_pmult_sym()
+            || self.is_pair_sym()
+            || self.is_diff_sym()
+            || self.is_inv_sym()
+            || self.is_one_sym()
+            || self.is_nat_one_sym()
+            || self.is_dh_neutral_sym()
+    }
 }
 
 pub fn fst_dest_sym() -> NoEqSym {

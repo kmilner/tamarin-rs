@@ -13,7 +13,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use tamarin_term::function_symbols::{NoEqSym, UserDefinedSym};
+use tamarin_term::function_symbols::UserDefinedSym;
 use tamarin_term::lterm::{LSort, LVar, Name};
 use tamarin_term::vterm::{var_term, Lit, VTerm};
 use tamarin_utils::fresh::PreciseFreshState;
@@ -159,28 +159,6 @@ fn default_function_type(n: usize) -> (Vec<SapicType>, SapicType) {
     (vec![None; n], None)
 }
 
-/// True iff `fs` is a `viewTerm2`-SPECIAL NoEq symbol (Term/Raw.hs):
-/// `pair`, `exp`, `pmult`, `diff`, `inv`, `one`, `natOne`, `dhNeutral`.  HS's
-/// `viewTerm2` renders these as dedicated constructors (`FPair`/`FExp`/…) rather
-/// than `FAppNoEq`, so `typeWith` treats them via the polymorphic `viewTerm`
-/// branch (no function-type learning / no argument back-propagation).
-#[allow(clippy::nonminimal_bool)] // intentional per-symbol -> arity enumeration
-fn is_special_viewterm2_sym(fs: &NoEqSym) -> bool {
-    use tamarin_term::function_symbols::{
-        DH_NEUTRAL_SYM_STRING, DIFF_SYM_STRING, EXP_SYM_STRING, INV_SYM_STRING, NAT_ONE_SYM_STRING,
-        ONE_SYM_STRING, PMULT_SYM_STRING,
-    };
-    let n = fs.name;
-    (n == b"pair" && fs.arity == 2)
-        || (n == EXP_SYM_STRING && fs.arity == 2)
-        || (n == PMULT_SYM_STRING && fs.arity == 2)
-        || (n == DIFF_SYM_STRING && fs.arity == 2)
-        || (n == INV_SYM_STRING && fs.arity == 1)
-        || (n == ONE_SYM_STRING && fs.arity == 0)
-        || (n == NAT_ONE_SYM_STRING && fs.arity == 0)
-        || (n == DH_NEUTRAL_SYM_STRING && fs.arity == 0)
-}
-
 /// `typeWith` (Typing.hs).  Types term `t` against target `tt`,
 /// returning the typed term and its inferred type, updating `env`.
 fn type_with(
@@ -218,7 +196,7 @@ fn type_with(
                 // type.  Crucially this means pairs (`<a,b>`) do NOT back-propagate
                 // an argument type onto `a`/`b` — matching HS, which keeps
                 // tuple-component variables untyped.
-                FunSym::NoEq(fs) if !is_special_viewterm2_sym(fs) => {
+                FunSym::NoEq(fs) if !fs.is_view_term2_special() => {
                     let n = fs.arity;
                     // HS keys the typing environment by `NoEqUser fs`
                     // (Typing.hs).
@@ -636,6 +614,7 @@ pub(crate) fn collect_user_fun_typings(thy: &tamarin_theory::theory::Theory) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tamarin_term::function_symbols::NoEqSym;
     use tamarin_theory::sapic::ProcessParsedAnnotation;
 
     fn slv(name: &str, idx: u64, ty: Option<&str>) -> SapicLVar {

@@ -418,14 +418,12 @@ fn root_sym(t: &tamarin_term::lterm::LNTerm) -> Option<RootSym> {
 ///   - `Some(DhKind::EMap)`: term is `em(_, _)` — return `[emap]`.
 ///   - `None`: not a DH-special form; fall back to generic walk.
 fn dh_view(t: &tamarin_term::lterm::LNTerm) -> Option<DhView<'_>> {
-    use tamarin_term::function_symbols::{exp_sym, pmult_sym, CSym, FunSym};
+    use tamarin_term::function_symbols::{CSym, FunSym};
     use tamarin_term::term::Term;
     if let Term::App(sym, args) = t {
         match sym {
-            FunSym::NoEq(s) if *s == exp_sym() && args.len() == 2 => Some(DhView::Exp(&args[0])),
-            FunSym::NoEq(s) if *s == pmult_sym() && args.len() == 2 => {
-                Some(DhView::PMult(&args[1]))
-            }
+            FunSym::NoEq(s) if s.is_exp_sym() && args.len() == 2 => Some(DhView::Exp(&args[0])),
+            FunSym::NoEq(s) if s.is_pmult_sym() && args.len() == 2 => Some(DhView::PMult(&args[1])),
             FunSym::C(CSym::EMap) => Some(DhView::EMap),
             _ => None,
         }
@@ -815,7 +813,7 @@ fn has_forbidden_chain<'a>(
 fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltAdj) -> bool {
     use crate::constraint::solver::goals::is_simple_term;
     use crate::rule::{IntrRuleACInfo, RuleInfo};
-    use tamarin_term::function_symbols::{FunSym, EXP_SYM_STRING};
+    use tamarin_term::function_symbols::FunSym;
     use tamarin_term::lterm::{frees, is_msg_var, LNTerm};
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
@@ -824,9 +822,10 @@ fn has_forbidden_exp(sys: &System, ab_adj: &crate::constraint::system::PrebuiltA
     // (`ni_factors` / `ni_factors_subset`).
 
     // `kFactView` is shared at module scope (returns `KDir`/term).
+    // HS `viewTerm2 -> FExp`: `expSym` itself.
     fn view_exp(t: &LNTerm) -> Option<(&LNTerm, &LNTerm)> {
         if let Term::App(FunSym::NoEq(s), args) = t
-            && s.name == EXP_SYM_STRING
+            && s.is_exp_sym()
             && args.len() == 2
         {
             return Some((&args[0], &args[1]));
@@ -1128,7 +1127,7 @@ fn is_forbidden_d_emap_order(
     >,
 ) -> bool {
     use crate::rule::{is_d_emap_rule, PremIdx};
-    use tamarin_term::function_symbols::{AcSym, CSym, FunSym, EXP_SYM_STRING};
+    use tamarin_term::function_symbols::{AcSym, CSym, FunSym};
     use tamarin_term::term::Term;
     if !is_d_emap_rule(ru) {
         return false;
@@ -1178,7 +1177,7 @@ fn is_forbidden_d_emap_order(
 
     // tc = exp(em(p', q'), Mult([s', r', ...]))
     let (em_t, mult_arg) = match tc {
-        Term::App(FunSym::NoEq(s), args) if s.name == EXP_SYM_STRING && args.len() == 2 => {
+        Term::App(FunSym::NoEq(s), args) if s.is_exp_sym() && args.len() == 2 => {
             (&args[0], &args[1])
         }
         _ => return false,
@@ -1287,14 +1286,15 @@ fn k_fact_view(fa: &crate::fact::LNFact) -> Option<(KDir, &tamarin_term::lterm::
     }
 }
 
-/// View `pmult(scalar, point)` — returns `(scalar, point)`.
+/// View `pmult(scalar, point)` — returns `(scalar, point)`.  HS
+/// `viewTerm2 -> FPMult`: `pmultSym` itself.
 fn bp_view_pmult(
     t: &tamarin_term::lterm::LNTerm,
 ) -> Option<(&tamarin_term::lterm::LNTerm, &tamarin_term::lterm::LNTerm)> {
-    use tamarin_term::function_symbols::{FunSym, PMULT_SYM_STRING};
+    use tamarin_term::function_symbols::FunSym;
     use tamarin_term::term::Term;
     if let Term::App(FunSym::NoEq(s), args) = t
-        && s.name == PMULT_SYM_STRING
+        && s.is_pmult_sym()
         && args.len() == 2
     {
         return Some((&args[0], &args[1]));
@@ -1304,10 +1304,11 @@ fn bp_view_pmult(
 
 /// `niFactors`: HS Term/LTerm.hs.  The non-inverse factors of a
 /// term.  `Mult(ts...)` → concat-map ni_factors; `Inv(t)` → ni_factors t;
-/// else `[t]`.  Shared by `has_forbidden_exp` and the BP checks.
+/// else `[t]` (`viewTerm2`, so `Inv` is `invSym` itself).  Shared by
+/// `has_forbidden_exp` and the BP checks.
 fn ni_factors(t: &tamarin_term::lterm::LNTerm) -> Vec<tamarin_term::lterm::LNTerm> {
-    use tamarin_term::function_symbols::{AcSym, FunSym, INV_SYM_STRING};
-    use tamarin_term::term::Term;
+    use tamarin_term::function_symbols::{AcSym, FunSym};
+    use tamarin_term::term::{is_inverse, Term};
     match t {
         Term::App(FunSym::Ac(AcSym::Mult), args) => {
             let mut out = Vec::new();
@@ -1316,9 +1317,7 @@ fn ni_factors(t: &tamarin_term::lterm::LNTerm) -> Vec<tamarin_term::lterm::LNTer
             }
             out
         }
-        Term::App(FunSym::NoEq(s), args) if s.name == INV_SYM_STRING && args.len() == 1 => {
-            ni_factors(&args[0])
-        }
+        Term::App(_, args) if is_inverse(t) => ni_factors(&args[0]),
         _ => vec![t.clone()],
     }
 }

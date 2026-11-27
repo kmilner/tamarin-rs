@@ -272,11 +272,9 @@ pub fn sort_of_lterm<C, F: Fn(&C) -> LSort>(t: &LTerm<C>, sort_of_const: F) -> L
         Term::Lit(Lit::Con(c)) => sort_of_const(c),
         Term::Lit(Lit::Var(v)) => v.sort,
         Term::App(FunSym::Ac(AcSym::NatPlus), _) => LSort::Nat,
-        Term::App(FunSym::NoEq(s), args)
-            if args.is_empty() && s.name == crate::function_symbols::NAT_ONE_SYM_STRING =>
-        {
-            LSort::Nat
-        }
+        // HS `viewTerm2 -> NatOne`: `natOneSym` itself, so a user-declared
+        // `tone/0 [private]` stays a message.
+        t if crate::term::is_nat_one(t) => LSort::Nat,
         _ => LSort::Msg,
     }
 }

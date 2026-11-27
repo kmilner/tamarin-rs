@@ -6,7 +6,7 @@
 //! match st-rule LHSes that need AC matching; the pure one counts those as
 //! not matching.
 
-use crate::function_symbols::{AcSym, FunSym};
+use crate::function_symbols::{AcSym, FunSym, NoEqSym};
 use crate::lterm::LNTerm;
 use crate::maude_proc::MaudeHandle;
 use crate::maude_sig::MaudeSig;
@@ -31,38 +31,39 @@ pub fn nf_via_haskell_maude(msig: &MaudeSig, maude: &MaudeHandle, t: &LNTerm) ->
 }
 
 fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
-    use crate::function_symbols::{
-        AcSym, DH_NEUTRAL_SYM_STRING, EXP_SYM_STRING, INV_SYM_STRING, ONE_SYM_STRING,
-        ZERO_SYM_STRING,
-    };
+    // HS dispatches on `viewTerm2`, which recognises the builtin free symbols
+    // by complete symbol identity; every other free symbol (including a
+    // user-declared one that only shares a builtin's name) is `FAppNoEq`.
     match t {
         Term::Lit(_) => true,
         Term::App(sym, args) => {
             // 1. Irreducible top: walk subterms.  HS checks membership only
             //    for `FAppNoEq` and `FAppACfct`; the builtin AC operators,
             //    though in `irreducible_fun_syms`, have their own arms below.
-            if matches!(sym, FunSym::NoEq(_) | FunSym::Ac(AcSym::AcFct(_)))
-                && msig.irreducible_fun_syms.contains(sym)
-            {
+            let plain_top = match sym {
+                FunSym::NoEq(s) => !s.is_view_term2_special(),
+                FunSym::Ac(AcSym::AcFct(_)) => true,
+                _ => false,
+            };
+            if plain_top && msig.irreducible_fun_syms.contains(sym) {
                 return args.iter().all(|a| go_nf(a, msig, maude));
             }
             // FList is irreducible unconditionally (HS: `FList ts -> all go ts`).
             if matches!(sym, FunSym::List) {
                 return args.iter().all(|a| go_nf(a, msig, maude));
             }
-            // 2. Nullary constants in NF (One, DHNeutral, Zero, NatOne).
+            // 2. Nullary constants in NF (One, DHNeutral, NatOne).  HS's
+            //    `Zero` arm is unreachable (`viewTerm2` has no `Zero` case),
+            //    so `zero` takes the `FAppNoEq` arms like any other symbol.
             if let FunSym::NoEq(s) = sym
                 && args.is_empty()
-                && (s.name == ONE_SYM_STRING
-                    || s.name == DH_NEUTRAL_SYM_STRING
-                    || s.name == ZERO_SYM_STRING
-                    || s.name == crate::function_symbols::NAT_ONE_SYM_STRING)
+                && (s.is_one_sym() || s.is_dh_neutral_sym() || s.is_nat_one_sym())
             {
                 return true;
             }
             // 3. Subterm-rule LHS match → reducible.  HS guards both st-rule
             //    arms on a `FAppNoEq` / `FAppACfct` top symbol (Norm.hs).
-            if matches!(sym, FunSym::NoEq(_) | FunSym::Ac(AcSym::AcFct(_)))
+            if plain_top
                 && msig
                     .st_rules
                     .iter()
@@ -72,29 +73,25 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
             }
             // 4. Reducible exponent / inverse / mult / xor patterns.
             if let FunSym::NoEq(s) = sym {
-                if s.name == EXP_SYM_STRING && args.len() == 2 {
+                if s.is_exp_sym() && args.len() == 2 {
                     // (a ^ b) ^ c → reducible
-                    if let Term::App(FunSym::NoEq(s2), _) = &args[0]
-                        && s2.name == EXP_SYM_STRING
-                    {
+                    if is_no_eq_app(&args[0], NoEqSym::is_exp_sym) {
                         return false;
                     }
                     // a ^ 1 → reducible
-                    if is_nullary(&args[1], ONE_SYM_STRING) {
+                    if is_nullary(&args[1], NoEqSym::is_one_sym) {
                         return false;
                     }
                     // DH_neutral ^ b → reducible
-                    if is_nullary(&args[0], DH_NEUTRAL_SYM_STRING) {
+                    if is_nullary(&args[0], NoEqSym::is_dh_neutral_sym) {
                         return false;
                     }
                     // else walk subterms
                     return go_nf(&args[0], msig, maude) && go_nf(&args[1], msig, maude);
                 }
-                if s.name == INV_SYM_STRING && args.len() == 1 {
+                if s.is_inv_sym() && args.len() == 1 {
                     // inv(inv(_)) → reducible
-                    if let Term::App(FunSym::NoEq(s2), _) = &args[0]
-                        && s2.name == INV_SYM_STRING
-                    {
+                    if crate::term::is_inverse(&args[0]) {
                         return false;
                     }
                     // inv(mult(...)) where any factor is inverse → reducible
@@ -104,20 +101,18 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
                         return false;
                     }
                     // inv(one) → reducible
-                    if is_nullary(&args[0], ONE_SYM_STRING) {
+                    if is_nullary(&args[0], NoEqSym::is_one_sym) {
                         return false;
                     }
                     return go_nf(&args[0], msig, maude);
                 }
-                if s.name == crate::function_symbols::PMULT_SYM_STRING && args.len() == 2 {
+                if s.is_pmult_sym() && args.len() == 2 {
                     // pmult(_, pmult(_,_)) → reducible
-                    if let Term::App(FunSym::NoEq(s2), _) = &args[1]
-                        && s2.name == crate::function_symbols::PMULT_SYM_STRING
-                    {
+                    if is_no_eq_app(&args[1], NoEqSym::is_pmult_sym) {
                         return false;
                     }
                     // pmult(one, _) → reducible
-                    if is_nullary(&args[0], ONE_SYM_STRING) {
+                    if is_nullary(&args[0], NoEqSym::is_one_sym) {
                         return false;
                     }
                     return go_nf(&args[0], msig, maude) && go_nf(&args[1], msig, maude);
@@ -132,8 +127,8 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
                         // (Norm.hs) — the three element tests fuse into one
                         // pass, the disjunction is unchanged.
                         let reducible_factor = |a: &LNTerm| {
-                            is_nullary(a, ONE_SYM_STRING)
-                                || is_nullary(a, DH_NEUTRAL_SYM_STRING)
+                            is_nullary(a, NoEqSym::is_one_sym)
+                                || is_nullary(a, NoEqSym::is_dh_neutral_sym)
                                 || crate::term::is_product(a)
                         };
                         if args.iter().any(reducible_factor) || invalid_mult(args) {
@@ -146,7 +141,7 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
                         // invalidXor ts` (Norm.hs).
                         if args
                             .iter()
-                            .any(|a| is_nullary(a, ZERO_SYM_STRING) || is_xor(a))
+                            .any(|a| is_nullary(a, NoEqSym::is_zero_sym) || is_xor(a))
                             || invalid_xor(args)
                         {
                             return false;
@@ -163,17 +158,11 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
             // 6. C-headed (FEMap) reducible patterns.
             if let FunSym::C(_) = sym {
                 // em(_, pmult(_,_)) or em(pmult(_,_), _) → reducible
-                if args.len() == 2 {
-                    if let Term::App(FunSym::NoEq(s2), _) = &args[0]
-                        && s2.name == crate::function_symbols::PMULT_SYM_STRING
-                    {
-                        return false;
-                    }
-                    if let Term::App(FunSym::NoEq(s2), _) = &args[1]
-                        && s2.name == crate::function_symbols::PMULT_SYM_STRING
-                    {
-                        return false;
-                    }
+                if args.len() == 2
+                    && (is_no_eq_app(&args[0], NoEqSym::is_pmult_sym)
+                        || is_no_eq_app(&args[1], NoEqSym::is_pmult_sym))
+                {
+                    return false;
                 }
                 return args.iter().all(|a| go_nf(a, msig, maude));
             }
@@ -184,12 +173,17 @@ fn go_nf(t: &LNTerm, msig: &MaudeSig, maude: Option<&MaudeHandle>) -> bool {
     }
 }
 
-fn is_nullary(t: &LNTerm, name: &[u8]) -> bool {
-    if let Term::App(FunSym::NoEq(s), args) = t {
-        s.name == name && args.is_empty()
-    } else {
-        false
-    }
+/// `t` is an application of a free symbol satisfying `is_sym` (one of the
+/// [`NoEqSym`] builtin identity predicates).
+fn is_no_eq_app(t: &LNTerm, is_sym: fn(&NoEqSym) -> bool) -> bool {
+    matches!(t, Term::App(FunSym::NoEq(s), _) if is_sym(s))
+}
+
+/// `t` is the nullary application of a builtin constant (`fAppOne`,
+/// `fAppZero`, ...), compared by complete symbol identity as HS's `==`/`elem`
+/// on terms does.
+fn is_nullary(t: &LNTerm, is_sym: fn(&NoEqSym) -> bool) -> bool {
+    matches!(t, Term::App(FunSym::NoEq(s), args) if args.is_empty() && is_sym(s))
 }
 
 fn is_xor(t: &LNTerm) -> bool {
@@ -199,10 +193,11 @@ fn is_xor(t: &LNTerm) -> bool {
 /// `invalidMult` — HS `Norm.hs`.  Detects mult patterns that
 /// are not in NF due to inverse cancellation.
 fn invalid_mult(ts: &[LNTerm]) -> bool {
-    use crate::function_symbols::{AcSym, INV_SYM_STRING};
+    // HS `partition isInverse`: `invSym` itself (any argument count, so a
+    // malformed application still trips the two-inverses rule).
     fn inverse_args(term: &LNTerm) -> Option<&[LNTerm]> {
         match term {
-            Term::App(FunSym::NoEq(sym), args) if sym.name == INV_SYM_STRING => Some(args.as_ref()),
+            Term::App(FunSym::NoEq(s), args) if s.is_inv_sym() => Some(args.as_ref()),
             _ => None,
         }
     }

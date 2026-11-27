@@ -33,7 +33,7 @@ use std::fmt::Write as _;
 
 use tamarin_utils::pretty_hpj::{fcat, fsep, parens, punctuate, Doc, HtmlDocGuard, FLAT_WIDTH};
 
-use crate::function_symbols::{diff_sym, exp_sym, pair_sym, AcSym, CSym, FunSym, EMAP_SYM_STRING};
+use crate::function_symbols::{AcSym, CSym, FunSym, EMAP_SYM_STRING};
 use crate::lterm::{sort_prefix, sort_suffix, BVar, LNTerm, LSort, LVar, Name, NameTag};
 use crate::term::{ShowLit, Term};
 use crate::vterm::{Lit, VTerm};
@@ -118,25 +118,23 @@ pub fn pretty_term<L>(pp_lit: &dyn Fn(&L) -> Doc, t: &Term<L>) -> Doc {
         Term::App(FunSym::Ac(o), ts) => {
             pp_terms(pp_lit, &ac_op_symbol(*o), 1, "(", ")", ts.iter().collect())
         }
-        Term::App(FunSym::NoEq(sym), ts) if ts.len() == 2 && *sym == exp_sym() => {
+        Term::App(FunSym::NoEq(sym), ts) if ts.len() == 2 && sym.is_exp_sym() => {
             pretty_term(pp_lit, &ts[0])
                 .beside(Doc::text("^"))
                 .beside(pretty_term(pp_lit, &ts[1]))
         }
         // All `<>` (Term/Term.hs), so a `diff` application never breaks at
         // its comma the way the generic `ppFun` arm does.
-        Term::App(FunSym::NoEq(sym), ts) if ts.len() == 2 && *sym == diff_sym() => {
-            Doc::text("diff")
-                .beside(Doc::text("("))
-                .beside(pretty_term(pp_lit, &ts[0]))
-                .beside(Doc::text(", "))
-                .beside(pretty_term(pp_lit, &ts[1]))
-                .beside(Doc::text(")"))
-        }
+        Term::App(FunSym::NoEq(sym), ts) if ts.len() == 2 && sym.is_diff_sym() => Doc::text("diff")
+            .beside(Doc::text("("))
+            .beside(pretty_term(pp_lit, &ts[0]))
+            .beside(Doc::text(", "))
+            .beside(pretty_term(pp_lit, &ts[1]))
+            .beside(Doc::text(")")),
         t if crate::term::is_nat_one(t) => Doc::text("%1"),
         // The arm carries no arity guard (Term/Term.hs); the arity check
         // lives in `split`, which stops on anything else.
-        Term::App(FunSym::NoEq(sym), _) if *sym == pair_sym() => {
+        Term::App(FunSym::NoEq(sym), _) if sym.is_pair_sym() => {
             let mut flat: Vec<&Term<L>> = Vec::new();
             split_pair(t, &mut flat);
             pp_terms(pp_lit, ", ", 1, "<", ">", flat)
@@ -208,7 +206,7 @@ fn pp_user_ac_terms<L>(pp_lit: &dyn Fn(&L) -> Doc, separator: &str, terms: &[Ter
         .iter()
         .map(|term| {
             let doc = pretty_term(pp_lit, term);
-            if matches!(term, Term::App(FunSym::NoEq(sym), args) if *sym == exp_sym() && args.len() == 2)
+            if matches!(term, Term::App(FunSym::NoEq(sym), args) if sym.is_exp_sym() && args.len() == 2)
             {
                 parens(doc)
             } else {
@@ -235,7 +233,7 @@ fn pp_fun<L>(pp_lit: &dyn Fn(&L) -> Doc, f: &str, ts: &[Term<L>]) -> Doc {
 /// nested.
 fn split_pair<'a, L>(t: &'a Term<L>, out: &mut Vec<&'a Term<L>>) {
     match t {
-        Term::App(FunSym::NoEq(sym), ts) if ts.len() == 2 && *sym == pair_sym() => {
+        Term::App(FunSym::NoEq(sym), ts) if ts.len() == 2 && sym.is_pair_sym() => {
             out.push(&ts[0]);
             split_pair(&ts[1], out);
         }
@@ -321,7 +319,7 @@ impl fmt::Display for LSort {
 mod tests {
     use super::*;
     use crate::function_symbols::{
-        exp_sym, inv_sym, nat_one_sym, pair_sym, Constructability, NoEqSym, Privacy,
+        diff_sym, exp_sym, inv_sym, nat_one_sym, pair_sym, Constructability, NoEqSym, Privacy,
     };
     use crate::lterm::{fresh_term, pub_term, NameTag};
     use crate::term::{f_app_ac, f_app_c, f_app_no_eq, lit, show_term};

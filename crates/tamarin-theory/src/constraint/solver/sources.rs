@@ -262,11 +262,12 @@ pub(crate) fn source_patterns(
     // implicitFunSig, k > 0 || priv == Private]`, destructors included.
     for sym in &msig.fun_syms {
         if let tamarin_term::function_symbols::FunSym::NoEq(noeq) = sym {
-            // Skip HS `implicitFunSig` symbols: pair, inv.  (Mult and
-            // Union are AC, not NoEq, so they're naturally excluded;
-            // HS includes fst/snd/1, so they are not excluded here.)
-            let name = String::from_utf8_lossy(noeq.name);
-            if matches!(name.as_ref(), "pair" | "inv") {
+            // Skip HS `implicitFunSig` symbols: `pairSym`, `invSym` (a
+            // `Set` membership, so the whole symbol: a user-declared
+            // `inv/1 [private]` is kept).  (Mult and Union are AC, not
+            // NoEq, so they're naturally excluded; HS includes fst/snd/1,
+            // so they are not excluded here.)
+            if noeq.is_pair_sym() || noeq.is_inv_sym() {
                 continue;
             }
             // HS arity gate: `k > 0 || priv == Private` —

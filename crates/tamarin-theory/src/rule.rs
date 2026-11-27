@@ -780,9 +780,7 @@ pub fn rule_products_outside_exponents<I>(rule: &Rule<I>) -> Vec<LNTerm> {
         use tamarin_term::term::Term;
         match term {
             Term::App(FunSym::Ac(AcSym::Mult), _) => out.push(term.clone()),
-            Term::App(FunSym::NoEq(sym), args)
-                if *sym == tamarin_term::function_symbols::exp_sym() && args.len() == 2 =>
-            {
+            Term::App(FunSym::NoEq(sym), args) if sym.is_exp_sym() && args.len() == 2 => {
                 products(&args[0], out);
             }
             Term::App(_, args) => {

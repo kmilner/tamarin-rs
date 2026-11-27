@@ -387,9 +387,7 @@ pub fn is_ac<A>(t: &Term<A>) -> bool {
 /// `pair` constructor.
 pub fn is_pair<A>(t: &Term<A>) -> bool {
     match t {
-        Term::App(FunSym::NoEq(s), args) => {
-            *s == crate::function_symbols::pair_sym() && args.len() == 2
-        }
+        Term::App(FunSym::NoEq(s), args) => s.is_pair_sym() && args.len() == 2,
         _ => false,
     }
 }
@@ -398,7 +396,7 @@ pub fn is_pair<A>(t: &Term<A>) -> bool {
 /// `NatOne` (Term/Term/Raw.hs), the nullary application of `natOneSym`.
 pub fn is_nat_one<A>(t: &Term<A>) -> bool {
     matches!(t, Term::App(FunSym::NoEq(s), args)
-        if args.is_empty() && *s == crate::function_symbols::nat_one_sym())
+        if args.is_empty() && s.is_nat_one_sym())
 }
 
 /// `True` iff the term is a DH product `_*_`. Port of HS `isProduct`
@@ -409,13 +407,11 @@ pub fn is_product<A>(t: &Term<A>) -> bool {
 }
 
 /// `True` iff the term is a well-formed inverse `inv(_)`. Port of HS `isInverse`
-/// (Term/Term.hs, `viewTerm2 -> FInv _`): the unary `inv` operator
-/// applied to one argument.
+/// (Term/Term.hs, `viewTerm2 -> FInv _`): `invSym` itself (not a
+/// user-declared symbol that merely shares its name) applied to one argument.
 pub fn is_inverse<A>(t: &Term<A>) -> bool {
     match t {
-        Term::App(FunSym::NoEq(s), args) => {
-            s.name == crate::function_symbols::INV_SYM_STRING && args.len() == 1
-        }
+        Term::App(FunSym::NoEq(s), args) => s.is_inv_sym() && args.len() == 1,
         _ => false,
     }
 }

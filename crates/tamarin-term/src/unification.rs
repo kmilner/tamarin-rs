@@ -117,7 +117,7 @@ where
             Term::App(FunSym::NoEq(lf), la),
             Term::App(FunSym::Ac(crate::function_symbols::AcSym::NatPlus), _),
         ) if la.is_empty() => {
-            if *lf == crate::function_symbols::nat_one_sym() {
+            if lf.is_nat_one_sym() {
                 delay(delayed, l.clone(), r.clone())
             } else {
                 Err(UnifyError::NoUnifier)
@@ -127,7 +127,7 @@ where
             Term::App(FunSym::Ac(crate::function_symbols::AcSym::NatPlus), _),
             Term::App(FunSym::NoEq(rf), ra),
         ) if ra.is_empty() => {
-            if *rf == crate::function_symbols::nat_one_sym() {
+            if rf.is_nat_one_sym() {
                 delay(delayed, l.clone(), r.clone())
             } else {
                 Err(UnifyError::NoUnifier)

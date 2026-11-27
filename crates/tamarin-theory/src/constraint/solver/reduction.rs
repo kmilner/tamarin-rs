@@ -2183,19 +2183,16 @@ fn is_product_or_union(t: &tamarin_term::lterm::LNTerm) -> bool {
 }
 
 /// The terms a `KU` action on `t` decomposes into (HS `insertAction`):
-/// the components of a pair, inverse, product or multiset union.
+/// the components of a pair, inverse, product or multiset union.  HS
+/// matches `viewTerm2 -> FPair`/`FInv`, i.e. `pairSym`/`invSym` themselves:
+/// a user-declared `inv/1 [private]` is not decomposed.
 pub(crate) fn ku_decomp_args(
     t: &tamarin_term::lterm::LNTerm,
 ) -> Option<&[tamarin_term::lterm::LNTerm]> {
-    use tamarin_term::function_symbols::{AcSym, FunSym, INV_SYM_STRING};
-    use tamarin_term::term::Term;
+    use tamarin_term::function_symbols::{AcSym, FunSym};
+    use tamarin_term::term::{is_inverse, is_pair, Term};
     match t {
-        Term::App(FunSym::NoEq(s), args)
-            if (s.name == b"pair" && args.len() == 2)
-                || (s.name == INV_SYM_STRING && args.len() == 1) =>
-        {
-            Some(args)
-        }
+        Term::App(FunSym::NoEq(_), args) if is_pair(t) || is_inverse(t) => Some(args),
         Term::App(FunSym::Ac(AcSym::Mult | AcSym::Union), args) => Some(args),
         _ => None,
     }
