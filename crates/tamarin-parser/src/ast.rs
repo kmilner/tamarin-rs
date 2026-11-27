@@ -352,11 +352,77 @@ pub enum GoalSpec {
 // Tactics
 // =============================================================================
 
-/// A single selector function as written in a tactic, e.g. `regex "In_S"`.
+/// A tactic function call carries both its printable spelling and its predicate.
+/// The spelling includes every argument, including any ignored by the predicate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectorLeaf {
-    pub name: String,
-    pub params: Vec<String>,
+    source: String,
+    predicate: SelectorPredicate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectorPredicate {
+    Regex {
+        pattern: String,
+    },
+    IsFactName {
+        name: String,
+    },
+    IsInFactTerms {
+        pattern: String,
+    },
+    DhreNoise {
+        oracle_type: String,
+    },
+    DefaultNoise {
+        goal_pattern: String,
+        oracle_type: Option<String>,
+    },
+    ReasonableNoncesNoise {
+        oracle_type: String,
+    },
+    NonAbsurdConstraint {
+        oracle_type: String,
+    },
+    Unknown {
+        name: String,
+    },
+}
+
+impl SelectorLeaf {
+    pub fn new(name: &str, first: String, rest: Vec<String>) -> Self {
+        let mut source = format!("{name} \"{first}\"");
+        for param in &rest {
+            source.push_str(" \"");
+            source.push_str(param);
+            source.push('"');
+        }
+
+        let predicate = match name {
+            "regex" => SelectorPredicate::Regex { pattern: first },
+            "isFactName" => SelectorPredicate::IsFactName { name: first },
+            "isInFactTerms" => SelectorPredicate::IsInFactTerms { pattern: first },
+            "dhreNoise" => SelectorPredicate::DhreNoise { oracle_type: first },
+            "defaultNoise" => SelectorPredicate::DefaultNoise {
+                goal_pattern: first,
+                oracle_type: rest.into_iter().next(),
+            },
+            "reasonableNoncesNoise" => {
+                SelectorPredicate::ReasonableNoncesNoise { oracle_type: first }
+            }
+            "nonAbsurdConstraint" => SelectorPredicate::NonAbsurdConstraint { oracle_type: first },
+            _ => SelectorPredicate::Unknown { name: name.into() },
+        };
+        Self { source, predicate }
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    pub fn predicate(&self) -> &SelectorPredicate {
+        &self.predicate
+    }
 }
 
 /// A boolean selector expression from one line of a priority block.

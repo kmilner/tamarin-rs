@@ -13,7 +13,7 @@
 //! Tactics are parsed directly into [`Tactic`] by `tamarin-parser`; this
 //! module renders that shared representation.
 
-pub use tamarin_parser::{PrioBlock, SelectorExpr, SelectorLeaf, Tactic};
+pub use tamarin_parser::{PrioBlock, SelectorExpr, SelectorLeaf, SelectorPredicate, Tactic};
 
 /// Render via the ported HS `prettyTactic` (TheoryObject.hs).
 pub fn render(tactic: &Tactic) -> String {
@@ -68,14 +68,7 @@ fn render_selector(selector: &SelectorExpr) -> crate::pretty_hpj::Doc {
 /// Rebuild the selector text stored by HS's tactic parser before `prettify`.
 fn render_selector_raw(out: &mut String, selector: &SelectorExpr) {
     match selector {
-        SelectorExpr::Leaf(leaf) => {
-            out.push_str(&leaf.name);
-            for param in &leaf.params {
-                out.push_str(" \"");
-                out.push_str(param);
-                out.push('"');
-            }
-        }
+        SelectorExpr::Leaf(leaf) => out.push_str(leaf.source()),
         SelectorExpr::Not(expr) => {
             out.push_str("not ");
             render_selector_raw(out, expr);
@@ -146,7 +139,7 @@ mod tests {
         assert_eq!(t.prios[0].selectors.len(), 1);
         assert!(matches!(
             t.prios[0].selectors[0],
-            SelectorExpr::Leaf(ref l) if l.name == "regex"
+            SelectorExpr::Leaf(ref l) if l.source() == r#"regex "a""#
         ));
     }
 }

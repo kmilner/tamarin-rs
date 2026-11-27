@@ -1792,15 +1792,14 @@ impl<'a> Parser<'a> {
             self.restore(start);
             return Ok(None);
         };
-        let mut params = Vec::new();
-        while let Some(param) = self.tactic_function_param() {
-            params.push(param);
-        }
-        if params.is_empty() {
+        let Some(first) = self.tactic_function_param() else {
             self.restore(start);
             return Ok(None);
-        }
-        Ok(Some(SelectorExpr::Leaf(SelectorLeaf { name, params })))
+        };
+        let rest = std::iter::from_fn(|| self.tactic_function_param()).collect();
+        Ok(Some(SelectorExpr::Leaf(SelectorLeaf::new(
+            &name, first, rest,
+        ))))
     }
 
     /// Tactic function values are deliberately not Haskell string literals:

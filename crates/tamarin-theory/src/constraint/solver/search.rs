@@ -287,7 +287,7 @@ fn forks(ctx: &ProofContext, cases: usize) -> bool {
         && !disable_parallel_expand()
         && rayon::current_num_threads() > 1
         // Ordinary all-traces forks inherit the same absolute deadline.
-        && !(ctx.serial_under_a_deadline() && DEADLINE.with(|cell| cell.get().is_some()))
+        && !(DEADLINE.with(|cell| cell.get().is_some()) && ctx.serial_under_a_deadline())
 }
 
 /// Visit cases in order on several workers, up to the first solved one.

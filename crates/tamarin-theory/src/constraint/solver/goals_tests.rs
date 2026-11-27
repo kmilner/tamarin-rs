@@ -149,8 +149,7 @@ fn regex_backslash_lt_gt_are_pcre_literals() {
     assert!(!regex_is_match(r"a\\>", "a>"));
 }
 
-/// `apply_ranking_fn "smallest"` sorts by rendered length, stably;
-/// "id"/unknown is identity.
+/// `smallest` orders by rendered length, and `id` preserves the input order.
 #[test]
 fn ranking_fn_smallest_and_id() {
     use crate::fact::ku_fact;
@@ -164,15 +163,23 @@ fn ranking_fn_smallest_and_id() {
         )
     };
     // `~aaaa` renders longer than `~a`.
-    let g_long = mk("aaaa", 0);
-    let g_short = mk("a", 1);
-    let out = apply_ranking_fn("smallest", vec![g_long.clone(), g_short.clone()]);
-    assert_eq!(out[0].seq, 1, "shortest rendered goal first");
-    assert_eq!(out[1].seq, 0);
-    // id keeps input order.
-    let out2 = apply_ranking_fn("id", vec![g_long.clone(), g_short.clone()]);
-    assert_eq!(out2[0].seq, 0);
-    assert_eq!(out2[1].seq, 1);
+    let mut goals = [mk("aaaa", 0), mk("a", 1)];
+    block_ordering("id").unwrap()(&mut goals);
+    assert_eq!([goals[0].seq, goals[1].seq], [0, 1]);
+    block_ordering("smallest").unwrap()(&mut goals);
+    assert_eq!([goals[0].seq, goals[1].seq], [1, 0]);
+}
+
+fn regex_prio(pattern: &str) -> crate::tactic::PrioBlock {
+    use crate::tactic::{PrioBlock, SelectorExpr, SelectorLeaf};
+    PrioBlock {
+        ranking: "id".into(),
+        selectors: vec![SelectorExpr::Leaf(SelectorLeaf::new(
+            "regex",
+            pattern.into(),
+            vec![],
+        ))],
+    }
 }
 
 /// `it_ranking` result = rankedPrioGoals ++ nonRanked ++ rankedDeprioGoals,
@@ -181,7 +188,7 @@ fn ranking_fn_smallest_and_id() {
 #[test]
 fn it_ranking_prio_nonranked_deprio_order() {
     use crate::fact::ku_fact;
-    use crate::tactic::{PrioBlock, SelectorExpr, SelectorLeaf, Tactic};
+    use crate::tactic::Tactic;
     use tamarin_term::lterm::fresh_term;
 
     let mk = |s: &str, seq: u64| {
@@ -198,20 +205,13 @@ fn it_ranking_prio_nonranked_deprio_order() {
     let g_x = mk("x", 2);
     let ags = vec![g_sks.clone(), g_r.clone(), g_x.clone()];
 
-    let prio = |pat: &str| PrioBlock {
-        ranking: "id".to_string(),
-        selectors: vec![SelectorExpr::Leaf(SelectorLeaf {
-            name: "regex".to_string(),
-            params: vec![pat.to_string()],
-        })],
-    };
     // Fresh names render as `~'skS'` etc.  prio 0 matches ~'r',
     // prio 1 matches ~'skS'; ~'x' matches no prio. deprio matches ~'x'.
     let tactic = Tactic {
         name: "t".to_string(),
         presort: 'C',
-        prios: vec![prio("~'r'"), prio("~'skS'")],
-        deprios: vec![prio("~'x'")],
+        prios: vec![regex_prio("~'r'"), regex_prio("~'skS'")],
+        deprios: vec![regex_prio("~'x'")],
     };
 
     let sys = System::empty();
@@ -234,7 +234,7 @@ fn it_ranking_prio_nonranked_deprio_order() {
 #[test]
 fn it_ranking_nonranked_preserved() {
     use crate::fact::ku_fact;
-    use crate::tactic::{PrioBlock, SelectorExpr, SelectorLeaf, Tactic};
+    use crate::tactic::Tactic;
     use tamarin_term::lterm::fresh_term;
     let mk = |s: &str, seq: u64| {
         let v = tamarin_term::lterm::LVar::new("x", tamarin_term::lterm::LSort::Msg, 0);
@@ -249,17 +249,10 @@ fn it_ranking_nonranked_preserved() {
     let g_b = mk("b", 0); // no match → nonRanked
     let g_c = mk("c", 1); // no match → nonRanked
     let g_a = mk("a", 2); // matches prio → moves to front
-    let prio = PrioBlock {
-        ranking: "id".to_string(),
-        selectors: vec![SelectorExpr::Leaf(SelectorLeaf {
-            name: "regex".to_string(),
-            params: vec!["~'a'".to_string()],
-        })],
-    };
     let tactic = Tactic {
         name: "t".to_string(),
         presort: 'C',
-        prios: vec![prio],
+        prios: vec![regex_prio("~'a'")],
         deprios: vec![],
     };
     let sys = System::empty();
@@ -270,6 +263,44 @@ fn it_ranking_nonranked_preserved() {
     // ~'a' (prio, seq 2) first, then nonRanked [~'b'=0, ~'c'=1] in
     // presort order.
     assert_eq!(seqs, vec![2, 0, 1]);
+}
+
+#[test]
+fn tactic_errors_are_deferred_until_demanded() {
+    let mut sys = System::empty();
+    let sig = tamarin_term::maude_sig::pair_maude_sig();
+    let formula =
+        tamarin_parser::parser::parse_formula_str("All x #i. Reveal(x)@i ==> F", &sig).unwrap();
+    sys.insert_formula(crate::elaborate::formula_to_guarded_parsed(&formula, &sig).unwrap());
+    let goal = AnnotatedGoal::new(
+        Goal::Split(crate::constraint::constraints::SplitId(0)),
+        0,
+        Usefulness::Useful,
+    );
+
+    for (block, may_fail, fails) in [
+        (r#"unknownRank "x""#, true, true),
+        (r#"regex ".*" | unknownRank "x""#, true, false),
+        (r#"defaultNoise ".*""#, true, true),
+        (r#"defaultNoise "NEVER""#, true, false),
+        (r#"defaultNoise ".*" """#, false, false),
+        (r#"{unknownOrder} regex ".*""#, true, true),
+        (r#"{unknownOrder} regex "NEVER""#, true, false),
+    ] {
+        let source = format!("theory T begin\ntactic: t\nprio: {block}\nend");
+        let theory = tamarin_parser::parse_theory(&source, &[]).unwrap();
+        let tamarin_parser::TheoryItem::Tactic(tactic) = &theory.items[0] else {
+            panic!("expected a tactic");
+        };
+        let rankings =
+            parse_heuristic_str_with_tactics("{t}", "t.spthy", std::slice::from_ref(tactic));
+        assert_eq!(rankings_may_fail(&rankings), may_fail, "{block}");
+        assert_eq!(
+            it_ranking(tactic, vec![goal.clone()], false, &sys).is_err(),
+            fails,
+            "{block}"
+        );
+    }
 }
 
 #[test]
@@ -379,17 +410,11 @@ fn useful_goal_nr_uses_derived_usefulness_ord() {
 /// has one (HS `chosenTactic`, ProofMethod.hs).
 #[test]
 fn tactic_ranking_keeps_the_braced_name() {
-    use crate::tactic::{PrioBlock, SelectorExpr, SelectorLeaf, Tactic};
+    use crate::tactic::Tactic;
     let declared = Tactic {
         name: "rank".to_string(),
         presort: 'C',
-        prios: vec![PrioBlock {
-            ranking: "id".to_string(),
-            selectors: vec![SelectorExpr::Leaf(SelectorLeaf {
-                name: "regex".to_string(),
-                params: vec!["Out".to_string()],
-            })],
-        }],
+        prios: vec![regex_prio("Out")],
         deprios: vec![],
     };
     let names = |s: &str| -> Vec<String> {

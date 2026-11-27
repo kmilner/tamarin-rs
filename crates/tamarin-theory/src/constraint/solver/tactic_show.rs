@@ -37,24 +37,15 @@ use crate::guarded::Guarded;
 // checkFormula — the shared engine (Tactics.hs)
 // =============================================================================
 
-/// Recursively collect ALL action fact-tag names occurring in the guards of
-/// a guarded formula.  Mirrors HS `guardFactTags` (Guarded.hs),
-/// which folds over the WHOLE structure (not just the top level).
-fn guard_fact_tag_names(g: &Guarded, out: &mut Vec<String>) {
+/// Does any guard in the formula contain an action whose tag matches `Reveal`?
+pub(super) fn has_reveal_guard(g: &Guarded) -> bool {
     match g {
-        Guarded::Atom(_) => {}
-        Guarded::Disj(xs) | Guarded::Conj(xs) => {
-            for x in xs.iter() {
-                guard_fact_tag_names(x, out);
-            }
-        }
+        Guarded::Atom(_) => false,
+        Guarded::Disj(xs) | Guarded::Conj(xs) => xs.iter().any(has_reveal_guard),
         Guarded::GGuarded { guards, body, .. } => {
-            for a in guards.iter() {
-                if let ProtoAtom::Action(_, f) = a {
-                    out.push(crate::fact::fact_tag_name(&f.tag));
-                }
-            }
-            guard_fact_tag_names(body, out);
+            guards.iter().any(|a| {
+                matches!(a, ProtoAtom::Action(_, f) if crate::fact::fact_tag_name(&f.tag).contains("Reveal"))
+            }) || has_reveal_guard(body)
         }
     }
 }
@@ -71,23 +62,8 @@ fn formula_action_fact(g: &Guarded) -> Option<&Fact<BLNTerm>> {
     None
 }
 
-/// HS `checkFormula oracleType f` (Tactics.hs).
-///
-/// Returns the free `LVar`s of the top-level Reveal-action's fact terms,
-/// but ONLY if (a) some guard fact-tag name matches the regex `"Reveal"`
-/// AND (b) `show (getFormulaTerms f)` matches `"exp\\('g'"`
-/// (or `"grpid,exp\\('g'"` when `oracleType == "curve"`).
-///
-/// The returned `VarSpec`s are `show`n by the callers to build PCRE
-/// alternations like `(~n|~s|...)`.
-fn check_formula(oracle_type: &str, f: &Guarded) -> Vec<LVar> {
-    // rev = any guard fact-tag name =~ "Reveal"
-    let mut tag_names = Vec::new();
-    guard_fact_tag_names(f, &mut tag_names);
-    if !tag_names.iter().any(|n| n.contains("Reveal")) {
-        return Vec::new();
-    }
-
+/// Variables selected by `checkFormula` after its Reveal guard matched.
+fn reveal_vars(oracle_type: &str, f: &Guarded) -> Vec<LVar> {
     // expG = show (getFormulaTerms f) =~ <pattern>
     // getFormulaTerms returns the top-level Action fact's term args, shown
     // as a Haskell list `[t1,t2,..]`.
@@ -143,13 +119,12 @@ fn show_term_list(args: &[BLNTerm]) -> String {
 
 /// The set of `show`n LVars from `concat (map (checkFormula o) sFormulas)`.
 pub fn sys_reveal_shown(oracle_type: &str, formulas: &[std::sync::Arc<Guarded>]) -> Vec<String> {
-    let mut out = Vec::new();
-    for f in formulas {
-        for v in check_formula(oracle_type, f) {
-            out.push(v.to_string());
-        }
-    }
-    out
+    formulas
+        .iter()
+        .filter(|f| has_reveal_guard(f))
+        .flat_map(|f| reveal_vars(oracle_type, f))
+        .map(|v| v.to_string())
+        .collect()
 }
 
 #[cfg(test)]

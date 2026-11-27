@@ -157,10 +157,36 @@ pub(crate) fn rankings_may_fail(rankings: &[GoalRanking]) -> bool {
     rankings.iter().any(|ranking| match ranking {
         GoalRanking::Oracle { .. } | GoalRanking::OracleSmart { .. } => true,
         GoalRanking::Tactic {
-            resolution_error, ..
-        } => resolution_error.is_some(),
+            tactic,
+            resolution_error,
+            ..
+        } => {
+            resolution_error.is_some()
+                || tactic.prios.iter().chain(&tactic.deprios).any(|b| {
+                    block_ordering(&b.ranking).is_none()
+                        || b.selectors.iter().any(selector_may_fail)
+                })
+        }
         _ => false,
     })
+}
+
+fn selector_may_fail(selector: &crate::tactic::SelectorExpr) -> bool {
+    use crate::tactic::{SelectorExpr, SelectorPredicate};
+    match selector {
+        SelectorExpr::Leaf(leaf) => matches!(
+            leaf.predicate(),
+            SelectorPredicate::Unknown { .. }
+                | SelectorPredicate::DefaultNoise {
+                    oracle_type: None,
+                    ..
+                }
+        ),
+        SelectorExpr::Not(inner) => selector_may_fail(inner),
+        SelectorExpr::And(a, b) | SelectorExpr::Or(a, b) => {
+            selector_may_fail(a) || selector_may_fail(b)
+        }
+    }
 }
 
 /// HS `goalRankingName`'s `loopStatus` (System.hs).
@@ -414,14 +440,15 @@ pub fn has_open_goals(sys: &System) -> bool {
         .any(|(goal, status)| !status.solved && is_open_in_sys(goal, sys, &ab_adj))
 }
 
-/// Error type for oracle execution failures.
-///
-/// When oracle exec fails, HS throws an uncaught IO exception → the
-/// whole tamarin-prover invocation dies (ProofMethod.hs,
-/// `readProcess` throws on non-zero exit or spawn failure).  RS
-/// mirrors this with a hard error that propagates to the top level.
+/// A tactic selector or external oracle failed during goal ranking.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RankingError(pub String);
+
+impl RankingError {
+    fn undefined_function(name: &str) -> Self {
+        Self(format!("The function {name} is not defined."))
+    }
+}
 
 impl std::fmt::Display for RankingError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -441,8 +468,7 @@ impl std::error::Error for RankingError {}
 ///     . sortDecisionTree solveFirst . goalNrRanking
 /// ```
 ///
-/// `Ok(None)` is the ranking's `ApplySorry`; an error means a lazily
-/// forced source could not be evaluated.
+/// `Ok(None)` is the ranking's `ApplySorry`. Ranking and source failures propagate to the caller.
 pub(crate) fn rank_goals_with(
     sys: &System,
     ctx: &crate::constraint::solver::context::ProofContext,
@@ -736,7 +762,7 @@ fn internal_tactic_ranking(
 ///     recognises it (any selector true), or `Nothing`.
 ///   * `indexedPrio = sortOn fst (zip indexPrio ags)`; goals with the
 ///     same first-matching prio are grouped, in ascending prio order;
-///     unmatched goals (`Nothing` = greatest) are dropped.
+///     unmatched goals are dropped.
 ///   * Within each prio group, apply that prio's optional `rankingPrio`
 ///     sub-ordering function (`smallest` / `id`).
 ///   * `rankedPrioGoals = concat` of those.  Same for deprio.
@@ -749,8 +775,8 @@ fn it_ranking(
     quit_on_empty: bool,
     sys: &System,
 ) -> Result<Option<Vec<AnnotatedGoal>>, RankingError> {
-    let ranked_prio = rank_by_blocks(&tactic.prios, &ags, sys);
-    let ranked_deprio = rank_by_blocks(&tactic.deprios, &ags, sys);
+    let ranked_prio = rank_by_blocks(&tactic.prios, &ags, sys)?;
+    let ranked_deprio = rank_by_blocks(&tactic.deprios, &ags, sys)?;
 
     // nonRanked = filter (`notElem` rankedPrio ++ rankedDeprio) ags
     // (preserves presort order).  Compare by goal identity (seq + goal).
@@ -790,88 +816,79 @@ fn rank_by_blocks(
     blocks: &[crate::tactic::PrioBlock],
     ags: &[AnnotatedGoal],
     sys: &System,
-) -> Vec<AnnotatedGoal> {
+) -> Result<Vec<AnnotatedGoal>, RankingError> {
     if blocks.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
-    // index_of_first_matching_block for each goal.
-    // HS `indexedPrio = sortOn fst (zip indexPrio ags)` then `groupBy`
-    // on equal index.  `sortOn` is STABLE, so within one index the goals
-    // keep their presort (ags) order.  Under Haskell's `Ord (Maybe a)`
-    // (`compare Nothing (Just _) = LT`) `Nothing` sorts FIRST (least), so
-    // unmatched goals form the leading group, which HS drops via
-    // `tail groupedPrio`.  We replicate by iterating block indices 0..n and
-    // collecting only the goals whose first-match is `Some(bi)`, in ags
-    // order — `None` (unmatched) goals are never emitted, i.e. dropped.
-    let first_match: Vec<Option<usize>> = ags
-        .iter()
-        .map(|g| blocks.iter().position(|b| block_matches(b, g, sys)))
-        .collect();
 
-    // Single-pass bucketing by the already-computed first-match index.
-    // Each goal lands in exactly one bucket (its `Some(bi)`); `None`
-    // (unmatched) goals are skipped (dropped, matching HS `tail
-    // groupedPrio`).  Pushing in ags order preserves presort order within
-    // each bucket, and emitting buckets 0..n keeps ascending block-index
-    // order.
-    let mut buckets: Vec<Vec<AnnotatedGoal>> = vec![Vec::new(); blocks.len()];
-    for (g, fm) in ags.iter().zip(first_match.iter()) {
-        if let Some(bi) = *fm {
-            buckets[bi].push(g.clone());
+    let mut buckets = vec![Vec::new(); blocks.len()];
+    for goal in ags {
+        for (block, bucket) in blocks.iter().zip(&mut buckets) {
+            if block_matches(block, goal, sys)? {
+                bucket.push(goal.clone());
+                break;
+            }
         }
     }
 
     let mut out = Vec::new();
-    for (block, group) in blocks.iter().zip(buckets) {
+    for (block, mut group) in blocks.iter().zip(buckets) {
         if group.is_empty() {
             continue;
         }
-        // Apply this block's ranking function (id / smallest).
-        out.extend(apply_ranking_fn(&block.ranking, group));
+        let order = block_ordering(&block.ranking)
+            .ok_or_else(|| RankingError::undefined_function(&block.ranking))?;
+        order(&mut group);
+        out.extend(group);
     }
-    out
+    Ok(out)
 }
 
 /// HS `rankingFunctions` (Tactics.hs): `id` (identity) and
 /// `smallest` (sort by rendered-goal string length, stable).
-fn apply_ranking_fn(name: &str, group: Vec<AnnotatedGoal>) -> Vec<AnnotatedGoal> {
+fn block_ordering(name: &str) -> Option<fn(&mut [AnnotatedGoal])> {
     match name {
-        "smallest" => {
-            // sortOn (length . render . prettyGoal) — STABLE.
-            // `sort_by_cached_key` computes the key exactly once per
-            // element (vs O(n log n) re-renders with `sort_by_key`),
-            // sorting with the same stable order.
-            let mut g = group;
-            g.sort_by_cached_key(|a| {
-                let s = crate::pretty_theory::render_goal_for_oracle(&a.goal);
-                // `length` of the rendered string with the line breaks
-                // dropped — summed per line, no joined copy.
-                s.lines().map(|l| l.chars().count()).sum::<usize>()
+        "" | "id" => Some(|_| {}),
+        "smallest" => Some(|group| {
+            group.sort_by_cached_key(|g| {
+                let rendered = crate::pretty_theory::render_goal_for_oracle(&g.goal);
+                rendered.lines().map(|l| l.chars().count()).sum::<usize>()
             });
-            g
-        }
-        // "id" / "" / anything else → identity.
-        _ => group,
+        }),
+        _ => None,
     }
 }
 
 /// Does block `b` recognise goal `g`? HS `isPrio = or . sequenceA
 /// functionsPrio` (ProofMethod.hs): True iff ANY of the block's
 /// disjunct selector-expressions evaluates True.
-fn block_matches(b: &crate::tactic::PrioBlock, g: &AnnotatedGoal, sys: &System) -> bool {
-    b.selectors.iter().any(|e| eval_selector(e, g, sys))
+fn block_matches(
+    block: &crate::tactic::PrioBlock,
+    goal: &AnnotatedGoal,
+    sys: &System,
+) -> Result<bool, RankingError> {
+    for selector in &block.selectors {
+        if eval_selector(selector, goal, sys)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 /// Evaluate a `SelectorExpr` against a goal.  Mirrors HS's
 /// `functionNot`/`functionAnd`/`functionOr` combinators
 /// (Tactics.hs) bottoming out at `nameToFunction`.
-fn eval_selector(e: &crate::tactic::SelectorExpr, g: &AnnotatedGoal, sys: &System) -> bool {
+fn eval_selector(
+    e: &crate::tactic::SelectorExpr,
+    g: &AnnotatedGoal,
+    sys: &System,
+) -> Result<bool, RankingError> {
     use crate::tactic::SelectorExpr;
     match e {
-        SelectorExpr::Leaf(leaf) => eval_leaf(leaf, g, sys),
-        SelectorExpr::Not(inner) => !eval_selector(inner, g, sys),
-        SelectorExpr::And(a, b) => eval_selector(a, g, sys) && eval_selector(b, g, sys),
-        SelectorExpr::Or(a, b) => eval_selector(a, g, sys) || eval_selector(b, g, sys),
+        SelectorExpr::Leaf(leaf) => eval_predicate(leaf.predicate(), g, sys),
+        SelectorExpr::Not(inner) => Ok(!eval_selector(inner, g, sys)?),
+        SelectorExpr::And(a, b) => Ok(eval_selector(a, g, sys)? && eval_selector(b, g, sys)?),
+        SelectorExpr::Or(a, b) => Ok(eval_selector(a, g, sys)? || eval_selector(b, g, sys)?),
     }
 }
 
@@ -882,31 +899,22 @@ fn tactic_pg(g: &AnnotatedGoal) -> String {
     s.lines().collect::<String>()
 }
 
-/// Evaluate one selector leaf (`regex "..."`, `dhreNoise "..."`, …).
-/// Mirrors HS `tacticFunctions` (Tactics.hs).
-fn eval_leaf(leaf: &crate::tactic::SelectorLeaf, g: &AnnotatedGoal, sys: &System) -> bool {
+/// Evaluate one tactic predicate, forcing its regex only when reached.
+fn eval_predicate(
+    predicate: &crate::tactic::SelectorPredicate,
+    g: &AnnotatedGoal,
+    sys: &System,
+) -> Result<bool, RankingError> {
     use crate::constraint::solver::tactic_show as ts;
     use crate::fact::{FactTag, Multiplicity};
+    use crate::tactic::SelectorPredicate;
     use tamarin_term::lterm::LNTerm;
-    let params = &leaf.params;
-    let head = |i: usize| params.get(i).map(String::as_str).unwrap_or("");
-    match leaf.name.as_str() {
-        "regex" => {
-            // HS `regex' (regex:_) (agoal,_,_) = pg =~ regex`
-            // (Tactics.hs).  `=~ :: Bool` with Text.Regex.PCRE is
-            // an UNANCHORED search (matches if found anywhere).  We use
-            // `fancy-regex` (PCRE-compatible: lookaround, backrefs) and
-            // `is_match` for the same unanchored Bool semantics.
-            match params.first() {
-                Some(pat) => regex_is_match(pat, &tactic_pg(g)),
-                None => false,
-            }
-        }
+    Ok(match predicate {
+        SelectorPredicate::Regex { pattern } => regex_is_match(pattern, &tactic_pg(g)),
 
         // dhreNoise (Tactics.hs): `pg =~ goalPattern`, where the
         // pattern is a DH-product/inverse over a sys-specific nonce class.
-        "dhreNoise" => {
-            let oracle_type = head(0);
+        SelectorPredicate::DhreNoise { oracle_type } => {
             let pg = tactic_pg(g);
             // sysPatternDiff = "(~[a-zA-Z0-9.]*)"
             let sys_pattern_diff = "(~[a-zA-Z0-9.]*)";
@@ -932,11 +940,24 @@ fn eval_leaf(leaf: &crate::tactic::SelectorLeaf, g: &AnnotatedGoal, sys: &System
         // defaultNoise (Tactics.hs): `or $ map (flip elem sysPattern)
         // goalMatches` — every regex-match substring of the pretty goal that
         // equals a shown reveal-var.
-        "defaultNoise" => {
-            let param_goal = head(0);
-            let oracle_type = head(1);
+        SelectorPredicate::DefaultNoise {
+            goal_pattern,
+            oracle_type,
+        } => {
             let pg = tactic_pg(g);
-            let goal_matches = regex_all_matches(param_goal, &pg);
+            let goal_matches = regex_all_matches(goal_pattern, &pg);
+            if goal_matches.is_empty() {
+                return Ok(false);
+            }
+            let oracle_type = match oracle_type {
+                Some(oracle_type) => oracle_type,
+                None if sys.formulas.iter().any(|f| ts::has_reveal_guard(f)) => {
+                    return Err(RankingError(
+                        "defaultNoise requires a second argument specifying the oracle type".into(),
+                    ));
+                }
+                None => return Ok(false),
+            };
             let sys_pattern = ts::sys_reveal_shown(oracle_type, &sys.formulas);
             goal_matches
                 .iter()
@@ -946,8 +967,7 @@ fn eval_leaf(leaf: &crate::tactic::SelectorLeaf, g: &AnnotatedGoal, sys: &System
         // reasonableNoncesNoise (Tactics.hs): `or $ map (flip elem
         // sysPattern) nonces`, where nonces = map show (getFactTerms_ goal)
         // and sysPattern = "~n" : shown reveal-vars.
-        "reasonableNoncesNoise" => {
-            let oracle_type = head(0);
+        SelectorPredicate::ReasonableNoncesNoise { oracle_type } => {
             let fact_terms: &[LNTerm] = match &g.goal {
                 Goal::Action(_, fa) => fa.terms(),
                 _ => &[],
@@ -961,8 +981,7 @@ fn eval_leaf(leaf: &crate::tactic::SelectorLeaf, g: &AnnotatedGoal, sys: &System
         }
 
         // nonAbsurdConstraint (Tactics.hs): hasSafeNonces && isSubset.
-        "nonAbsurdConstraint" => {
-            let oracle_type = head(0);
+        SelectorPredicate::NonAbsurdConstraint { oracle_type } => {
             let pg = tactic_pg(g);
             // isSubset: every function appearing in pg is in {Ku, inv}.
             let functions_detection = "[^A-Za-z0-9][A-Za-z0-9]+\\(";
@@ -986,32 +1005,23 @@ fn eval_leaf(leaf: &crate::tactic::SelectorLeaf, g: &AnnotatedGoal, sys: &System
             has_safe_nonces && is_subset
         }
 
-        // isFactName (Tactics.hs).
-        "isFactName" => {
-            let s = head(0);
-            match &g.goal {
-                Goal::Premise(_, fa) => {
-                    matches!(&fa.tag, FactTag::Proto(Multiplicity::Linear, name, _) if *name == s)
-                }
-                Goal::Action(_, fa) => crate::fact::show_fact_tag_derived(&fa.tag) == s,
-                _ => false,
+        SelectorPredicate::IsFactName { name } => match &g.goal {
+            Goal::Premise(_, fa) => {
+                matches!(&fa.tag, FactTag::Proto(Multiplicity::Linear, fact_name, _) if *fact_name == name)
             }
-        }
-
-        // isInFactTerms (Tactics.hs): single-term action fact whose
-        // `show` matches the regex.
-        "isInFactTerms" => {
-            let s = head(0);
-            match &g.goal {
-                Goal::Action(_, fa) if fa.arity() == 1 => {
-                    regex_is_match(s, &tamarin_term::term::show_term(&fa.terms()[0]))
-                }
-                _ => false,
+            Goal::Action(_, fa) => crate::fact::show_fact_tag_derived(&fa.tag) == *name,
+            _ => false,
+        },
+        SelectorPredicate::IsInFactTerms { pattern } => match &g.goal {
+            Goal::Action(_, fa) if fa.arity() == 1 => {
+                regex_is_match(pattern, &tamarin_term::term::show_term(&fa.terms()[0]))
             }
+            _ => false,
+        },
+        SelectorPredicate::Unknown { name } => {
+            return Err(RankingError::undefined_function(name));
         }
-
-        _ => false,
-    }
+    })
 }
 
 /// Join shown reveal-vars into a regex alternation body (no surrounding

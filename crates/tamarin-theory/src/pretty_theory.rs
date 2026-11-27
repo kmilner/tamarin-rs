@@ -1782,14 +1782,9 @@ fn pp_step_doc(
     }
 }
 
-/// Render a `Goal` for the oracle/tactic ranking path.  This is HS's
-/// `render $ prettyGoal g` from `ProofMethod.hs`
-/// (oracle stdin)
-/// and `Tactics.hs` `pg = concat . lines . render $ prettyGoal agoal`
-/// (tactic regex string).  All consumers (goals.rs oracle stdin /
-/// `apply_ranking_fn` / `tactic_pg`) immediately apply `concat . lines`
-/// to drop the newlines, so the byte-for-byte requirement is on each
-/// line's internal text (leading indent spaces survive the `concat`).
+/// Render a goal for external oracles and tactic ranking (`prettyGoal` in
+/// ProofMethod.hs and Tactics.hs). Callers discard newlines and preserve
+/// each line's indentation.
 ///
 /// Width: the oracle/tactic path uses plain `render = P.render`
 /// (`Theory.Text.Pretty` re-exports `Text.PrettyPrint.Class.render`,
