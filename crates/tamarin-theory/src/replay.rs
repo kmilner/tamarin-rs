@@ -18,10 +18,11 @@ use std::collections::BTreeMap;
 use crate::constraint::constraints::Goal;
 use crate::constraint::solver::context::ProofContext;
 use crate::constraint::solver::proof_method::{
-    exec_proof_method, finished_step_is_valid, ProofMethod, Result as MethodResult,
+    exec_proof_method, finished_step_is_valid, ProofMethod,
 };
 use crate::constraint::solver::search::{
-    node_status_of, rollup_statuses, run_proof_search_at_depth, NodeStatus, ProofNode,
+    node_status_of, rollup_statuses, run_proof_search_at_depth, NodeStatus, ProofAnnotation,
+    ProofNode,
 };
 use crate::constraint::system::System;
 use crate::prove::ProveError;
@@ -72,11 +73,10 @@ pub(crate) fn sorry_node<'a>(
         method: ProofMethod::Sorry(reason),
         children: children
             .into_iter()
-            .map(|(name, child)| (name, parsed_to_unannotated(child, sys.clone())))
+            .map(|(name, child)| (name, parsed_to_unannotated(child)))
             .collect(),
-        sys,
+        annotation: ProofAnnotation::checked(sys),
         status: NodeStatus::Sorry,
-        annotated: true,
     }
 }
 
@@ -91,9 +91,8 @@ fn invalid_step_node(node: &ProofTree, sys: System) -> ProofNode {
 }
 
 /// HS `noSystemPrf` (Theory/Proof.hs): the stored subtree with no system
-/// annotation anywhere, keeping each stored method. `sys` is only a
-/// placeholder required by `ProofNode`.
-fn parsed_to_unannotated(node: &ProofTree, sys: System) -> ProofNode {
+/// annotation anywhere, keeping each stored method.
+fn parsed_to_unannotated(node: &ProofTree) -> ProofNode {
     let method = node.method.clone();
     let status = match &method {
         ProofMethod::Finished(r) => node_status_of(r),
@@ -103,40 +102,13 @@ fn parsed_to_unannotated(node: &ProofTree, sys: System) -> ProofNode {
     let children: BTreeMap<String, ProofNode> = node
         .cases
         .iter()
-        .map(|(name, sub)| (name.clone(), parsed_to_unannotated(sub, sys.clone())))
+        .map(|(name, sub)| (name.clone(), parsed_to_unannotated(sub)))
         .collect();
     ProofNode {
         method,
-        sys,
+        annotation: ProofAnnotation::Unchecked,
         children,
         status,
-        annotated: false,
-    }
-}
-
-/// Replay a terminal leaf (`by contradiction`, `SOLVED`, `UNFINISHABLE`).
-/// A stored result whose kind the system still reaches is kept verbatim, so
-/// a stored `by contradiction` matches any runtime reason and prints without
-/// one. Otherwise the step is invalid: unannotated without the auto-prover,
-/// else re-proved, as `replaceSorryProver` re-proves `checkProof`'s sorry.
-fn finished_leaf(
-    ctx: &ProofContext,
-    sys: System,
-    node: &ProofTree,
-    stored: &MethodResult,
-    auto_prove: bool,
-    proof_bound: usize,
-) -> Result<ProofNode, ProveError> {
-    match finished_step_is_valid(ctx, &sys, stored)? {
-        true => Ok(ProofNode {
-            method: ProofMethod::Finished(stored.clone()),
-            sys,
-            children: BTreeMap::new(),
-            status: node_status_of(stored),
-            annotated: true,
-        }),
-        _ if !auto_prove => Ok(invalid_step_node(node, sys)),
-        _ => run_proof_search_at_depth(ctx, sys, proof_bound, 0),
     }
 }
 
@@ -179,12 +151,6 @@ fn replay_node_inner(
 
     crate::constraint::solver::trace::trace_state(&sys);
 
-    if let ProofMethod::Finished(stored) = &node.method
-        && node.cases.is_empty()
-    {
-        return finished_leaf(ctx, sys, node, stored, auto_prove, proof_bound);
-    }
-
     // Re-execute the stored method (`checkAndExecProofMethod`), then merge
     // its cases with the stored children (`mergeMapsWith`, Theory/Proof.hs).
     let (method, cases) = match exec_method_for(&node.method, &sys, ctx)? {
@@ -197,103 +163,70 @@ fn replay_node_inner(
         }
     };
 
-    // Both maps empty: a contradictory closure. When only the runtime map is
-    // empty, every stored child is kept unannotated below.
-    if cases.is_empty() && node.cases.is_empty() {
-        return Ok(ProofNode {
-            method,
-            sys,
-            children: BTreeMap::new(),
-            status: NodeStatus::Contradictory,
-            annotated: true,
-        });
-    }
-
-    let produced: BTreeMap<String, System> = cases.into_iter().collect();
-
-    let mut children: BTreeMap<String, ProofNode> = BTreeMap::new();
-    // A stored-only child counts as incomplete whatever its stored method.
-    let mut statuses = Vec::new();
-
-    for (skel_name, sub_tree) in &node.cases {
-        // An unnamed stored child (from Simplify or a one-case solve) adopts
-        // the single runtime case; a named one matches by name.
-        let runtime_name = if skel_name.is_empty() {
-            if produced.len() == 1 {
-                Some(produced.keys().next().unwrap().clone())
-            } else {
-                None
+    let mut produced: BTreeMap<String, System> = cases.into_iter().collect();
+    let mut children = BTreeMap::new();
+    for (name, stored) in &node.cases {
+        let child = match produced.remove(name) {
+            Some(child_sys) => {
+                let _path = crate::constraint::solver::trace::CasePathGuard::push(name);
+                replay_node(ctx, child_sys, stored, proof_bound, auto_prove)?
             }
-        } else if produced.contains_key(skel_name) {
-            Some(skel_name.clone())
-        } else {
-            None
+            None => parsed_to_unannotated(stored),
         };
-        let Some(runtime_name) = runtime_name else {
-            // A stored-only case (`noSystemPrf` in `mergeMapsWith`) is kept
-            // verbatim and unannotated, with or without the auto-prover.
-            let placeholder = parsed_to_unannotated(sub_tree, sys.clone());
-            children.insert(skel_name.clone(), placeholder);
-            statuses.push(NodeStatus::Sorry);
-            continue;
-        };
-        let child_sys = produced.get(&runtime_name).cloned().unwrap();
-        let _path = crate::constraint::solver::trace::CasePathGuard::push(&runtime_name);
-        let child_node = replay_node(ctx, child_sys, sub_tree, proof_bound, auto_prove)?;
-        statuses.push(child_node.status);
-        children.insert(runtime_name, child_node);
+        children.insert(name.clone(), child);
     }
 
-    // A runtime-only case goes through `unhandledCase = mapProofInfo
-    // (Nothing,) . prover d`: an annotated sorry, which `--prove` extends.
-    for (rt_name, rt_sys) in produced.into_iter() {
-        // Includes a runtime case an unnamed stored child adopted.
-        if children.contains_key(&rt_name) {
-            continue;
-        }
+    // A runtime-only case starts as an annotated sorry, which `--prove` extends.
+    for (rt_name, rt_sys) in produced {
         let _path = crate::constraint::solver::trace::CasePathGuard::push(&rt_name);
         let auto = if auto_prove {
             run_proof_search_at_depth(ctx, rt_sys, proof_bound, 0)?
         } else {
             sorry_node(None, rt_sys, [])
         };
-        statuses.push(auto.status);
         children.insert(rt_name, auto);
     }
 
+    let status = match &method {
+        ProofMethod::Finished(result) => node_status_of(result),
+        _ if children.is_empty() => NodeStatus::Contradictory,
+        _ => rollup_statuses(children.values().map(|child| {
+            if child.annotation.is_checked() {
+                child.status
+            } else {
+                NodeStatus::Sorry
+            }
+        })),
+    };
     Ok(ProofNode {
         method,
-        sys,
+        annotation: ProofAnnotation::checked(sys),
         children,
-        status: rollup_statuses(statuses),
-        annotated: true,
+        status,
     })
 }
 
-/// HS `checkAndExecProofMethod` (Theory/Proof.hs): [`resolve_method`]
-/// validates the stored step, then it runs against `sys`.
+/// Validate and execute a stored method (HS `checkAndExecProofMethod`).
 fn exec_method_for(
     stored: &ProofMethod,
     sys: &System,
     ctx: &ProofContext,
 ) -> Result<Option<(ProofMethod, Vec<(String, System)>)>, ProveError> {
-    let Some(method) = resolve_method(stored, sys) else {
-        return Ok(None);
+    let method = match stored {
+        ProofMethod::Finished(result) => {
+            return Ok(
+                finished_step_is_valid(ctx, sys, result)?.then(|| (stored.clone(), Vec::new()))
+            );
+        }
+        ProofMethod::SolveGoal(goal) => {
+            let Some(live) = match_goal(goal, sys) else {
+                return Ok(None);
+            };
+            ProofMethod::SolveGoal(live)
+        }
+        _ => stored.clone(),
     };
     Ok(exec_proof_method(ctx, &method, sys)?.map(|cases| (method, cases)))
-}
-
-/// Bind a stored method to `sys`: a `SolveGoal` takes the equal live goal.
-/// Terminal methods are leaves in [`replay_node`]; one with stored cases is
-/// malformed, and `Invalidated` never executes.
-fn resolve_method(stored: &ProofMethod, sys: &System) -> Option<ProofMethod> {
-    match stored {
-        ProofMethod::Sorry(reason) => Some(ProofMethod::Sorry(reason.clone())),
-        ProofMethod::Simplify => Some(ProofMethod::Simplify),
-        ProofMethod::Induction => Some(ProofMethod::Induction),
-        ProofMethod::SolveGoal(g) => Some(ProofMethod::SolveGoal(match_goal(g, sys)?)),
-        ProofMethod::Finished(_) | ProofMethod::Invalidated => None,
-    }
 }
 
 /// The goal of `sys` equal to the stored one (HS `goal \`M.member\` sGoals`,

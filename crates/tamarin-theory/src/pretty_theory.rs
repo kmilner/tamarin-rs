@@ -1569,7 +1569,7 @@ impl ProofBody for crate::constraint::solver::search::ProofNode {
     }
 
     fn annotated(&self) -> bool {
-        self.annotated
+        self.annotation.is_checked()
     }
 
     fn cases(&self) -> Vec<(&String, &Self)> {

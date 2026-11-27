@@ -22,7 +22,7 @@ fn prepare_replacements(
     roots: &mut BTreeMap<Vec<String>, Option<Duration>>,
     time_limit: Option<Duration>,
 ) {
-    if node.annotated && matches!(node.method, ProofMethod::Sorry(_)) {
+    if node.annotation.is_checked() && matches!(node.method, ProofMethod::Sorry(_)) {
         roots.insert(path.clone(), time_limit);
         node.method = ProofMethod::Sorry(Some("depth limit".into()));
         node.children.clear();
@@ -52,7 +52,7 @@ impl SavedSearch<'_> {
             *incomplete = true;
             return Ok(None);
         }
-        if !node.annotated {
+        if !node.annotation.is_checked() {
             // A stale stored-only branch has no checked system. In particular
             // a parsed SOLVED marker is not evidence of a solution.
             return Ok(None);
@@ -141,7 +141,7 @@ pub(crate) fn extend_saved_proof(
 /// Prefer an already checked witness in case order before searching any
 /// unfinished branch. A stored-only SOLVED claim cannot establish a witness.
 fn keep_saved_witness(node: &mut ProofNode) -> bool {
-    if !node.annotated {
+    if !node.annotation.is_checked() {
         return false;
     }
     if matches!(node.method, ProofMethod::Finished(MethodResult::Solved)) {
@@ -183,10 +183,9 @@ mod tests {
         };
         ProofNode {
             method,
-            sys: System::empty(),
+            annotation: ProofAnnotation::checked(System::empty()),
             children: BTreeMap::new(),
             status,
-            annotated: true,
         }
     }
 
@@ -200,10 +199,9 @@ mod tests {
         let children = children.into_iter().map(|(k, v)| (k.into(), v)).collect();
         ProofNode {
             method: ProofMethod::Simplify,
-            sys: System::empty(),
+            annotation: ProofAnnotation::checked(System::empty()),
             status: rollup_status(&children),
             children,
-            annotated: true,
         }
     }
 
@@ -269,7 +267,7 @@ mod tests {
         for cut in [CutStrategy::Dfs, CutStrategy::Bfs, CutStrategy::SeqDfs] {
             ctx.cut = cut;
             let mut stale = solved();
-            stale.annotated = false;
+            stale.annotation = ProofAnnotation::Unchecked;
             stale.status = NodeStatus::Sorry;
             let tree = branch(vec![("a", stale), ("b", leaf(ProofMethod::Sorry(None)))]);
             let result = extend_saved_proof(&ctx, tree, 0).unwrap();

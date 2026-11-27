@@ -552,13 +552,14 @@ end"#;
     fn node(method: ProofMethod, status: NodeStatus, children: &[(&str, ProofNode)]) -> ProofNode {
         ProofNode {
             method,
-            sys: System::empty(),
+            annotation: tamarin_theory::constraint::solver::search::ProofAnnotation::checked(
+                System::empty(),
+            ),
             children: children
                 .iter()
                 .map(|(k, v)| (k.to_string(), v.clone()))
                 .collect::<BTreeMap<_, _>>(),
             status,
-            annotated: true,
         }
     }
 

@@ -17,7 +17,8 @@ use tamarin_theory::constraint::solver::proof_method::{
     exec_proof_method, is_finished, is_finished_or_stuck, ProofMethod,
 };
 use tamarin_theory::constraint::solver::search::{
-    candidate_methods_with_expl, node_status_of, rollup_status, NodeStatus, ProofNode, ProofStatus,
+    candidate_methods_with_expl, node_status_of, rollup_status, NodeStatus, ProofAnnotation,
+    ProofNode, ProofStatus,
 };
 use tamarin_theory::constraint::system::{SourceKind, System};
 use tamarin_theory::pretty_system::pretty_non_graph_system;
@@ -33,7 +34,7 @@ pub(crate) struct ProofIndexNode {
     pub method: ProofMethod,
     pub children: BTreeMap<String, ProofIndexNode>,
     pub annotated: bool,
-    status: ProofStatus,
+    pub display_status: ProofStatus,
 }
 
 /// System-free result of replaying a stored proof. Both overview and source
@@ -93,11 +94,11 @@ pub(crate) struct ProofSnippet {
 impl ProofSnippet {
     fn from_proof_node(node: &ProofNode) -> Self {
         Self {
-            system: node.annotated.then(|| node.sys.clone()),
+            system: node.annotation.system().cloned(),
             children: node
                 .children
                 .iter()
-                .map(|(name, child)| (name.clone(), child.annotated))
+                .map(|(name, child)| (name.clone(), child.annotation.is_checked()))
                 .collect(),
         }
     }
@@ -110,22 +111,22 @@ impl ProofIndexNode {
             .iter()
             .map(|(name, child)| (name.clone(), Self::from_proof_node(child)))
             .collect();
-        let status = children.values().fold(
-            ProofStatus::from_step(&node.method, node.annotated),
-            |status, child| status.combine(child.status),
-        );
+        let annotated = node.annotation.is_checked();
+        // Web.Theory.annotateLemmaProof marks a stale branch as incomplete.
+        let step_status = if annotated {
+            ProofStatus::from_step(&node.method, true)
+        } else {
+            ProofStatus::Incomplete
+        };
+        let display_status = children.values().fold(step_status, |status, child| {
+            status.combine(child.display_status)
+        });
         Self {
             method: node.method.clone(),
             children,
-            annotated: node.annotated,
-            status,
+            annotated,
+            display_status,
         }
-    }
-
-    /// HS `getProofStatus = foldMap proofStepStatus`, restricted to the
-    /// fields retained by the proof index snapshot.
-    pub fn proof_status(&self) -> ProofStatus {
-        self.status
     }
 }
 
@@ -240,10 +241,11 @@ impl ProofState {
         let root_guard = crate::cancellation::lock(root)?;
         let selected =
             navigate_at(&root_guard, path).ok_or_else(|| format!("path not found: {:?}", path))?;
-        if !selected.annotated {
-            return Err(format!("no annotated system at path: {:?}", path));
-        }
-        let selected_sys = selected.sys.clone();
+        let selected_sys = selected
+            .annotation
+            .system()
+            .ok_or_else(|| format!("no annotated system at path: {:?}", path))?
+            .clone();
         drop(root_guard);
         tamarin_theory::constraint::solver::trace::trace_state_at_path(&selected_sys, path);
         let cases = exec_proof_method(&ctx, &method, &selected_sys)
@@ -263,10 +265,9 @@ impl ProofState {
                 };
                 let child = ProofNode {
                     method: leaf_method,
-                    sys,
+                    annotation: ProofAnnotation::checked(sys),
                     children: BTreeMap::new(),
                     status,
-                    annotated: true,
                 };
                 children.insert(name, child);
             }
@@ -282,9 +283,8 @@ impl ProofState {
     }
 
     /// Replace one existing proof node with `sorry /* removed */`. A root is
-    /// re-annotated from its retained initial system, matching `focus []`;
-    /// nested unannotated nodes remain unresolved. Unlike generic method
-    /// application this needs no context, ranking, or system clone.
+    /// re-annotated from the lemma’s initial system, matching `focus []`;
+    /// nested unannotated nodes remain unresolved.
     pub(crate) fn mark_removed_at_path(
         &self,
         lemma: &str,
@@ -300,16 +300,33 @@ impl ProofState {
         let Some(selected) = navigate_at(&root_guard, path) else {
             return Ok(false);
         };
-        if !selected.annotated && !path.is_empty() {
-            return Ok(false);
-        }
+        let has_system = selected.annotation.system().is_some();
         drop(root_guard);
+        let method = ProofMethod::Sorry(Some("removed".into()));
+        if !has_system {
+            if !path.is_empty() {
+                return Ok(false);
+            }
+            // At the root, focus [] checks the replacement against the lemma's initial system.
+            let replacement = tamarin_theory::theory::ProofTree {
+                method,
+                cases: BTreeMap::new(),
+            };
+            let checked = tamarin_theory::prove::check_and_extend_proof_in_session(
+                &self.session,
+                lemma,
+                &replacement,
+                usize::MAX,
+            )
+            .map_err(|e| e.to_string())?;
+            *root = Arc::new(Mutex::new(checked));
+            return Ok(true);
+        }
         let root = copy_on_write(root)?;
         let node = navigate_mut(root, path).expect("path was checked before copy-on-write");
-        node.method = ProofMethod::Sorry(Some("removed".to_string()));
+        node.method = method;
         node.children.clear();
         node.status = NodeStatus::Sorry;
-        node.annotated = true;
         recompute_ancestor_statuses(root, path);
         Ok(true)
     }
@@ -338,7 +355,7 @@ impl ProofState {
         let root_guard = crate::cancellation::lock(root)?;
         let selected =
             navigate_at(&root_guard, path).ok_or_else(|| format!("path not found: {:?}", path))?;
-        if !selected.annotated {
+        if selected.annotation.system().is_none() {
             return Err(format!("no annotated system at path: {:?}", path));
         }
         drop(root_guard);
@@ -652,7 +669,7 @@ impl ProofState {
         lemma: &str,
         path: &[String],
     ) -> Result<Option<tamarin_theory::constraint::system::System>, String> {
-        self.filter_map_node_at(lemma, path, |node| node.annotated.then(|| node.sys.clone()))
+        self.filter_map_node_at(lemma, path, |node| node.annotation.system().cloned())
     }
 
     fn filter_map_node_at<R>(
@@ -812,8 +829,6 @@ pub(crate) fn render_sub_proof_snippet(
     // via `noSystemPrf`) has NO constraint system to render; HS emits the
     // single fallback line instead of the methods/sequent/sub-case blocks:
     //   text $ "no annotated constraint system / " ++ nCases ++ " sub-case(s)"
-    // RS's unannotated `ProofNode` carries an empty sentinel `sys`
-    // (replay.rs `parsed_to_unannotated`) that MUST NOT be rendered.
     let Some(system) = snippet.system.as_ref() else {
         return Ok(tamarin_theory::pretty_hpj::postprocess_html(&format!(
             "no annotated constraint system / {} sub-case(s)",
@@ -1307,10 +1322,9 @@ end
                 "child".to_string(),
                 ProofNode {
                     method: ProofMethod::Sorry(None),
-                    sys: System::empty(),
+                    annotation: ProofAnnotation::Unchecked,
                     children: BTreeMap::new(),
                     status: NodeStatus::Sorry,
-                    annotated: false,
                 },
             );
         });
@@ -1324,12 +1338,14 @@ end
             state.mark_removed_at_path("trivial", &["child".to_string()]),
             Ok(false)
         );
-        state.with_live_root_mut("trivial", |root| root.annotated = false);
+        state.with_live_root_mut("trivial", |root| {
+            root.annotation = ProofAnnotation::Unchecked
+        });
         assert_eq!(state.mark_removed_at_path("trivial", &[]), Ok(true));
 
         let root = state.get_root("trivial").unwrap().unwrap();
         assert_eq!(root.status, NodeStatus::Sorry);
-        assert!(root.annotated);
+        assert!(root.annotation.system().is_some());
         assert!(root.children.is_empty());
         assert!(matches!(
             root.method,
@@ -1399,10 +1415,7 @@ end
             body.as_ref(),
             tamarin_theory::pretty_theory::pretty_proof_body(&live)
         );
-        assert_eq!(
-            root.proof_status(),
-            tamarin_theory::constraint::solver::search::proof_status(&live)
-        );
+        assert_eq!(root.display_status, ProofStatus::Incomplete);
         assert!(state.peek_root("stored").is_some());
         assert_eq!(
             state.state_count(|s| matches!(s, LemmaProofState::Snapshot(_))),
@@ -1591,7 +1604,9 @@ end"#,
         };
         let state = trivial_proof_state(&mp);
         state.get_root("trivial").expect("materialize root");
-        state.with_live_root_mut("trivial", |root| root.annotated = false);
+        state.with_live_root_mut("trivial", |root| {
+            root.annotation = ProofAnnotation::Unchecked
+        });
 
         assert!(state
             .get_system_at("trivial", &[])
@@ -1602,10 +1617,9 @@ end"#,
             .is_err());
         let replacement = ProofNode {
             method: ProofMethod::Sorry(None),
-            sys: System::empty(),
+            annotation: ProofAnnotation::checked(System::empty()),
             children: BTreeMap::new(),
             status: NodeStatus::Sorry,
-            annotated: true,
         };
         assert!(state.graft_at_path("trivial", &[], replacement).is_err());
     }
@@ -1614,10 +1628,9 @@ end"#,
     fn mutation_rolls_status_up_to_the_root() {
         let leaf = |status| ProofNode {
             method: ProofMethod::Sorry(None),
-            sys: System::empty(),
+            annotation: ProofAnnotation::checked(System::empty()),
             children: BTreeMap::new(),
             status,
-            annotated: true,
         };
         let mut middle = leaf(NodeStatus::Open);
         middle

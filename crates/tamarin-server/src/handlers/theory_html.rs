@@ -362,7 +362,7 @@ fn mark_wrap(
     if !node.annotated {
         return ("<span class=\"hl_superfluous\">", "</span>");
     }
-    match interpret_color(cx.tq, node.proof_status()) {
+    match interpret_color(cx.tq, node.display_status) {
         StepColor::Unmarked => ("", ""),
         StepColor::Green => ("<span class=\"hl_good\">", "</span>"),
         StepColor::Red => ("<span class=\"hl_bad\">", "</span>"),
@@ -535,7 +535,7 @@ fn pp_step(
         // one empty remove-step anchor per node in HS's /overview/help.
         out.push_str(&format!("<span class=\"hl_superfluous\">{label}</span>"));
     } else {
-        let color = interpret_color(cx.tq, node.proof_status());
+        let color = interpret_color(cx.tq, node.display_status);
         let cls = match color {
             StepColor::Unmarked => "sorry-step",
             StepColor::Green => "hl_good",

@@ -2,6 +2,7 @@
 // Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
+use crate::constraint::solver::proof_method::Result as MethodResult;
 use crate::constraint::solver::search::run_proof_search;
 use crate::constraint::system::System;
 use crate::theory::ProofTree;
@@ -78,7 +79,10 @@ fn sorry_leaf_runs_auto_prover_only_for_prove_targets() {
         "a non-target lemma's stored sorry must survive unproved"
     );
     assert!(matches!(kept.method, ProofMethod::Sorry(None)));
-    assert!(kept.annotated, "a stored sorry leaf stays annotated");
+    assert!(
+        kept.annotation.is_checked(),
+        "a stored sorry leaf stays annotated"
+    );
 
     let reason = "kept reason".to_string();
     let explained = check_and_extend(
@@ -114,27 +118,19 @@ fn sorry_with_children_is_replaced_as_one_node() {
 
     let checked = check_and_extend(&ctx, past_initial_system(), &skel, 50).expect("proof replay");
     assert_eq!(checked.method, ProofMethod::Sorry(Some("stale".into())));
-    assert!(checked.annotated);
+    assert!(checked.annotation.is_checked());
     let kept = &checked.children["kept"];
-    assert!(!kept.annotated, "stored children have no checked system");
+    assert!(
+        !kept.annotation.is_checked(),
+        "stored children have no checked system"
+    );
     assert_eq!(
         kept.method,
         ProofMethod::Finished(MethodResult::Contradictory(None))
     );
 }
 
-/// A `by contradiction` leaf on a system with no contradictions
-/// must NOT silently emit Finished(Contradictory).  Per the
-/// walker contract (the contradiction-leaf branch, `finished_leaf`),
-/// when the runtime doesn't agree with the skeleton's `by contradiction`
-/// claim, the walker falls back to `run_proof_search` — the
-/// auto-prover then finds whatever the system actually proves
-/// (or emits Sorry honestly).  Crucially, the walker must NOT
-/// fabricate a Contradictory status.
-///
-/// On a system with no goals and no contradictions, the auto-prover
-/// recognises the system as trivially Solved.  The assertion that matters
-/// here is `status != Contradictory`.
+/// A stale contradiction must be re-proved against the current system.
 #[test]
 fn contradiction_leaf_without_contradiction_falls_back_to_auto() {
     let Some(h) = maude() else { return };
@@ -389,13 +385,7 @@ fn replay_checks_induction_applicability() {
         .is_none());
 }
 
-/// HS check-and-extend, `mergeMapsWith` rightOnly branch
-/// (Theory/Proof.hs): a stored-skeleton case that the
-/// re-executed method does NOT produce is mapped through
-/// `noSystemPrf` over the WHOLE subtree → every node `Nothing` →
-/// `/* unannotated */`.  `parsed_to_unannotated` must therefore set
-/// `annotated == false` on EVERY node of the converted subtree, not
-/// just the root.
+/// A stored-only case and all its descendants are unchecked.
 #[test]
 fn parsed_to_unannotated_marks_whole_subtree() {
     // Skeleton:  simplify → case "a" (by sorry), case "b" (by sorry)
@@ -410,11 +400,14 @@ fn parsed_to_unannotated_marks_whole_subtree() {
             ("b".to_string(), leaf(ProofMethod::Sorry(None))),
         ]),
     };
-    let node = parsed_to_unannotated(&skel, System::empty());
-    assert!(!node.annotated, "root must be unannotated");
+    let node = parsed_to_unannotated(&skel);
+    assert!(!node.annotation.is_checked(), "root must be unannotated");
     assert_eq!(node.children.len(), 2);
     for (name, child) in &node.children {
-        assert!(!child.annotated, "child `{name}` must be unannotated");
+        assert!(
+            !child.annotation.is_checked(),
+            "child `{name}` must be unannotated"
+        );
         assert!(matches!(child.method, ProofMethod::Sorry(None)));
     }
 }

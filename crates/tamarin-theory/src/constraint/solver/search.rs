@@ -24,31 +24,47 @@ use crate::constraint::solver::proof_method::{
 use crate::constraint::system::System;
 use crate::prove::ProveError;
 
+/// A checked step still contributes to the verdict after search releases its system.
+#[derive(Debug, Clone)]
+pub enum ProofAnnotation {
+    Unchecked,
+    Retained(Box<System>),
+    Released,
+}
+
+impl ProofAnnotation {
+    pub fn checked(sys: System) -> Self {
+        Self::Retained(Box::new(sys))
+    }
+
+    pub fn is_checked(&self) -> bool {
+        !matches!(self, Self::Unchecked)
+    }
+
+    pub fn system(&self) -> Option<&System> {
+        match self {
+            Self::Retained(sys) => Some(sys),
+            Self::Released | Self::Unchecked => None,
+        }
+    }
+}
+
 /// One node in the proof tree.
 #[derive(Debug, Clone)]
 pub struct ProofNode {
     pub method: ProofMethod,
-    pub sys: System,
+    pub annotation: ProofAnnotation,
     pub children: BTreeMap<String, ProofNode>,
     pub status: NodeStatus,
-    /// Whether this step carries a valid constraint-system annotation
-    /// (HS `psInfo step == Just sys`).  `false` mirrors HS's
-    /// `Nothing`-annotated steps produced by `checkProof`
-    /// (Theory/Proof.hs) when a stored skeleton step could not be
-    /// replayed; `prettyIncrementalProof` (ProofSkeleton.hs) then
-    /// appends `/* unannotated */`.  Defaults to `true` for every
-    /// freshly-searched / successfully-replayed node.
-    pub annotated: bool,
 }
 
 impl ProofNode {
     fn open(sys: System) -> Self {
         Self {
             method: ProofMethod::Sorry(None),
-            sys,
+            annotation: ProofAnnotation::checked(sys),
             children: BTreeMap::new(),
             status: NodeStatus::Open,
-            annotated: true,
         }
     }
 
@@ -140,11 +156,11 @@ impl ProofStatus {
 }
 
 /// HS `proofStepStatus` (Theory/Proof.hs): the status of ONE node.
-/// A node with no system annotation (`annotated == false`, HS `Nothing`)
+/// An unchecked node (HS `Nothing`)
 /// is `Undetermined` REGARDLESS of its method; otherwise it is keyed on
 /// the node's own method (NOT its aggregated `NodeStatus`).
 fn step_status(node: &ProofNode) -> ProofStatus {
-    ProofStatus::from_step(&node.method, node.annotated)
+    ProofStatus::from_step(&node.method, node.annotation.is_checked())
 }
 
 /// HS `getProofStatus` = `foldMap proofStepStatus` over every node in the
@@ -169,7 +185,7 @@ pub fn proof_status(node: &ProofNode) -> ProofStatus {
 /// ```
 ///
 /// The first equation matches REGARDLESS of children (`_`) and does not
-/// recurse into them.  `Just rootSystem` is RS `annotated == true`: a
+/// recurse into them. A
 /// `Finished(Solved)` step whose annotation was lost (HS `Nothing`,
 /// printed `/* unannotated */`) falls through to the second equation and
 /// is recursed into like any other node.  `M.toList` is ascending
@@ -195,8 +211,10 @@ fn collect_solved_systems_owned(
     path: &mut Vec<String>,
     out: &mut Vec<(Vec<String>, System)>,
 ) {
-    if matches!(node.method, ProofMethod::Finished(MethodResult::Solved)) && node.annotated {
-        out.push((path.clone(), node.sys));
+    if matches!(node.method, ProofMethod::Finished(MethodResult::Solved))
+        && let ProofAnnotation::Retained(sys) = node.annotation
+    {
+        out.push((path.clone(), *sys));
         return;
     }
     for (case, child) in node.children {
@@ -322,7 +340,10 @@ fn visit_forked(
                 &name,
             );
             // HS seeds a fresh counter from the free variables of each case.
-            let avoid_next = crate::constraint::solver::reduction::avoid_fresh_state(&child.sys);
+            let avoid_next = child
+                .annotation
+                .system()
+                .map_or(0, crate::constraint::solver::reduction::avoid_fresh_state);
             let worker_ctx = ctx.for_dfs_case(lease.as_ref(), avoid_next);
             #[cfg(test)]
             super::cancellation_tests::checkpoint(
@@ -538,10 +559,9 @@ pub(crate) fn run_proof_search_at_depth(
     let mut search = Search::new(proof_bound, ranking_depth_offset);
     let mut root = ProofNode {
         method: ProofMethod::Sorry(Some("initial".into())),
-        sys: initial,
+        annotation: ProofAnnotation::checked(initial),
         children: BTreeMap::new(),
         status: NodeStatus::Open,
-        annotated: true,
     };
     match ctx.cut {
         CutStrategy::SeqDfs | CutStrategy::Nothing | CutStrategy::AfterSorry => {
@@ -676,8 +696,8 @@ fn bfs_check_level(
     build: bool,
 ) -> Option<ProofNode> {
     if remaining == 0 {
-        let solved_leaf =
-            node.annotated && matches!(&node.method, ProofMethod::Finished(MethodResult::Solved));
+        let solved_leaf = node.annotation.is_checked()
+            && matches!(&node.method, ProofMethod::Finished(MethodResult::Solved));
         if solved_leaf {
             *found = true;
             return build.then(|| node.clone());
@@ -696,17 +716,16 @@ fn bfs_check_level(
             };
             return build.then(|| ProofNode {
                 method: ProofMethod::Sorry(Some(msg.into())),
-                sys: node.sys.clone(),
+                annotation: node.annotation.clone(),
                 children: BTreeMap::new(),
                 status: NodeStatus::Sorry,
-                annotated: node.annotated,
             });
         }
         return build.then(|| node.clone());
     }
     // Positive-depth traversal must not descend into a stale saved subtree:
     // HS checkLevel preserves proofs whose psInfo is Nothing unchanged.
-    if !node.annotated || node.children.is_empty() {
+    if !node.annotation.is_checked() || node.children.is_empty() {
         return build.then(|| node.clone());
     }
     let mut new_children: BTreeMap<String, ProofNode> = BTreeMap::new();
@@ -723,10 +742,9 @@ fn bfs_check_level(
         let status = rollup_status(&new_children);
         ProofNode {
             method: node.method.clone(),
-            sys: node.sys.clone(),
+            annotation: node.annotation.clone(),
             children: new_children,
             status,
-            annotated: node.annotated,
         }
     })
 }
@@ -901,12 +919,16 @@ fn expand(
     depth: usize,
 ) -> Result<(), ProveError> {
     expand_inner(ctx, search, node, depth)?;
+    finish_expansion(node, ctx.sys_retention)
+}
+
+fn finish_expansion(node: &mut ProofNode, retention: SysRetention) -> Result<(), ProveError> {
     // Boolean terminal checks can suppress a cancelled Maude query.
     check_cancelled()?;
     // Retain systems needed by depth-limited re-expansion or the caller's
     // retention policy; release other completed systems.
-    if drop_sys_after_expand(node, ctx.sys_retention) {
-        node.sys = crate::constraint::system::System::default();
+    if drop_sys_after_expand(node, retention) {
+        node.annotation = ProofAnnotation::Released;
     }
     Ok(())
 }
@@ -974,7 +996,11 @@ fn force_method(
     // Finished steps are recorded, not just SolveGoal dispatch
     // (proof_method.rs). Bound-cut nodes above remain wholly unevaluated,
     // matching HS's `boundProofDepth`.
-    crate::constraint::solver::trace::trace_state(&node.sys);
+    let sys = node
+        .annotation
+        .system()
+        .expect("a search frontier retains its system");
+    crate::constraint::solver::trace::trace_state(sys);
     // HS `findSolved` (cutOnSolvedDFS, Theory/Proof.hs) tests `d >= dMax`
     // before the node's method, so a Solved leaf at the limit is not yet a
     // solution. Deeper rounds can then still select an alphabetically
@@ -986,7 +1012,7 @@ fn force_method(
         return Ok(None);
     }
     // Already terminal.
-    let finished = is_finished(ctx, &node.sys)?;
+    let finished = is_finished(ctx, sys)?;
     if let Some(r) = finished {
         node.status = node_status_of(&r);
         node.method = ProofMethod::Finished(r);
@@ -1000,8 +1026,8 @@ fn force_method(
     // HS `rankProofMethods` → `execMethods` (ProofMethod.hs): the first
     // ranked method that applies.
     let ranking_depth = depth.saturating_add(search.ranking_depth_offset);
-    let Some((method, cases)) = select_open_method(&node.sys, ctx, ranking_depth)? else {
-        if let Some(result) = is_finished_or_stuck(ctx, &node.sys)? {
+    let Some((method, cases)) = select_open_method(sys, ctx, ranking_depth)? else {
+        if let Some(result) = is_finished_or_stuck(ctx, sys)? {
             node.status = node_status_of(&result);
             node.method = ProofMethod::Finished(result);
         } else {
@@ -1054,7 +1080,7 @@ fn cut_sibling_after_sorry(
         node.status = NodeStatus::Sorry;
     }
     node.children.clear();
-    check_cancelled()
+    finish_expansion(node, ctx.sys_retention)
 }
 
 fn expand_inner(
@@ -1289,6 +1315,7 @@ mod tests {
         assert_eq!(cut.method, searched.method);
         assert_eq!(cut.status, searched.status);
         assert!(cut.children.is_empty());
+        assert!(matches!(cut.annotation, ProofAnnotation::Released));
 
         search.proof_bound = 1;
         cut_sibling_after_sorry(&ctx, &mut search, &mut cut, 1).unwrap();
@@ -1580,13 +1607,16 @@ mod tests {
     ) -> ProofNode {
         ProofNode {
             method,
-            sys: tagged_sys(id),
+            annotation: if annotated {
+                ProofAnnotation::checked(tagged_sys(id))
+            } else {
+                ProofAnnotation::Unchecked
+            },
             children: children
                 .into_iter()
                 .map(|(n, c)| (n.to_string(), c))
                 .collect(),
             status: NodeStatus::Solved,
-            annotated,
         }
     }
 
@@ -1651,7 +1681,7 @@ mod tests {
     }
 
     #[test]
-    fn solved_systems_skips_unannotated_solved_node() {
+    fn solved_systems_requires_a_retained_system() {
         // HS's first equation needs `Just sys`; an unannotated
         // (`Nothing`) solved step falls through to the recursive
         // equation, so its own system is dropped but its children are
@@ -1674,7 +1704,13 @@ mod tests {
             Vec::new(),
             false,
         );
+        assert_eq!(proof_status(&bare), ProofStatus::Undetermined);
         assert!(walk(bare).is_empty());
+
+        let mut released = solved(7);
+        released.annotation = ProofAnnotation::Released;
+        assert_eq!(proof_status(&released), ProofStatus::TraceFound);
+        assert!(walk(released).is_empty());
     }
 
     #[test]
