@@ -58,9 +58,9 @@ fn variants_stdout_matches_the_oracle_bytes() {
             .unwrap_or_else(|e| panic!("maude at {mp} failed to start: {e:?}"))
     };
     let dh = start(tamarin_term::maude_sig::dh_maude_sig());
-    let dh_s = pretty_intruder_variants(&dh_intruder_rules(&dh));
+    let dh_s = pretty_intruder_variants(&dh_intruder_rules(&dh).unwrap());
     let bp = start(tamarin_term::maude_sig::bp_maude_sig());
-    let bp_s = pretty_intruder_variants(&bp_intruder_rules(&bp));
+    let bp_s = pretty_intruder_variants(&bp_intruder_rules(&bp).unwrap());
 
     let got = format!("{dh_s}{bp_s}\n");
     let want = expected();

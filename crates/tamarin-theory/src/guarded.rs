@@ -245,44 +245,49 @@ pub fn gall(vars: Vec<(String, LSort)>, guards: Vec<Atom<BLNTerm>>, body: Guarde
 ///   True and keep only the unknown ones, then recurse on the body.
 /// - Guarded quantifiers with bound vars are left intact — the body
 ///   gets simplified once the quantifier is gone (matches Haskell).
-pub fn simplify_guarded_with(
+///
+/// A valuation error aborts the simplification.
+pub fn simplify_guarded_with<E>(
     fm: &Guarded,
-    valuation: &dyn Fn(&Atom<LNTerm>) -> Option<bool>,
-) -> Guarded {
+    valuation: &dyn Fn(&Atom<LNTerm>) -> Result<Option<bool>, E>,
+) -> Result<Guarded, E> {
     // HS `simplifyGuardedOrReturn` calls `valuation =<< unbindAtom ato`
     // (Guarded.hs), which is `Nothing` whenever any `Bound` leaf is
     // present.
-    let eval = |a: &Atom<BLNTerm>| -> Option<bool> { unbind_atom(a).and_then(|la| valuation(&la)) };
-    match fm {
-        Guarded::Atom(a) => match eval(a) {
+    let eval = |a: &Atom<BLNTerm>| -> Result<Option<bool>, E> {
+        match unbind_atom(a) {
+            Some(la) => valuation(&la),
+            None => Ok(None),
+        }
+    };
+    Ok(match fm {
+        Guarded::Atom(a) => match eval(a)? {
             Some(true) => gtrue(),
             Some(false) => gfalse(),
             None => fm.clone(),
         },
-        Guarded::Disj(items) => {
-            let simplified: Vec<_> = items
+        Guarded::Disj(items) => gdisj(
+            items
                 .iter()
                 .map(|g| simplify_guarded_with(g, valuation))
-                .collect();
-            gdisj(simplified)
-        }
-        Guarded::Conj(items) => {
-            let simplified: Vec<_> = items
+                .collect::<Result<Vec<_>, E>>()?,
+        ),
+        Guarded::Conj(items) => gconj(
+            items
                 .iter()
                 .map(|g| simplify_guarded_with(g, valuation))
-                .collect();
-            gconj(simplified)
-        }
+                .collect::<Result<Vec<_>, E>>()?,
+        ),
         Guarded::GGuarded {
             qua: Quantifier::All,
             vars,
             guards,
             body,
         } if vars.is_empty() => {
-            let evals: Vec<Option<bool>> = guards.iter().map(eval).collect();
+            let evals: Vec<Option<bool>> = guards.iter().map(eval).collect::<Result<_, E>>()?;
             // Any False guard → universal vacuously holds.
             if evals.iter().any(|v| v == &Some(false)) {
-                return gtrue();
+                return Ok(gtrue());
             }
             // Keep only the Unknown guards — True guards are vacuous.
             let kept: Vec<Atom<BLNTerm>> = guards
@@ -291,7 +296,7 @@ pub fn simplify_guarded_with(
                 .filter(|(_, v)| v.is_none())
                 .map(|(a, _)| a.clone())
                 .collect();
-            let body_s = simplify_guarded_with(body, valuation);
+            let body_s = simplify_guarded_with(body, valuation)?;
             // HS-faithful: `simp` builds the universal via `gall [] (...) (simp
             // gf)` (Guarded.hs).  `gall` collapses to the body when the
             // kept guards are empty AND collapses the whole universal to
@@ -304,7 +309,7 @@ pub fn simplify_guarded_with(
         // Quantifiers with bound vars stay as-is — Haskell delays
         // simplification past the binder.
         Guarded::GGuarded { .. } => fm.clone(),
-    }
+    })
 }
 
 // =============================================================================

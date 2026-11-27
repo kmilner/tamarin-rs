@@ -660,7 +660,7 @@ fn loop_breakers_key_same_named_refined_rules_apart() {
             vec![fact("A", pub_term("2"))],
         ),
     ];
-    annotate_loop_breakers(&mut rules.iter_mut().collect::<Vec<_>>(), &h);
+    annotate_loop_breakers(&mut rules.iter_mut().collect::<Vec<_>>(), &h).unwrap();
     assert!(
         rules.iter().all(|r| r.loop_breakers.is_empty()),
         "acyclic per-item graph must yield no breakers; got {:?}",
@@ -687,7 +687,7 @@ fn loop_breakers_key_same_named_refined_rules_apart() {
             vec![fact("B", pub_term("1"))],
         ),
     ];
-    annotate_loop_breakers(&mut rules.iter_mut().collect::<Vec<_>>(), &h);
+    annotate_loop_breakers(&mut rules.iter_mut().collect::<Vec<_>>(), &h).unwrap();
     let breakers: Vec<&[PremIdx]> = rules.iter().map(|r| r.loop_breakers.as_slice()).collect();
     assert_eq!(
         breakers,

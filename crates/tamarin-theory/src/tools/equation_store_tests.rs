@@ -276,10 +276,10 @@ fn simp_is_idempotent_on_a_consistent_store() {
         LNSubstVFresh::from_list(vec![(x, con("a"))]),
         LNSubstVFresh::from_list(vec![(x, con("b"))]),
     ]);
-    let once = store.simp(&maude, |_, _| false).unwrap();
+    let once = store.simp(&maude, |_, _| Ok(false)).unwrap();
     assert!(!once.is_false());
     assert_eq!(once.split_size(id), Some(2), "the disjunction survives");
-    let twice = once.clone().simp(&maude, |_, _| false).unwrap();
+    let twice = once.clone().simp(&maude, |_, _| Ok(false)).unwrap();
     assert_eq!(twice, once, "simp must already be at its fixpoint");
 }
 
@@ -666,7 +666,7 @@ fn assert_simp_minimize_matches_pairwise(substs_per_disj: Vec<Vec<LNSubstVFresh>
     }
     let mut expected = store.clone();
     let expected_changed = simp_minimize_pairwise(&mut expected, is_contr);
-    let changed = store.simp_minimize(is_contr);
+    let changed = store.simp_minimize(|s| Ok::<_, ()>(is_contr(s))).unwrap();
     assert_eq!(changed, expected_changed);
     assert_eq!(store.conj.len(), expected.conj.len());
     for (d, e) in store.conj.iter().zip(&expected.conj) {

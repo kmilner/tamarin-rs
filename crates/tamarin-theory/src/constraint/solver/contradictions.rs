@@ -103,7 +103,7 @@ fn collect_contradictions(
         found!(Contradiction::SubtermCyclic);
     }
     // 3. NonNormalTerms.
-    if has_non_normal_terms(ctxt, sys) {
+    if has_non_normal_terms(ctxt, sys)? {
         found!(Contradiction::NonNormalTerms);
     }
     // 4. ForbiddenKD.
@@ -157,13 +157,18 @@ fn collect_contradictions(
 
 /// HS `hasNonNormalTerms` (Contradictions.hs): some candidate subterm of a
 /// node fails `nf'` (`nfViaHaskell`, Norm.hs), which needs Maude only to
-/// match `[AC]` subterm-rule left-hand sides.
-fn has_non_normal_terms(ctx: &ProofContext, sys: &System) -> bool {
+/// match `[AC]` subterm-rule left-hand sides.  HS runs that match purely,
+/// so a failed backend is an error, never "in normal form".
+fn has_non_normal_terms(
+    ctx: &ProofContext,
+    sys: &System,
+) -> Result<bool, crate::prove::ProveError> {
     // Without reducible symbols every term is in normal form.
     let sig = ctx.maude.maude_sig();
     if sig.reducible_fun_syms.is_empty() {
-        return false;
+        return Ok(false);
     }
+    let failed = |error| crate::prove::ProveError::maude("normal-form check", error);
     let irreducible = &sig.irreducible_fun_syms_fast;
     let mut memo = NfMemo::default();
 
@@ -175,18 +180,18 @@ fn has_non_normal_terms(ctx: &ProofContext, sys: &System) -> bool {
             .chain(&rule.actions)
         {
             for t in f.terms.iter() {
-                if any_non_nf(&ctx.maude, &sig, irreducible, &mut memo, t) {
-                    return true;
+                if any_non_nf(&ctx.maude, &sig, irreducible, &mut memo, t).map_err(failed)? {
+                    return Ok(true);
                 }
             }
         }
         for t in &rule.new_vars {
-            if any_non_nf(&ctx.maude, &sig, irreducible, &mut memo, t) {
-                return true;
+            if any_non_nf(&ctx.maude, &sig, irreducible, &mut memo, t).map_err(failed)? {
+                return Ok(true);
             }
         }
     }
-    false
+    Ok(false)
 }
 
 /// Candidate-subterm → NF verdict, for ONE [`has_non_normal_terms`] call.
@@ -214,13 +219,13 @@ fn nf_memoized(
     maude: &tamarin_term::maude_proc::MaudeHandle,
     memo: &mut NfMemo,
     t: &tamarin_term::lterm::LNTerm,
-) -> bool {
+) -> Result<bool, tamarin_term::maude_proc::MaudeError> {
     if let Some(&hit) = memo.get(t) {
-        return hit;
+        return Ok(hit);
     }
-    let is_nf = tamarin_term::norm::nf_via_haskell_maude(msig, maude, t);
+    let is_nf = tamarin_term::norm::nf_via_haskell_maude(msig, maude, t)?;
     memo.insert(t.clone(), is_nf);
-    is_nf
+    Ok(is_nf)
 }
 
 /// Short-circuiting structural walk: the moment a candidate subterm — a
@@ -240,18 +245,23 @@ fn any_non_nf(
     irreducible: &tamarin_utils::FastSet<tamarin_term::function_symbols::FunSym>,
     memo: &mut NfMemo,
     t: &tamarin_term::lterm::LNTerm,
-) -> bool {
+) -> Result<bool, tamarin_term::maude_proc::MaudeError> {
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
     match t {
-        Term::Lit(Lit::Con(_)) => false,
+        Term::Lit(Lit::Con(_)) => Ok(false),
         // Bare variables are always in normal form (`go_nf` returns true
         // for every `Lit`), so skip the NF-check call.
-        Term::Lit(Lit::Var(_)) => false,
-        Term::App(sym, args) if irreducible.contains(sym) => args
-            .iter()
-            .any(|a| any_non_nf(maude, msig, irreducible, memo, a)),
-        _ => !nf_memoized(msig, maude, memo, t),
+        Term::Lit(Lit::Var(_)) => Ok(false),
+        Term::App(sym, args) if irreducible.contains(sym) => {
+            for a in args.iter() {
+                if any_non_nf(maude, msig, irreducible, memo, a)? {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        }
+        _ => Ok(!nf_memoized(msig, maude, memo, t)?),
     }
 }
 
@@ -1648,7 +1658,7 @@ impl SubstNfChecker {
         &self,
         fsubst: &crate::tools::equation_store::LNSubst,
         vfresh_subst: &crate::tools::equation_store::LNSubstVFresh,
-    ) -> bool {
+    ) -> Result<bool, tamarin_term::maude_proc::MaudeError> {
         use tamarin_term::subst::apply_vterm;
         use tamarin_term::vterm::vars_vterm;
         // Force the `maybeNonNormalTerms` walk lazily over the pinned node
@@ -1664,7 +1674,7 @@ impl SubstNfChecker {
             })
         };
         if base.is_empty() {
-            return false;
+            return Ok(false);
         }
         let mut applied = self.applied.borrow_mut();
         let stale = match applied.as_ref() {
@@ -1734,12 +1744,12 @@ impl SubstNfChecker {
             // arguments (multiset / mult / xor / nat-plus), so
             // `mult(tid, x)` and `mult(x, tid)` are different `Eq`
             // representations but both in NF.
-            let is_nf = tamarin_term::norm::nf_via_haskell_maude(&sig, &self.maude, &t_prime);
+            let is_nf = tamarin_term::norm::nf_via_haskell_maude(&sig, &self.maude, &t_prime)?;
             if !is_nf {
-                return true;
+                return Ok(true);
             }
         }
-        false
+        Ok(false)
     }
 }
 

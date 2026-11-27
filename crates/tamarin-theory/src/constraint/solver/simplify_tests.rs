@@ -1070,6 +1070,7 @@ fn partial_atom_valuation_last_returns_none_when_successor_not_in_trace() {
             &subterms,
             &ProtoAtom::Last(tamarin_term::vterm::var_term(mkvar_l("n", 0))),
         )
+        .unwrap()
     };
     assert_eq!(
         last_n(&sys),
@@ -1138,7 +1139,8 @@ fn partial_atom_valuation_last_follows_unsolved_chains() {
         &node_rule_map,
         &subterms,
         &crate::atom::ProtoAtom::Last(tamarin_term::vterm::var_term(n)),
-    );
+    )
+    .unwrap();
     assert_eq!(last_n, Some(false));
 }
 
@@ -1168,6 +1170,7 @@ fn partial_atom_valuation_eq_unifies_before_reading_node_ids() {
             &subterms,
             &crate::atom::ProtoAtom::EqE(var_term(x), var_term(y)),
         )
+        .unwrap()
     };
     let a = LVar::new("A", LSort::Pub, 0);
     let b = LVar::new("b", LSort::Fresh, 0);

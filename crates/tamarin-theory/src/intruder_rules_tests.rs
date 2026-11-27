@@ -318,15 +318,23 @@ fn intruder_rule_subsumption_table() {
     for (i, row) in rows.into_iter().enumerate() {
         match row {
             Equal(r1, r2, want) => {
-                assert_eq!(equal_rule_up_to_renaming(&maude, &r1, &r2), want, "row {i}")
+                assert_eq!(
+                    equal_rule_up_to_renaming(&maude, &r1, &r2).unwrap(),
+                    want,
+                    "row {i}"
+                )
             }
             Subset(r1, r2, want) => assert_eq!(
-                equal_subset_rule_up_to_renaming(&maude, &r1, &r2),
+                equal_subset_rule_up_to_renaming(&maude, &r1, &r2).unwrap(),
                 want,
                 "row {i}"
             ),
             Minimize(rules, want) => {
-                assert_eq!(minimize_intruder_rules(&maude, rules), want, "row {i}")
+                assert_eq!(
+                    minimize_intruder_rules(&maude, rules).unwrap(),
+                    want,
+                    "row {i}"
+                )
             }
         }
     }

@@ -669,7 +669,7 @@ impl<'ctx> Reduction<'ctx> {
             let store = std::sync::Arc::unwrap_or_clone(self.sys.take_eq_store());
             self.sys.invalidate_max_var_idx_cache();
             self.sys
-                .set_eq_store(std::sync::Arc::new(store.simp(&maude, |_, _| false)?));
+                .set_eq_store(std::sync::Arc::new(store.simp(&maude, |_, _| Ok(false))?));
             // eq_store simp can rewrite/drop subst entries → max may lower.
             self.sys.invalidate_max_var_idx_cache();
             // The orphaned SplitG goal stays until the next
@@ -2092,7 +2092,7 @@ fn simp_store(
 ) -> Result<crate::tools::equation_store::EquationStore, crate::prove::ProveError> {
     Ok(match checker {
         Some(checker) => store.simp(maude, |fs, vfs| checker.check(fs, vfs))?,
-        None => store.simp(maude, |_, _| false)?,
+        None => store.simp(maude, |_, _| Ok(false))?,
     })
 }
 

@@ -432,10 +432,16 @@ fn run_variants(args: &Args) -> Result<i32, RunError> {
     };
     // Two separate handles, as HS: `dhIntruderRules False` on `dhMaudeSig`,
     // then `bpIntruderRules False` on `bpMaudeSig`, generated at runtime.
+    // HS computes the variants purely, so a Maude failure aborts the mode.
+    let generation_failed = |e: tamarin_term::maude_proc::MaudeError| {
+        RunError::Regular(format!("intruder variant generation failed: {e}"))
+    };
     let maude = start_maude(tamarin_term::maude_sig::dh_maude_sig())?;
-    let dh_rules = tamarin_theory::intruder_rules::dh_intruder_rules(&maude);
+    let dh_rules =
+        tamarin_theory::intruder_rules::dh_intruder_rules(&maude).map_err(generation_failed)?;
     let bp_maude = start_maude(tamarin_term::maude_sig::bp_maude_sig())?;
-    let bp_rules = tamarin_theory::intruder_rules::bp_intruder_rules(&bp_maude);
+    let bp_rules =
+        tamarin_theory::intruder_rules::bp_intruder_rules(&bp_maude).map_err(generation_failed)?;
     // HS `putStrLn (dhS ++ bpS)` where each block is `renderDoc .
     // prettyIntruderVariants` (Theory/Model/Rule.hs):
     // blank-line-separated `rule (modulo AC) NAME:` rules with HughesPJ body

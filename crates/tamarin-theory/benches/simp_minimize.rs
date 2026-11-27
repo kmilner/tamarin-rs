@@ -62,7 +62,11 @@ fn bench_simp_minimize(c: &mut Criterion) {
     for n in SIZES {
         let mut store = store(n);
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
-            b.iter(|| assert!(!black_box(&mut store).simp_minimize(|_| false)))
+            b.iter(|| {
+                assert!(!black_box(&mut store)
+                    .simp_minimize(|_| Ok::<_, ()>(false))
+                    .unwrap())
+            })
         });
     }
     group.finish();

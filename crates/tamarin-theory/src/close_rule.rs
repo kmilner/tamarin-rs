@@ -103,7 +103,8 @@ pub fn check_close_intr_rule(
         &maude.maude_sig(),
         maude,
         initial,
-    );
+    )
+    .map_err(|error| crate::prove::ProveError::maude("intruder rules", error))?;
     if !deduction_chain_check {
         return Ok(NdcCheckedCache {
             cache: assembled,

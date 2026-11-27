@@ -1573,6 +1573,12 @@ fn cancellation_fails_cleanly_and_a_retry_matches_a_clean_run() {
 /// A context whose signature has a user AC symbol `xorr` with the
 /// non-subterm rule `xorr(x, x) = zeroo`.
 fn xorr_contradiction_ctx(path: &str) -> ProofContext {
+    ProofContext::new(MaudeHandle::start(path, xorr_maude_sig()).unwrap(), vec![])
+}
+
+/// The pair signature extended by a user AC symbol `xorr` with the
+/// non-subterm rule `xorr(x, x) = zeroo`.
+fn xorr_maude_sig() -> MaudeSig {
     use tamarin_term::builtin::msg_var;
     use tamarin_term::function_symbols::{Constructability, NoEqSym, Privacy};
     use tamarin_term::rewriting::RRule;
@@ -1594,7 +1600,7 @@ fn xorr_contradiction_ctx(path: &str) -> ProofContext {
     );
     sig.st_rules
         .insert(tamarin_term::subterm_rule::rrule_to_ctxt_st_rule(&rule).unwrap());
-    ProofContext::new(MaudeHandle::start(path, sig.refresh()).unwrap(), vec![])
+    sig.refresh()
 }
 
 fn xorr_sym() -> tamarin_term::function_symbols::AcFctSym {
@@ -1682,6 +1688,19 @@ impl Backend {
         h
     }
 
+    /// A context whose solver process is [`Backend::maude`].  It is built
+    /// on a live process, since building assembles the intruder rules
+    /// through Maude.
+    fn context(
+        &self,
+        sig: MaudeSig,
+        options: crate::constraint::solver::context::ProofContextOptions,
+    ) -> ProofContext {
+        let mut ctx = ProofContext::with_options(self.healthy(sig.clone()), Vec::new(), options);
+        ctx.maude = self.maude(sig);
+        ctx
+    }
+
     /// A process that stays healthy in both modes.
     fn healthy(&self, sig: MaudeSig) -> MaudeHandle {
         MaudeHandle::start(&self.path, sig).expect("start maude")
@@ -1724,6 +1743,32 @@ fn backend_failures_surface_as_errors() {
             "order nodes after a fresh supplier",
             Failure::Maude,
             backend_fresh_ordering,
+        ),
+        (
+            "order injective-fact instances",
+            Failure::Maude,
+            backend_injective_facts,
+        ),
+        (
+            "evaluate formula atoms",
+            Failure::Maude,
+            backend_formula_atoms,
+        ),
+        (
+            "annotate loop breakers",
+            Failure::Maude,
+            backend_loop_breakers,
+        ),
+        ("check terms are in normal form", Failure::Maude, |b| {
+            backend_normal_forms(b, false)
+        }),
+        ("filter non-normal substitutions", Failure::Maude, |b| {
+            backend_normal_forms(b, true)
+        }),
+        (
+            "assemble intruder rules",
+            Failure::Maude,
+            backend_intruder_rules,
         ),
         (
             "materialise sources for a smart oracle",
@@ -1777,9 +1822,9 @@ fn backend_proof_method(backend: &Backend, action: bool) -> Result<(), ProveErro
     use tamarin_term::term::Term;
     use tamarin_term::vterm::var_term;
 
-    let ctx = ProofContext::new(
-        backend.maude(tamarin_term::maude_sig::mset_maude_sig()),
-        Vec::new(),
+    let ctx = backend.context(
+        tamarin_term::maude_sig::mset_maude_sig(),
+        Default::default(),
     );
     let union = |a, b| {
         Term::App(
@@ -1884,10 +1929,7 @@ fn backend_fresh_ordering(backend: &Backend) -> Result<(), ProveError> {
     use tamarin_term::term::Term;
     use tamarin_term::vterm::Lit;
 
-    let ctx = ProofContext::new(
-        backend.maude(tamarin_term::maude_sig::dh_maude_sig()),
-        Vec::new(),
-    );
+    let ctx = backend.context(tamarin_term::maude_sig::dh_maude_sig(), Default::default());
     let term = |name, sort| Term::Lit(Lit::Var(LVar::new(name, sort, 0)));
     let fresh = term("x", LSort::Fresh);
     let message = tamarin_term::builtin::mult(term("m", LSort::Msg), term("n", LSort::Msg));
@@ -1935,6 +1977,191 @@ fn backend_fresh_ordering(backend: &Backend) -> Result<(), ProveError> {
     let mut red = Reduction::new(&ctx, sys);
     let outcome = crate::constraint::solver::simplify::enforce_fresh_ordering_pass(&mut red)?;
     assert!(matches!(outcome, SystemOutcome::Linear));
+    Ok(())
+}
+
+/// `x ∪ y` over two message variables, an AC term only Maude unifies.
+fn msg_union(x: &'static str, y: &'static str) -> tamarin_term::lterm::LNTerm {
+    use tamarin_term::function_symbols::{AcSym, FunSym};
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::vterm::var_term;
+    tamarin_term::term::Term::App(
+        FunSym::Ac(AcSym::Union),
+        vec![
+            var_term(LVar::new(x, LSort::Msg, 0)),
+            var_term(LVar::new(y, LSort::Msg, 0)),
+        ]
+        .into(),
+    )
+}
+
+/// A protocol-rule instance named `name` with no actions.
+fn backend_rule(
+    name: &'static str,
+    premises: Vec<crate::fact::LNFact>,
+    conclusions: Vec<crate::fact::LNFact>,
+) -> crate::rule::RuleACInst {
+    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo};
+    Rule::new(
+        RuleInfo::Proto(ProtoRuleACInstInfo {
+            name: ProtoRuleName::Stand(name),
+            attributes: RuleAttributes::empty(),
+            loop_breakers: Vec::new(),
+        }),
+        premises,
+        conclusions,
+        Vec::new(),
+    )
+}
+
+/// The injective-fact ordering asks whether the supplier of an injective
+/// `St` fact and an earlier node holding the same fact are instances of one
+/// rule that unify.  Healthy, they do, so no ordering is added.
+fn backend_injective_facts(backend: &Backend) -> Result<(), ProveError> {
+    use crate::constraint::constraints::{Edge, LessAtom, Reason};
+    use crate::constraint::solver::reduction::Reduction;
+    use crate::constraint::system::System;
+    use crate::fact::{proto_fact, Multiplicity};
+    use crate::rule::{ConcIdx, PremIdx};
+    use tamarin_term::lterm::{LSort, LVar};
+
+    let state = proto_fact(
+        Multiplicity::Linear,
+        "St",
+        vec![tamarin_term::builtin::msg_var("t", 0)],
+    );
+    let ctx = backend.context(
+        tamarin_term::maude_sig::mset_maude_sig(),
+        crate::constraint::solver::context::ProofContextOptions {
+            forced_injective_facts: [state.tag].into(),
+            ..Default::default()
+        },
+    );
+    let input = |term| proto_fact(Multiplicity::Linear, "A", vec![term]);
+    let supplier = LVar::new("supplier", LSort::Node, 0);
+    let earlier = LVar::new("earlier", LSort::Node, 0);
+    let consumer = LVar::new("consumer", LSort::Node, 0);
+    let mut sys = System::empty();
+    sys.add_node(
+        supplier,
+        backend_rule("R", vec![input(msg_union("a", "b"))], vec![state.clone()]),
+    );
+    sys.add_node(
+        earlier,
+        backend_rule("R", vec![input(msg_union("x", "y"))], vec![state.clone()]),
+    );
+    sys.add_node(consumer, backend_rule("Use", vec![state], Vec::new()));
+    sys.add_edge(Edge {
+        src: (supplier, ConcIdx(0)),
+        tgt: (consumer, PremIdx(0)),
+    });
+    sys.add_less(LessAtom::new(earlier, consumer, Reason::Formula));
+    let mut red = Reduction::new(&ctx, sys);
+    let before = red.sys.clone();
+    crate::constraint::solver::simplify::add_non_injective_fact_instances(&mut red)?;
+    assert!(red.sys == before, "unifiable instances are not ordered");
+    Ok(())
+}
+
+/// Formula-atom evaluation asks whether the two sides of each equality
+/// unify.  Healthy, both AC equalities do, so the disjunction is unknown
+/// and stays.
+fn backend_formula_atoms(backend: &Backend) -> Result<(), ProveError> {
+    use crate::atom::ProtoAtom;
+    use crate::constraint::solver::reduction::{Reduction, SystemOutcome};
+    use crate::constraint::system::System;
+    use crate::guarded::{gdisj, lift_free_atom, Guarded};
+
+    let ctx = backend.context(
+        tamarin_term::maude_sig::mset_maude_sig(),
+        Default::default(),
+    );
+    let eq = |l, r| Guarded::Atom(lift_free_atom(&ProtoAtom::EqE(l, r)));
+    let mut sys = System::empty();
+    sys.insert_formula(gdisj(vec![
+        eq(msg_union("a", "b"), msg_union("x", "y")),
+        eq(msg_union("a", "x"), msg_union("b", "y")),
+    ]));
+    let mut red = Reduction::new(&ctx, sys);
+    let outcome = crate::constraint::solver::simplify::eval_formula_atoms_pass(&mut red)?;
+    assert!(matches!(outcome, SystemOutcome::Linear));
+    Ok(())
+}
+
+/// Loop-breaker annotation draws an edge from a conclusion to a premise
+/// only when the two facts unify.  Healthy, `A(a ∪ b)` feeds `A(x ∪ y)`
+/// and the acyclic pair gets no breaker.
+fn backend_loop_breakers(backend: &Backend) -> Result<(), ProveError> {
+    use crate::fact::{proto_fact, Multiplicity};
+    use crate::rule::{ProtoRuleEInfo, Rule};
+    use crate::theory::OpenProtoRule;
+
+    let h = backend.maude(tamarin_term::maude_sig::mset_maude_sig());
+    let fact = |term| proto_fact(Multiplicity::Linear, "A", vec![term]);
+    let rule = |name, premises, conclusions| {
+        OpenProtoRule::new(Rule::new(
+            ProtoRuleEInfo::standard(name),
+            premises,
+            conclusions,
+            Vec::new(),
+        ))
+    };
+    let mut rules = [
+        rule("Send", Vec::new(), vec![fact(msg_union("a", "b"))]),
+        rule("Recv", vec![fact(msg_union("x", "y"))], Vec::new()),
+    ];
+    crate::constraint::solver::context::annotate_loop_breakers(
+        &mut rules.iter_mut().collect::<Vec<_>>(),
+        &h,
+    )
+    .map_err(|error| ProveError::maude("loop breakers", error))?;
+    assert!(rules.iter().all(|r| r.loop_breakers.is_empty()));
+    Ok(())
+}
+
+/// Under `xorr(x, x) = zeroo`, whether `xorr(~k, ~k)` is in normal form
+/// (in the system, or once a substitution renames `~k`) takes a Maude AC
+/// match.  Healthy, the term is found reducible.
+fn backend_normal_forms(backend: &Backend, subst: bool) -> Result<(), ProveError> {
+    use crate::tools::equation_store::{LNSubst, LNSubstVFresh};
+    use tamarin_term::lterm::{LSort, LVar};
+    use tamarin_term::vterm::var_term;
+
+    let ctx = backend.context(xorr_maude_sig(), Default::default());
+    let sys = xorr_contradiction_system();
+    let non_normal = if subst {
+        let renaming = LNSubstVFresh::from_list([(
+            LVar::new("k", LSort::Fresh, 0),
+            var_term(LVar::new("m", LSort::Fresh, 0)),
+        )]);
+        crate::constraint::solver::contradictions::SubstNfChecker::new(&ctx.maude, &sys)
+            .check(&LNSubst::empty(), &renaming)
+            .map_err(|error| ProveError::maude("normal forms", error))?
+    } else {
+        crate::constraint::solver::contradictions::contradictions(&ctx, &sys)?
+            .contains(&crate::constraint::solver::contradictions::Contradiction::NonNormalTerms)
+    };
+    assert!(non_normal);
+    Ok(())
+}
+
+/// Assembling the intruder rules computes the variants of the destructor
+/// of `g(f(x)) = x`.  Healthy, the cache is built.
+fn backend_intruder_rules(backend: &Backend) -> Result<(), ProveError> {
+    let theory = elaborated(
+        &tamarin_parser::parse_theory(
+            "theory T begin\n\
+             functions: f/1, g/1\n\
+             equations: g(f(x)) = x\n\
+             end",
+            &[],
+        )
+        .unwrap(),
+    );
+    let h = backend.maude(theory.signature);
+    let checked =
+        crate::close_rule::check_close_intr_rule(&h, None, false, &[], Default::default())?;
+    assert!(!checked.cache.is_empty());
     Ok(())
 }
 
@@ -2090,7 +2317,8 @@ fn backend_ndc_check(backend: &Backend) -> Result<(), ProveError> {
         &sig,
         &backend.healthy(sig.clone()),
         &[],
-    );
+    )
+    .unwrap();
     let h = backend.maude(sig);
     let counter = h.fresh_counter_peek();
     let result = crate::close_rule::pretty_ndc_check(&h, None, rules, Default::default());

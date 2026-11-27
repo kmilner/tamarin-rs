@@ -597,8 +597,8 @@ impl ProofContext {
         sig: &tamarin_term::maude_sig::MaudeSig,
         maude: &MaudeHandle,
         initial: &[IntrRuleAC],
-    ) -> Vec<IntrRuleAC> {
-        let mut intruder_rules = crate::intruder_rules::subterm_constructor_rules(maude, sig);
+    ) -> Result<Vec<IntrRuleAC>, tamarin_term::maude_proc::MaudeError> {
+        let mut intruder_rules = crate::intruder_rules::subterm_constructor_rules(maude, sig)?;
         intruder_rules.extend(crate::intruder_rules::special_intruder_rules());
         // Union construction and decomposition supply multiset KU sources
         // and KD chain extensions (`multisetIntruderRules`, IntruderRules.hs).
@@ -624,11 +624,11 @@ impl ProofContext {
         intruder_rules.extend(crate::intruder_rules::destruction_rules_ac(
             maude,
             &sig.ac_user_fun_syms(),
-        ));
+        )?);
         intruder_rules.extend(crate::intruder_rules::destruction_rules_no_eq(
             maude,
             &sig.no_eq_fun_syms(),
-        ));
+        )?);
         // DH / BP intruder variants — port of HS
         // `Main.TheoryLoader.addMessageDeductionRuleVariants`
         // (src/Main/TheoryLoader.hs):
@@ -678,7 +678,7 @@ impl ProofContext {
                 assembled.push(rule);
             }
         }
-        assembled
+        Ok(assembled)
     }
 
     /// Debug dump of the context's final intruder-rule cache, gated by
@@ -840,7 +840,7 @@ impl ProofContext {
         let intruder_rules: IntrRuleCache = match intr_override {
             Some(cache) => cache,
             None => IntrRuleCache::from(Self::ndc_check_cache_order(
-                Self::assemble_intruder_rules(&sig, &maude, &[]),
+                Self::assemble_intruder_rules(&sig, &maude, &[])?,
             )),
         };
         Self::dump_intruder_rules(&intruder_rules);
@@ -874,7 +874,7 @@ impl ProofContext {
                 .collect();
         }
         if !loop_breakers_prepared || has_explicit_variants {
-            annotate_loop_breakers(&mut rules.iter_mut().collect::<Vec<_>>(), &maude);
+            annotate_loop_breakers(&mut rules.iter_mut().collect::<Vec<_>>(), &maude)?;
         }
         for rule in &mut rules {
             crate::tools::rule_variants::prepare_open_rule_variant(rule, &maude)?;
@@ -965,7 +965,7 @@ impl ProofContext {
 pub(crate) fn annotate_loop_breakers(
     rules: &mut [&mut OpenProtoRule],
     maude: &tamarin_term::maude_proc::MaudeHandle,
-) {
+) -> Result<(), tamarin_term::maude_proc::MaudeError> {
     use crate::rule::PremIdx;
 
     // HS keys the relation nodes by the WHOLE closed theory item under its
@@ -1123,23 +1123,28 @@ pub(crate) fn annotate_loop_breakers(
                 // i.e. iterate the VARIANT INSTANCES of both the premise and
                 // each conclusion, rename the conclusion away from the
                 // premise's frees, and check Maude AC-unifiability.
-                let conc_unifies = ru_from_ac.conclusions.iter().enumerate().any(|(ci, c0)| {
+                // HS runs the unifier purely, so a failed backend aborts
+                // the pass instead of dropping the edge.
+                let mut conc_unifies = false;
+                'concs: for (ci, c0) in ru_from_ac.conclusions.iter().enumerate() {
                     if c0.tag != prem_fa.tag {
-                        return false;
+                        continue;
                     }
                     let prem_insts = prem_insts_by_rule[i_to][to_prem_idx.0]
                         .get_or_init(|| instances(i_to, prem_fa));
                     let conc_insts =
                         conc_insts_by_rule[i_from][ci].get_or_init(|| instances(i_from, c0));
-                    conc_insts.iter().any(|conc| {
-                        prem_insts.iter().any(|prem| {
+                    for conc in conc_insts {
+                        for prem in prem_insts {
                             let mut fresh = tamarin_term::lterm::avoid(prem);
                             let conc_fresh = tamarin_term::lterm::rename(conc.clone(), &mut fresh);
-                            crate::rule::unifiable_ln_facts(maude, &conc_fresh, prem)
-                                .unwrap_or(false)
-                        })
-                    })
-                });
+                            if crate::rule::unifiable_ln_facts(maude, &conc_fresh, prem)? {
+                                conc_unifies = true;
+                                break 'concs;
+                            }
+                        }
+                    }
+                }
                 if !conc_unifies {
                     continue;
                 }
@@ -1162,6 +1167,7 @@ pub(crate) fn annotate_loop_breakers(
             .map(|(_, p)| *p)
             .collect();
     }
+    Ok(())
 }
 
 /// Run [`annotate_loop_breakers`] over a theory's rules, in place and in
@@ -1177,7 +1183,7 @@ pub(crate) fn annotate_loop_breakers(
 pub fn annotate_theory_loop_breakers(
     theory: &mut crate::theory::Theory,
     maude: &tamarin_term::maude_proc::MaudeHandle,
-) {
+) -> Result<(), tamarin_term::maude_proc::MaudeError> {
     use crate::theory::TheoryItem;
     let mut rules: Vec<&mut OpenProtoRule> = theory
         .items
@@ -1187,7 +1193,7 @@ pub fn annotate_theory_loop_breakers(
             _ => None,
         })
         .collect();
-    annotate_loop_breakers(&mut rules, maude);
+    annotate_loop_breakers(&mut rules, maude)
 }
 
 #[cfg(test)]

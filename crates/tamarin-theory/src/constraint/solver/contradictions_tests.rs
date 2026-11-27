@@ -220,9 +220,9 @@ fn nf_memo_agrees_with_unmemoized_verdicts() {
     let mut verdicts = Vec::new();
     for pass in 0..2 {
         for t in candidates() {
-            let expected = tamarin_term::norm::nf_via_haskell_maude(&sig, &maude, &t);
+            let expected = tamarin_term::norm::nf_via_haskell_maude(&sig, &maude, &t).unwrap();
             assert_eq!(
-                nf_memoized(&sig, &maude, &mut memo, &t),
+                nf_memoized(&sig, &maude, &mut memo, &t).unwrap(),
                 expected,
                 "pass {pass}: memoized verdict disagrees for {t:?}"
             );
@@ -245,9 +245,9 @@ fn nf_memo_agrees_with_unmemoized_verdicts() {
     let irreducible = &sig.irreducible_fun_syms_fast;
     let mut shared = NfMemo::default();
     for t in candidates() {
-        let fresh = any_non_nf(&maude, &sig, irreducible, &mut NfMemo::default(), &t);
+        let fresh = any_non_nf(&maude, &sig, irreducible, &mut NfMemo::default(), &t).unwrap();
         assert_eq!(
-            any_non_nf(&maude, &sig, irreducible, &mut shared, &t),
+            any_non_nf(&maude, &sig, irreducible, &mut shared, &t).unwrap(),
             fresh,
             "shared-memo walk disagrees for {t:?}"
         );

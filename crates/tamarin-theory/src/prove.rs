@@ -34,8 +34,10 @@ impl From<tamarin_utils::cancellation::Cancelled> for ProveError {
 
 impl From<crate::tools::equation_store::AddEqsError> for ProveError {
     fn from(error: crate::tools::equation_store::AddEqsError) -> Self {
-        let crate::tools::equation_store::AddEqsError::Maude(message) = error;
-        Self::Maude(message)
+        match error {
+            crate::tools::equation_store::AddEqsError::Maude(message) => Self::Maude(message),
+            crate::tools::equation_store::AddEqsError::Cancelled => Self::Cancelled,
+        }
     }
 }
 
@@ -49,6 +51,7 @@ impl From<crate::tools::rule_variants::VariantsError> for ProveError {
     fn from(error: crate::tools::rule_variants::VariantsError) -> Self {
         match error {
             crate::tools::rule_variants::VariantsError::Maude(message) => Self::Maude(message),
+            crate::tools::rule_variants::VariantsError::Cancelled => Self::Cancelled,
             other => Self::UnsupportedInput(other.to_string()),
         }
     }

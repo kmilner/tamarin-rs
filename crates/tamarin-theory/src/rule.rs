@@ -885,7 +885,7 @@ pub fn equal_rule_up_to_renaming_ignoring_names(
     maude: &tamarin_term::maude_proc::MaudeHandle,
     r1: &IntrRuleAC,
     r2: &IntrRuleAC,
-) -> bool {
+) -> Result<bool, tamarin_term::maude_proc::MaudeError> {
     use tamarin_term::rewriting::Equal;
     use tamarin_term::subst_vfresh::LNSubstVFresh;
 
@@ -903,7 +903,7 @@ pub fn equal_rule_up_to_renaming_ignoring_names(
     }
     for (f1, f2) in rule_facts(r1).zip(rule_facts(r2)) {
         if f1.tag != f2.tag {
-            return false;
+            return Ok(false);
         }
         for (a, b) in f1.terms.iter().zip(f2.terms.iter()) {
             term_eqs.push(Equal {
@@ -916,15 +916,13 @@ pub fn equal_rule_up_to_renaming_ignoring_names(
     // Trivial case: no constraints → identity unifier is trivially a
     // renaming (empty), so result is True.
     if term_eqs.is_empty() {
-        return true;
+        return Ok(true);
     }
 
     let vars_r1 = rule_vars(r1);
     let vars_r2 = rule_vars(r2);
-    let unifs = match maude.unify(&term_eqs) {
-        Ok(u) => u,
-        Err(_) => return false,
-    };
+    // HS unifies purely, so a failed backend is an error, never "unequal".
+    let unifs = maude.unify(&term_eqs)?;
     // For each unifier `subst`: check `isRenaming (restrictVFresh vars_r1 subst)
     //                       && isRenaming (restrictVFresh vars_r2 subst)`.
     // The unifier comes back as `Vec<(LVar, LNTerm)>` — treat as VFresh.
@@ -933,10 +931,10 @@ pub fn equal_rule_up_to_renaming_ignoring_names(
         let r1_rest = s_fresh.restrict(&vars_r1);
         let r2_rest = s_fresh.restrict(&vars_r2);
         if r1_rest.is_renaming() && r2_rest.is_renaming() {
-            return true;
+            return Ok(true);
         }
     }
-    false
+    Ok(false)
 }
 
 /// `equalRuleUpToRenaming` — port of
@@ -951,8 +949,8 @@ pub fn equal_rule_up_to_renaming(
     maude: &tamarin_term::maude_proc::MaudeHandle,
     r1: &IntrRuleAC,
     r2: &IntrRuleAC,
-) -> bool {
-    r1.info == r2.info && equal_rule_up_to_renaming_ignoring_names(maude, r1, r2)
+) -> Result<bool, tamarin_term::maude_proc::MaudeError> {
+    Ok(r1.info == r2.info && equal_rule_up_to_renaming_ignoring_names(maude, r1, r2)?)
 }
 
 /// `equalDuplicateRuleUpToRenaming` — port of
@@ -969,7 +967,7 @@ pub fn equal_duplicate_rule_up_to_renaming(
     maude: &tamarin_term::maude_proc::MaudeHandle,
     r1: &IntrRuleAC,
     r2: &IntrRuleAC,
-) -> bool {
+) -> Result<bool, tamarin_term::maude_proc::MaudeError> {
     let r2_apart = tamarin_term::lterm::rename_avoiding(r2.clone(), r1);
     equal_rule_up_to_renaming_ignoring_names(maude, r1, &r2_apart)
 }
@@ -1000,27 +998,24 @@ pub fn equal_subset_rule_up_to_renaming(
     maude: &tamarin_term::maude_proc::MaudeHandle,
     r1: &IntrRuleAC,
     r2: &IntrRuleAC,
-) -> bool {
+) -> Result<bool, tamarin_term::maude_proc::MaudeError> {
     use tamarin_term::rewriting::Equal;
     use tamarin_term::subst_vfresh::LNSubstVFresh;
 
     // HS's `head` errors on a conclusion-free rule; that answers false here.
     let (co1, co2) = match (r1.conclusions.first(), r2.conclusions.first()) {
         (Some(a), Some(b)) => (a, b),
-        _ => return false,
+        _ => return Ok(false),
     };
-    let unifs = match unify_ln_fact_eqs(
+    let unifs = unify_ln_fact_eqs(
         maude,
         &[Equal {
             lhs: co2.clone(),
             rhs: co1.clone(),
         }],
-    ) {
-        Ok(u) => u,
-        Err(_) => return false,
-    };
+    )?;
     if unifs.is_empty() {
-        return false;
+        return Ok(false);
     }
 
     let vars_r1 = rule_vars(r1);
@@ -1047,10 +1042,10 @@ pub fn equal_subset_rule_up_to_renaming(
         let spr1 = r1.premises.clone().apply(&sigma);
         let srpr2 = r2.premises.clone().apply(&sigma);
         if is_subset_of(&srpr2, &spr1) {
-            return true;
+            return Ok(true);
         }
     }
-    false
+    Ok(false)
 }
 
 // =============================================================================

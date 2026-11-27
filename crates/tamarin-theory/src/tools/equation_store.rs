@@ -29,7 +29,7 @@ use std::collections::BTreeSet;
 use std::cmp::Ordering;
 
 use tamarin_term::lterm::{sort_compare, HasFrees, LNTerm, LSort, LVar, Name};
-use tamarin_term::maude_proc::MaudeHandle;
+use tamarin_term::maude_proc::{MaudeError, MaudeHandle};
 use tamarin_term::subst::Subst;
 use tamarin_term::subst_vfresh::SubstVFresh;
 use tamarin_term::term::Term;
@@ -324,9 +324,7 @@ impl EquationStore {
         let unifiers = if residuals.is_empty() {
             vec![Vec::new()]
         } else {
-            maude
-                .unify(&residuals)
-                .map_err(|e| AddEqsError::Maude(format!("{}", e)))?
+            maude.unify(&residuals).map_err(AddEqsError::from)?
         };
         match unifiers.as_slice() {
             [] => {
@@ -349,12 +347,24 @@ impl EquationStore {
 #[derive(Debug, Clone)]
 pub enum AddEqsError {
     Maude(String),
+    /// A cancelled Maude call stays a cancellation.
+    Cancelled,
+}
+
+impl From<MaudeError> for AddEqsError {
+    fn from(error: MaudeError) -> Self {
+        match error {
+            MaudeError::Cancelled => AddEqsError::Cancelled,
+            error => AddEqsError::Maude(error.to_string()),
+        }
+    }
 }
 
 impl std::fmt::Display for AddEqsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AddEqsError::Maude(s) => write!(f, "Maude error: {}", s),
+            AddEqsError::Cancelled => f.write_str("request cancelled"),
         }
     }
 }
@@ -458,8 +468,11 @@ impl EquationStore {
     /// `simpMinimize`: dedupe substitutions within a disjunction; if a
     /// disjunction contains the empty subst (i.e. a tautology), reduce
     /// it to just that. Also drops substs flagged contradictory by
-    /// `is_contr`.
-    pub fn simp_minimize<F: Fn(&LNSubstVFresh) -> bool>(&mut self, is_contr: F) -> bool {
+    /// `is_contr`, whose failure aborts the pass.
+    pub fn simp_minimize<E, F: Fn(&LNSubstVFresh) -> Result<bool, E>>(
+        &mut self,
+        is_contr: F,
+    ) -> Result<bool, E> {
         let mut changed = false;
         let empty = LNSubstVFresh::empty();
         for d in self.conj.iter_mut() {
@@ -467,7 +480,13 @@ impl EquationStore {
             // them) has no duplicate; leave it alone unless it holds the
             // empty or a contradictory substitution.
             let sorted = d.substs.windows(2).all(|w| w[0] < w[1]);
-            let needs_special = d.substs.iter().any(|s| s == &empty || is_contr(s));
+            let mut needs_special = false;
+            for s in &d.substs {
+                if s == &empty || is_contr(s)? {
+                    needs_special = true;
+                    break;
+                }
+            }
             if sorted && !needs_special {
                 continue;
             }
@@ -486,7 +505,13 @@ impl EquationStore {
                 if seen.iter().any(|s| **s == empty) {
                     seen = vec![&empty];
                 } else {
-                    seen.retain(|s| !is_contr(s));
+                    let mut kept = Vec::with_capacity(seen.len());
+                    for s in seen {
+                        if !is_contr(s)? {
+                            kept.push(s);
+                        }
+                    }
+                    seen = kept;
                 }
             }
             // `seen` keeps the order of `d.substs` (and `[empty]` has length
@@ -497,13 +522,13 @@ impl EquationStore {
                 changed = true;
             }
         }
-        changed
+        Ok(changed)
     }
 
     /// `simp` (EquationStore.hs): run the `simp1` passes to a fixpoint.
     /// `is_contr` is `simpMinimize`'s contradiction predicate, given the free
     /// substitution as it stood at the start of the round.
-    pub fn simp<F: Fn(&LNSubst, &LNSubstVFresh) -> bool>(
+    pub fn simp<F: Fn(&LNSubst, &LNSubstVFresh) -> Result<bool, MaudeError>>(
         mut self,
         maude: &MaudeHandle,
         is_contr: F,
@@ -524,7 +549,10 @@ impl EquationStore {
             }
             let mut changed = false;
             let subst_snapshot = self.subst.clone();
-            if self.simp_minimize(|s| is_contr(&subst_snapshot, s)) {
+            if self
+                .simp_minimize(|s| is_contr(&subst_snapshot, s))
+                .map_err(AddEqsError::from)?
+            {
                 changed = true;
                 self.sort_disj_substs();
             }
@@ -573,7 +601,7 @@ impl EquationStore {
     /// `simpDisjunction` (EquationStore.hs): simplify a lone disjunction,
     /// returning the factored free substitution and the residual
     /// disjunction (`None` when it simplified away).
-    pub fn simp_disjunction<F: Fn(&LNSubst, &LNSubstVFresh) -> bool>(
+    pub fn simp_disjunction<F: Fn(&LNSubst, &LNSubstVFresh) -> Result<bool, MaudeError>>(
         maude: &MaudeHandle,
         is_contr: F,
         substs: Vec<LNSubstVFresh>,
@@ -649,7 +677,7 @@ impl EquationStore {
                 let unifiers = maude
                     .with_fresh_counter_from(avoid_max)
                     .unify(&eqs)
-                    .map_err(|e| AddEqsError::Maude(format!("{}", e)))?;
+                    .map_err(AddEqsError::from)?;
                 // `restrictVFresh (varsRange newsubst ++ domVFresh s)`. The
                 // range terms are kept as Maude returns them, unnormalised.
                 new_substs.extend(unifiers.into_iter().map(|u| {
@@ -1077,7 +1105,10 @@ fn equal_subst_up_to_renaming(
     maude
         .match_eqs(&eqs)
         .map(|sols| !sols.is_empty())
-        .map_err(|e| AddEqsError::Maude(format!("remove_permutations: {}", e)))
+        .map_err(|e| match e {
+            MaudeError::Cancelled => AddEqsError::Cancelled,
+            e => AddEqsError::Maude(format!("remove_permutations: {e}")),
+        })
 }
 
 #[cfg(test)]

@@ -497,13 +497,19 @@ fn guarded_simplify_table() {
     ];
     for (formula, known, otherwise, want) in rows {
         let val = |at: &Atom<LNTerm>| {
-            known
-                .iter()
-                .find(|(a, b, _)| *at == bvar_to_lvar(&eq_atom(a, b)))
-                .map(|(_, _, v)| *v)
-                .or(otherwise)
+            Ok::<_, ()>(
+                known
+                    .iter()
+                    .find(|(a, b, _)| *at == bvar_to_lvar(&eq_atom(a, b)))
+                    .map(|(_, _, v)| *v)
+                    .or(otherwise),
+            )
         };
-        assert_eq!(simplify_guarded_with(&formula, &val), want, "{formula:?}");
+        assert_eq!(
+            simplify_guarded_with(&formula, &val),
+            Ok(want),
+            "{formula:?}"
+        );
     }
 }
 

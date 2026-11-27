@@ -104,6 +104,8 @@ pub(crate) fn closed_rule_as_open(
 #[derive(Debug, Clone)]
 pub enum VariantsError {
     Maude(String),
+    /// A cancelled Maude call stays a cancellation.
+    Cancelled,
     MissingMaudeForExplicitVariants,
     UnsupportedInput(crate::wellformedness::WfReport),
 }
@@ -112,6 +114,7 @@ impl std::fmt::Display for VariantsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             VariantsError::Maude(s) => write!(f, "Maude error: {}", s),
+            VariantsError::Cancelled => f.write_str("request cancelled"),
             VariantsError::MissingMaudeForExplicitVariants => write!(
                 f,
                 "Maude is required to validate explicit rule variants; refusing to load an unchecked family."
@@ -127,14 +130,19 @@ impl std::fmt::Display for VariantsError {
 impl std::error::Error for VariantsError {}
 impl From<crate::tools::equation_store::AddEqsError> for VariantsError {
     fn from(error: crate::tools::equation_store::AddEqsError) -> Self {
-        let crate::tools::equation_store::AddEqsError::Maude(message) = error;
-        Self::Maude(message)
+        match error {
+            crate::tools::equation_store::AddEqsError::Maude(message) => Self::Maude(message),
+            crate::tools::equation_store::AddEqsError::Cancelled => Self::Cancelled,
+        }
     }
 }
 
 impl From<MaudeError> for VariantsError {
     fn from(e: MaudeError) -> Self {
-        VariantsError::Maude(format!("{}", e))
+        match e {
+            MaudeError::Cancelled => VariantsError::Cancelled,
+            e => VariantsError::Maude(e.to_string()),
+        }
     }
 }
 
@@ -233,7 +241,7 @@ pub(crate) fn finish_theory_rules(
             rule.expand_variant_macros(&macros);
         }
     }
-    crate::constraint::solver::context::annotate_theory_loop_breakers(theory, maude);
+    crate::constraint::solver::context::annotate_theory_loop_breakers(theory, maude)?;
     Ok(())
 }
 
@@ -490,7 +498,7 @@ pub fn variants_proto_rule(
     // substitution (EquationStore.hs).
     let (common_subst, residual) = crate::tools::equation_store::EquationStore::simp_disjunction(
         maude,
-        |_, _| false,
+        |_, _| Ok(false),
         composed_substs,
     )?;
 

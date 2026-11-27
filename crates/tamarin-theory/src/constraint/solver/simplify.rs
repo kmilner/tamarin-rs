@@ -65,10 +65,10 @@ fn merge_last_injective_fact_nodes(
 /// The non-diff tail of HS `simplifySystem` (Simplify.hs), run once after
 /// the fixpoint loop: `exploitUniqueMsgOrder`, `removeSolvedSplitGoals`,
 /// `addNonInjectiveFactInstances`.
-fn simp_post_loop_steps(red: &mut Reduction) {
+fn simp_post_loop_steps(red: &mut Reduction) -> Result<(), crate::prove::ProveError> {
     exploit_unique_msg_order(red);
     red.remove_solved_split_goals();
-    add_non_injective_fact_instances(red);
+    add_non_injective_fact_instances(red)
 }
 
 /// Port of HS `simplifySystem` (Simplify.hs), returning every branch
@@ -138,7 +138,7 @@ fn simplify_system_fan_out_inner_with_passes(
         }
     }
     // Post-loop steps — same as `simplify_system`.
-    simp_post_loop_steps(red);
+    simp_post_loop_steps(red)?;
     Ok(vec![SystemBranch {
         sys: std::mem::replace(&mut red.sys, crate::constraint::system::System::empty()),
         counter: red.maude.fresh_counter_peek(),
@@ -191,7 +191,7 @@ fn continue_simplify_branches(
                     SystemOutcome::Cases(simplify_system_fan_out_inner_with_passes(branch, passes)?)
                 }
                 None => {
-                    simp_post_loop_steps(branch);
+                    simp_post_loop_steps(branch)?;
                     SystemOutcome::Linear
                 }
             },
@@ -231,12 +231,15 @@ pub(crate) fn non_unifiable_nodes(
 /// (Simplify.hs): collects (smaller, larger) pairs from
 /// `nonInjectiveFactInstances` (Simplify.hs) and inserts each as
 /// `LessAtom(smaller, larger, InjectiveFacts)`.
-fn add_non_injective_fact_instances(red: &mut Reduction) {
+pub(crate) fn add_non_injective_fact_instances(
+    red: &mut Reduction,
+) -> Result<(), crate::prove::ProveError> {
     use crate::constraint::constraints::{LessAtom, Reason};
-    let pairs = non_injective_fact_instances_pairs(red);
+    let pairs = non_injective_fact_instances_pairs(red)?;
     for (a, b) in pairs {
         red.insert_less(LessAtom::new(a, b, Reason::InjectiveFacts));
     }
+    Ok(())
 }
 
 /// Direct port of Haskell `Simplify.nonInjectiveFactInstances`
@@ -249,16 +252,19 @@ fn add_non_injective_fact_instances(red: &mut Reduction) {
 /// use to make progress without contradicting yet.
 fn non_injective_fact_instances_pairs(
     red: &Reduction,
-) -> Vec<(
-    crate::constraint::constraints::NodeId,
-    crate::constraint::constraints::NodeId,
-)> {
+) -> Result<
+    Vec<(
+        crate::constraint::constraints::NodeId,
+        crate::constraint::constraints::NodeId,
+    )>,
+    crate::prove::ProveError,
+> {
     use crate::constraint::constraints::NodeId;
     let sys = &red.sys;
     let ctxt = red.ctx;
     let mut out: Vec<(NodeId, NodeId)> = Vec::new();
     if ctxt.injective_fact_insts.is_empty() {
-        return out;
+        return Ok(out);
     }
 
     // Resolve node-id → rule via a once-built map instead of a linear
@@ -266,8 +272,10 @@ fn non_injective_fact_instances_pairs(
     let node_rule_map = sys.node_rule_map();
     let lookup_node =
         |id: &NodeId| -> Option<&crate::rule::RuleACInst> { node_rule_map.get(id).copied() };
+    // HS runs the unifier purely, so a failed backend aborts the pass.
     let non_unifiable_nodes = |i: &NodeId, j: &NodeId| {
-        non_unifiable_nodes(&ctxt.maude, &node_rule_map, i, j).unwrap_or(false)
+        non_unifiable_nodes(&ctxt.maude, &node_rule_map, i, j)
+            .map_err(|error| crate::prove::ProveError::maude("injective-fact unification", error))
     };
     // HS walks `S.toList sEdges` and `M.toList sNodes`.
     let edges_sorted = sys.edges_in_set_order();
@@ -312,19 +320,19 @@ fn non_injective_fact_instances_pairs(
                 continue;
             }
             // checkRuleJK: j<k and nonUnifiable(j, i) — return (j, i)
-            if non_unifiable_nodes(j, &i) {
+            if non_unifiable_nodes(j, &i)? {
                 out.push((*j, i));
                 continue;
             }
             // checkRuleIJ: i<j and nonUnifiable(k, j) — return (k, j)
             // Haskell's IJ branch uses `D.reachableSet [i] less`; we
             // mirror that with `i < j`.
-            if sys.always_before_with(&ab_adj, &i, j) && non_unifiable_nodes(&k, j) {
+            if sys.always_before_with(&ab_adj, &i, j) && non_unifiable_nodes(&k, j)? {
                 out.push((k, *j));
             }
         }
     }
-    out
+    Ok(out)
 }
 
 /// CR-rule *N6*, HS `exploitUniqueMsgOrder` (Simplify.hs): a term that is
@@ -368,7 +376,9 @@ fn exploit_unique_msg_order(red: &mut Reduction) {
 /// atoms, and re-inserts the simplified result. Atoms that evaluate
 /// to a known truth value collapse to `gtrue`/`gfalse`, dropping
 /// out of disjunctions or short-circuiting conjunctions.
-fn eval_formula_atoms_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::prove::ProveError> {
+pub(crate) fn eval_formula_atoms_pass(
+    red: &mut Reduction,
+) -> Result<SystemOutcome, crate::prove::ProveError> {
     use crate::guarded::{simplify_guarded_with, Guarded};
     // HS iterates `Stored.toList sFormulas`.
     let formulas = crate::constraint::system::formulas_in_set_order(&red.sys.formulas);
@@ -386,7 +396,7 @@ fn eval_formula_atoms_pass(red: &mut Reduction) -> Result<SystemOutcome, crate::
             partial_atom_valuation_with(&red.sys, &maude, &ab_adj, &node_rule_map, &subterms, a)
         };
         for fm in formulas.into_iter() {
-            let simp = simplify_guarded_with(fm, &val);
+            let simp = simplify_guarded_with(fm, &val)?;
             if &simp == fm {
                 continue;
             }
@@ -451,7 +461,8 @@ fn apply_formula_atom_changes(
 
 /// HS `partialAtomValuation` (Simplify.hs): `Some(b)` when the atom has truth
 /// value `b` in every model of the system, `None` when unknown. `ab_adj` is
-/// the pass's `rawLessRel`, HS's shared `before`.
+/// the pass's `rawLessRel`, HS's shared `before`.  HS runs its unifier
+/// purely, so a failed backend is an error, never "unknown".
 fn partial_atom_valuation_with(
     sys: &crate::constraint::system::System,
     maude: &tamarin_term::maude_proc::MaudeHandle,
@@ -462,117 +473,110 @@ fn partial_atom_valuation_with(
     >,
     subterms: &crate::tools::subterm_store::StoreValuation<'_>,
     atom: &crate::atom::Atom<tamarin_term::lterm::LNTerm>,
-) -> Option<bool> {
+) -> Result<Option<bool>, crate::prove::ProveError> {
     use crate::atom::ProtoAtom;
-    // Maude errors count as unifiable.
+    let failed = |error| crate::prove::ProveError::maude("atom valuation unification", error);
     let non_unifiable_nodes =
         |i: &crate::constraint::constraints::NodeId, j: &crate::constraint::constraints::NodeId| {
-            non_unifiable_nodes(maude, node_rule, i, j).unwrap_or(false)
+            non_unifiable_nodes(maude, node_rule, i, j).map_err(failed)
         };
-    match atom {
+    Ok(match atom {
         ProtoAtom::Less(i, j) => {
-            let ni = eq_node_id(i)?;
-            let nj = eq_node_id(j)?;
+            let (Some(ni), Some(nj)) = (eq_node_id(i), eq_node_id(j)) else {
+                return Ok(None);
+            };
             // HS guard order: `j before i` wins over `i before j` on a cycle.
             if ni == nj {
-                return Some(false);
+                return Ok(Some(false));
             }
             if sys.always_before_with(ab_adj, &nj, &ni) {
-                return Some(false);
+                return Ok(Some(false));
             }
             if sys.always_before_with(ab_adj, &ni, &nj) {
-                return Some(true);
+                return Ok(Some(true));
             }
             if sys.is_last(&ni) && sys.is_in_trace(&nj) {
-                return Some(false);
+                return Ok(Some(false));
             }
-            if sys.is_last(&nj) && sys.is_in_trace(&ni) && non_unifiable_nodes(&ni, &nj) {
-                return Some(true);
+            if sys.is_last(&nj) && sys.is_in_trace(&ni) && non_unifiable_nodes(&ni, &nj)? {
+                return Ok(Some(true));
             }
             None
         }
         ProtoAtom::EqE(x, y) => {
             if x == y {
-                return Some(true);
+                return Ok(Some(true));
             }
-            // HS asks `unifiableLNTerms` before reading node ids; a Maude
-            // error counts as unifiable.
-            if matches!(
-                maude.unify(&[tamarin_term::rewriting::Equal {
+            // HS asks `unifiableLNTerms` before reading node ids.
+            let unifiers = maude
+                .unify(&[tamarin_term::rewriting::Equal {
                     lhs: x.clone(),
                     rhs: y.clone(),
-                }]),
-                Ok(uns) if uns.is_empty()
-            ) {
-                return Some(false);
+                }])
+                .map_err(failed)?;
+            if unifiers.is_empty() {
+                return Ok(Some(false));
             }
             use tamarin_term::lterm::lterm_node_id;
             let (Some(ni), Some(nj)) = (lterm_node_id(x), lterm_node_id(y)) else {
-                return None;
+                return Ok(None);
             };
             if sys.always_before_with(ab_adj, &ni, &nj)
                 || sys.always_before_with(ab_adj, &nj, &ni)
-                || non_unifiable_nodes(&ni, &nj)
+                || non_unifiable_nodes(&ni, &nj)?
             {
-                return Some(false);
+                return Ok(Some(false));
             }
             None
         }
         ProtoAtom::Action(t, lnfa) => {
-            let n = eq_node_id(t)?;
+            let Some(n) = eq_node_id(t) else {
+                return Ok(None);
+            };
             // `ActionG i fa` membership counts solved goals too.
             for (g, _st) in sys.goals.iter() {
                 if let crate::constraint::constraints::Goal::Action(gi, gfa) = g
                     && gi == &n
                     && gfa == lnfa
                 {
-                    return Some(true);
+                    return Ok(Some(true));
                 }
             }
-            let rule = node_rule.get(&n).copied()?;
+            let Some(rule) = node_rule.get(&n).copied() else {
+                return Ok(None);
+            };
             if rule.actions.iter().any(|a| a == lnfa) {
-                return Some(true);
+                return Ok(Some(true));
             }
-            // False when no action unifies with `fa`; a Maude error counts
-            // as unifiable.
-            let mut all_non_unif = true;
+            // False when no action unifies with `fa`.
             for a in &rule.actions {
-                match crate::rule::unifiable_ln_facts(maude, lnfa, a) {
-                    Ok(true) => {
-                        all_non_unif = false;
-                        break;
-                    }
-                    Ok(false) => {}
-                    Err(_) => {
-                        all_non_unif = false;
-                        break;
-                    }
+                if crate::rule::unifiable_ln_facts(maude, lnfa, a).map_err(failed)? {
+                    return Ok(None);
                 }
             }
-            if all_non_unif {
-                return Some(false);
-            }
-            None
+            Some(false)
         }
         ProtoAtom::Last(t) => {
-            let n = eq_node_id(t)?;
+            let Some(n) = eq_node_id(t) else {
+                return Ok(None);
+            };
             // HS `Last i` (Simplify.hs); `nodesAfter` walks `rawLessRel`,
             // which includes unsolved chains.
             if sys.is_last(&n) {
-                return Some(true);
+                return Ok(Some(true));
             }
             if crate::constraint::solver::goals::reachable_set_adj(ab_adj.map(), &n, false)
                 .iter()
                 .any(|j| sys.is_in_trace(j))
             {
-                return Some(false);
+                return Ok(Some(false));
             }
             // Final fallback: if there's a recorded last_atom and it's
             // non-unifiable with n, then n cannot be last.
             if let Some(la) = &sys.last_atom
-                && non_unifiable_nodes(&n, la)
+                && non_unifiable_nodes(&n, la)?
             {
-                return Some(false);
+                return Ok(Some(false));
             }
             None
         }
@@ -580,7 +584,7 @@ fn partial_atom_valuation_with(
         // (Simplify.hs).
         ProtoAtom::Subterm(small, big) => subterms.is_true_false(small, big),
         _ => None,
-    }
+    })
 }
 
 /// The node id `partial_atom_valuation_with` reads out of a timepoint term
