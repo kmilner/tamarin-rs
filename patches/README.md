@@ -1,7 +1,7 @@
 # Haskell oracle patch series
 
 This branch tracks merged upstream Tamarin changes at
-`a75fec7ff13cbfcbb0a67813afb16707e981c06e`. [`series`](series) is empty:
+`a75fec7ff13cbfcbb0a67813afb16707e981c06e`. [`series`](series) lists no patches, so
 `./setup.sh testing` builds an oracle from the pristine submodule pin.
 
 When tracking pending upstream work, keep one incremental patch per PR in a

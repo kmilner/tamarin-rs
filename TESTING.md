@@ -45,7 +45,7 @@ sudo apt-get install bash build-essential ca-certificates coreutils curl \
     procps python3 sed unzip util-linux zlib1g-dev
 ```
 
-You also need a stable Rust toolchain (including Cargo, rustfmt and Clippy),
+You also need Rust 1.96 or later (including Cargo, rustfmt and Clippy),
 Stack for `./setup.sh testing`, and Maude; Maude 3.5.1 matches CI. Set
 `MAUDE_PATH` if Maude is not installed at a location described below.
 GNU `time` is required only for `scripts/bench.sh` (`sudo apt-get install time`),
@@ -70,15 +70,14 @@ accepted using the fixed attestation retained under `.stack-work/`; a genuinely
 different binary needs its own adjacent `.tamarin-rs-oracle` attestation or the
 explicit `ALLOW_ORACLE_REV_MISMATCH=1` waiver.
 
-**A current release build.** Every gate refuses an in-tree `target/` binary
+**A current release build.** The proof and load gates refuse an in-tree `target/` binary
 that predates Cargo's recorded inputs (`rs_stale_check`). A deliberately
 external/sealed `RS_PATH` is content-fingerprinted against replacement during
 the run, but its source provenance cannot be inferred from this checkout and
 remains the caller's responsibility. Build before you gate:
 
 ```bash
-cargo build --release                          # the gates' RS side
-cargo build --release --example dump_proof     # separate target; the plain build does NOT cover it
+cargo build --release --bin tamarin-rs
 ```
 
 The binary stamps its own provenance, so you can always check what a gate
@@ -99,7 +98,8 @@ Rust tests each resolve their dependencies explicitly:
   also prepended to `PATH` for subprocesses.
 
   `capture_cli_refs.sh` uses the Rust test harness's resolution order so its
-  captures and `cli_refs.rs` use the same Maude installation.
+  captures and `cli_refs.rs` can use the same Maude installation. Set `MAUDE`
+  for the capture script and `MAUDE_PATH` for the tests when overriding it.
 
   Web servers resolve `dot` through `PATH`. If Graphviz is installed through
   linuxbrew and that directory is absent from `PATH`, add it before running:
@@ -116,9 +116,9 @@ Rust tests each resolve their dependencies explicitly:
   than skipping. A `MAUDE_PATH` that is set but names a missing file is an
   assertion failure. The binary under test resolves its own default
   separately, and reads no environment variable — `default_maude_path`
-  (`tamarin-prover/src/run.rs`) walks the two `/usr` paths and then a bare
-  `maude` for the OS to find on `$PATH`. Setting `MAUDE_PATH` is what makes
-  the two agree:
+  (`crates/tamarin-prover/src/run.rs`) walks the two `/usr` paths and then a bare
+  `maude` for the OS to find on `$PATH`. Put Maude on `PATH` for subprocesses
+  and pass its path to test helpers:
 
   ```bash
   MAUDE_PATH="$(command -v maude)" cargo test --profile ci --workspace
@@ -133,10 +133,8 @@ Rust tests each resolve their dependencies explicitly:
 environment-volatile lines: `Git revision:`, `Compiled at:`,
 `processing time:` and `analyzed:` (the last carries the input path). That is
 `strip_env`, defined once in `scripts/gate_common.sh` and sourced from there
-by `corpus_file_diff.sh`, `wf_gate.sh`, `pretty_gate.sh`, `rs_ref_check.sh`,
-`rs_vs_rs_diff.sh`, `capture_cli_refs.sh` and `triage_diff_vs_hs.sh`;
-`divergence_fixtures/_common.sh` keeps its own copy of the same four-line
-policy. The sweeps blank the same four lines instead of deleting them
+by the proof and load gates, reference checks, divergence fixtures and proof
+comparison tools. The sweeps blank the same four lines instead of deleting them
 (`norm`, also in `gate_common.sh`: a blanked line still pins that the line was
 printed and where, which their no-compare check leans on).
 
@@ -172,10 +170,14 @@ table and its parser tests in the same change.
 The focused regression suites are:
 
 ```bash
-cargo test -p tamarin-parser --test structured_errors --test lookup_arity_errors
+cargo test -p tamarin-parser --test parse_table --test parser_api
 cargo test -p tamarin-prover parser_diagnostic_ --lib
 cargo test -p tamarin-server --test server_responses
 ```
+
+The parser table checks acceptance against the pinned Haskell parser and checks
+Rust error kinds separately. Refresh the Haskell outcomes with
+`scripts/capture_parse_refs.sh`.
 
 The parity gates still require matching acceptance, exit status, and successful
 `--prove` output. They deliberately do not require byte-identical parser-error
@@ -294,6 +296,7 @@ Rust suite. To run it locally:
 
 ```bash
 cargo build --profile ci --bin tamarin-rs
+node --test scripts/test_cancel_ui.mjs
 npm install --prefix target/gui-browser-test --no-audit --no-fund --no-save playwright@1.63.0
 target/gui-browser-test/node_modules/.bin/playwright install chromium
 node scripts/test_gui.mjs
@@ -318,13 +321,13 @@ The exact test inventory evolves with the workspace; use Cargo's summary as
 the authoritative count. Tests carrying `#[ignore]` are omitted by an
 ordinary run. CI uses `--profile ci`, and it is the profile to
 prefer locally: it is release optimisation without fat LTO, which the release
-profile would re-run at every one of the ~44 test-binary links. Each profile
+profile would re-run for each test binary. Each profile
 also gets its own target tree, so alternating between plain `cargo test`
 (dev), `--release` and `--profile ci` builds the suite three times over —
 `target/debug` alone runs to tens of gigabytes. Pick one and stay on it.
 
-`MAUDE_PATH` is what points the binary under test at the same maude the
-harness resolved; see Prerequisites. An unresolvable maude is a panic naming
+`MAUDE_PATH` selects Maude for the Rust test helpers. CLI subprocesses use
+`--with-maude` or the executable search described under Prerequisites. An unresolvable maude is a panic naming
 `TAM_ALLOW_NO_MAUDE=1`, so no maude-gated test can report a vacuous green.
 `tamarin-test-support`'s own `maude_path_is_read_in_one_place` holds that
 line: it walks every `.rs` file under `crates/` and fails when any file
@@ -358,15 +361,10 @@ oracle and rewrites `tests/fixtures/haskell-responses/`; `server_responses.rs`
 replays it against the port. Adding a server pin is "add a row, re-run the
 capture".
 
-`crates/tamarin-server`'s suite additionally pins its committed HTTP captures
-to the submodule: `haskell_captures_match_the_submodule_pin` compares
-`tests/fixtures/haskell-responses/oracle_rev` against `git -C tamarin-prover
-rev-parse HEAD` and fails — with no skip path — when a bump lands without
-re-running `tests/capture_haskell_fixtures.sh`, which re-stamps that file on
-every successful capture. The normal `scripts/bump_submodule.sh` path runs
-that capture automatically after rebuilding the testing oracle. `SKIP_BUILD=1`
-also skips the capture and prints a warning, so that exceptional workflow must
-build the oracle and run the capture explicitly before testing or committing.
+The server's `capture_provenance` test checks both the upstream revision and
+the patch-series digest in `tests/fixtures/haskell-responses/oracle_rev`.
+`scripts/bump_submodule.sh` refreshes the HTTP captures after rebuilding the
+oracle. With `SKIP_BUILD=1`, build the oracle and run the capture script separately.
 
 `crates/tamarin-prover`'s `cli_refs` table byte-compares flag pins against
 committed oracle stdout under `tests/fixtures/cli_refs/`. Both sides read one
@@ -511,13 +509,10 @@ unexplained empty oracle run is not cached.
 `TIMING proof` lines report input-key calculation, cache reads, Rust proving,
 normalization/checking and comparison, plus phase and whole-gate totals.
 
-**Budget for it.** `JOBS=4` is a memory bound, not a leftover: four
-concurrent oracles at `-N4 -M11g` plus four Rust provers is up to ~44 GB of
-GHC heap. It carries the shared `oom_prologue` — `oom_score_adj=1000` plus a
-24 GiB `ulimit -v`, inherited by every child — as do the two fast gates and
-the triage tools that run provers, so a runaway prover dies alone. The ceiling
-is still yours to respect: on a constrained box lower `JOBS` rather than
-raising it.
+**Memory budget.** With `JOBS=4`, the Haskell phase can run four oracles
+at `-N4 -M11g`, with up to 44 GiB of GHC heap between them. The Rust
+comparison phase runs afterwards. Both phases inherit the shared 24 GiB
+per-process virtual-memory limit. Lower `JOBS` on a memory-constrained host.
 
 **Cache keys carry the oracle.** `.gate_cache/proof/` and `.gate_cache/load/`
 entries are named
@@ -594,8 +589,8 @@ valid Unix filename containing tabs, newlines, or non-UTF-8 bytes cannot alias
 another dependency or corrupt web staging. The parser also reports whether the
 active theory declares lemmas; web crawls use that metadata to permit empty
 lemma discovery only for theories without lemma declarations.
-Run `./setup.sh testing` (or otherwise build `target/release/tamarin-rs`)
-before the shell/Python harness checks; `INPUT_MANIFEST_BIN` may select an
+Build `target/release/tamarin-rs` with `cargo build --release --bin tamarin-rs`
+before the shell/Python harness checks. `INPUT_MANIFEST_BIN` may select an
 equivalent development binary while working on the manifest itself.
 
 ## Fast gates (run on every build)
@@ -639,37 +634,23 @@ deleted), and `MAUDE_PATH`. Both resolve one Maude through `gate_common.sh`
 (`MAUDE_PATH` → `PATH` → linuxbrew → hard fail) and pass that exact path to
 the oracle and port.
 
-## Corner fixtures (no oracle, no proving)
+## Focused fixtures with captured oracle output
 
 ```bash
-scripts/divergence_fixtures/check.sh          # ~50 s, 180 rows
+scripts/divergence_fixtures/check.sh
 ```
 
-Behaviour that no theory under the submodule's `examples/` tree reaches, so
-`wf_gate`/`pretty_gate`/`corpus_file_diff` all stay green across a regression
-in any of it. Only the port runs: the oracle side is captured bytes committed
-under `divergence_fixtures/expected/`, stamped with the pin they came from
-(`expected/oracle_rev`) — `check.sh` refuses to run when that stamp no longer
-matches the submodule pin, so a bump forces a fresh `capture.sh`. The rows
-currently all require a match. The manifest also supports `diverge` rows, which
-must reproduce recorded port bytes while remaining different from the oracle;
-this preserves both sides of a deliberate divergence when one exists.
+The [fixture manifest](scripts/divergence_fixtures/fixtures.tsv) selects the
+input, flags and output to compare for each case. It covers parsing, loading,
+proof search, trace export and diagnostics, including invocations of pinned
+upstream models. The runner compares Rust output with committed Haskell
+captures. It fails if their recorded upstream revision differs from the
+submodule pin.
 
-A row pins one or more slices of one load (`fixtures.tsv` documents them):
-the wf block, the theory echo and the run summary that the corpus gates
-compare, the whole stdout (`--parse-only` and `-m` documents), the
-`--output-dot`/`--output-json` files (`traces`), and the outcome of a fatal
-run (`error`). An `error` slice records the exit code and a normalised error
-kind, never stderr bytes or positions: the port renders parse errors through
-codespan by design. A row named `<fixture>@<variant>` loads the same theory
-under other flags, and a fixture may ship `#include`d or oracle siblings
-(`<fixture>.inc`, `<fixture>.oracle`, `<fixture>.d/`). `capture.sh <row>...`
-recaptures only the named rows.
-
-It is the cheapest real assertion in the tree, and the only oracle-byte
-comparison CI makes: the `test` job's `Divergence fixtures` step builds
-`--profile ci --bin tamarin-rs`, puts `/opt/maude` on `PATH` (the port's own
-probe does not read `MAUDE_PATH`) and runs it, ~50 s. `cargo test` does not.
+A row can select the wellformedness block, theory, summary, full stdout,
+trace files, exit status with error kind, or a stable error message.
+`capture.sh` refreshes the full manifest against Haskell. CI runs
+`check.sh` separately from Cargo tests.
 
 ## Flag-parity sweeps
 
@@ -755,9 +736,8 @@ For "this refactor must not change output" checks, no Haskell needed:
 PRE=/tmp/rs-prepatch POST=/tmp/rs-patched scripts/rs_vs_rs_diff.sh
 ```
 
-Runs two Rust binaries (pre/post) over every example and diffs stripped
-stdout; agreement everywhere means the change is behaviorally inert and
-inherits the baseline's HS-faithfulness by transitivity.
+Runs both Rust binaries over the selected proof corpus and compares stripped
+stdout. A pass establishes matching output for those inputs and flags.
 `scripts/triage_diff_vs_hs.sh` then 3-way-triages any DIFF files against
 Haskell output (moved toward HS or away?). It reads and fills the batch gate's
 `.gate_cache/proof/` at the same fingerprinted key, and runs all three binaries
@@ -830,8 +810,8 @@ are maintained separately; CI materializes the oracle sources with
 `./setup.sh testing-sources` without compiling Haskell. Negative-input and non-proof scenarios remain in
 their focused suites rather than this successful-proof-output reference.
 In particular, `sp14/GDH.spthy` is rejected for unsupported products;
-`cli_e2e` checks its failure and diagnostic, and the full proof gate
-compares its output and exit status against Haskell.
+the full proof gate compares its output and exit status against Haskell.
+The `err_unsupported_products` fixtures exercise the CLI diagnostic across modes.
 
 Adding entries without changing existing theory inputs or per-file flags
 preserves their Haskell proof-cache keys. Corpus membership is part
