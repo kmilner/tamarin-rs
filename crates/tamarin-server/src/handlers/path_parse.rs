@@ -349,33 +349,52 @@ fn is_fractional_suffix(rest: &str) -> bool {
 mod tests {
     use super::*;
 
+    /// HS `parseTheoryPath`: leading and trailing slashes are ignored; a
+    /// proof or method path keeps its sub-path verbatim, so `proof/<lemma>` is
+    /// the root (no sub-path) and `proof/<lemma>/_` the inner empty case; and
+    /// `parseCases`' `safeRead` reads `Int`, so case indices are signed.
     #[test]
-    fn help_and_rules() {
-        assert_eq!(parse("help"), Some(TheoryPath::Help));
-        assert_eq!(parse("/help/"), Some(TheoryPath::Help));
-        assert_eq!(parse("rules"), Some(TheoryPath::Rules));
+    fn theory_paths_parse_like_parse_theory_path() {
+        let proof = |lemma: &str, sub: &[&str]| TheoryPath::Proof {
+            lemma: lemma.into(),
+            sub: sub.iter().map(|s| s.to_string()).collect(),
+        };
+        let method = |lemma: &str, idx, sub: &[&str]| TheoryPath::Method {
+            lemma: lemma.into(),
+            idx,
+            sub: sub.iter().map(|s| s.to_string()).collect(),
+        };
+        let source = |kind, src_idx, case_idx| TheoryPath::Source {
+            kind,
+            src_idx,
+            case_idx,
+        };
+        for (segment, want) in [
+            ("help", Some(TheoryPath::Help)),
+            ("/help/", Some(TheoryPath::Help)),
+            ("rules", Some(TheoryPath::Rules)),
+            ("lemma/Alice", Some(TheoryPath::Lemma("Alice".into()))),
+            ("proof/Alice", Some(proof("Alice", &[]))),
+            ("proof/Alice/_", Some(proof("Alice", &[""]))),
+            (
+                "proof/Alice/case_1/0",
+                Some(proof("Alice", &["case_1", "0"])),
+            ),
+            ("method/Alice/1", Some(method("Alice", 1, &[]))),
+            ("method/Alice/1/_", Some(method("Alice", 1, &[""]))),
+            ("method/Alice/3/0", Some(method("Alice", 3, &["0"]))),
+            ("cases/raw/-1/1", Some(source(SourceKind::Raw, -1, 1))),
+            (
+                "cases/refined/007/-0",
+                Some(source(SourceKind::Refined, 7, 0)),
+            ),
+            ("cases/raw/-/1", None),
+            ("cases/raw/1", None),
+        ] {
+            assert_eq!(parse(segment), want, "{segment:?}");
+        }
     }
-    #[test]
-    fn lemma_basic() {
-        assert_eq!(
-            parse("lemma/Alice"),
-            Some(TheoryPath::Lemma("Alice".into()))
-        );
-    }
-    #[test]
-    fn proof_path() {
-        let p = parse("proof/Alice/case_1/0").unwrap();
-        assert!(
-            matches!(p, TheoryPath::Proof { lemma, sub } if lemma == "Alice" && sub == vec!["case_1", "0"])
-        );
-    }
-    #[test]
-    fn method_path() {
-        let p = parse("method/Alice/3/0").unwrap();
-        assert!(
-            matches!(p, TheoryPath::Method { lemma, idx, sub } if lemma == "Alice" && idx == 3 && sub == vec!["0"])
-        );
-    }
+
     /// [`TheoryPath::render`] runs every segment through
     /// [`prefix_with_underscore`].  An empty case name therefore appears in
     /// the URL as `_`.  A case name that starts with `_` gets one more `_`.
@@ -427,30 +446,6 @@ mod tests {
                 format!("/thy/trace/1/main/lemma/{url}"),
             );
         }
-    }
-    /// `parseCases`'s `safeRead` reads `Int`, so the case indices are signed:
-    /// `cases/raw/-1/1` parses (and then raises the same bounds error as
-    /// `cases/raw/0/1` in the handler).
-    #[test]
-    fn case_indices_are_signed() {
-        assert_eq!(
-            parse("cases/raw/-1/1"),
-            Some(TheoryPath::Source {
-                kind: SourceKind::Raw,
-                src_idx: -1,
-                case_idx: 1,
-            })
-        );
-        assert_eq!(
-            parse("cases/refined/007/-0"),
-            Some(TheoryPath::Source {
-                kind: SourceKind::Refined,
-                src_idx: 7,
-                case_idx: 0,
-            })
-        );
-        assert_eq!(parse("cases/raw/-/1"), None);
-        assert_eq!(parse("cases/raw/1"), None);
     }
 
     /// Every form of [`safe_read_int`]'s doc comment, each pinned against the
@@ -506,45 +501,5 @@ mod tests {
         assert_eq!(read(&deep), Some(-1));
         // One `)` short: still unbalanced, still no parse.
         assert_eq!(read(&deep[..deep.len() - 1]), None);
-    }
-    // Haskell `parseProof (y:ys) = Just (TheoryProof y ys)`: no trailing
-    // strip — `proof/<lemma>` is the root (sub=[]), `proof/<lemma>/_`
-    // is the inner sub-path with single empty case (sub=[""]).
-    #[test]
-    fn proof_root_vs_inner_empty_case() {
-        let root = parse("proof/Alice").unwrap();
-        assert!(
-            matches!(&root, TheoryPath::Proof { lemma, sub } if lemma == "Alice" && sub.is_empty()),
-            "got {:?}",
-            root
-        );
-        let inner = parse("proof/Alice/_").unwrap();
-        assert!(
-            matches!(&inner, TheoryPath::Proof { lemma, sub } if lemma == "Alice" && sub == &[""]),
-            "got {:?}",
-            inner
-        );
-    }
-    // Method path: `method/<lemma>/<N>` applies method N at lemma root
-    // (sub=[]); `method/<lemma>/<N>/_` applies at the inner empty-case
-    // sub-path (sub=[""]).  Without this distinction the click on a
-    // post-simplify sub-case's method list would resolve to the
-    // wrong proof node.
-    #[test]
-    fn method_root_vs_inner_empty_case() {
-        let root = parse("method/Alice/1").unwrap();
-        assert!(
-            matches!(&root, TheoryPath::Method { lemma, idx, sub }
-            if lemma == "Alice" && *idx == 1 && sub.is_empty()),
-            "got {:?}",
-            root
-        );
-        let inner = parse("method/Alice/1/_").unwrap();
-        assert!(
-            matches!(&inner, TheoryPath::Method { lemma, idx, sub }
-            if lemma == "Alice" && *idx == 1 && sub == &[""]),
-            "got {:?}",
-            inner
-        );
     }
 }

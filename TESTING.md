@@ -174,7 +174,7 @@ The focused regression suites are:
 ```bash
 cargo test -p tamarin-parser --test structured_errors --test lookup_arity_errors
 cargo test -p tamarin-prover parser_diagnostic_ --lib
-cargo test -p tamarin-server --test routes_upload
+cargo test -p tamarin-server --test server_responses
 ```
 
 The parity gates still require matching acceptance, exit status, and successful
@@ -347,6 +347,16 @@ audit to this target rather than creating a separate integration-test binary.
 The oracle-backed cases in `oracle_solver` skip when no Haskell binary is
 reachable. Their results establish parity only when both Maude and the oracle
 are available.
+
+`crates/tamarin-server`'s HTTP differential is one table,
+`tests/fixtures/server_responses.tsv`: each row is a request with its status,
+content type and comparison mode (bytes, load stamp blanked, version banner
+blanked, `contains:`, `redirect`, or a documented `diverge`). Rows below a
+`SERVE` line run in order against one fresh server on both sides.
+`tests/capture_haskell_fixtures.sh` replays the table against the pinned
+oracle and rewrites `tests/fixtures/haskell-responses/`; `server_responses.rs`
+replays it against the port. Adding a server pin is "add a row, re-run the
+capture".
 
 `crates/tamarin-server`'s suite additionally pins its committed HTTP captures
 to the submodule: `haskell_captures_match_the_submodule_pin` compares

@@ -1,0 +1,1 @@
+{"alert":"Last request failed with exception: unguarded variable(s) 'x' in the subformula\n  \"∀ x #i. (A( ) @ #i) ⇒ (x = x)\"\nin the formula\n  \"∀ x #i. (A( ) @ #i) ⇒ (x = x)\"\nCallStack (from HasCallStack):\n  error, called at src/Theory/Constraint/System/Guarded.hs:509:29 in tamarin-prover-theory-1.13.0-8wixYaxm5uHCGl2uEzaKzP:Theory.Constraint.System.Guarded"}

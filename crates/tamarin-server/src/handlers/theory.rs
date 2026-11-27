@@ -1892,21 +1892,6 @@ mod tests {
         assert!(parse_extractor("unknown").is_none());
     }
 
-    // `getUrlRender (TheoryGraphJsonR idx path)` re-renders the parsed path,
-    // so an empty proof-tree case name comes back as the `_` segment
-    // `prefixWithUnderscore` encodes it as.
-    #[test]
-    fn graph_json_url_encodes_empty_case_name() {
-        let p = path_parse::TheoryPath::Proof {
-            lemma: "injective_agree".into(),
-            sub: vec![String::new()],
-        };
-        assert_eq!(
-            path_parse::theory_url(2, "json", &p),
-            "/thy/trace/2/json/proof/injective_agree/_"
-        );
-    }
-
     // -----------------------------------------------------------------
     // `getOptions` (`graph_options_from_map`)
     // -----------------------------------------------------------------
@@ -1928,96 +1913,61 @@ mod tests {
         graph_options_from_map(&params)
     }
 
+    /// HS `getOptions`: the `un*`/`no-*` flags and `clustering` count by
+    /// presence alone (`isNothing`/`isJust` of `lookupGetParam`), whatever
+    /// their value; `simplification` is read with the derived `Read`, so the
+    /// UI's numeric levels fall back to SL2; unknown parameters change nothing.
+    /// Note that `show_auto_source` defaults to TRUE here, unlike the struct.
     #[test]
-    fn empty_query_matches_haskell_getoptions_defaults() {
-        // With no params HS `getOptions` yields: compress/abbreviate true
-        // (uncompress/unabbreviate absent => isNothing => True), clustering
-        // false (isJust Nothing), simplification SL2 (readMaybe of Nothing =>
-        // fromMaybe SL2), and show_auto_source TRUE -- note this differs from
-        // the struct default (False), because `no-auto-sources` is absent so
-        // `isNothing` yields True.
-        let o = options_of("");
-        assert_eq!(o.simplification_level, SimplificationLevel::SL2);
-        assert!(o.compress);
-        assert!(o.abbreviate);
-        assert!(!o.clustering_similar_names);
-        assert!(o.show_auto_source);
-    }
-
-    #[test]
-    fn full_query_mirrors_getoptions() {
-        // The UI sends numeric simplification=2, which HS derived `Read` for
-        // SimplificationLevel cannot parse (only SL0..SL3), so it falls back to
-        // SL2. The presence flags flip their respective options off (or on, for
-        // clustering).
-        let o = options_of(
-            "simplification=2&clustering=true&uncompress=&unabbreviate=&no-auto-sources=",
-        );
-        assert_eq!(o.simplification_level, SimplificationLevel::SL2);
-        assert!(o.clustering_similar_names);
-        assert!(!o.compress);
-        assert!(!o.abbreviate);
-        assert!(!o.show_auto_source);
-    }
-
-    #[test]
-    fn simplification_numeric_falls_back_to_sl2() {
-        // HS readMaybe on "0".."3" returns Nothing (derived Read wants SL0..SL3).
-        for n in ["0", "1", "2", "3"] {
-            let o = options_of(&format!("simplification={n}"));
-            assert_eq!(
-                o.simplification_level,
-                SimplificationLevel::SL2,
-                "numeric simplification={n} must fall back to SL2"
-            );
+    fn graph_options_follow_getoptions() {
+        use SimplificationLevel::*;
+        // (query, simplification, compress, abbreviate, clustering, auto sources)
+        for (qs, level, compress, abbreviate, clustering, auto_source) in [
+            ("", SL2, true, true, false, true),
+            ("unknown=42", SL2, true, true, false, true),
+            (
+                "simplification=2&clustering=true&uncompress=&unabbreviate=&no-auto-sources=",
+                SL2,
+                false,
+                false,
+                true,
+                false,
+            ),
+            ("uncompress", SL2, false, true, false, true),
+            ("clustering", SL2, true, true, true, true),
+            ("simplification=0", SL2, true, true, false, true),
+            ("simplification=1", SL2, true, true, false, true),
+            ("simplification=3", SL2, true, true, false, true),
+            ("simplification=SL0", SL0, true, true, false, true),
+            ("simplification=SL1", SL1, true, true, false, true),
+            ("simplification=SL3", SL3, true, true, false, true),
+        ] {
+            let want = GraphOptions {
+                simplification_level: level,
+                compress,
+                abbreviate,
+                clustering_similar_names: clustering,
+                show_auto_source: auto_source,
+            };
+            assert_eq!(options_of(qs), want, "query {qs:?}");
         }
     }
 
+    /// Derived `Read` is case-sensitive and skips whitespace and balanced
+    /// parentheses around the constructor.
     #[test]
-    fn simplification_sl_tokens_parse() {
-        assert_eq!(
-            options_of("simplification=SL0").simplification_level,
-            SimplificationLevel::SL0
-        );
-        assert_eq!(
-            options_of("simplification=SL1").simplification_level,
-            SimplificationLevel::SL1
-        );
-        assert_eq!(
-            options_of("simplification=SL3").simplification_level,
-            SimplificationLevel::SL3
-        );
-        // Derived `Read` is case-sensitive and tolerates surrounding parens.
-        assert_eq!(
-            read_simplification_level("(SL3)"),
-            Some(SimplificationLevel::SL3)
-        );
-        assert_eq!(
-            read_simplification_level(" ( SL3 ) "),
-            Some(SimplificationLevel::SL3)
-        );
-        assert_eq!(read_simplification_level("sl2"), None);
-        assert_eq!(read_simplification_level("2"), None);
-        assert_eq!(read_simplification_level("SL4"), None);
-        assert_eq!(read_simplification_level(""), None);
-    }
-
-    #[test]
-    fn presence_flag_with_value_still_counts() {
-        // `un*`/`no-*` flags are presence-based; a non-empty value (or no `=`)
-        // is still "present".
-        let o = options_of("uncompress");
-        assert!(!o.compress);
-        let o2 = options_of("clustering");
-        assert!(o2.clustering_similar_names);
-    }
-
-    #[test]
-    fn parse_query_unknown_param_keeps_haskell_defaults() {
-        // Unknown params do not touch any field; result equals the empty-query
-        // (getOptions) outcome, which has show_auto_source = true.
-        let o = options_of("unknown=42");
-        assert_eq!(o, options_of(""));
-        assert!(o.show_auto_source);
+    fn simplification_level_reads_like_derived_read() {
+        use SimplificationLevel::*;
+        for (token, want) in [
+            ("SL0", Some(SL0)),
+            ("(SL3)", Some(SL3)),
+            (" ( SL3 ) ", Some(SL3)),
+            ("sl2", None),
+            ("2", None),
+            ("SL4", None),
+            ("", None),
+        ] {
+            assert_eq!(read_simplification_level(token), want, "{token:?}");
+        }
     }
 }

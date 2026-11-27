@@ -1,0 +1,110 @@
+{
+    "graphs": [
+        {
+            "jgAbbrevs": [],
+            "jgClusters": [],
+            "jgDirected": true,
+            "jgEdges": [
+                {
+                    "jgeColor": "black",
+                    "jgeRelation": "ProtoFact",
+                    "jgeSource": "#vr.2:c1",
+                    "jgeTarget": "#i:p0"
+                }
+            ],
+            "jgLabel": "Theory: RevealingSignatures Case: 1:1",
+            "jgNodes": [
+                {
+                    "jgnColor": "#d5d897",
+                    "jgnId": "#vr.2",
+                    "jgnLabel": "ONE",
+                    "jgnMetadata": {
+                        "jgnActs": [],
+                        "jgnConcs": [
+                            {
+                                "jgnFactId": "#vr.2:c0",
+                                "jgnFactMult": "",
+                                "jgnFactName": "Out",
+                                "jgnFactShow": "Out( revealSign(~random.3, ~sk.3) )",
+                                "jgnFactTag": "OutFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnFunct": "revealSign",
+                                        "jgnParams": [
+                                            {
+                                                "jgnConst": "~random.3"
+                                            },
+                                            {
+                                                "jgnConst": "~sk.3"
+                                            }
+                                        ],
+                                        "jgnShow": "revealSign(~random.3,~sk.3)"
+                                    }
+                                ]
+                            },
+                            {
+                                "jgnFactId": "#vr.2:c1",
+                                "jgnFactMult": "",
+                                "jgnFactName": "Key",
+                                "jgnFactShow": "Key( ~sk.3 )",
+                                "jgnFactTag": "ProtoFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnConst": "~sk.3"
+                                    }
+                                ]
+                            }
+                        ],
+                        "jgnPrems": [
+                            {
+                                "jgnFactId": "#vr.2:p0",
+                                "jgnFactMult": "",
+                                "jgnFactName": "Fr",
+                                "jgnFactShow": "Fr( ~sk.3 )",
+                                "jgnFactTag": "FreshFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnConst": "~sk.3"
+                                    }
+                                ]
+                            },
+                            {
+                                "jgnFactId": "#vr.2:p1",
+                                "jgnFactMult": "",
+                                "jgnFactName": "Fr",
+                                "jgnFactShow": "Fr( ~random.3 )",
+                                "jgnFactTag": "FreshFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnConst": "~random.3"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    "jgnType": "isProtocolRule"
+                },
+                {
+                    "jgnId": "#i",
+                    "jgnLabel": "",
+                    "jgnMetadata": {
+                        "jgnActs": [],
+                        "jgnConcs": [],
+                        "jgnPrems": [
+                            {
+                                "jgnFactId": "#i:p0",
+                                "jgnFactMult": "",
+                                "jgnFactName": "",
+                                "jgnFactShow": "",
+                                "jgnFactTag": "",
+                                "jgnFactTerms": []
+                            }
+                        ]
+                    },
+                    "jgnType": "missingNodePrem"
+                }
+            ],
+            "jgType": "Tamarin prover constraint system"
+        }
+    ]
+}

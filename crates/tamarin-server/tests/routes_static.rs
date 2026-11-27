@@ -4,9 +4,9 @@
 //! images) from a single `/static/` namespace.  The Rust port does the same
 //! with the `ServeDir` of tower-http.  The miss case for `/static` is a
 //! separate matter.  HS serves that case from its own wai-app-static WAI app,
-//! so the request never reaches the error handler of Yesod.  The test
-//! `routes_basic::test_missing_static_asset_matches_haskell` compares that
-//! case against the body of the oracle.
+//! so the request never reaches the error handler of Yesod.  A row of
+//! `tests/fixtures/server_responses.tsv` compares that case against the body
+//! of the oracle.
 
 mod common;
 
@@ -20,7 +20,7 @@ fn data_dir() -> PathBuf {
 
 #[tokio::test]
 async fn embedded_gui_serves_page_dependencies_and_cache_validators() {
-    let s = start_server_with_theory_and("issue193.spthy", |cfg| {
+    let s = start_server_with_theory_and(ISSUE193, |cfg| {
         cfg.data_dir = None;
     })
     .await;
@@ -82,7 +82,7 @@ async fn embedded_gui_serves_page_dependencies_and_cache_validators() {
 /// separately by `capture_provenance`.
 #[tokio::test]
 async fn test_static_assets_are_served_from_the_data_dir() {
-    let s = start_server_with_theory("issue193.spthy").await;
+    let s = start_server_with_theory(ISSUE193).await;
     for (url, rel, mime) in [
         (
             "/static/css/tamarin-prover-ui.css",
@@ -169,7 +169,7 @@ async fn test_frontend_dist_assets_stream_and_fall_back_to_data() {
     );
     std::fs::write(data.join("js/tamarin-prover-ui.js"), &patched_js).unwrap();
 
-    let s = start_server_with_theory_and("issue193.spthy", |cfg| {
+    let s = start_server_with_theory_and(ISSUE193, |cfg| {
         cfg.data_dir = Some(data);
         cfg.frontend_dist = Some(dist);
     })

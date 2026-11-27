@@ -1,0 +1,13 @@
+{
+    "graphs": [
+        {
+            "jgAbbrevs": [],
+            "jgClusters": [],
+            "jgDirected": true,
+            "jgEdges": [],
+            "jgLabel": "Theory: RevealingSignatures Lemma: debug",
+            "jgNodes": [],
+            "jgType": "Tamarin prover constraint system"
+        }
+    ]
+}

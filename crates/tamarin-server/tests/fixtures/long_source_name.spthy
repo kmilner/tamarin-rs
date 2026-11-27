@@ -1,0 +1,17 @@
+theory LongSourceName
+begin
+
+/*
+ * A source case named after a rule too long for the HTML ribbon: the case
+ * heading wraps at the web line width.
+ */
+
+rule insert_state_prog_rip_fst_st_list_ip_fst_st_succ_snd_st_0_1111111111111:
+  [ Fr( ~k ) ] --> [ St( ~k ) ]
+
+rule Use:
+  [ St( k ) ] --[ Used( k ) ]-> [ ]
+
+lemma used: exists-trace "Ex k #i. Used( k ) @ #i"
+
+end

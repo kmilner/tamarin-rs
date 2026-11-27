@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Capture HTTP responses from the Haskell `tamarin-prover interactive`
-# server for use as comparison fixtures in the Rust port integration
-# tests.
+# Capture the Haskell `tamarin-prover interactive` server's responses for
+# every row of `tests/fixtures/server_responses.tsv`, the table that
+# `tests/server_responses.rs` replays against the port.
 #
 # Usage:
 #   ./tests/capture_haskell_fixtures.sh [PORT]
@@ -12,20 +12,28 @@
 #   - the testing oracle built by `./setup.sh testing` (override its automatic
 #     discovery with `HS_PATH`)
 #   - `curl` and `maude` on PATH (override the latter with `MAUDE_PATH`)
-#   - The Tamarin source tree's `examples/regression/trace/issue193.spthy`
 #
-# Output: writes each captured response into
-#   tests/fixtures/haskell-responses/
-# plus `oracle_rev`, the submodule revision and patch series they were captured
-# from.  `tests/capture_provenance.rs` checks both identities, so a source
-# change that forgets to re-run this script fails the suite instead of silently
-# pinning the port to a stale oracle.
+# The table and this script share one reading (the table's header documents
+# the columns):
+#   - `SERVE <theory> [config]` stops the running oracle and serves that one
+#     theory from a fresh work directory, so it is theory index 1.  The config
+#     tokens are port-side harness tweaks; the oracle ignores them.
+#   - every other row is one request, sent in file order to the current
+#     server, so a stateful sequence (autoprove, then the index it allocated)
+#     replays identically on both sides.
+#   - the row's status and content type are checked against the oracle's
+#     (a `diverge` row records the port's own; a `redirect` row only needs a
+#     3xx), and a `contains:` row's lines must be in the oracle's body.
+#   - the first row naming a capture writes it; every later row naming the
+#     same capture must get the same bytes from the oracle.  A
+#     `diverge:<other>` row's body must differ from `<other>`.
 #
-# Re-run this whenever Haskell behaviour changes.  The Rust port tests in
-# `tests/routes_*.rs` compare against these captures several ways: byte
-# equality for the error pages, the JSON graph and the dot graphs (there is
-# one DOT serializer, `showDot`, on both sides), and JSON envelope key set for
-# the route captures whose payload is not yet byte-stable.
+# Output: one file per named capture under tests/fixtures/haskell-responses/,
+# plus `oracle_rev`, the submodule revision and patch series they were
+# captured from.  `tests/capture_provenance.rs` checks both identities, so a
+# source change that forgets to re-run this script fails the suite instead of
+# silently pinning the port to a stale oracle.  The directory is replaced as a
+# whole, so it holds exactly the captures the table names.
 
 set -euo pipefail
 
@@ -34,7 +42,7 @@ BASE="http://127.0.0.1:${PORT}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/../../.." && pwd)"
 RES_DIR="${SCRIPT_DIR}/fixtures/haskell-responses"
-FIXTURE="${SCRIPT_DIR}/fixtures/issue193.spthy"
+TABLE="${SCRIPT_DIR}/fixtures/server_responses.tsv"
 
 [ -r "$ROOT/scripts/gate_common.sh" ] || {
   echo "error: missing scripts/gate_common.sh" >&2
@@ -62,29 +70,38 @@ if ! web_port_free "$PORT"; then
   echo "error: port $PORT is already occupied; refusing to capture another service" >&2
   exit 2
 fi
-
-if [[ ! -f "$FIXTURE" ]]; then
-  echo "error: fixture $FIXTURE missing" >&2
-  exit 1
-fi
+[ -r "$TABLE" ] || { echo "error: table $TABLE missing" >&2; exit 1; }
 
 mkdir -p "$RES_DIR"
+# Keep the completed capture beside the destination so GNU mv can atomically
+# exchange the two directories without a cross-filesystem fallback.
+CAPTURE_DIR="$(mktemp -d "${RES_DIR}.capture.XXXXXX")"
+SCRATCH="$(mktemp -d)"
+LOG="${SCRATCH}/haskell-server.log"
+SERVER_PID=""
+
+stop_server() {
+  [ -n "$SERVER_PID" ] || return 0
+  kill "$SERVER_PID" 2>/dev/null || true
+  wait "$SERVER_PID" 2>/dev/null || true
+  SERVER_PID=""
+  if ! web_wait_port_free "$PORT"; then
+    echo "error: port $PORT did not become free after stopping the oracle" >&2
+    exit 1
+  fi
+}
+trap 'stop_server; rm -rf "$CAPTURE_DIR" "$SCRATCH"' EXIT
 
 # Poll the just-launched $SERVER_PID until it serves the root page; dump its
-# log and give up otherwise.  Optional $1 names the theory it is serving.
+# log and give up otherwise.
 wait_for_server() {
   local state
-  for _ in {1..40}; do
-    if ! kill -0 "$SERVER_PID" 2>/dev/null; then
-      echo "error: Haskell server exited before becoming ready (log: /tmp/haskell-server.log)" >&2
-      cat /tmp/haskell-server.log >&2
-      exit 1
-    fi
+  for _ in {1..80}; do
     state=$(ps -o stat= -p "$SERVER_PID" 2>/dev/null || true)
     case "$state" in
       ''|*Z*)
-        echo "error: Haskell server exited before becoming ready (log: /tmp/haskell-server.log)" >&2
-        cat /tmp/haskell-server.log >&2
+        echo "error: Haskell server exited before becoming ready for $1" >&2
+        cat "$LOG" >&2
         exit 1
         ;;
     esac
@@ -93,169 +110,110 @@ wait_for_server() {
     fi
     sleep 0.5
   done
-  echo "error: Haskell server never came up${1:+ for $1} on $BASE/ (log: /tmp/haskell-server.log)" >&2
-  cat /tmp/haskell-server.log >&2
-  kill "$SERVER_PID" 2>/dev/null || true
+  echo "error: Haskell server never came up for $1 on $BASE/" >&2
+  cat "$LOG" >&2
   exit 1
 }
 
-# Spin Haskell up in its own work-dir so it doesn't dirty ours.
-WORKDIR="$(mktemp -d)"
-# Keep the completed capture beside the destination so GNU mv can atomically
-# exchange the two directories without a cross-filesystem fallback.
-CAPTURE_DIR="$(mktemp -d "${RES_DIR}.capture.XXXXXX")"
-# BIGDIR is the second phase's work-dir (created further down); declaring it
-# here keeps the trap's `${BIGDIR:+...}` well-defined under `set -u` and
-# contributes no argument to `rm` while it is empty.
-BIGDIR=""
-trap 'rm -rf "$WORKDIR" "$CAPTURE_DIR" ${BIGDIR:+"$BIGDIR"}; pkill -P $$ -f "tamarin-prover interactive --port=${PORT}" 2>/dev/null || true' EXIT
-cp "$FIXTURE" "$WORKDIR/issue193.spthy"
-
-echo "starting Haskell tamarin-prover on port $PORT ..."
-( cd "$WORKDIR" && "$HS_PATH" interactive --port="$PORT" --no-logging ./ ) >/tmp/haskell-server.log 2>&1 &
-SERVER_PID=$!
-wait_for_server
-echo "Haskell server up, capturing fixtures into $RES_DIR ..."
-
-# Convenience helper.
-fetch() {
-  local outfile="$1"; shift
-  local url="$1"; shift
-  local method="${1:-GET}"
-  # Every method shares one option set, so a flag added here reaches all of
-  # them:
-  #   -s            no progress meter (the run prints its own table)
-  #   -S            but DO report a transport failure on stderr; the `ERR`
-  #                 cell alone does not say what went wrong, and stderr is
-  #                 left alone so the message reaches the operator
-  #   --path-as-is  keep the URL bytes curl sends identical to the ones
-  #                 written below, which the Not Found page echoes back
-  # We deliberately drop `-f`: we *want* the body of a non-2xx response (e.g.
-  # Haskell returns 500 for graph stubs and 404 for /thy/equiv/...; the body
-  # documents the route's default behaviour and is asserted against in the
-  # Rust tests).
-  local opts=(-sS --path-as-is)
-  case "$method" in
-    POST) opts+=(-X POST) ;;
-    HEAD) opts+=(-I) ;;
+# serve <line> <theory>: one fresh oracle serving <theory> (workspace-relative,
+# or a bare name under tests/fixtures/) as its only theory.
+serve() {
+  local line=$1 theory=$2 src workdir
+  case "$theory" in
+    */*) src="${ROOT}/${theory}" ;;
+    *) src="${SCRIPT_DIR}/fixtures/${theory}" ;;
   esac
-  local status
-  if ! status=$(curl "${opts[@]}" -o "${CAPTURE_DIR}/${outfile}" \
-      -w "%{http_code}" "${BASE}${url}"); then
-    printf "  %-30s %3s\n" "$url" ERR
-    return 1
-  fi
-  printf "  %-30s %3s\n" "$url" "$status"
+  [ -f "$src" ] || fail "$line" "theory $src missing"
+  stop_server
+  workdir="$(mktemp -d "${SCRATCH}/serve.XXXXXX")"
+  cp "$src" "$workdir/"
+  ( cd "$workdir" && exec "$HS_PATH" interactive --port="$PORT" --no-logging ./ ) >>"$LOG" 2>&1 &
+  SERVER_PID=$!
+  wait_for_server "$theory"
+  echo "line $line: serving $theory"
 }
 
-# ---------------- Live routes ----------------
-fetch index.html                "/"
-fetch robots.txt                "/robots.txt"
-fetch overview_help.html        "/thy/trace/1/overview/help"
-fetch main_help.json            "/thy/trace/1/main/help"
-fetch main_rules.json           "/thy/trace/1/main/rules"
-fetch main_message.json         "/thy/trace/1/main/message"
-fetch main_lemma.json           "/thy/trace/1/main/lemma/debug"
-fetch source.txt                "/thy/trace/1/source"
-fetch message.json              "/thy/trace/1/message"
-fetch download.txt              "/thy/trace/1/download/x.spthy"
-fetch reload.json               "/thy/trace/1/reload" POST
-
-# ---------------- Autoprove (Haskell uses capital False) ----------------
-fetch autoprove.json            "/thy/trace/1/autoprove/idfs/0/False/proof/debug"
-fetch autoprove_on_proven.json  "/thy/trace/2/autoprove/idfs/0/False/proof/debug"
-fetch autoprove_on_rules.json   "/thy/trace/1/autoprove/idfs/0/False/rules"
-fetch autoprove_all.json        "/thy/trace/1/autoproveAll/idfs/0/proof/debug"
-
-# ---------------- Live routes (fully ported) ----------------
-fetch next.txt                  "/thy/trace/1/next/main/lemma/debug"
-fetch next_help.txt             "/thy/trace/1/next/main/help"
-fetch prev.txt                  "/thy/trace/1/prev/main/lemma/debug"
-fetch verify.json               "/thy/trace/1/verify/lemma/debug"
-fetch verify_proof.json         "/thy/trace/1/verify/proof/debug"
-fetch del_path.json             "/thy/trace/1/del/path/lemma/debug"
-fetch del_path_bad.json         "/thy/trace/1/del/path/rules"
-fetch kill.txt                  "/kill"
-fetch kill_path.txt             "/kill?path=foo"
-
-# ---------------- Yesod's 500 page (json graph route) ----------------
-# `graphJsonThyPath` falls through to `error "Unhandled theory path. This is a
-# bug."` on any theory path that is neither a proof nor a source case, so this
-# URL raises; the body is Yesod's error page and is asserted byte-for-byte in
-# `routes_graph.rs`.
-fetch json_rules.html           "/thy/trace/1/json/rules"
-
-# Both list lookups can fail, with distinct call sites for each route.
-# Negative case indices fail before the source list is evaluated; minBound
-# wraps to maxBound when subtracting one. The Rust tests cover those aliases.
-for route in json graph interactive-graph-def; do
-  fetch "${route}_source_negative.html" "/thy/trace/1/${route}/cases/refined/0/1"
-  fetch "${route}_source_large.html"    "/thy/trace/1/${route}/cases/refined/9999/1"
-  fetch "${route}_case_negative.html"   "/thy/trace/1/${route}/cases/refined/1/0"
-  fetch "${route}_case_large.html"      "/thy/trace/1/${route}/cases/refined/1/9999"
-done
-
-# ---------------- Yesod's 404 page ----------------
-# Every `notFound` — unknown theory index, unparseable theory path, or a URL
-# matching no route at all — carries the same page, with the request's raw
-# path echoed into it (HTML-escaped).  `/static` is a separate wai-app-static
-# WAI app, so a missing asset there is a bare `File not found` instead.
-fetch missing_idx_overview.html "/thy/trace/99/overview/help"
-fetch not_found_theory_path.html "/thy/trace/1/json/main"
-fetch not_found_unknown_route.html "/nonexistent"
-fetch not_found_escaped_path.html "/a&b'c%3Cd"
-fetch static_not_found.txt      "/static/js/does-not-exist.js"
-# The theory-index route piece is `#Int`: a piece `PathPiece Int` cannot read
-# does not match the route, and one that reads but names no live theory is the
-# handler's miss — the same page either way.
-fetch not_found_negative_idx.html "/thy/trace/-1/overview/help"
-fetch not_found_unparsed_idx.html "/thy/trace/1x/overview/help"
-fetch not_found_huge_idx.html   "/thy/trace/99999999999999999999/overview/help"
-
-# ---------------- The dot routes' theory-path dispatch ----------------
-# `/graph` (`imgThyPath`) and `/interactive-graph-def` (`dotGraphString`) draw
-# source cases and proof nodes; every other theory path is their catch-all
-# `error`.  The dot captures are the graph itself, asserted byte for byte in
-# `routes_graph.rs::interactive_graph_def_renders_source_cases`.
-fetch igd_cases_refined.dot     "/thy/trace/1/interactive-graph-def/cases/refined/1/1"
-fetch igd_cases_raw.dot         "/thy/trace/1/interactive-graph-def/cases/raw/1/1"
-fetch igd_unhandled_path.html   "/thy/trace/1/interactive-graph-def/rules"
-fetch graph_unhandled_path.html "/thy/trace/1/graph/help"
-
-# ---------------- The method route's out-of-range index ----------------
-# An `i` past the end of the ranked methods reaches `getTheoryPathMR`'s own
-# "Sorry" alert — a 200 JSON alert that allocates no new theory index, so it is
-# safe to capture in any order.  A non-positive `i` instead passes upstream's
-# `length methods >= i` guard and raises inside `!!`, which comes back as an
-# alert quoting the GHC CallStack; that one is captured by nothing on purpose,
-# since the port answers this same "Sorry" alert for it (a deliberate
-# divergence, see `test_method_out_of_range_index_alerts_match_haskell`).
-fetch method_out_of_range.json  "/thy/trace/1/main/method/debug/9999"
-
-# ---------------- Graph shell + the diff-theory stub ----------------
-fetch intdot.html               "/thy/trace/1/intdot/lemma/debug"
-fetch equiv_overview.json       "/thy/equiv/1/overview/help"
-
-kill "$SERVER_PID" 2>/dev/null || true
-wait "$SERVER_PID" 2>/dev/null || true
-if ! web_wait_port_free "$PORT"; then
-  echo "error: port $PORT did not become free after stopping the first server" >&2
+fail() {
+  echo "error: line $1: $2" >&2
   exit 1
-fi
+}
 
-# ---------------- Backend abbreviation (second theory, second server) -------
-# `abbrevInBackend` replaces every premise/conclusion term of `size >= 30` with
-# a short `AbbrevName` constant, so it needs a theory carrying such a term plus
-# a stored proof for the system to hang off — `BigTermProved.spthy`.  It is
-# served from its OWN work-dir: a second `.spthy` alongside `issue193.spthy`
-# would renumber the theory indices every URL above depends on.
-BIGDIR="$(mktemp -d)"
-cp "${SCRIPT_DIR}/fixtures/BigTermProved.spthy" "$BIGDIR/BigTermProved.spthy"
-( cd "$BIGDIR" && "$HS_PATH" interactive --port="$PORT" --no-logging ./ ) >>/tmp/haskell-server.log 2>&1 &
-SERVER_PID=$!
-wait_for_server BigTermProved
-fetch json_proof_abbrev.json    "/thy/trace/1/json/proof/done/_/Init/Init?abbrevInBackend=1"
-rm -rf "$BIGDIR"
+# request <line> <method> <path> <status> <content-type> <compare> <capture>
+request() {
+  local line=$1 method=$2 path=$3 status=$4 ctype=$5 compare=$6 capture=$7
+  local body="${SCRATCH}/body" headers="${SCRATCH}/headers" got got_status got_ctype
+  # `-sS` stays quiet but reports a transport failure; `--path-as-is` keeps
+  # the bytes curl sends identical to the table's, which the Not Found page
+  # echoes back.  No `-f`: a non-2xx body is a capture like any other.
+  local opts=(-sS --path-as-is -o "$body" -D "$headers" -w '%{http_code}\t%{content_type}')
+  case "$method" in
+    GET) ;;
+    POST) opts+=(-X POST) ;;
+    UPLOAD:*)
+      local file=${method#UPLOAD:}
+      case "$file" in /*) ;; *) file="${ROOT}/${file}" ;; esac
+      opts+=(-F "uploadedTheory=@${file};filename=$(basename "$file");type=text/plain")
+      ;;
+    *) fail "$line" "unknown method $method" ;;
+  esac
+  got=$(curl "${opts[@]}" "${BASE}${path}") || fail "$line" "$method $path: transport error"
+  got_status=${got%%$'\t'*}
+  got_ctype=${got#*$'\t'}
+  printf '  %-4s %3s %-32s %s\n' "$line" "$got_status" "$got_ctype" "$path"
+
+  case "$compare" in
+    diverge*) ;;
+    redirect)
+      [[ "$got_status" == 3?? ]] || fail "$line" "$path: oracle answered $got_status, not a redirect"
+      # The capture is the Location header's value.
+      grep -i '^location:' "$headers" | head -n1 | sed 's/^[^:]*: *//' | tr -d '\r\n' > "$body"
+      ;;
+    *)
+      [ "$got_status" = "$status" ] || fail "$line" "$path: oracle status $got_status, table says $status"
+      if [ "$ctype" != - ] && [ "$got_ctype" != "$ctype" ]; then
+        fail "$line" "$path: oracle content type '$got_ctype', table says '$ctype'"
+      fi
+      ;;
+  esac
+  case "$compare" in
+    contains:*)
+      local needle
+      while IFS= read -r needle; do
+        grep -qF -- "$needle" "$body" || fail "$line" "$path: oracle body lacks '$needle'"
+      done < <(printf '%b\n' "${compare#contains:}")
+      ;;
+    diverge:*)
+      local other="${CAPTURE_DIR}/${compare#diverge:}"
+      [ -f "$other" ] || fail "$line" "diverge target ${compare#diverge:} is not captured above this row"
+      if cmp -s "$body" "$other"; then
+        fail "$line" "$path: the oracle now answers ${compare#diverge:}; this row no longer diverges"
+      fi
+      ;;
+  esac
+
+  [ "$capture" != - ] || return 0
+  if [ -f "${CAPTURE_DIR}/${capture}" ]; then
+    cmp -s "$body" "${CAPTURE_DIR}/${capture}" \
+      || fail "$line" "$path: oracle body differs from $capture, which an earlier row captured"
+  else
+    mv "$body" "${CAPTURE_DIR}/${capture}"
+  fi
+}
+
+lineno=0
+while IFS= read -r raw || [ -n "$raw" ]; do
+  lineno=$((lineno + 1))
+  case "$raw" in ''|'#'*) continue ;; esac
+  IFS=$'\t' read -r -a cols <<< "$raw"
+  if [ "${cols[0]}" = SERVE ]; then
+    serve "$lineno" "${cols[1]}"
+    continue
+  fi
+  [ "${#cols[@]}" -eq 6 ] || fail "$lineno" "expected 6 tab-separated columns, got ${#cols[@]}"
+  [ -n "$SERVER_PID" ] || fail "$lineno" "request before any SERVE row"
+  request "$lineno" "${cols[@]}"
+done < "$TABLE"
+stop_server
 
 # Stamp the oracle these bytes came from only after every request succeeds,
 # then atomically exchange the complete capture with the committed directory.
@@ -267,5 +225,3 @@ printf 'pin=%s\npatch_series_sha256=%s\n' "$pin" "$patch_series" \
 mv --exchange --no-copy --no-target-directory "$CAPTURE_DIR" "$RES_DIR"
 
 echo "done.  Captures live under: ${RES_DIR} (pin: $pin, patches: $patch_series)"
-kill "$SERVER_PID" 2>/dev/null || true
-wait "$SERVER_PID" 2>/dev/null || true
