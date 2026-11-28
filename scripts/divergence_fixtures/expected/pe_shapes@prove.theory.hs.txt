@@ -1,0 +1,105 @@
+theory PeShapes
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, h/1, pair/2, sdec/2, senc/2, snd/1
+equations:
+    fst(<x.1, x.2>) = x.1,
+    sdec(senc(x.1, x.2), x.2) = x.1,
+    snd(<x.1, x.2>) = x.2
+
+text{* the abstract state after partial evaluation contains 7 facts:
+
+1. !Key( ~k )
+
+2. St( 'a', ~k )
+
+3. St( 'b', h(~k) )
+
+4. St1( ~k )[+]
+
+5. Fr( ~z )
+
+6. Out( z )
+
+7. In( z )
+
+This abstract state results in 8 refined multiset rewriting rules.
+Note that the original number of multiset rewriting rules was 7.
+
+*}
+
+rule (modulo E) A:
+   [ Fr( ~k ) ] --> [ St1( ~k ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) B:
+   [ Fr( ~k ) ] --> [ St1( ~k )[+] ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) PA:
+   [ Fr( ~k ) ] --> [ St( 'a', ~k ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) PB:
+   [ Fr( ~k ) ] --> [ St( 'b', h(~k) ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) PC:
+   [ St( 'a', ~y ) ] --[ Seen( ~y ) ]-> [ Out( ~y ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) PC_PE_1:
+   [ St( 'b', h(~k) ) ] --[ Seen( h(~k) ) ]-> [ Out( h(~k) ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Key:
+   [ Fr( ~k ) ] --> [ !Key( ~k ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Secret:
+   [ Fr( ~m.1 ), !Key( ~k ) ]
+  --[ Secret( ~m.1 ) ]->
+   [ Out( senc(~m.1, ~k) ) ]
+
+  /* has exactly the trivial AC variant */
+
+lemma seen:
+  exists-trace "∃ y #i. Seen( y ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ y #i. (Seen( y ) @ #i)"
+*/
+simplify
+solve( Seen( y ) @ #i )
+  case PC
+  solve( St( 'a', ~y ) ▶₀ #i )
+    case PA
+    SOLVED // trace found
+  qed
+qed
+
+lemma reachable:
+  exists-trace "∃ m #i. Secret( m ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ m #i. (Secret( m ) @ #i)"
+*/
+simplify
+solve( !Key( ~k ) ▶₁ #i )
+  case Key
+  SOLVED // trace found
+qed
+
+
+
+end

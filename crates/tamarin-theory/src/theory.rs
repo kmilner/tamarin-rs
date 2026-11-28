@@ -14,11 +14,30 @@
 use tamarin_term::maude_sig::MaudeSig;
 pub use tamarin_term::tags::{LemmaAttr, TraceQuantifier};
 
+use crate::constraint::system::SourceKind;
 use crate::formula::{LNFormula, SyntacticLNFormula};
 use crate::predicate::Predicate;
 use crate::restriction::Restriction;
 use crate::rule::ProtoRuleE;
 use crate::sapic::PlainProcess;
+
+/// HS `variantsProtoRule`'s result for a rule's executable body
+/// (Theory/Tools/RuleVariants.hs).
+#[derive(Debug, Clone, PartialEq)]
+pub enum RuleVariants {
+    /// Not computed yet.
+    Unprepared,
+    /// `Nothing`: every variant is fresh-redundant.
+    NoVariants,
+    /// `Just ruAC`: the AC body, after reducible-term abstraction and precise
+    /// renaming, with its variant disjunction (`RuleACConstrs`, Rule.hs).
+    /// `solve_rule_constraints` adds a nonempty disjunction to the equation
+    /// store as a SplitG goal, deferring the variant choice to proof search.
+    Closed {
+        body: ProtoRuleE,
+        variants: Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
+    },
+}
 
 /// A protocol rule family with its original E rule, explicit AC members,
 /// and the executable body and variant machinery prepared during closing.
@@ -27,15 +46,9 @@ use crate::sapic::PlainProcess;
 pub struct OpenProtoRule {
     /// Working body: it may be macro-expanded, unfolded, or auto-source annotated.
     pub rule: ProtoRuleE,
-    /// Variant disjunction for the executable body (`RuleACConstrs`, Rule.hs).
-    /// `solve_rule_constraints` adds a nonempty disjunction to the equation
-    /// store as a SplitG goal, deferring the variant choice to proof search.
-    pub variant_substs: Vec<tamarin_term::subst_vfresh::LNSubstVFresh>,
-    /// Optional canonical executable body paired with `variant_substs`.
-    /// Closing prepares it through reducible-term abstraction and precise
-    /// variable renaming (`variantsProtoRule`, RuleVariants.hs); standalone
-    /// proof contexts prepare it on demand. `None` uses `rule` as the body.
-    pub abstracted_rule: Option<ProtoRuleE>,
+    /// The variants of `rule`, computed while closing or, by standalone proof
+    /// contexts, on demand.
+    pub variants: RuleVariants,
     /// Premise indices marked as loop breakers by the dataflow
     /// analysis (`useAutoLoopBreakersAC`).  In Haskell these live on
     /// `praciLoopBreakers` of `ProtoRuleACInfo`; we attach them to
@@ -65,8 +78,7 @@ impl OpenProtoRule {
     pub fn new(rule: ProtoRuleE) -> Self {
         OpenProtoRule {
             rule,
-            variant_substs: Vec::new(),
-            abstracted_rule: None,
+            variants: RuleVariants::Unprepared,
             loop_breakers: Vec::new(),
             rule_e: None,
             rule_ac: Vec::new(),
@@ -78,6 +90,22 @@ impl OpenProtoRule {
     /// `getProtoRuleEs` (ClosedTheory.hs) reads exactly this.
     pub fn rule_e(&self) -> &ProtoRuleE {
         self.rule_e.as_deref().unwrap_or(&self.rule)
+    }
+
+    /// The executable body: the closed AC body, else `rule`.
+    pub fn ac_body(&self) -> &ProtoRuleE {
+        match &self.variants {
+            RuleVariants::Closed { body, .. } => body,
+            RuleVariants::Unprepared | RuleVariants::NoVariants => &self.rule,
+        }
+    }
+
+    /// The closed body's variant disjunction; empty when there is none.
+    pub fn variant_substs(&self) -> &[tamarin_term::subst_vfresh::LNSubstVFresh] {
+        match &self.variants {
+            RuleVariants::Closed { variants, .. } => variants,
+            RuleVariants::Unprepared | RuleVariants::NoVariants => &[],
+        }
     }
 
     /// Expand explicit members at the executable-rule boundary. Open printers
@@ -176,13 +204,27 @@ pub struct Lemma {
 }
 
 impl Lemma {
+    /// HS `lemmaSourceKind`: source lemmas are proved from raw cases.
+    pub fn source_kind(&self) -> SourceKind {
+        if self.attributes.contains(&LemmaAttr::Sources) {
+            SourceKind::RawSources
+        } else {
+            SourceKind::RefinedSources
+        }
+    }
+
     /// Only universal source lemmas can refine source cases.
-    pub(crate) fn is_source_assumption(&self) -> bool {
+    pub fn is_source_assumption(&self) -> bool {
         self.trace_quantifier == TraceQuantifier::AllTraces
-            && self
-                .attributes
-                .iter()
-                .any(|attr| matches!(attr, LemmaAttr::Sources))
+            && self.source_kind() == SourceKind::RawSources
+    }
+
+    /// HS `gatherReusableLemmas`: can this proof assume the given earlier lemma?
+    pub fn can_reuse(&self, prior: &Lemma) -> bool {
+        prior.trace_quantifier == TraceQuantifier::AllTraces
+            && prior.attributes.contains(&LemmaAttr::Reuse)
+            && prior.source_kind() <= self.source_kind()
+            && !self.attributes.iter().any(|attr| matches!(attr, LemmaAttr::HideLemma(name) if name == "ALL" || name == &prior.name))
     }
 }
 
@@ -236,18 +278,17 @@ pub use tamarin_term::macro_expand::LNMacro;
 /// `LTree CaseName (ProofStep ())` (Theory/ProofSkeleton.hs,
 /// Theory/Proof.hs).
 ///
-/// `cases` keeps the source order of the `case` blocks; the printer sorts by
-/// name (HS stores them in an `M.fromList`, Theory/Text/Parser/Proof.hs)
-/// and replay looks each case up by name.
+/// `cases` is keyed by name like HS's `M.fromList` of the parsed case blocks
+/// (Theory/Text/Parser/Proof.hs).
 #[derive(Debug, Clone, PartialEq)]
 pub struct ProofTree {
     pub method: crate::constraint::solver::proof_method::ProofMethod,
-    pub cases: Vec<(String, ProofTree)>,
+    pub cases: std::collections::BTreeMap<String, ProofTree>,
 }
 
 /// A lemma's stored proof.  `None` is a lemma written without one, which HS
 /// gives the one-node `unproven ()` skeleton
-/// (Theory/ProofSkeleton.hs); `prove::replace_sorry_prove` (HS
+/// (Theory/ProofSkeleton.hs); `replay::replace_sorry_prove` (HS
 /// `replaceSorryProver`, Theory/Proof.hs) walks the tree at
 /// proof-replay time and invokes the auto-prover only at `sorry` leaves.
 pub type ProofSkeleton = Option<ProofTree>;
@@ -304,6 +345,10 @@ pub struct Options {
     pub deduction_chain_check: bool,
     /// HS `_lemmasToProve`: lemma names the user requested via `--prove=NAME`.
     pub lemmas_to_prove: Vec<String>,
+    /// HS `_forcedInjectiveFacts`: set only by a successful SAPIC translation
+    /// (`setforcedInjectiveFacts`, sapic/src/Sapic.hs) and unioned into the
+    /// inferred injective fact instances by `closeRuleCache` (CloseRule.hs).
+    pub forced_injective_facts: std::collections::BTreeSet<crate::fact::FactTag>,
 }
 
 /// HS `defaultOption` (OpenTheory.hs), whose tenth field is the
@@ -314,6 +359,7 @@ impl Default for Options {
             declarable: [false; tamarin_parser::DeclarableOption::ALL.len()],
             deduction_chain_check: true,
             lemmas_to_prove: Vec::new(),
+            forced_injective_facts: Default::default(),
         }
     }
 }
@@ -523,32 +569,47 @@ pub struct MergedProtoRule {
 /// block keeps the disjunction its parser gave it — `Disj [emptySubstVFresh]`
 /// (`protoRuleACInfo`, Theory/Text/Parser/Rule.hs) —
 /// and the narrowing [`crate::tools::rule_variants::populate_rule_variants`]
-/// ran on the E rule stays out of it.  For every other rule an empty
-/// `variant_substs` stands for that same trivial disjunction.
+/// ran on the E rule stays out of it.  A rule without closed variants gets
+/// that same trivial disjunction.
 pub fn closed_rules_ac(r: &OpenProtoRule) -> Vec<crate::rule::ProtoRuleAC> {
-    let info = |e: &ProtoRuleE, variants: Vec<tamarin_term::subst_vfresh::LNSubstVFresh>| {
-        crate::rule::ProtoRuleACInfo {
-            name: e.info.name,
-            attributes: e.info.attributes.clone(),
-            variants,
-            loop_breakers: r.loop_breakers.clone(),
+    if !r.rule_ac.is_empty() {
+        return written_rules_ac(r, &r.loop_breakers);
+    }
+    let variants = match &r.variants {
+        RuleVariants::Closed { variants, .. } => variants.clone(),
+        RuleVariants::Unprepared | RuleVariants::NoVariants => {
+            vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()]
         }
     };
-    let trivial = || vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()];
-    if r.rule_ac.is_empty() {
-        let variants = if r.variant_substs.is_empty() {
-            trivial()
-        } else {
-            r.variant_substs.clone()
-        };
-        let ac = r.abstracted_rule.as_ref().unwrap_or(&r.rule);
-        vec![rule_ac_under(ac, info(&r.rule, variants))]
-    } else {
-        r.rule_ac
-            .iter()
-            .map(|ac| rule_ac_under(ac, info(ac, trivial())))
-            .collect()
-    }
+    let info = crate::rule::ProtoRuleACInfo {
+        name: r.rule.info.name,
+        attributes: r.rule.info.attributes.clone(),
+        variants,
+        loop_breakers: r.loop_breakers.clone(),
+    };
+    vec![rule_ac_under(r.ac_body(), info)]
+}
+
+/// The written `variants (modulo AC)` members as `ProtoRuleAC`s: each keeps
+/// its own name and attributes, has the identity substitution as its
+/// variant disjunction (`protoRuleACInfo`, Theory/Text/Parser/Rule.hs) and
+/// carries `loop_breakers`.
+fn written_rules_ac(
+    r: &OpenProtoRule,
+    loop_breakers: &[crate::rule::PremIdx],
+) -> Vec<crate::rule::ProtoRuleAC> {
+    r.rule_ac
+        .iter()
+        .map(|ac| {
+            let info = crate::rule::ProtoRuleACInfo {
+                name: ac.info.name,
+                attributes: ac.info.attributes.clone(),
+                variants: vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()],
+                loop_breakers: loop_breakers.to_vec(),
+            };
+            rule_ac_under(ac, info)
+        })
+        .collect()
 }
 
 /// A rule's facts under a `ProtoRuleAC` info.  HS types both halves as one
@@ -647,20 +708,7 @@ pub fn merge_open_proto_rules(
 /// disjunction and an empty loop-breaker list
 /// (Theory/Text/Parser/Rule.hs).
 pub(crate) fn manual_rule_variants(r: &OpenProtoRule) -> Vec<crate::rule::ProtoRuleAC> {
-    r.rule_ac
-        .iter()
-        .map(|v| {
-            rule_ac_under(
-                v,
-                crate::rule::ProtoRuleACInfo {
-                    name: v.info.name,
-                    attributes: v.info.attributes.clone(),
-                    variants: vec![tamarin_term::subst_vfresh::LNSubstVFresh::empty()],
-                    loop_breakers: Vec::new(),
-                },
-            )
-        })
-        .collect()
+    written_rules_ac(r, &[])
 }
 
 /// HS `clearFunctionTypingInfos` (TheoryObject.hs): drop every
@@ -680,34 +728,6 @@ pub fn contains_manual_rule_variants(items: &[TheoryItem<MergedProtoRule>]) -> b
     items
         .iter()
         .any(|i| matches!(i, TheoryItem::Rule(r) if !r.rule_ac.is_empty()))
-}
-
-/// Whether opening any stored rule would retain an AC half. This is the
-/// allocation-free gate for [`merge_open_proto_rules`]: `equalUpToTerms`
-/// compares only the rule name and the fact-tag shapes, so constructing and
-/// cloning the closed AC rules is unnecessary merely to choose a printer.
-pub fn contains_open_rule_variants(items: &[TheoryItem<OpenProtoRule>]) -> bool {
-    fn same_tags(xs: &[crate::fact::LNFact], ys: &[crate::fact::LNFact]) -> bool {
-        xs.len() == ys.len() && xs.iter().zip(ys).all(|(x, y)| x.tag == y.tag)
-    }
-    fn differs(ac: &ProtoRuleE, e: &ProtoRuleE) -> bool {
-        ac.info.name != e.info.name
-            || !same_tags(&ac.premises, &e.premises)
-            || !same_tags(&ac.conclusions, &e.conclusions)
-            || !same_tags(&ac.actions, &e.actions)
-    }
-
-    items.iter().any(|item| {
-        let TheoryItem::Rule(rule) = item else {
-            return false;
-        };
-        let e = rule.rule_e();
-        if rule.rule_ac.is_empty() {
-            differs(rule.abstracted_rule.as_ref().unwrap_or(&rule.rule), e)
-        } else {
-            rule.rule_ac.iter().any(|ac| differs(ac, e))
-        }
-    })
 }
 
 #[cfg(test)]

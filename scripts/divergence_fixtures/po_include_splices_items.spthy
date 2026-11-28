@@ -1,0 +1,14 @@
+// Category: the --parse-only open-theory printer (`prettyOpenTheory`),
+// which no corpus gate runs: the gates load and close every theory.
+//
+// `#include`d items splice inline and render at their spliced position.
+
+theory WithInclude
+begin
+
+#include "po_include_splices_items.inc"
+
+rule Main:
+  [ ] --[ M() ]-> [ ]
+
+end

@@ -11,7 +11,7 @@ use tamarin_term::subterm_rule::{is_subterm_convergent, CtxtStRule};
 
 use crate::pretty_hpj::{self as hpj, Doc};
 
-use super::{underline_topic, WfError, WF_LINE_LENGTH, WF_RIBBON};
+use super::{underline_topic, WfError};
 
 /// Port of HS `checkEquationsSubtermConvergence` (Wellformedness.hs).
 ///
@@ -51,7 +51,7 @@ pub fn subterm_convergence_report(sig: &MaudeSig) -> Vec<WfError> {
     // outer `nest 2`.  Build it as one HughesPJ Doc so the wrap decision +
     // indentation are HS-exact.
     //
-    // WIDTH: [`WF_LINE_LENGTH`] / [`WF_RIBBON`] — NOT the theory body's
+    // WIDTH: [`hpj::DEFAULT_LINE_LENGTH`] / [`hpj::DEFAULT_RIBBON`] — NOT the theory body's
     // `renderDoc` width of 110/73 (Console.hs).  The
     // pre-rendered string is emitted verbatim inside the `/* ... */` comment,
     // so the equation list wraps at the 100/67 budget, e.g. `f3`/`f6` (inline
@@ -71,7 +71,7 @@ pub fn subterm_convergence_report(sig: &MaudeSig) -> Vec<WfError> {
         // Outer `nest 2` from prettyWfErrorReport `(nest 2 . vcat ...)`.
         let mut s = hpj::vcat(docs)
             .nest(2)
-            .render_with(WF_LINE_LENGTH, WF_RIBBON);
+            .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
         s.push('\n');
         s
     };

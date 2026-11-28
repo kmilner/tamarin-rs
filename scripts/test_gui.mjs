@@ -22,7 +22,7 @@ try {
     await mkdir(dirname(bin), { recursive: true });
     await mkdir(join(theories, 'data'), { recursive: true });
     await copyFile(resolve(process.env.RS_PATH || join(root, 'target/ci/tamarin-rs')), bin);
-    await copyFile(join(root, 'crates/tamarin-server/tests/fixtures/issue193.spthy'), join(theories, 'example.spthy'));
+    await copyFile(join(root, 'tamarin-prover/examples/regression/trace/issue193.spthy'), join(theories, 'example.spthy'));
     // A misleading data/ directory must not override the embedded GUI.
     await mkdir(join(theories, 'data/js'), { recursive: true });
     await writeFile(join(theories, 'data/js/jquery.js'), 'throw Error("wrong assets");');

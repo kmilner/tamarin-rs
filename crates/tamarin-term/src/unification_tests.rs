@@ -2,230 +2,284 @@
 // Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
-use crate::builtin::{msg_var, pair, pk};
-use crate::lterm::LNTerm;
+use crate::builtin::{fresh_var, msg_var, mult, pair, pk, pub_var, union};
+use crate::lterm::{LNTerm, LSort, LVar};
+use crate::vterm::Lit;
 
-#[test]
-fn unify_two_distinct_variables() {
-    let x: LNTerm = msg_var("x", 0);
-    let y: LNTerm = msg_var("y", 0);
-    let s = unify_lnterm_no_ac(vec![Equal::new(x.clone(), y)]).unwrap();
-    // HS `unifyRaw` orients a var-var pair of the same sort by `Ord LVar`
-    // (Unification.hs).  The index and the sort are equal here, so the
-    // comparison falls to the name.  `unifyRaw` therefore eliminates the later
-    // name, and that name becomes the key.  A check that the substitution is
-    // not empty accepts either orientation.
-    assert_eq!(
-        s.to_list(),
-        vec![(crate::lterm::LVar::new("y", LSort::Msg, 0), x)]
-    );
-}
-
-#[test]
-fn unify_var_with_term() {
-    let x: LNTerm = msg_var("x", 0);
-    let p: LNTerm = pair(msg_var("a", 0), msg_var("b", 0));
-    let s = unify_lnterm_no_ac(vec![Equal::new(x.clone(), p.clone())]).unwrap();
-    assert_eq!(apply_vterm(&s, x), p);
-}
-
-#[test]
-fn unify_fails_on_constructor_mismatch() {
-    // pair(x,y) vs pk(x): can't unify, different constructors.
-    let lhs: LNTerm = pair(msg_var("x", 0), msg_var("y", 0));
-    let rhs: LNTerm = pk(msg_var("z", 0));
-    assert!(unify_lnterm_no_ac(vec![Equal::new(lhs, rhs)]).is_err());
-}
-
-#[test]
-fn unify_occurs_check() {
-    // x = pair(x, y) — should fail (x occurs in RHS).
-    let x: LNTerm = msg_var("x", 0);
-    let rhs: LNTerm = pair(x.clone(), msg_var("y", 0));
-    assert!(unify_lnterm_no_ac(vec![Equal::new(x, rhs)]).is_err());
-}
-
-#[test]
-fn match_pattern_variable_against_constant_term() {
-    // Match: term=pair(a,b), pattern=pair(x,y).
-    let t: LNTerm = pair(msg_var("a", 0), msg_var("b", 0));
-    let p: LNTerm = pair(msg_var("x", 0), msg_var("y", 0));
-    let problem = Match::match_with(t, p);
-    let s = solve_match_lterm_no_ac(&|n| crate::lterm::sort_of_name(n), problem).unwrap();
-    // Each pattern variable is the key.  Each key maps to the subject term at
-    // its own argument position.  A count of the bindings alone does not see a
-    // swap of the two.
-    assert_eq!(
-        s.to_list(),
-        vec![
-            (crate::lterm::LVar::new("x", LSort::Msg, 0), msg_var("a", 0)),
-            (crate::lterm::LVar::new("y", LSort::Msg, 0), msg_var("b", 0)),
-        ]
-    );
-}
-
-#[test]
-fn match_fails_on_different_arity() {
-    let t: LNTerm = pk(msg_var("a", 0));
-    let p: LNTerm = pair(msg_var("x", 0), msg_var("y", 0));
-    let problem = Match::match_with(t, p);
-    assert!(solve_match_lterm_no_ac(&|n| crate::lterm::sort_of_name(n), problem).is_none());
-}
-
-// -------------------------------------------------------------------
-// HS `unifyRaw` AC/C arms (Unification.hs): the AC arm fires
-// only when BOTH sides are AC apps with the SAME symbol; otherwise the
-// pair falls through to `_ -> mzero` (no unifier).  These pin that the AC
-// arm delays/NeedsAC only for same-symbol AC apps on both sides.
-// -------------------------------------------------------------------
-use crate::builtin::{mult, union};
-
-#[test]
-fn factored_unify_distinct_ac_symbols_is_no_unifier() {
-    // mult(a,b) vs union(c,d): different AC symbols → HS `mzero`.
-    let lhs: LNTerm = mult(msg_var("a", 0), msg_var("b", 0));
-    let rhs: LNTerm = union(msg_var("c", 0), msg_var("d", 0));
-    assert!(
-        unify_lnterm_factored(vec![Equal::new(lhs, rhs)]).is_none(),
-        "different AC symbols (mult vs union) must yield no unifier, \
-                 not a residual shipped to Maude"
-    );
-}
-
-#[test]
-fn factored_unify_ac_vs_non_ac_is_no_unifier() {
-    // mult(a,b) vs pk(x): AC-vs-NoEq → falls through to HS `_ -> mzero`.
-    let lhs: LNTerm = mult(msg_var("a", 0), msg_var("b", 0));
-    let rhs: LNTerm = pk(msg_var("x", 0));
-    assert!(
-        unify_lnterm_factored(vec![Equal::new(lhs, rhs)]).is_none(),
-        "AC vs non-AC must yield no unifier (HS mzero), not a residual"
-    );
-}
-
-#[test]
-fn factored_unify_same_ac_symbol_delays_residual() {
-    // mult(a,b) vs mult(c,d): same AC symbol → HS `tell [Equal l r]`,
-    // i.e. a single residual delayed for Maude, with an empty local subst.
-    let lhs: LNTerm = mult(msg_var("a", 0), msg_var("b", 0));
-    let rhs: LNTerm = mult(msg_var("c", 0), msg_var("d", 0));
-    let (subst, residuals) = unify_lnterm_factored(vec![Equal::new(lhs, rhs)])
-        .expect("same AC symbol must delay (Some), not fail");
-    assert!(subst.is_empty(), "no non-AC bindings");
-    assert_eq!(
-        residuals.len(),
-        1,
-        "exactly one AC equation delayed for Maude"
-    );
-}
-
-#[test]
-fn no_ac_distinct_ac_symbols_is_no_unifier_not_needs_ac() {
-    // HS no-AC path: a guard failure → Nothing → [] (no unifier).
-    let lhs: LNTerm = mult(msg_var("a", 0), msg_var("b", 0));
-    let rhs: LNTerm = union(msg_var("c", 0), msg_var("d", 0));
-    match unify_lnterm_no_ac(vec![Equal::new(lhs, rhs)]) {
-        Err(UnifyError::NoUnifier) => {}
-        other => panic!("expected NoUnifier (HS mzero), got {:?}", other),
+fn lvar(t: &LNTerm) -> LVar {
+    match t {
+        Term::Lit(Lit::Var(v)) => *v,
+        _ => panic!("expected a variable, got {t:?}"),
     }
 }
 
+/// `Ord LVar` is idx-first, then sort, then name (LTerm.hs: "An ord instance
+/// that prefers the 'lvarIdx' over the 'lvarName'"), the opposite of a
+/// derived name-first order.  `restrict`, `BTreeMap<LVar, _>` iteration and
+/// the var-var orientation of the unify table below all ride on it.
 #[test]
-fn no_ac_ac_vs_non_ac_is_no_unifier_not_needs_ac() {
-    let lhs: LNTerm = mult(msg_var("a", 0), msg_var("b", 0));
-    let rhs: LNTerm = pk(msg_var("x", 0));
-    match unify_lnterm_no_ac(vec![Equal::new(lhs, rhs)]) {
-        Err(UnifyError::NoUnifier) => {}
-        other => panic!("expected NoUnifier (HS mzero), got {:?}", other),
-    }
+fn lvar_ord_is_idx_first_then_sort_then_name() {
+    let v = |name, sort, idx| LVar::new(name, sort, idx);
+    assert!(v("x", LSort::Msg, 1) < v("x", LSort::Msg, 5));
+    assert!(v("z", LSort::Msg, 1) < v("a", LSort::Msg, 5));
+    assert!(v("a", LSort::Msg, 3) < v("b", LSort::Msg, 3));
+    assert!(v("a", LSort::Pub, 3) < v("a", LSort::Fresh, 3));
 }
 
 #[test]
-fn no_ac_same_ac_symbol_is_needs_ac() {
-    // Same AC symbol → HS `tell` → no-AC `solve (Just _)` "AC symbol
-    // found" error, surfaced here as NeedsAC.
-    let lhs: LNTerm = mult(msg_var("a", 0), msg_var("b", 0));
-    let rhs: LNTerm = mult(msg_var("c", 0), msg_var("d", 0));
-    match unify_lnterm_no_ac(vec![Equal::new(lhs, rhs)]) {
-        Err(UnifyError::NeedsAC) => {}
-        other => panic!("expected NeedsAC (HS AC symbol found), got {:?}", other),
-    }
+fn lvar_ord_btreemap_iteration_is_idx_first() {
+    let mut m = std::collections::BTreeMap::new();
+    m.insert(LVar::new("z", LSort::Msg, 1), 'a');
+    m.insert(LVar::new("a", LSort::Msg, 10), 'b');
+    m.insert(LVar::new("m", LSort::Msg, 5), 'c');
+    let keys_in_order: Vec<u64> = m.keys().map(|k| k.idx).collect();
+    assert_eq!(keys_in_order, vec![1, 5, 10]);
 }
 
-// -------------------------------------------------------------------
-// `solve_match_lterm` 3-way outcome (HS `solveMatchLTerm`,
-// Unification.hs).  These pin the exact distinction that
-// eliminates the LAK06 (28 879→0) / NAXOS / CRxor surplus Maude
-// `match`es: an AC-/C-headed subterm only forces a Maude fallback
-// when it appears AC-vs-AC; under a variable pattern, or facing a
-// variable subject, it resolves natively (Matched / NoMatcher).
-// -------------------------------------------------------------------
-fn sn(n: &crate::lterm::Name) -> LSort {
-    crate::lterm::sort_of_name(n)
-}
-
+/// The unify-factored table: HS `unifyLTermFactored` (Unification.hs) over
+/// `unifyRaw`.  `None` is no unifier; `Some((subst, residuals))` is the
+/// local non-AC substitution and the number of AC equations delayed for
+/// Maude.
+///
+/// - var-var, same sort: `if vl < vr then elim vr l else elim vl r`, so the
+///   larger var under idx-first `Ord LVar` is the key.
+/// - var-var, cross sort: `sortGeqLTerm sortOf vl r -> elim vl r`, so the
+///   broader var is the key; incomparable sorts (Pub, Fresh) fail.
+/// - var-term: the var is the key; the occurs check fails.
+/// - AC: only same-symbol AC on both sides is delayed (`tell`); any other AC
+///   pairing falls through to `mzero`.
+/// - chained: `elim` substitutes through the accumulator, so both vars of a
+///   var-var link end bound to the later term.
+///
+/// The runner checks each row as given and again with the two sides of
+/// every equation swapped: orientation comes from `Ord LVar` and sorts, never
+/// from input order.
 #[test]
-fn match_ac_subterm_under_var_pattern_is_matched_no_maude() {
-    // pattern = x (var), subject = mult(a,b) (AC-headed).  HS
-    // `matchRaw` checks `(_, Lit (Var vp))` FIRST → binds, no AC.
-    let t: LNTerm = mult(msg_var("a", 0), msg_var("b", 0));
-    let p: LNTerm = msg_var("x", 0);
-    match solve_match_lterm(&sn, Match::match_with(t, p)) {
-        MatchOutcome::Matched(s) => assert_eq!(s.len(), 1),
-        o => panic!(
-            "expected Matched, got {:?}",
-            match o {
-                MatchOutcome::NoMatcher => "NoMatcher",
-                _ => "NeedsAc",
-            }
+fn every_unify_factored_row_holds_whichever_side_each_term_is_on() {
+    type Expect = Option<(Vec<(LNTerm, LNTerm)>, usize)>;
+    let (x, y) = (msg_var("x", 0), msg_var("y", 0));
+    let blind = pair(msg_var("m", 28), msg_var("r", 28));
+    let pair_ab = pair(msg_var("a", 10), msg_var("b", 20));
+    let rows: Vec<(&str, Vec<(LNTerm, LNTerm)>, Expect)> = vec![
+        (
+            "same idx: name breaks the tie",
+            vec![(x.clone(), y.clone())],
+            Some((vec![(y.clone(), x.clone())], 0)),
         ),
+        (
+            "same sort: larger idx is the key",
+            vec![(msg_var("t", 1), msg_var("e", 10))],
+            Some((vec![(msg_var("e", 10), msg_var("t", 1))], 0)),
+        ),
+        (
+            "Msg is broader than Fresh",
+            vec![(msg_var("m", 5), fresh_var("k", 100))],
+            Some((vec![(msg_var("m", 5), fresh_var("k", 100))], 0)),
+        ),
+        (
+            "Msg is broader than Pub",
+            vec![(msg_var("m", 5), pub_var("A", 100))],
+            Some((vec![(msg_var("m", 5), pub_var("A", 100))], 0)),
+        ),
+        (
+            "Pub and Fresh are incomparable",
+            vec![(pub_var("A", 1), fresh_var("k", 2))],
+            None,
+        ),
+        (
+            "var against an application",
+            vec![(msg_var("x", 5), pair_ab.clone())],
+            Some((vec![(msg_var("x", 5), pair_ab)], 0)),
+        ),
+        (
+            "constructor clash",
+            vec![(pair(x.clone(), y.clone()), pk(msg_var("z", 0)))],
+            None,
+        ),
+        (
+            "occurs check",
+            vec![(x.clone(), pair(x.clone(), y.clone()))],
+            None,
+        ),
+        (
+            "x = x binds nothing",
+            vec![(x.clone(), x.clone())],
+            Some((vec![], 0)),
+        ),
+        (
+            "AC-free pair-pair",
+            vec![(
+                pair(msg_var("a", 1), msg_var("b", 2)),
+                pair(msg_var("x", 10), msg_var("y", 20)),
+            )],
+            Some((
+                vec![
+                    (msg_var("x", 10), msg_var("a", 1)),
+                    (msg_var("y", 20), msg_var("b", 2)),
+                ],
+                0,
+            )),
+        ),
+        (
+            "chained var-var then var-term",
+            vec![
+                (msg_var("t", 1), msg_var("m", 19)),
+                (msg_var("m", 19), blind.clone()),
+            ],
+            Some((
+                vec![(msg_var("t", 1), blind.clone()), (msg_var("m", 19), blind)],
+                0,
+            )),
+        ),
+        (
+            "distinct AC symbols",
+            vec![(
+                mult(msg_var("a", 0), msg_var("b", 0)),
+                union(msg_var("c", 0), msg_var("d", 0)),
+            )],
+            None,
+        ),
+        (
+            "AC against NoEq",
+            vec![(mult(msg_var("a", 0), msg_var("b", 0)), pk(x.clone()))],
+            None,
+        ),
+        (
+            "same AC symbol is delayed",
+            vec![(
+                mult(msg_var("a", 0), msg_var("b", 0)),
+                mult(msg_var("c", 0), msg_var("d", 0)),
+            )],
+            Some((vec![], 1)),
+        ),
+    ];
+    for (label, eqs, expect) in rows {
+        let expect = expect.map(|(s, n)| {
+            let s: Vec<(LVar, LNTerm)> = s.into_iter().map(|(k, v)| (lvar(&k), v)).collect();
+            (s, n)
+        });
+        for swapped in [false, true] {
+            let eqs = eqs
+                .iter()
+                .map(|(l, r)| match swapped {
+                    false => Equal::new(l.clone(), r.clone()),
+                    true => Equal::new(r.clone(), l.clone()),
+                })
+                .collect();
+            let got = unify_lnterm_factored(eqs).map(|(s, res)| (s.to_list(), res.len()));
+            assert_eq!(got, expect, "{label} (swapped: {swapped})");
+        }
     }
 }
 
+/// The match-lterm table: HS `solveMatchLTerm` (Unification.hs) without the
+/// Maude fallback.  `matchRaw` checks a variable pattern first, so an
+/// AC-headed subject under a variable pattern binds natively; an AC pattern
+/// facing a variable subject is `NoMatcher`; only same-symbol AC on both
+/// sides needs Maude.  A pattern variable outside the bindable set is a
+/// skolem constant (HS `skolemizeTerm`) that matches only itself.
 #[test]
-fn match_ac_pattern_vs_var_subject_is_no_matcher_not_needs_ac() {
-    // pattern = mult(a,b) (AC), subject = x (var).  Subject is a Lit
-    // Var, NOT an FApp(AC) — HS reaches `_ -> NoMatcher`, not the
-    // AC arm (which needs BOTH sides AC-headed).  This is the exact
-    // LAK06 shape (`Xor(..)` pattern vs `k.0` var subject): the AC-headed
-    // pattern facing a var subject is NoMatcher, never a Maude fallback.
-    let t: LNTerm = msg_var("x", 0);
-    let p: LNTerm = mult(msg_var("a", 0), msg_var("b", 0));
-    match solve_match_lterm(&sn, Match::match_with(t, p)) {
-        MatchOutcome::NoMatcher => {}
-        MatchOutcome::Matched(_) => panic!("expected NoMatcher, got Matched"),
-        MatchOutcome::NeedsAc => panic!("expected NoMatcher, got NeedsAc"),
+fn every_match_lterm_row_has_its_outcome() {
+    enum Expect {
+        Matched(Vec<(LNTerm, LNTerm)>),
+        NoMatcher,
+        NeedsAc,
     }
-}
-
-#[test]
-fn match_same_ac_symbol_both_sides_is_needs_ac() {
-    // mult(a,b) vs mult(c,d): genuine AC-vs-AC → HS `ACProblem`.
-    let t: LNTerm = mult(msg_var("a", 0), msg_var("b", 0));
-    let p: LNTerm = mult(msg_var("c", 0), msg_var("d", 0));
-    match solve_match_lterm(&sn, Match::match_with(t, p)) {
-        MatchOutcome::NeedsAc => {}
-        MatchOutcome::Matched(_) => panic!("expected NeedsAc, got Matched"),
-        MatchOutcome::NoMatcher => panic!("expected NeedsAc, got NoMatcher"),
+    fn any(_: &LVar) -> bool {
+        true
     }
-}
-
-#[test]
-fn match_ac_subterm_under_noeq_with_clash_is_no_matcher() {
-    // pk(mult(a,b)) vs pk(x): the AC subterm faces a var PATTERN →
-    // bound natively → Matched (no Maude), proving the AC op deep in
-    // the subject doesn't force a fallback when the pattern is a var.
-    let t: LNTerm = pk(mult(msg_var("a", 0), msg_var("b", 0)));
-    let p: LNTerm = pk(msg_var("x", 0));
-    match solve_match_lterm(&sn, Match::match_with(t, p)) {
-        MatchOutcome::Matched(s) => assert_eq!(s.len(), 1),
-        _ => panic!("expected Matched"),
+    fn only_y(v: &LVar) -> bool {
+        v.name == "y"
     }
-    // ...but pk(x) vs pair(a,b): head clash → NoMatcher, no Maude.
-    let t2: LNTerm = pk(msg_var("x", 0));
-    let p2: LNTerm = pair(msg_var("a", 0), msg_var("b", 0));
-    assert!(matches!(
-        solve_match_lterm(&sn, Match::match_with(t2, p2)),
-        MatchOutcome::NoMatcher
-    ));
+    let v = |n: &str| msg_var(n, 0);
+    let ab = || mult(v("a"), v("b"));
+    let rows: Vec<(&str, LNTerm, LNTerm, fn(&LVar) -> bool, Expect)> = vec![
+        (
+            "pattern vars bind positionally",
+            pair(v("a"), v("b")),
+            pair(v("x"), v("y")),
+            any,
+            Expect::Matched(vec![(v("x"), v("a")), (v("y"), v("b"))]),
+        ),
+        (
+            "arity clash",
+            pk(v("a")),
+            pair(v("x"), v("y")),
+            any,
+            Expect::NoMatcher,
+        ),
+        (
+            "AC subject under a var pattern",
+            ab(),
+            v("x"),
+            any,
+            Expect::Matched(vec![(v("x"), ab())]),
+        ),
+        (
+            "AC pattern against a var subject",
+            v("x"),
+            ab(),
+            any,
+            Expect::NoMatcher,
+        ),
+        (
+            "same AC symbol on both sides",
+            ab(),
+            mult(v("c"), v("d")),
+            any,
+            Expect::NeedsAc,
+        ),
+        (
+            "AC subterm under NoEq, var pattern",
+            pk(ab()),
+            pk(v("x")),
+            any,
+            Expect::Matched(vec![(v("x"), ab())]),
+        ),
+        (
+            "head clash",
+            pk(v("x")),
+            pair(v("a"), v("b")),
+            any,
+            Expect::NoMatcher,
+        ),
+        (
+            "non-bindable var matches itself",
+            pair(v("x"), v("a")),
+            pair(v("x"), v("y")),
+            only_y,
+            Expect::Matched(vec![(v("y"), v("a"))]),
+        ),
+        (
+            "non-bindable var is a constant",
+            pair(v("a"), v("x")),
+            pair(v("x"), v("y")),
+            only_y,
+            Expect::NoMatcher,
+        ),
+    ];
+    for (label, subject, pattern, bindable, expect) in rows {
+        let got = solve_match_lterm(
+            &crate::lterm::sort_of_name,
+            &bindable,
+            Match::match_with(subject, pattern),
+        );
+        match (got, expect) {
+            (MatchOutcome::Matched(s), Expect::Matched(want)) => {
+                let want: Vec<(LVar, LNTerm)> =
+                    want.into_iter().map(|(k, t)| (lvar(&k), t)).collect();
+                assert_eq!(s.to_list(), want, "{label}");
+            }
+            (MatchOutcome::NoMatcher, Expect::NoMatcher)
+            | (MatchOutcome::NeedsAc, Expect::NeedsAc) => {}
+            (got, _) => panic!(
+                "{label}: got {}",
+                match got {
+                    MatchOutcome::Matched(_) => "Matched",
+                    MatchOutcome::NoMatcher => "NoMatcher",
+                    MatchOutcome::NeedsAc => "NeedsAc",
+                }
+            ),
+        }
+    }
 }

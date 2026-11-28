@@ -1,26 +1,10 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Live proof-tree state — mirror of Haskell's `IncrementalProof` +
-//! `applyProverAtPath`.
-//!
-//! Haskell's interactive UI keeps a mutable proof tree per lemma; user
-//! clicks dispatch a `ProofMethod` at a path in that tree and the
-//! result is spliced back in. Rust keeps each root lazy until first use and
-//! shares materialised roots copy-on-write between theory versions.
-//!
-//! In the Rust port we model this with:
-//!
-//! - One lazy, copy-on-write [`ProofNode`] root per lemma.
-//! - [`apply_at_path`]: navigate by case-name path, run the requested
-//!   `ProofMethod` via `exec_proof_method`, replace that subtree's
-//!   children, return the new root.
-//!
-//! The implementation is intentionally minimal: it doesn't yet drive
-//! the full `run_proof_search` loop on click — that's the autoprove
-//! button.  Each user-driven step applies exactly one method and
-//! returns the resulting cases.  The proof can therefore stay "open"
-//! until the user navigates / clicks again.
+//! Live proof-tree state, HS's per-lemma `IncrementalProof` and
+//! `applyProverAtPath`: one lazy, copy-on-write [`ProofNode`] root per lemma.
+//! A clicked method runs one `exec_proof_method` step at a case-name path;
+//! autoprove grafts a whole search result there.
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -33,13 +17,13 @@ use tamarin_theory::constraint::solver::proof_method::{
     exec_proof_method, is_finished, is_finished_or_stuck, ProofMethod,
 };
 use tamarin_theory::constraint::solver::search::{
-    candidate_methods_with_expl, rollup_status, NodeStatus, ProofNode, ProofStatus,
+    candidate_methods_with_expl, node_status_of, rollup_status, NodeStatus, ProofAnnotation,
+    ProofNode, ProofStatus,
 };
-use tamarin_theory::constraint::system::System;
+use tamarin_theory::constraint::system::{SourceKind, System};
 use tamarin_theory::pretty_system::pretty_non_graph_system;
-use tamarin_theory::theory::TheoryItem;
 
-use crate::handlers::path_parse::{encode_sub_path, url_path_escape};
+use crate::handlers::path_parse::{theory_url, TheoryPath};
 
 /// The immutable, system-free part of a replayed proof node.
 ///
@@ -50,7 +34,7 @@ pub(crate) struct ProofIndexNode {
     pub method: ProofMethod,
     pub children: BTreeMap<String, ProofIndexNode>,
     pub annotated: bool,
-    status: ProofStatus,
+    pub display_status: ProofStatus,
 }
 
 /// System-free result of replaying a stored proof. Both overview and source
@@ -110,11 +94,11 @@ pub(crate) struct ProofSnippet {
 impl ProofSnippet {
     fn from_proof_node(node: &ProofNode) -> Self {
         Self {
-            system: node.annotated.then(|| node.sys.clone()),
+            system: node.annotation.system().cloned(),
             children: node
                 .children
                 .iter()
-                .map(|(name, child)| (name.clone(), child.annotated))
+                .map(|(name, child)| (name.clone(), child.annotation.is_checked()))
                 .collect(),
         }
     }
@@ -127,22 +111,22 @@ impl ProofIndexNode {
             .iter()
             .map(|(name, child)| (name.clone(), Self::from_proof_node(child)))
             .collect();
-        let status = children.values().fold(
-            ProofStatus::from_step(&node.method, node.annotated),
-            |status, child| status.combine(child.status),
-        );
+        let annotated = node.annotation.is_checked();
+        // Web.Theory.annotateLemmaProof marks a stale branch as incomplete.
+        let step_status = if annotated {
+            ProofStatus::from_step(&node.method, true)
+        } else {
+            ProofStatus::Incomplete
+        };
+        let display_status = children.values().fold(step_status, |status, child| {
+            status.combine(child.display_status)
+        });
         Self {
             method: node.method.clone(),
             children,
-            annotated: node.annotated,
-            status,
+            annotated,
+            display_status,
         }
-    }
-
-    /// HS `getProofStatus = foldMap proofStepStatus`, restricted to the
-    /// fields retained by the proof index snapshot.
-    pub fn proof_status(&self) -> ProofStatus {
-        self.status
     }
 }
 
@@ -176,68 +160,36 @@ pub struct ProofState {
 }
 
 impl ProofState {
-    /// Build the per-theory prover session. Per-lemma roots and contexts stay
-    /// lazy until an interactive route asks for them.
+    /// Build the per-theory prover session from a loaded entry. Per-lemma
+    /// roots and contexts stay lazy until an interactive route asks for them.
     ///
-    /// `maude_sig`: the signature this theory's Maude process loads its
-    /// module from (`TheoryEntry::prover_maude_sig`) — `typed`'s signature
-    /// from before the load's NDC join.
-    ///
-    /// `ndc_cache`: the theory's once-per-load NDC-checked intruder cache
-    /// (`theory_io` ran `check_close_intr_rule` at load), injected into
-    /// the session so it does not re-run the check. The borrowed handle is
-    /// the same allocation the `TheoryEntry` holds.
+    /// The Maude process loads the entry's `prover_maude_sig`, and the
+    /// session reuses its load-time NDC-checked intruder cache.
     pub(crate) fn new(
-        typed: &std::sync::Arc<tamarin_theory::theory::Theory>,
-        maude_sig: tamarin_term::maude_sig::MaudeSig,
-        ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
+        entry: &crate::state::TheoryEntry,
         cfg: &crate::ServerConfig,
     ) -> Result<Self, String> {
-        let maude = tamarin_term::maude_proc::MaudeHandle::start(&cfg.maude_path, maude_sig)
-            .map_err(|e| format!("maude start: {:?}", e))?;
-        Self::new_with_maude(typed, maude, ndc_cache, cfg)
-    }
-
-    fn new_with_maude(
-        typed: &std::sync::Arc<tamarin_theory::theory::Theory>,
-        maude: tamarin_term::maude_proc::MaudeHandle,
-        ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
-        cfg: &crate::ServerConfig,
-    ) -> Result<Self, String> {
-        // Effective cut strategy — HS `closeTheory` precedence
-        // (TheoryLoader.hs): the CLI `--stop-on-trace` wins;
-        // the theory's `configuration:` block is consulted only when
-        // the flag is absent.  Steers the session's autoprove
-        // (`runAutoProver`'s `apCut`) and interactive contexts.
-        let config_block = typed.items.iter().find_map(|i| match i {
-            TheoryItem::ConfigBlock(c) => Some(c),
-            _ => None,
-        });
-        let cut = match cfg.stop_on_trace {
-            Some(c) => c,
-            None => match config_block {
-                Some(cfg) => tamarin_theory::prove::config_block_options(cfg)?
-                    .0
-                    .unwrap_or(tamarin_theory::constraint::solver::context::CutStrategy::Dfs),
-                None => tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
-            },
-        };
+        let maude = tamarin_term::maude_proc::MaudeHandle::start(
+            &cfg.load.maude_path,
+            (*entry.prover_maude_sig).clone(),
+        )
+        .map_err(|e| format!("maude start: {:?}", e))?;
         let session = tamarin_theory::prove::ProverSession::build(
-            typed.clone(),
+            &entry.typed_theory,
             maude,
             tamarin_theory::prove::ProverSessionOptions {
-                cut,
-                ndc_cache: ndc_cache.cloned(),
-                parameters: cfg.solver_parameters,
+                cut: entry.cut,
+                ndc_cache: Some(entry.ndc_cache.clone()),
+                parameters: cfg.load.parameters,
                 sys_retention: tamarin_theory::constraint::solver::search::SysRetention::KeepAll,
                 show_saturation_steps: true,
-                loop_breakers_prepared: ndc_cache.is_some(),
                 ..Default::default()
             },
         )
         .map(Arc::new)
         .map_err(|e| format!("prover session: {e}"))?;
-        let by_lemma = typed
+        let by_lemma = entry
+            .typed_theory
             .lemmas()
             .map(|lemma| (lemma.name.clone(), Mutex::new(LemmaProofState::Lazy)))
             .collect();
@@ -274,10 +226,11 @@ impl ProofState {
         let root_guard = crate::cancellation::lock(root)?;
         let selected =
             navigate_at(&root_guard, path).ok_or_else(|| format!("path not found: {:?}", path))?;
-        if !selected.annotated {
-            return Err(format!("no annotated system at path: {:?}", path));
-        }
-        let selected_sys = selected.sys.clone();
+        let selected_sys = selected
+            .annotation
+            .system()
+            .ok_or_else(|| format!("no annotated system at path: {:?}", path))?
+            .clone();
         drop(root_guard);
         tamarin_theory::constraint::solver::trace::trace_state_at_path(&selected_sys, path);
         let cases = exec_proof_method(&ctx, &method, &selected_sys)
@@ -292,25 +245,14 @@ impl ProofState {
                 let (status, leaf_method) = match is_finished(&ctx, &sys)
                     .map_err(|error| format!("proof context: {error}"))?
                 {
-                    Some(r) => {
-                        let s = match &r {
-                            tamarin_theory::constraint::solver::proof_method::Result::Solved =>
-                                NodeStatus::Solved,
-                            tamarin_theory::constraint::solver::proof_method::Result::Contradictory(_) =>
-                                NodeStatus::Contradictory,
-                            tamarin_theory::constraint::solver::proof_method::Result::Unfinishable =>
-                                NodeStatus::Unfinishable,
-                        };
-                        (s, ProofMethod::Finished(r))
-                    }
+                    Some(r) => (node_status_of(&r), ProofMethod::Finished(r)),
                     None => (NodeStatus::Sorry, ProofMethod::Sorry(None)),
                 };
                 let child = ProofNode {
                     method: leaf_method,
-                    sys,
+                    annotation: ProofAnnotation::checked(sys),
                     children: BTreeMap::new(),
                     status,
-                    annotated: true,
                 };
                 children.insert(name, child);
             }
@@ -326,9 +268,8 @@ impl ProofState {
     }
 
     /// Replace one existing proof node with `sorry /* removed */`. A root is
-    /// re-annotated from its retained initial system, matching `focus []`;
-    /// nested unannotated nodes remain unresolved. Unlike generic method
-    /// application this needs no context, ranking, or system clone.
+    /// re-annotated from the lemma’s initial system, matching `focus []`;
+    /// nested unannotated nodes remain unresolved.
     pub(crate) fn mark_removed_at_path(
         &self,
         lemma: &str,
@@ -344,16 +285,33 @@ impl ProofState {
         let Some(selected) = navigate_at(&root_guard, path) else {
             return Ok(false);
         };
-        if !selected.annotated && !path.is_empty() {
-            return Ok(false);
-        }
+        let has_system = selected.annotation.system().is_some();
         drop(root_guard);
+        let method = ProofMethod::Sorry(Some("removed".into()));
+        if !has_system {
+            if !path.is_empty() {
+                return Ok(false);
+            }
+            // At the root, focus [] checks the replacement against the lemma's initial system.
+            let replacement = tamarin_theory::theory::ProofTree {
+                method,
+                cases: BTreeMap::new(),
+            };
+            let checked = tamarin_theory::prove::check_and_extend_proof_in_session(
+                &self.session,
+                lemma,
+                &replacement,
+                usize::MAX,
+            )
+            .map_err(|e| e.to_string())?;
+            *root = Arc::new(Mutex::new(checked));
+            return Ok(true);
+        }
         let root = copy_on_write(root)?;
         let node = navigate_mut(root, path).expect("path was checked before copy-on-write");
-        node.method = ProofMethod::Sorry(Some("removed".to_string()));
+        node.method = method;
         node.children.clear();
         node.status = NodeStatus::Sorry;
-        node.annotated = true;
         recompute_ancestor_statuses(root, path);
         Ok(true)
     }
@@ -382,7 +340,7 @@ impl ProofState {
         let root_guard = crate::cancellation::lock(root)?;
         let selected =
             navigate_at(&root_guard, path).ok_or_else(|| format!("path not found: {:?}", path))?;
-        if !selected.annotated {
+        if selected.annotation.system().is_none() {
             return Err(format!("no annotated system at path: {:?}", path));
         }
         drop(root_guard);
@@ -422,85 +380,61 @@ impl ProofState {
         })
     }
 
-    /// Build a session for a modified theory while preserving the proof roots
-    /// of every surviving lemma. Proofs after a removed `[reuse]` lemma are
-    /// replayed against fresh systems so no deleted assumption survives in an
-    /// interactive proof path.
-    pub(crate) fn rebase_onto(
-        &self,
-        typed: &Arc<tamarin_theory::theory::Theory>,
-        ndc_cache: Option<&tamarin_theory::constraint::solver::context::IntrRuleCache>,
-        cfg: &crate::ServerConfig,
-        invalidated: &std::collections::BTreeSet<String>,
-    ) -> Result<Self, String> {
-        // The edited theory has the same signature and rules. Share the
-        // existing transport instead of retaining one Maude child per theory
-        // version created by repeated edits.
-        let rebased = Self::new_with_maude(
-            typed,
-            self.session
-                .template_context()
-                .maude
-                .with_fresh_counter_next(0),
-            ndc_cache,
-            cfg,
-        )?;
-        for lemma in typed.lemmas() {
-            let Some(slot) = self.by_lemma.get(&lemma.name) else {
-                continue;
-            };
-            // Do not block readers of the published theory while a stale
-            // proof is reconstructed and replayed into the edited version.
-            let state = crate::cancellation::lock(slot)?.clone();
-            if !invalidated.contains(&lemma.name) {
-                *rebased.by_lemma[&lemma.name].lock() = state;
+    /// Recheck live proofs that depended on the removed assumption. Stored
+    /// proofs replay from the edited theory on their next use.
+    pub(crate) fn without_lemma(&self, name: &str) -> Result<Option<Self>, String> {
+        let Some(session) = self.session.without_lemma(name) else {
+            return Ok(None);
+        };
+        let mut rebased = self.fork()?;
+        rebased.by_lemma.remove(name);
+        rebased.session = Arc::new(session);
+
+        let (removed_index, removed) = self
+            .session
+            .theory()
+            .lemmas()
+            .enumerate()
+            .find(|(_, lemma)| lemma.name == name)
+            .expect("session contained lemma");
+        let refines_sources = removed.is_source_assumption();
+        for (index, lemma) in rebased.session.theory().lemmas().enumerate() {
+            let used_refined_sources =
+                refines_sources && lemma.source_kind() == SourceKind::RefinedSources;
+            let used_reuse = index >= removed_index && lemma.can_reuse(removed);
+            if !used_refined_sources && !used_reuse {
                 continue;
             }
-            let root = match &state {
-                LemmaProofState::Live(root) => root.clone(),
-                LemmaProofState::Lazy | LemmaProofState::Snapshot(_) => {
-                    let Some(root) = self.replay_interactive_root(&lemma.name)? else {
-                        continue;
-                    };
-                    Arc::new(Mutex::new(root))
-                }
+            let state = rebased
+                .by_lemma
+                .get_mut(&lemma.name)
+                .expect("surviving lemma")
+                .get_mut();
+            let LemmaProofState::Live(root) = state else {
+                *state = LemmaProofState::Lazy;
+                continue;
             };
-            let old = crate::cancellation::lock(&root)?;
-            let wrap_invalidated = !matches!(old.method, ProofMethod::Sorry(None));
-            let payload = if matches!(old.method, ProofMethod::Invalidated) {
-                old.children.get("").unwrap_or(&old)
-            } else {
-                &old
-            };
-            let skeleton = proof_tree_from_node(payload);
-            drop(old);
-            let replayed = tamarin_theory::prove::check_and_extend_proof_in_session(
+            let root = crate::cancellation::lock(root)?;
+            let was_open = root.status == NodeStatus::Open;
+            let steps = proof_tree_from_node(&root);
+            drop(root);
+            let mut replayed = tamarin_theory::prove::check_and_extend_proof_in_session(
                 &rebased.session,
                 &lemma.name,
-                &skeleton,
+                &steps,
                 usize::MAX,
             )
-            .map_err(|error| format!("initial proof for {}: {error}", lemma.name))?;
-            let root = if wrap_invalidated {
-                ProofNode {
-                    method: ProofMethod::Invalidated,
-                    sys: replayed.sys.clone(),
-                    children: BTreeMap::from([(String::new(), replayed)]),
-                    status: NodeStatus::Open,
-                    annotated: true,
-                }
-            } else {
-                replayed
-            };
-            *rebased.by_lemma[&lemma.name].lock() =
-                LemmaProofState::Live(Arc::new(Mutex::new(root)));
+            .map_err(|error| format!("rechecking {}: {error}", lemma.name))?;
+            if was_open && matches!(steps.method, ProofMethod::Sorry(_)) {
+                prepare_interactive_root(&mut replayed, lemma.proof.is_some());
+            }
+            *state = LemmaProofState::Live(Arc::new(Mutex::new(replayed)));
         }
-        Ok(rebased)
+        Ok(Some(rebased))
     }
 
     /// Read a root without causing stored-proof replay or allocating its
-    /// initial system. Used by overview panes so opening a rules/source page
-    /// does not retain every lemma's proof system.
+    /// initial system.
     #[cfg(test)]
     pub(crate) fn peek_root(&self, lemma: &str) -> Option<ProofNode> {
         let state = self.by_lemma.get(lemma)?.lock();
@@ -720,7 +654,7 @@ impl ProofState {
         lemma: &str,
         path: &[String],
     ) -> Result<Option<tamarin_theory::constraint::system::System>, String> {
-        self.filter_map_node_at(lemma, path, |node| node.annotated.then(|| node.sys.clone()))
+        self.filter_map_node_at(lemma, path, |node| node.annotation.system().cloned())
     }
 
     fn filter_map_node_at<R>(
@@ -743,6 +677,17 @@ impl ProofState {
     }
 }
 
+fn proof_tree_from_node(node: &ProofNode) -> tamarin_theory::theory::ProofTree {
+    tamarin_theory::theory::ProofTree {
+        method: node.method.clone(),
+        cases: node
+            .children
+            .iter()
+            .map(|(name, child)| (name.clone(), proof_tree_from_node(child)))
+            .collect(),
+    }
+}
+
 fn prepare_interactive_root(root: &mut ProofNode, has_stored_proof: bool) {
     if !has_stored_proof && matches!(root.method, ProofMethod::Sorry(_)) && root.children.is_empty()
     {
@@ -758,20 +703,6 @@ pub(crate) fn navigate_at<'a>(node: &'a ProofNode, path: &[String]) -> Option<&'
         cur = cur.children.get(seg)?;
     }
     Some(cur)
-}
-
-/// Discard solver annotations while retaining the user-visible proof steps.
-/// Replaying this skeleton against a new initial system is the only safe way
-/// to carry a live proof across a theory edit that changes its assumptions.
-fn proof_tree_from_node(node: &ProofNode) -> tamarin_theory::theory::ProofTree {
-    tamarin_theory::theory::ProofTree {
-        method: node.method.clone(),
-        cases: node
-            .children
-            .iter()
-            .map(|(name, child)| (name.clone(), proof_tree_from_node(child)))
-            .collect(),
-    }
 }
 
 /// Port of HS `getProofPaths` (`Web/Theory.hs`):
@@ -844,9 +775,7 @@ fn recompute_ancestor_statuses(root: &mut ProofNode, path: &[String]) {
 fn empty_case_status(method: &ProofMethod) -> NodeStatus {
     match method {
         ProofMethod::Sorry(_) => NodeStatus::Sorry,
-        ProofMethod::Finished(result) => {
-            tamarin_theory::constraint::solver::search::node_status_of(result)
-        }
+        ProofMethod::Finished(result) => node_status_of(result),
         ProofMethod::Simplify | ProofMethod::SolveGoal(_) | ProofMethod::Induction => {
             NodeStatus::Contradictory
         }
@@ -885,30 +814,23 @@ pub(crate) fn render_sub_proof_snippet(
     // via `noSystemPrf`) has NO constraint system to render; HS emits the
     // single fallback line instead of the methods/sequent/sub-case blocks:
     //   text $ "no annotated constraint system / " ++ nCases ++ " sub-case(s)"
-    // RS's unannotated `ProofNode` carries an empty sentinel `sys`
-    // (replay.rs `parsed_to_unannotated`) that MUST NOT be rendered.
     let Some(system) = snippet.system.as_ref() else {
         return Ok(tamarin_theory::pretty_hpj::postprocess_html(&format!(
             "no annotated constraint system / {} sub-case(s)",
             snippet.children.len()
         )));
     };
-    let url_path = encode_sub_path(proof_path);
+    let proof = |sub: &[String]| TheoryPath::Proof {
+        lemma: lemma.to_string(),
+        sub: sub.to_vec(),
+    };
     // HS `subProofSnippet = vcat [ …proofMethods…, text "", <h3>Constraint
     // system</h3>, [dynamic-graph], sequent, <h3>N sub-case(s)</h3>, …subCases ]`
     // — each element is a `vcat` line; join with `\n`, then postprocess once.
     let mut parts: Vec<String> = Vec::new();
     // Applicable Proof Methods (ranked at this node's proof depth, HS
     // `subProofSnippet` uses `length proofPath`).
-    write_applicable_methods(
-        &mut parts,
-        idx,
-        lemma,
-        &url_path,
-        proof_path.len(),
-        system,
-        ctx,
-    )?;
+    write_applicable_methods(&mut parts, idx, lemma, proof_path, system, ctx)?;
     // HS `text ""` — a blank line before the Constraint-system header.
     parts.push(String::new());
     parts.push("<h3>Constraint system</h3>".to_string());
@@ -917,15 +839,9 @@ pub(crate) fn render_sub_proof_snippet(
         // pointing at `InteractiveDotGraphR` = the `intdot` route (the HTML
         // shell that in turn fetches `interactive-graph-def`), NOT the raw
         // DOT route directly (`Web/Theory.hs`).
-        let src = format!(
-            "/thy/trace/{idx}/intdot/proof/{lemma}{path}",
-            idx = idx,
-            lemma = url_path_escape(lemma),
-            path = url_path,
-        );
         parts.push(format!(
             "<dynamic-graph graphSrc=\"{}\"></dynamic-graph>",
-            src
+            theory_url(idx, "intdot", &proof(proof_path))
         ));
     }
     // HS `preformatted (Just "sequent") (prettyNonGraphSystem se)` =
@@ -941,7 +857,6 @@ pub(crate) fn render_sub_proof_snippet(
     for (case_name, child_annotated) in &snippet.children {
         let mut child_path = proof_path.to_vec();
         child_path.push(case_name.clone());
-        let child_url = encode_sub_path(&child_path);
         // HS `withTag "h4" [] (text "Case" <-> text name)` = `<h4>Case NAME</h4>`.
         parts.push(format!(
             "<h4>Case {}</h4>",
@@ -955,15 +870,9 @@ pub(crate) fn render_sub_proof_snippet(
             continue;
         }
         // HS `refDotInteractiveStaticPath` → `<static-graph graphSrc=…>`.
-        let src = format!(
-            "/thy/trace/{idx}/intdot/proof/{lemma}{path}",
-            idx = idx,
-            lemma = url_path_escape(lemma),
-            path = child_url,
-        );
         parts.push(format!(
             "<static-graph graphSrc=\"{}\"></static-graph>",
-            src
+            theory_url(idx, "intdot", &proof(&child_path))
         ));
     }
     Ok(tamarin_theory::pretty_hpj::postprocess_html(
@@ -993,45 +902,19 @@ fn has_graph_content(sys: &System) -> bool {
         .any(|(g, st)| !st.solved && (g.is_action() || g.is_chain()))
 }
 
-fn write_applicable_methods(
-    out: &mut Vec<String>,
-    idx: usize,
-    lemma: &str,
-    url_path: &str,
-    depth: usize,
-    sys: &System,
+/// HS `rankProofMethods` (ProofMethod.hs) as the web uses it: the ranked
+/// `(method, explanation)` list, filtered to the methods `execProofMethod`
+/// accepts. Both the method pane's numbering and the `method/<N>` route read
+/// this one list, so a clicked number always selects the method displayed.
+pub(crate) fn applicable_methods(
     ctx: &ProofContext,
-) -> Result<(), String> {
-    use tamarin_theory::pretty_hpj::{self as hpj, Doc};
-    // The ranking used at this proof depth (HS `subProofSnippet`:
-    // `ranking = useHeuristic heuristic (length proofPath)`,
-    // `Web/Theory.hs`).
-    let ranking = ranking_at_depth(Some(ctx), depth);
-    // Match Haskell `rankProofMethods` (`ProofMethod.hs`):
-    //   stoppingMethod = Finished <$> isFinished ctxt sys
-    //   in execMethods $ maybe proofMethods ((:[]) . (,"")) stoppingMethod
-    // When `isFinished` yields a verdict the WHOLE method list is replaced
-    // by the single stopping method `[Finished r]` (and `execProofMethod
-    // (Finished _) = Just M.empty` always survives the `execMethods`
-    // filter).  Otherwise the list is `proofMethods` (Simplify / Induction
-    // / SolveGoal), filtered by `execProofMethod`.  In Rust,
-    // `candidate_methods` is that un-filtered `proofMethods` list (used by
-    // the search loop which tries each in order); for the UI we filter via
-    // `exec_proof_method` so the user-visible numbering matches the actual
-    // click semantics.
-    // Each entry is `(method, expl)` — `expl` is HS's `rankProofMethods`
-    // explanation string (`"nr. N …"` for SolveGoal, `""` otherwise),
-    // rendered by `prettyPM` as a trailing `// <expl>` line comment.
-    // `candidate_methods_with_expl` performs the terminal check itself, so a
-    // finished system yields its one `Finished` method without a duplicate
-    // contradiction sweep here.
+    sys: &System,
+    depth: usize,
+) -> Result<Vec<(ProofMethod, String)>, String> {
     let mut methods = Vec::new();
     for candidate in
         candidate_methods_with_expl(sys, ctx, depth).map_err(|error| error.to_string())?
     {
-        // HS-faithful WHNF-depth applicability (Web/Theory.hs via
-        // ProofMethod.hs). Must stay in lockstep with
-        // `theory::apply_method`'s method-number filter.
         if tamarin_theory::constraint::solver::proof_method::is_applicable_for_display(
             ctx,
             &candidate.0,
@@ -1042,6 +925,24 @@ fn write_applicable_methods(
             methods.push(candidate);
         }
     }
+    Ok(methods)
+}
+
+fn write_applicable_methods(
+    out: &mut Vec<String>,
+    idx: usize,
+    lemma: &str,
+    proof_path: &[String],
+    sys: &System,
+    ctx: &ProofContext,
+) -> Result<(), String> {
+    let depth = proof_path.len();
+    use tamarin_theory::pretty_hpj::{self as hpj, Doc};
+    // The ranking used at this proof depth (HS `subProofSnippet`:
+    // `ranking = useHeuristic heuristic (length proofPath)`,
+    // `Web/Theory.hs`).
+    let ranking = ranking_at_depth(ctx, depth);
+    let methods = applicable_methods(ctx, sys, depth)?;
     if methods.is_empty() {
         use tamarin_theory::constraint::solver::proof_method::Result as Terminal;
         let heading = match is_finished_or_stuck(ctx, sys).map_err(|error| error.to_string())? {
@@ -1062,48 +963,22 @@ fn write_applicable_methods(
         .render();
     out.push(format!("<h3>{h3}</h3>"));
     // HS `preformatted (Just "methods") (numbered' $ zipWith prettyPM [1..] pms)`
-    // = `withTag "div" [("class","preformatted methods")] …` (no `<pre>`).
-    // Mirror Haskell `Web.Theory.subProofSnippet` (`Web/Theory.hs`):
-    // each ranked method N (1-based) emits
-    //   <a class="internal-link proof-method"
-    //      href="/thy/trace/<idx>/main/method/<lemma>/<N>/<sub>">label</a>
-    // The frontend's `mainDisplay.applyProofMethod` keyboard shortcuts
-    // (1..9) target `div.methods a.internal-link`, and the click handler
-    // for `internal-link` posts the URL via `server.handleJson` —
-    // landing on our `/main/method/...` route which dispatches to
-    // `theory::apply_method` and returns a `{redirect}`.
-    // HS lays the whole list out as ONE HtmlDoc (`numbered' $ zipWith
-    // prettyPM [1..] pms`, Web/Theory.hs): each item is
-    // `flushRight nW (show i) <> ". " <> (link (prettyProofMethod m) <->
-    // lineComment_ expl)` — so the method text wraps (a) at HTML-ENTITY
-    // fill widths (renderHtmlDoc), (b) beside-shifted by the `N. ` prefix
-    // (nW+2 cols), and (c) with the trailing `// expl` comment
-    // participating in the last line's fits check.  Reproduce that layout
-    // per item: build the method Doc under the entity-width guard and lay
-    // it with `render_at(100, 67, nW+2)` (the beside-shift budget), then
-    // split the never-wrapped `<->`-joined comment back off to place the
-    // `</a>` boundary.  (Continuation-line indent bytes and the blank line
-    // `numbered'` inserts between items are whitespace the parity gate
-    // canonicalizes; the break POSITIONS are what must match.)
-    // HS `numbered' $ zipWith prettyPM [1..] pms` (Web/Theory.hs):
-    //   pp (i, d) = text (flushRight nW (show i)) <> text ". " <> d
-    //   d        = withTag "a" [("class",…),("href",…)] (prettyProofMethod m)
-    //              <-> (if null expl then emptyDoc else lineComment_ expl)
-    // and `numbered'` separates the items by a blank line (`intersperse (text "")`).
-    // Each item is built as ONE Doc (so the `N. ` prefix beside-shifts a wrapped
-    // method's continuation lines, the method carries its `hl_keyword` span, and
-    // the trailing `// expl` comment participates in the fill), then rendered
-    // under the active HtmlDoc guard.
+    // (Web/Theory.hs): item N is `flushRight nW (show N) <> ". " <> d` with
+    // `d = link (prettyProofMethod m) <-> lineComment_ expl`, built as ONE Doc
+    // so the prefix beside-shifts a wrapped method and the comment takes part
+    // in the fill; `numbered'` separates items by a blank line.
     let nw = methods.len().to_string().len();
     let mut method_blocks: Vec<String> = Vec::with_capacity(methods.len());
     for (i, (m, expl)) in methods.iter().enumerate() {
         let nr = i + 1;
-        let href = format!(
-            "/thy/trace/{idx}/main/method/{lemma}/{nr}{path}",
-            idx = idx,
-            lemma = url_path_escape(lemma),
-            nr = nr,
-            path = url_path
+        let href = theory_url(
+            idx,
+            "main",
+            &TheoryPath::Method {
+                lemma: lemma.to_string(),
+                idx: nr as i64,
+                sub: proof_path.to_vec(),
+            },
         );
         let link = hpj::with_tag(
             "a",
@@ -1125,7 +1000,11 @@ fn write_applicable_methods(
         method_blocks.join("\n\n")
     ));
     // Autoprove menu links (a./b./[o.]/s.) — self-contained block.
-    write_autoprove_links(out, idx, &url_path_escape(lemma), url_path, ctx);
+    let proof = TheoryPath::Proof {
+        lemma: lemma.to_string(),
+        sub: proof_path.to_vec(),
+    };
+    write_autoprove_links(out, idx, &proof, ctx);
     Ok(())
 }
 
@@ -1137,17 +1016,14 @@ fn write_applicable_methods(
 /// with cut ∈ {idfs=CutDFS, characterize=CutNothing}; `AutoProverAllR`
 /// omits the oracle flag.  `linkToPath` prepends the `internal-link`
 /// class (the gate sorts class tokens, so ordering is immaterial).
-/// `lemma_esc` is the already-`url_path_escape`d lemma segment.
 fn write_autoprove_links(
     out: &mut Vec<String>,
     idx: usize,
-    lemma_esc: &str,
-    url_path: &str,
+    proof: &TheoryPath,
     ctx: &ProofContext,
 ) {
     use tamarin_theory::pretty_hpj as hpj;
-    let l = lemma_esc;
-    let p = url_path;
+    let url = |route: &str| theory_url(idx, route, proof);
     let bound = 5; // HS `fromMaybe 5 (apBound ti.autoProver)` — default depth bound.
                    // HS `autoProverLinks` (Web/Theory.hs) wraps each link's visible
                    // text in `keyword_` — an `hl_keyword` span in HtmlDoc mode, plain text
@@ -1161,14 +1037,19 @@ fn write_autoprove_links(
     let kw = |s: &str| hpj::keyword_(s).render();
     // a. autoprove  (A. for all solutions)   [nameSuffix = emptyDoc]
     out.push(format!(
-        "a. <a class=\"internal-link autoprove\" href=\"/thy/trace/{idx}/autoprove/idfs/0/False/proof/{l}{p}\">{ap}</a> \
-         (A. <a class=\"internal-link characterization\" href=\"/thy/trace/{idx}/autoprove/characterize/0/False/proof/{l}{p}\">{fas}</a>)",
-        ap = kw("autoprove"), fas = kw("for all solutions"),
+        "a. <a class=\"internal-link autoprove\" href=\"{a}\">{ap}</a> \
+         (A. <a class=\"internal-link characterization\" href=\"{c}\">{fas}</a>)",
+        a = url("autoprove/idfs/0/False"),
+        c = url("autoprove/characterize/0/False"),
+        ap = kw("autoprove"),
+        fas = kw("for all solutions"),
     ));
     // b. bounded autoprove  (B. for all solutions)  with proof-depth bound N
     out.push(format!(
-        "b. <a class=\"internal-link bounded-autoprove\" href=\"/thy/trace/{idx}/autoprove/idfs/{bound}/False/proof/{l}{p}\">{ap}</a> \
-         (B. <a class=\"internal-link bounded-characterization\" href=\"/thy/trace/{idx}/autoprove/characterize/{bound}/False/proof/{l}{p}\">{fas}</a>)  with proof-depth bound {bound}",
+        "b. <a class=\"internal-link bounded-autoprove\" href=\"{a}\">{ap}</a> \
+         (B. <a class=\"internal-link bounded-characterization\" href=\"{c}\">{fas}</a>)  with proof-depth bound {bound}",
+        a = url(&format!("autoprove/idfs/{bound}/False")),
+        c = url(&format!("autoprove/characterize/{bound}/False")),
         ap = kw("autoprove"), fas = kw("for all solutions"),
     ));
     // o. oracle autoprove — only when the heuristic uses an oracle
@@ -1176,14 +1057,16 @@ fn write_autoprove_links(
     // single hsep separator).
     if uses_oracle(ctx) {
         out.push(format!(
-            "o. <a class=\"internal-link oracle-autoprove\" href=\"/thy/trace/{idx}/autoprove/idfs/0/True/proof/{l}{p}\">{ap}</a> until oracle returns nothing",
+            "o. <a class=\"internal-link oracle-autoprove\" href=\"{a}\">{ap}</a> until oracle returns nothing",
+            a = url("autoprove/idfs/0/True"),
             ap = kw("autoprove"),
         ));
     }
     // s. autoprove for all lemmas  (S. for all solutions)  for all lemmas<trailing space>
     out.push(format!(
-        "s. <a class=\"internal-link autoprove-all\" href=\"/thy/trace/{idx}/autoproveAll/idfs/0/proof/{l}{p}\">{ap}</a> \
-         (S. <a class=\"internal-link characterization-all\" href=\"/thy/trace/{idx}/autoproveAll/characterize/0/proof/{l}{p}\">{fas}</a>)  for all lemmas ",
+        "s. <a class=\"internal-link autoprove-all\" href=\"{a}\">{ap}</a> \
+         (S. <a class=\"internal-link characterization-all\" href=\"{c}\">{fas}</a>)  for all lemmas ",
+        a = url("autoproveAll/idfs/0"), c = url("autoproveAll/characterize/0"),
         ap = kw("autoprove"), fas = kw("for all solutions"),
     ));
 }
@@ -1221,13 +1104,7 @@ mod tests {
             &test_config(mp),
         )
         .expect("load");
-        ProofState::new(
-            &entry.typed_theory,
-            (*entry.prover_maude_sig).clone(),
-            entry.ndc_cache.as_ref(),
-            &test_config(mp),
-        )
-        .expect("build state")
+        ProofState::new(&entry, &test_config(mp)).expect("build state")
     }
 
     fn test_config(maude: &str) -> crate::ServerConfig {
@@ -1236,7 +1113,7 @@ mod tests {
             std::path::PathBuf::new(),
             maude.to_string(),
         );
-        cfg.derivcheck_timeout = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
+        cfg.load.derivation_checks = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
         cfg
     }
 
@@ -1430,10 +1307,9 @@ end
                 "child".to_string(),
                 ProofNode {
                     method: ProofMethod::Sorry(None),
-                    sys: System::empty(),
+                    annotation: ProofAnnotation::Unchecked,
                     children: BTreeMap::new(),
                     status: NodeStatus::Sorry,
-                    annotated: false,
                 },
             );
         });
@@ -1447,12 +1323,14 @@ end
             state.mark_removed_at_path("trivial", &["child".to_string()]),
             Ok(false)
         );
-        state.with_live_root_mut("trivial", |root| root.annotated = false);
+        state.with_live_root_mut("trivial", |root| {
+            root.annotation = ProofAnnotation::Unchecked
+        });
         assert_eq!(state.mark_removed_at_path("trivial", &[]), Ok(true));
 
         let root = state.get_root("trivial").unwrap().unwrap();
         assert_eq!(root.status, NodeStatus::Sorry);
-        assert!(root.annotated);
+        assert!(root.annotation.system().is_some());
         assert!(root.children.is_empty());
         assert!(matches!(
             root.method,
@@ -1522,10 +1400,7 @@ end
             body.as_ref(),
             tamarin_theory::pretty_theory::pretty_proof_body(&live)
         );
-        assert_eq!(
-            root.proof_status(),
-            tamarin_theory::constraint::solver::search::proof_status(&live)
-        );
+        assert_eq!(root.display_status, ProofStatus::Incomplete);
         assert!(state.peek_root("stored").is_some());
         assert_eq!(
             state.state_count(|s| matches!(s, LemmaProofState::Snapshot(_))),
@@ -1571,23 +1446,12 @@ end
     }
 
     #[test]
-    fn rebase_keeps_unvisited_surviving_proofs_lazy() {
+    fn removing_a_lemma_keeps_unvisited_surviving_proofs_lazy() {
         let Some(mp) = require_maude_path() else {
             return;
         };
         let state = trivial_proof_state(&mp);
-        let mut typed = state.session.theory().clone();
-        assert!(typed.remove_lemma("second"));
-        let typed = Arc::new(typed);
-
-        let rebased = state
-            .rebase_onto(
-                &typed,
-                None,
-                &test_config(&mp),
-                &std::collections::BTreeSet::new(),
-            )
-            .expect("rebase");
+        let rebased = state.without_lemma("second").unwrap().unwrap();
 
         assert!(state.peek_root("stored").is_none());
         assert!(rebased.peek_root("trivial").is_none());
@@ -1598,88 +1462,65 @@ end
             .is_some());
         assert!(rebased.peek_root("stored").is_none());
         assert!(rebased.peek_root("second").is_none());
+        assert!(state.without_lemma("missing").unwrap().is_none());
     }
 
     #[test]
-    fn rebase_replays_proofs_after_a_removed_reuse_lemma() {
+    fn removing_an_assumption_rechecks_dependent_proofs() {
         let Some(mp) = require_maude_path() else {
             return;
         };
-        let state = proof_state_from_source(
-            r#"theory T begin
-rule R: [ Fr(~k) ] --[ A(~k) ]-> []
-lemma reusable [reuse]: all-traces
-  "All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j"
-lemma consumer: all-traces
-  "All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j"
-end"#,
-            &mp,
-        );
-        let old = state
-            .get_system_at("consumer", &[])
-            .expect("old proof")
-            .expect("old root system");
-        assert_eq!(old.lemmas.len(), 1);
-
-        let mut typed = state.session.theory().clone();
-        assert!(typed.remove_lemma("reusable"));
-        let typed = Arc::new(typed);
-        let rebased = state
-            .rebase_onto(
-                &typed,
-                None,
-                &test_config(&mp),
-                &std::collections::BTreeSet::from(["consumer".to_string()]),
+        let prove = |state: &ProofState| {
+            let sys = state.get_system_at("consumer", &[]).unwrap().unwrap();
+            tamarin_theory::prove::prove_system_in_session_with_options(
+                &state.session,
+                "consumer",
+                sys,
+                tamarin_theory::prove::SearchOptions {
+                    proof_bound: 100,
+                    ranking_depth_offset: 0,
+                    cut: tamarin_theory::constraint::solver::context::CutStrategy::Dfs,
+                    oracle_only: false,
+                },
             )
-            .expect("rebase");
-
-        assert!(matches!(
-            rebased.get_method_at("consumer", &[]).expect("new proof"),
-            Some(ProofMethod::Sorry(None))
-        ));
-        let fresh = rebased
-            .get_system_at("consumer", &[])
-            .expect("new proof")
-            .expect("new system");
-        assert!(fresh.lemmas.is_empty());
-    }
-
-    #[test]
-    fn rebase_replays_a_snapshotted_proof() {
-        let Some(mp) = require_maude_path() else {
-            return;
+            .unwrap()
         };
-        let state = proof_state_from_source(
-            r#"theory T begin
-rule R: [ Fr(~k) ] --[ A(~k) ]-> []
-lemma reusable [reuse]: all-traces
-  "All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j"
-lemma consumer: all-traces
-  "All k #i. A(k) @ #i ==> Ex #j. A(k) @ #j"
-end"#,
-            &mp,
-        );
-        assert!(state.proof_body("consumer").unwrap().is_some());
-        assert_eq!(
-            state.state_count(|s| matches!(s, LemmaProofState::Snapshot(_))),
-            1
-        );
 
-        let mut typed = state.session.theory().clone();
-        assert!(typed.remove_lemma("reusable"));
-        let rebased = state
-            .rebase_onto(
-                &Arc::new(typed),
-                None,
-                &test_config(&mp),
-                &std::collections::BTreeSet::from(["consumer".to_string()]),
-            )
-            .expect("rebase");
+        for source in [
+            r#"theory Reuse begin
+                rule Emit: [] --[ Used() ]-> []
+                lemma assumption [reuse]: "All #i. Used() @ i ==> F"
+                lemma consumer: "All #i. Used() @ i ==> F"
+            end"#,
+            r#"theory Sources begin
+                rule Make: [] --[ Created() ]-> [Seed()]
+                rule Use: [Seed()] --[ Used() ]-> []
+                lemma consumer: "All #i. Used() @ i ==> F"
+                lemma assumption [sources]: "All #i. Created() @ i ==> F"
+            end"#,
+        ] {
+            let state = proof_state_from_source(source, &mp);
+            state.proof_body("consumer").unwrap();
+            let from_snapshot = state.without_lemma("assumption").unwrap().unwrap();
+            assert!(from_snapshot.peek_root("consumer").is_none());
+            assert_eq!(prove(&from_snapshot).status, NodeStatus::Solved);
 
-        assert!(matches!(
-            rebased.get_method_at("consumer", &[]).expect("new proof"),
-            Some(ProofMethod::Sorry(None))
-        ));
+            let old = prove(&state);
+            assert_eq!(old.status, NodeStatus::Contradictory);
+            state.graft_at_path("consumer", &[], old).unwrap();
+            let edited = state.without_lemma("assumption").unwrap().unwrap();
+            let root = edited.get_root("consumer").unwrap().unwrap();
+            assert!(
+                !root.children.is_empty(),
+                "the live proof steps were discarded"
+            );
+            assert_ne!(root.status, NodeStatus::Contradictory);
+            assert_eq!(prove(&edited).status, NodeStatus::Solved);
+            assert_eq!(
+                state.get_root("consumer").unwrap().unwrap().status,
+                NodeStatus::Contradictory
+            );
+        }
     }
 
     #[test]
@@ -1748,7 +1589,9 @@ end"#,
         };
         let state = trivial_proof_state(&mp);
         state.get_root("trivial").expect("materialize root");
-        state.with_live_root_mut("trivial", |root| root.annotated = false);
+        state.with_live_root_mut("trivial", |root| {
+            root.annotation = ProofAnnotation::Unchecked
+        });
 
         assert!(state
             .get_system_at("trivial", &[])
@@ -1759,10 +1602,9 @@ end"#,
             .is_err());
         let replacement = ProofNode {
             method: ProofMethod::Sorry(None),
-            sys: System::empty(),
+            annotation: ProofAnnotation::checked(System::empty()),
             children: BTreeMap::new(),
             status: NodeStatus::Sorry,
-            annotated: true,
         };
         assert!(state.graft_at_path("trivial", &[], replacement).is_err());
     }
@@ -1771,10 +1613,9 @@ end"#,
     fn mutation_rolls_status_up_to_the_root() {
         let leaf = |status| ProofNode {
             method: ProofMethod::Sorry(None),
-            sys: System::empty(),
+            annotation: ProofAnnotation::checked(System::empty()),
             children: BTreeMap::new(),
             status,
-            annotated: true,
         };
         let mut middle = leaf(NodeStatus::Open);
         middle

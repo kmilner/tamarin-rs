@@ -1,5 +1,5 @@
 //! `EquationStore::simp_minimize` on one disjunction of `n` distinct
-//! substitutions, the state `simp_with_fresh_avoiding` hands it after
+//! substitutions, the state `EquationStore::simp` hands it after
 //! `sort_disj_substs`.  Duplicate detection is the only work on this input.
 //!
 //! Each substitution maps four variables to large terms that agree
@@ -62,7 +62,11 @@ fn bench_simp_minimize(c: &mut Criterion) {
     for n in SIZES {
         let mut store = store(n);
         group.bench_with_input(BenchmarkId::from_parameter(n), &n, |b, _| {
-            b.iter(|| assert!(!black_box(&mut store).simp_minimize(|_| false)))
+            b.iter(|| {
+                assert!(!black_box(&mut store)
+                    .simp_minimize(|_| Ok::<_, ()>(false))
+                    .unwrap())
+            })
         });
     }
     group.finish();

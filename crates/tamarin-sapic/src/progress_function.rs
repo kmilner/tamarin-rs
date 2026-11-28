@@ -12,7 +12,7 @@
 //!   - `pf_inv`    (HS `pfInv`):   the inverse map (to → from).
 //!
 //! HS `pfRange` (the range on its own) has no RS consumer and is not ported;
-//! its helper `pfRange'` is [`pf_range_prime`], which `pf_inv` searches.
+//! `pf_inv` builds its helper `pfRange'` inline.
 //!
 //! Faithful to HS down to set iteration order: `S.Set ProcessPosition` is
 //! modelled as `BTreeSet<Vec<i64>>` (lexicographic position order = HS `Ord
@@ -207,30 +207,27 @@ fn flatten(s: &PosSetSet) -> PosSet {
     out
 }
 
-/// `pfRange'` (ProgressFunction.hs): the set of `(to, from)` pairs.
-fn pf_range_prime(proc: &AProc) -> Result<BTreeSet<(Pos, Pos)>, String> {
-    let froms = pf_from(proc)?;
-    let mut acc: BTreeSet<(Pos, Pos)> = BTreeSet::new();
+/// `pfInv` (ProgressFunction.hs): the inverse of the progress function, as
+/// a map from a "to" position to its (first matching) "from" position, given
+/// the domain `froms = pfFrom proc`.
+///
+/// HS runs `L.find` over `S.toList (pfRange' proc)`, the `(to, from)` pairs in
+/// ascending order, so the first `from` per `to` wins; keeping the first entry
+/// per key while inserting in that order is the same choice.
+pub(crate) fn pf_inv(
+    proc: &AProc,
+    froms: &PosSet,
+) -> Result<std::collections::BTreeMap<Pos, Pos>, String> {
+    // `pfRange'`: the set of `(to, from)` pairs.
+    let mut range: BTreeSet<(Pos, Pos)> = BTreeSet::new();
     for pos in froms {
-        let flat = flatten(&pf(proc, &pos)?);
-        for to in flat {
-            acc.insert((to, pos.clone()));
+        for to in flatten(&pf(proc, pos)?) {
+            range.insert((to, pos.clone()));
         }
     }
-    Ok(acc)
-}
-
-/// `pfInv` (ProgressFunction.hs): the inverse of the progress function
-/// — given a "to" position, the (first matching) "from" position.
-///
-/// HS uses `L.find` over `S.toList set` (ascending `(to, from)` pair order), so
-/// the first `from` for a `to` in lexicographic pair order wins.  The pairs are
-/// ascending in `to` first, so keeping the FIRST `from` seen per `to` in a map
-/// is that same choice, answered by lookup instead of a scan per query.
-pub(crate) fn pf_inv(proc: &AProc) -> Result<impl Fn(&[i64]) -> Option<Pos> + use<>, String> {
-    let mut inv: std::collections::BTreeMap<Pos, Pos> = std::collections::BTreeMap::new();
-    for (to, from) in pf_range_prime(proc)? {
+    let mut inv = std::collections::BTreeMap::new();
+    for (to, from) in range {
         inv.entry(to).or_insert(from);
     }
-    Ok(move |x: &[i64]| -> Option<Pos> { inv.get(x).cloned() })
+    Ok(inv)
 }

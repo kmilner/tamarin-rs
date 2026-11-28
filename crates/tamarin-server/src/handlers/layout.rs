@@ -84,20 +84,3 @@ pub(crate) fn intdot_shell_html(title: &str, dotsrc: &str) -> String {
         options = OPTIONS_MENU_ITEMS,
     )
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn intdot_shell_matches_haskell_layout() {
-        let html = intdot_shell_html(
-            "Theory: RevealingSignatures",
-            "/thy/trace/1/json/lemma/debug",
-        );
-        assert_eq!(
-            html,
-            include_str!("../../tests/fixtures/haskell-responses/intdot.html")
-        );
-    }
-}

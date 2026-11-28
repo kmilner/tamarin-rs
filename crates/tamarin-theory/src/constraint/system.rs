@@ -10,7 +10,6 @@
 //! collections are all read and mutated by the solver during proof search.
 
 use std::cell::Cell;
-use std::cell::RefCell;
 use std::sync::Arc;
 
 use crate::constraint::constraints::{Edge, Goal, LessAtom, NodeId};
@@ -215,66 +214,6 @@ impl SystemContent {
     }
 }
 
-/// One cached generation of the implied-formula dedup canon for a single
-/// formula store (`formulas` or `solved_formulas`), keyed by that store's
-/// per-store stamp.  Built lazily by `insert_implied_formulas_pass` (via
-/// [`System::formulas_canon_table`] / [`System::solved_formulas_canon_table`]).
-///
-/// Each entry is `(src, canon, hash)` for the store element at the same index:
-/// * `src` is a strong `Arc` clone of the store element.  Its refcount pins the
-///   allocation, so a store `Arc` whose pointer equals a `src` pointer is
-///   provably the SAME immutable value (formula `Arc`s are only ever REPLACED
-///   wholesale — `*slot = Arc::new(..)`, never `Arc::make_mut`/`get_mut`ed —
-///   so a live pinned address can never be recycled under a different value).
-///   That is the ABA-safety basis for the pointer-keyed incremental rebuild.
-/// * `canon` is the dedup canonical form of `src` (the caller's canon closure).
-///   When the canonicalisation is a structural no-op it is a clone of the `src`
-///   `Arc` itself (refcount bump, no extra tree).
-/// * `hash` is the `fx_hash_one` prefilter hash of `canon`.
-///
-/// The `stamp` records the store stamp the entries were built against: a probe
-/// reuses this table only while the live per-store stamp still equals it (an
-/// exact-value/order match, since stamps are globally unique and every store
-/// mutation mints a fresh one).
-#[derive(Debug)]
-pub(crate) struct CanonTable {
-    /// Per-store stamp the entries were built against.  Private: only the
-    /// stamp-hit probe in this module reads it.
-    stamp: u64,
-    /// `(src, canon, hash)` for each store element, in store order.
-    pub(crate) entries: Vec<(Arc<Guarded>, Arc<Guarded>, u64)>,
-}
-
-// ===== canon-cache effectiveness counters (TAM_RS_CANON_TABLE_STATS=1) =====
-// Mirror the `SUBST_SKIP_STATS` / `FP_STATS` diagnostic counters: gauge whether
-// the stamp/pointer reuse actually pays off (the design's stated hit-rate risk).
-// Every increment is behind the once-read env gate, so a production run
-// (gate off) pays nothing.
-static CANON_CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static CANON_HITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static CANON_INCR: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static CANON_ENTRY_REUSED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-static CANON_ENTRY_CANONED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-
-#[inline]
-fn canon_stats_enabled() -> bool {
-    tamarin_utils::env_gate!("TAM_RS_CANON_TABLE_STATS")
-}
-
-/// Order-sensitive equality of two canon-entry lists on the OBSERVED components
-/// (canon value + prefilter hash) — the `src` `Arc` is provenance, not part of
-/// the dedup decision.  Used by the `TAM_RS_VERIFY_CANON_TABLES` oracle to
-/// certify a cached generation against a fresh rebuild.
-fn canon_entries_eq(
-    a: &[(Arc<Guarded>, Arc<Guarded>, u64)],
-    b: &[(Arc<Guarded>, Arc<Guarded>, u64)],
-) -> bool {
-    a.len() == b.len()
-        && a.iter()
-            .zip(b.iter())
-            .all(|((_, ca, ha), (_, cb, hb))| *ha == *hb && ca.as_ref() == cb.as_ref())
-}
-
 /// A constraint-solver sequent. The solver mutates this incrementally
 /// during proof search.
 ///
@@ -355,47 +294,6 @@ pub struct System {
     /// the cache Cells.  Private: readable/writable only through
     /// `subst_marker_matches` / `record_subst_marker` / `clear_subst_marker`.
     subst_applied_marker: Cell<Option<(u64, u64)>>,
-    /// Value-version of `formulas` ALONE (finer than `content_stamp`, which
-    /// tracks all nine content fields).  A fresh `next_stamp()` on every VALUE
-    /// or ORDER change to `formulas`.  Powers the implied-dedup canon cache
-    /// ([`formulas_canon_table`](Self::formulas_canon_table)): while it is
-    /// unchanged the cached [`CanonTable`] is reused verbatim; when it bumps,
-    /// the table is incrementally rebuilt (pointer-keyed entry reuse).
-    ///
-    /// The COMPLETE set of `formulas` write paths that mint a fresh value here:
-    ///
-    /// 1. `formulas_mut` — the tracked choke (also bumps `content_stamp`).
-    /// 2. `formulas_mut_untracked` — the untracked choke for whole-system
-    ///    rewriters (`subst_system_once`'s rewrite+dedup, `rename_precise_system`'s
-    ///    re-`Arc` + sort/dedup, `sources.rs` shift/rename, the `gfalse` push).
-    ///    Every untracked `formulas` write routes through this accessor: raw
-    ///    `content_mut_untracked().formulas` writes are forbidden by the
-    ///    `content_untracked_callers_are_enumerated` guard test (no compiler
-    ///    seal is possible: `SystemContent.formulas` is a `pub` field, so the
-    ///    guard test's whole-`src` scan is the enforcement).
-    /// 3. `content_mut` — the coarse door (bumps this conservatively).
-    /// 4. `mint_fresh_stamps` — whole-object constructors / whole-system transforms.
-    ///
-    /// Over-bumping only downgrades a verbatim reuse to an incremental rebuild
-    /// (which then reuses every unchanged entry by pointer); under-bumping is a
-    /// stale-cache bug, so every ambiguous site bumps.
-    formulas_stamp: Cell<u64>,
-    /// Value-version of `solved_formulas` ALONE.  See `formulas_stamp` — the
-    /// same write-path enumeration applies (`solved_formulas_mut`,
-    /// `solved_formulas_mut_untracked`, `content_mut`, `mint_fresh_stamps`).
-    solved_formulas_stamp: Cell<u64>,
-    /// Cached implied-dedup canon [`CanonTable`] for `formulas`, valid while its
-    /// `stamp` field still equals `formulas_stamp`.  `RefCell` for interior
-    /// mutability off the read path (built lazily during `insert_implied_formulas_pass`,
-    /// which holds `&System`).  `Arc` so a stamp hit reuses the table in O(1)
-    /// and so sibling clones share one generation until one of them rebuilds.
-    /// Excluded from `PartialEq`/serialized keys exactly like the cache Cells;
-    /// cloned into a fresh `RefCell` (never shared) so siblings' rebuilds stay
-    /// independent.
-    formulas_canon_cache: RefCell<Option<Arc<CanonTable>>>,
-    /// Cached implied-dedup canon [`CanonTable`] for `solved_formulas`
-    /// (see [`formulas_canon_cache`](Self::formulas_canon_cache)).
-    solved_formulas_canon_cache: RefCell<Option<Arc<CanonTable>>>,
 }
 
 // Manual `Clone` — copies the cache value (NOT invalidates).  System
@@ -416,10 +314,6 @@ impl Clone for System {
             content_stamp,
             subst_stamp,
             subst_applied_marker,
-            formulas_stamp,
-            solved_formulas_stamp,
-            formulas_canon_cache,
-            solved_formulas_canon_cache,
         } = self;
         Self {
             content: content.clone(),
@@ -437,17 +331,6 @@ impl Clone for System {
             content_stamp: Cell::new(content_stamp.get()),
             subst_stamp: Cell::new(subst_stamp.get()),
             subst_applied_marker: Cell::new(subst_applied_marker.get()),
-            // Per-store stamps copied verbatim (like the content stamp): a clone
-            // is formula-identical to its parent and legitimately shares its
-            // stamp.  The canon caches are cloned into a FRESH `RefCell` — the
-            // `Arc<CanonTable>` generation is SHARED (refcount bump) so both
-            // siblings reuse it while their (identical) stamp holds, but the
-            // `RefCell`s are independent, so one sibling rebuilding its table
-            // does not disturb the other's cached `Arc`.
-            formulas_stamp: Cell::new(formulas_stamp.get()),
-            solved_formulas_stamp: Cell::new(solved_formulas_stamp.get()),
-            formulas_canon_cache: RefCell::new(formulas_canon_cache.borrow().clone()),
-            solved_formulas_canon_cache: RefCell::new(solved_formulas_canon_cache.borrow().clone()),
         }
     }
 }
@@ -476,14 +359,6 @@ impl PartialEq for System {
             content_stamp: _,
             subst_stamp: _,
             subst_applied_marker: _,
-            // DELIBERATELY excluded from equality (like the other cache/stamp
-            // Cells): the per-store stamps and canon caches are derived state,
-            // so two systems with identical formula stores but different cache
-            // generations must compare equal.
-            formulas_stamp: _,
-            solved_formulas_stamp: _,
-            formulas_canon_cache: _,
-            solved_formulas_canon_cache: _,
         } = self;
         *source_kind == other.source_kind
             && *side == other.side
@@ -642,24 +517,6 @@ impl System {
         self.content_stamp.set(tamarin_utils::next_stamp());
     }
 
-    /// Mint a fresh `formulas_stamp` — the per-store version that the
-    /// implied-dedup canon cache keys on.  Private: only the write chokes in
-    /// this module call it (the `formulas_stamp` field doc enumerates them),
-    /// so no outside code can substitute a hand-bump for routing through a
-    /// door.  A fresh unique stamp makes the cached [`CanonTable`] a miss
-    /// (incremental rebuild); over-bumping only loses a verbatim reuse,
-    /// under-bumping is a stale-cache bug.
-    #[inline]
-    fn bump_formulas_stamp(&self) {
-        self.formulas_stamp.set(tamarin_utils::next_stamp());
-    }
-
-    /// Mint a fresh `solved_formulas_stamp` (see [`bump_formulas_stamp`](Self::bump_formulas_stamp)).
-    #[inline]
-    fn bump_solved_formulas_stamp(&self) {
-        self.solved_formulas_stamp.set(tamarin_utils::next_stamp());
-    }
-
     /// Mint a fresh `subst_stamp` (called on every `eq_store.subst` mutation
     /// via `eq_store_mut`/`set_eq_store`).
     #[inline]
@@ -707,30 +564,25 @@ impl System {
         self.subst_applied_marker.set(None);
     }
 
-    /// Mint fresh values for ALL stamps (content, subst, and both per-store
-    /// formula stamps) and clear the marker.  Used at whole-object
-    /// construction (`System::empty`) and by the whole-system `sources.rs`
-    /// freshen transforms, where a cloned marker must not survive a wholesale
-    /// rewrite.  Also drops the canon caches: the freshen transforms re-`Arc`
-    /// every formula, so a cached generation's pointers would never hit —
-    /// dropping releases the stale pins.
+    /// Mint fresh content and subst stamps and clear the marker.  Used at
+    /// whole-object construction (`System::empty`) and by the whole-system
+    /// `sources.rs` freshen transforms, where a cloned marker must not
+    /// survive a wholesale rewrite.
     #[inline]
     pub fn mint_fresh_stamps(&self) {
         self.content_stamp.set(tamarin_utils::next_stamp());
         self.subst_stamp.set(tamarin_utils::next_stamp());
         self.subst_applied_marker.set(None);
-        self.formulas_stamp.set(tamarin_utils::next_stamp());
-        self.solved_formulas_stamp.set(tamarin_utils::next_stamp());
-        *self.formulas_canon_cache.borrow_mut() = None;
-        *self.solved_formulas_canon_cache.borrow_mut() = None;
     }
 
     /// Install a new equation store, bumping `subst_stamp`. The private field
-    /// makes this the only whole-store assignment path.
+    /// makes this the only whole-store assignment path. The store's variables
+    /// count towards the max-var index, so its cache is dropped too.
     #[inline]
     pub fn set_eq_store(&mut self, es: Arc<EquationStore>) {
         self.content.eq_store = es;
         self.bump_subst_stamp();
+        self.max_var_idx_cache.set(None);
     }
 
     /// Read the equation store without exposing a writable field.
@@ -745,14 +597,14 @@ impl System {
     #[inline]
     pub fn take_eq_store(&mut self) -> Arc<EquationStore> {
         self.bump_subst_stamp();
+        self.max_var_idx_cache.set(None);
         std::mem::take(&mut self.content.eq_store)
     }
 
     // ====== content-write choke doors (the enforcement surface) ======
 
-    /// The one CONSERVATIVE content-write door.  Bumps all four stamps
-    /// (`content_stamp`, `subst_stamp`, and both per-store formula stamps) and
-    /// invalidates BOTH max caches, then hands out `&mut SystemContent` for
+    /// The one CONSERVATIVE content-write door.  Bumps both stamps
+    /// (`content_stamp`, `subst_stamp`) and invalidates BOTH max caches, then hands out `&mut SystemContent` for
     /// field-level split borrows.  Over-invalidation loses skips / cache hits,
     /// never correctness.  Prefer a precise accessor on a hot path; use this
     /// everywhere else (notably the interactive graph-render pipeline, which
@@ -765,12 +617,6 @@ impl System {
     pub fn content_mut(&mut self) -> &mut SystemContent {
         self.bump_content_stamp();
         self.bump_subst_stamp();
-        // Coarse door: the returned `&mut SystemContent` can rewrite `formulas`
-        // / `solved_formulas`, so bump their per-store stamps conservatively
-        // (over-bump — an incremental rebuild still reuses every unchanged entry
-        // by pointer).
-        self.bump_formulas_stamp();
-        self.bump_solved_formulas_stamp();
         self.max_var_idx_cache.set(None);
         self.node_max_cache.set(None);
         &mut self.content
@@ -802,7 +648,7 @@ impl System {
         &mut self.content
     }
 
-    /// Bump `content_stamp` + `formulas_stamp` and hand out
+    /// Bump `content_stamp` and hand out
     /// `&mut Vec<Arc<Guarded>>` for the `formulas` store.  Leaves the max
     /// caches alone: the caller keeps its adjacent `bump_cache_guarded` /
     /// `invalidate_*` so the additive max-cache discipline is unchanged for
@@ -811,16 +657,14 @@ impl System {
     #[inline]
     pub fn formulas_mut(&mut self) -> &mut Vec<Arc<Guarded>> {
         self.bump_content_stamp();
-        self.bump_formulas_stamp();
         &mut self.content.formulas
     }
 
-    /// Bump `content_stamp` + `solved_formulas_stamp` and hand out `&mut` to
-    /// `solved_formulas` (see [`formulas_mut`](Self::formulas_mut)).
+    /// Bump `content_stamp` and hand out `&mut` to `solved_formulas` (see
+    /// [`formulas_mut`](Self::formulas_mut)).
     #[inline]
     pub fn solved_formulas_mut(&mut self) -> &mut Vec<Arc<Guarded>> {
         self.bump_content_stamp();
-        self.bump_solved_formulas_stamp();
         &mut self.content.solved_formulas
     }
 
@@ -921,55 +765,20 @@ impl System {
         }
     }
 
-    /// Apply the equation-store substitution to less-atom endpoints. The
-    /// fields are borrowed together here so no raw `SystemContent` reference
-    /// has to escape through the untracked solver door.
-    pub(crate) fn normalise_less_atoms(&mut self) -> bool {
-        if self.content.eq_store.subst.is_empty() {
-            return false;
-        }
-        let content = &mut self.content;
-        let subst = &content.eq_store.subst;
-        let mut changed = false;
-        let normalize = |id: &NodeId| match subst.image_of(id) {
-            Some(tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(var))) => *var,
-            _ => *id,
-        };
-        for atom in &mut content.less_atoms {
-            let smaller = normalize(&atom.smaller);
-            let larger = normalize(&atom.larger);
-            changed |= smaller != atom.smaller || larger != atom.larger;
-            atom.smaller = smaller;
-            atom.larger = larger;
-        }
-        if changed {
-            // Substitution cannot increase the cached maximum here, but the
-            // content stamp must invalidate a stale simplification marker.
-            self.bump_content_stamp();
-        }
-        changed
-    }
-
-    /// Bump `formulas_stamp` ONLY (NOT `content_stamp`) and hand out
-    /// `&mut Vec<Arc<Guarded>>` for `formulas`.  The untracked-door analog of
+    /// `&mut` to `formulas` with NO stamp bump: the untracked-door analog of
     /// [`formulas_mut`](Self::formulas_mut) for whole-system rewriters
-    /// (`subst_system_once`, `rename_precise_system`, `sources.rs` shifters):
-    /// they manage `content_stamp` / the max caches themselves (bumping
-    /// `content_stamp` here would defeat the `subst_system` no-op skip), but the
-    /// per-store formula stamp axis still needs invalidation, so this bumps it.
-    /// Every untracked `formulas` write routes through here — pinned by the
+    /// (`subst_system_once`, `rename_precise_system`), which manage
+    /// `content_stamp` / the max caches themselves.  Pinned by the
     /// `content_untracked_callers_are_enumerated` guard test.
     #[inline]
     pub(crate) fn formulas_mut_untracked(&mut self) -> &mut Vec<Arc<Guarded>> {
-        self.bump_formulas_stamp();
         &mut self.content.formulas
     }
 
-    /// Bump `solved_formulas_stamp` ONLY and hand out `&mut` to `solved_formulas`
-    /// (see [`formulas_mut_untracked`](Self::formulas_mut_untracked)).
+    /// `&mut` to `solved_formulas` with NO stamp bump (see
+    /// [`formulas_mut_untracked`](Self::formulas_mut_untracked)).
     #[inline]
     pub(crate) fn solved_formulas_mut_untracked(&mut self) -> &mut Vec<Arc<Guarded>> {
-        self.bump_solved_formulas_stamp();
         &mut self.content.solved_formulas
     }
 
@@ -989,188 +798,6 @@ impl System {
     pub fn set_last_atom(&mut self, la: Option<NodeId>) {
         self.bump_content_stamp();
         self.content.last_atom = la;
-    }
-
-    // ====== implied-dedup canon cache (stamped, ptr-keyed incremental) ======
-
-    /// The implied-dedup [`CanonTable`] for `formulas`, reusing the cached
-    /// generation while `formulas_stamp` is unchanged, else incrementally
-    /// rebuilding it under the current stamp.  `canon` maps a store element to
-    /// its `(canon Arc, hash)`.  The cache is keyed on the stamp ALONE — a
-    /// stamp hit returns entries built by an earlier call's `canon` — so every
-    /// caller must pass the same mapping (the sole caller,
-    /// `insert_implied_formulas_pass`'s dedup tables, passes
-    /// `ImpliedDedupTables::canon`).
-    ///
-    /// Lazy caller (`insert_implied_formulas_pass` forces this only when a dedup
-    /// candidate exists), so a zero-candidate pass never touches the cache.
-    pub(crate) fn formulas_canon_table(
-        &self,
-        canon: impl Fn(&Arc<Guarded>) -> (Arc<Guarded>, u64),
-    ) -> Arc<CanonTable> {
-        Self::canon_table_for(
-            &self.content.formulas,
-            self.formulas_stamp.get(),
-            &self.formulas_canon_cache,
-            canon,
-        )
-    }
-
-    /// The implied-dedup [`CanonTable`] for `solved_formulas`
-    /// (see [`formulas_canon_table`](Self::formulas_canon_table)).
-    pub(crate) fn solved_formulas_canon_table(
-        &self,
-        canon: impl Fn(&Arc<Guarded>) -> (Arc<Guarded>, u64),
-    ) -> Arc<CanonTable> {
-        Self::canon_table_for(
-            &self.content.solved_formulas,
-            self.solved_formulas_stamp.get(),
-            &self.solved_formulas_canon_cache,
-            canon,
-        )
-    }
-
-    /// Shared stamp-hit / incremental-rebuild logic for both canon caches.
-    fn canon_table_for(
-        store: &[Arc<Guarded>],
-        stamp: u64,
-        slot: &RefCell<Option<Arc<CanonTable>>>,
-        canon: impl Fn(&Arc<Guarded>) -> (Arc<Guarded>, u64),
-    ) -> Arc<CanonTable> {
-        let stats = canon_stats_enabled();
-        if stats {
-            use std::sync::atomic::Ordering::Relaxed;
-            let calls = CANON_CALLS.fetch_add(1, Relaxed) + 1;
-            if calls.is_multiple_of(20_000) {
-                let hits = CANON_HITS.load(Relaxed);
-                let incr = CANON_INCR.load(Relaxed);
-                let reused = CANON_ENTRY_REUSED.load(Relaxed);
-                let canoned = CANON_ENTRY_CANONED.load(Relaxed);
-                let entries = reused + canoned;
-                eprintln!(
-                    "[CANON_STATS] calls={} hits={} ({:.1}%) incr={} entry_reuse={}/{} ({:.1}%)",
-                    calls,
-                    hits,
-                    100.0 * hits as f64 / calls as f64,
-                    incr,
-                    reused,
-                    entries,
-                    if entries == 0 {
-                        0.0
-                    } else {
-                        100.0 * reused as f64 / entries as f64
-                    },
-                );
-            }
-        }
-        // Snapshot the current cached generation (an `Arc` clone) so the
-        // `RefCell` borrow ends before a rebuild borrows it mutably below.
-        let current = slot.borrow().clone();
-        if let Some(cached) = &current
-            && cached.stamp == stamp
-        {
-            // Oracle: a stamp hit asserts the store is value/order-identical
-            // to the generation that built `cached`.  Rebuild from scratch
-            // and assert byte-equality — a mismatch means a `formulas`
-            // change did not mint a fresh stamp (an under-bumped write path).
-            if tamarin_utils::env_gate!("TAM_RS_VERIFY_CANON_TABLES") {
-                let fresh = Self::build_canon_full(store, stamp, &canon);
-                assert!(
-                    canon_entries_eq(&cached.entries, &fresh.entries),
-                    "TAM_RS_VERIFY_CANON_TABLES: cached canon table diverges \
-                         from a fresh rebuild at a matching stamp — a formula \
-                         store write did not bump its per-store stamp"
-                );
-            }
-            if stats {
-                CANON_HITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            }
-            return Arc::clone(cached);
-        }
-        if stats {
-            CANON_INCR.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        }
-        // Stamp miss: incrementally rebuild, reusing each entry whose store
-        // `Arc` pointer still matches the previous generation.
-        let table = Arc::new(Self::build_canon_incremental(
-            store,
-            stamp,
-            current.as_deref(),
-            &canon,
-        ));
-        // Oracle: the pointer-keyed incremental rebuild must be byte-identical
-        // to a from-scratch full recanon — a mismatch would mean a reused
-        // (canon, hash) belonged to a different value (an ABA / pointer-keying
-        // bug), the riskiest part of the design.
-        if tamarin_utils::env_gate!("TAM_RS_VERIFY_CANON_TABLES") {
-            let fresh = Self::build_canon_full(store, stamp, &canon);
-            assert!(
-                canon_entries_eq(&table.entries, &fresh.entries),
-                "TAM_RS_VERIFY_CANON_TABLES: incremental canon rebuild diverges \
-                 from a full recanon — pointer-keyed entry reuse returned a \
-                 stale (canon, hash)"
-            );
-        }
-        *slot.borrow_mut() = Some(Arc::clone(&table));
-        table
-    }
-
-    /// Full (non-incremental) canon table over `store` — every element canoned
-    /// afresh.  Backs the verify oracle's from-scratch rebuild.
-    fn build_canon_full(
-        store: &[Arc<Guarded>],
-        stamp: u64,
-        canon: &impl Fn(&Arc<Guarded>) -> (Arc<Guarded>, u64),
-    ) -> CanonTable {
-        let entries = store
-            .iter()
-            .map(|f| {
-                let (c, h) = canon(f);
-                (Arc::clone(f), c, h)
-            })
-            .collect();
-        CanonTable { stamp, entries }
-    }
-
-    /// Incremental canon table over `store`, reusing `(canon, hash)` from `prev`
-    /// for every element whose `Arc` pointer is unchanged (see [`CanonTable`]
-    /// for the ABA-safety argument), recanonicalising only the pointer-misses.
-    fn build_canon_incremental(
-        store: &[Arc<Guarded>],
-        stamp: u64,
-        prev: Option<&CanonTable>,
-        canon: &impl Fn(&Arc<Guarded>) -> (Arc<Guarded>, u64),
-    ) -> CanonTable {
-        // Pointer → previous generation's `(canon, hash)`.  `prev` stays
-        // borrowed for the whole build, pinning every `prev` `src` allocation,
-        // so a live `store` `Arc` sharing a pointer is provably the same
-        // immutable value.
-        let mut prev_by_ptr: tamarin_utils::FastMap<*const Guarded, (&Arc<Guarded>, u64)> =
-            tamarin_utils::FastMap::default();
-        if let Some(p) = prev {
-            prev_by_ptr.reserve(p.entries.len());
-            for (src, c, h) in &p.entries {
-                prev_by_ptr.insert(Arc::as_ptr(src), (c, *h));
-            }
-        }
-        let stats = canon_stats_enabled();
-        let entries = store
-            .iter()
-            .map(|f| {
-                if let Some((c, h)) = prev_by_ptr.get(&Arc::as_ptr(f)) {
-                    if stats {
-                        CANON_ENTRY_REUSED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                    }
-                    return (Arc::clone(f), Arc::clone(c), *h);
-                }
-                if stats {
-                    CANON_ENTRY_CANONED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                }
-                let (c, h) = canon(f);
-                (Arc::clone(f), c, h)
-            })
-            .collect();
-        CanonTable { stamp, entries }
     }
 
     /// The rule instance at node `v`, if present. Port of HS `nodeRuleSafe`
@@ -1316,6 +943,81 @@ impl System {
         })
     }
 
+    /// HS `allActions` (System.hs): unsolved action goals (`M.toList sGoals`
+    /// order), then node actions (`M.toList sNodes` order).
+    pub fn all_actions(&self) -> Vec<(NodeId, &crate::fact::LNFact)> {
+        let mut actions: Vec<(NodeId, &crate::fact::LNFact)> =
+            self.unsolved_action_atoms().collect();
+        actions.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+        for (i, ru) in self.nodes_in_map_order() {
+            actions.extend(ru.actions.iter().map(|fa| (*i, fa)));
+        }
+        actions
+    }
+
+    /// The actions of [`all_ku_actions`](Self::all_ku_actions) in no
+    /// particular order, for callers that only test for one.
+    pub fn ku_actions(
+        &self,
+    ) -> impl Iterator<Item = (NodeId, &crate::fact::LNFact, &tamarin_term::lterm::LNTerm)> + '_
+    {
+        self.unsolved_action_atoms()
+            .chain(
+                self.nodes
+                    .iter()
+                    .flat_map(|(i, ru)| ru.actions.iter().map(move |fa| (*i, fa))),
+            )
+            .filter(|(_, fa)| fa.is_ku())
+            .filter_map(|(i, fa)| fa.terms().first().map(|m| (i, fa, m)))
+    }
+
+    /// HS `allKUActions` (System.hs): every `KU(m)` action as
+    /// `(node, fact, m)`, unsolved action goals first (`M.toList sGoals`
+    /// order), then node actions (`M.toList sNodes` order).
+    pub fn all_ku_actions(
+        &self,
+    ) -> Vec<(NodeId, &crate::fact::LNFact, &tamarin_term::lterm::LNTerm)> {
+        let mut goals: Vec<(NodeId, &crate::fact::LNFact)> = self.unsolved_action_atoms().collect();
+        goals.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(b.1)));
+        let node_actions = self
+            .nodes_in_map_order()
+            .into_iter()
+            .flat_map(|(i, ru)| ru.actions.iter().map(move |fa| (*i, fa)));
+        goals
+            .into_iter()
+            .chain(node_actions)
+            .filter(|(_, fa)| fa.is_ku())
+            .filter_map(|(i, fa)| fa.terms().first().map(|m| (i, fa, m)))
+            .collect()
+    }
+
+    /// HS `allKDConcs` (System.hs): every `KD(m)` conclusion as
+    /// `(node, rule, m)`, in `M.toList sNodes` order.
+    pub fn all_kd_concs(&self) -> Vec<(NodeId, &RuleACInst, &tamarin_term::lterm::LNTerm)> {
+        self.nodes_in_map_order()
+            .into_iter()
+            .flat_map(|(i, ru)| {
+                ru.conclusions
+                    .iter()
+                    .filter(|fa| fa.is_kd())
+                    .filter_map(move |fa| fa.terms().first().map(|m| (*i, ru, m)))
+            })
+            .collect()
+    }
+
+    /// HS `isLast` (System.hs).
+    pub fn is_last(&self, i: &NodeId) -> bool {
+        self.last_atom.as_ref() == Some(i)
+    }
+
+    /// HS `isInTrace` (System.hs): `i` is a node, the last node, or the
+    /// timepoint of an unsolved action.
+    pub fn is_in_trace(&self, i: &NodeId) -> bool {
+        self.nodes.iter().any(|(n, _)| n == i)
+            || self.is_last(i)
+            || self.unsolved_action_atoms().any(|(n, _)| n == *i)
+    }
+
     /// All unsolved premise goals, as `(NodePrem, LNFact)`. Port of HS
     /// `unsolvedPremises` (System.hs).  Same insertion-order caveat
     /// as [`unsolved_chains`](Self::unsolved_chains).
@@ -1379,6 +1081,7 @@ impl System {
         // clones `eq_store.subst` once), so a fired skip is never invalidated
         // by the pass's own bookkeeping.
         self.bump_subst_stamp();
+        self.max_var_idx_cache.set(None);
         Arc::make_mut(&mut self.content.eq_store)
     }
 
@@ -1442,24 +1145,10 @@ impl System {
     pub fn bump_node_max_rule(&self, r: &crate::rule::RuleACInst) {
         if let Some(cur) = self.node_max_cache.get() {
             let mut m = cur;
-            crate::constraint::solver::reduction::bm_rule_pub(r, &mut m);
+            crate::constraint::solver::reduction::bm_rule(r, &mut m);
             if m != cur {
                 self.node_max_cache.set(Some(m));
             }
-        }
-    }
-
-    /// Bump the node-component cache after a UNIFORM `idx += shift`
-    /// applied to every node var (monotone graft/freshen).  Since every
-    /// node var's idx rises by exactly `shift`, the max over them rises
-    /// by exactly `shift` too — PROVIDED at least one node var exists.
-    /// The caller MUST guard on non-empty nodes (an empty node map has
-    /// component 0 both before and after, so bumping it would be wrong).
-    /// No-op if invalidated.
-    #[inline]
-    pub fn bump_node_max_by_shift(&self, shift: u64) {
-        if let Some(cur) = self.node_max_cache.get() {
-            self.node_max_cache.set(Some(cur.saturating_add(shift)));
         }
     }
 
@@ -1497,19 +1186,13 @@ impl System {
     /// Bump the cache by walking a term.
     #[inline]
     pub fn bump_cache_term(&self, t: &tamarin_term::lterm::LNTerm) {
-        self.bump_cache_with(|m| crate::constraint::solver::reduction::bm_term_pub(t, m));
-    }
-
-    /// Bump the cache by walking a fact's terms.
-    #[inline]
-    pub fn bump_cache_fact(&self, fa: &crate::fact::LNFact) {
-        self.bump_cache_with(|m| crate::constraint::solver::reduction::bm_fact_pub(fa, m));
+        self.bump_cache_with(|m| crate::constraint::solver::reduction::bm_term(t, m));
     }
 
     /// Bump the cache by walking a rule's free vars.
     #[inline]
     pub fn bump_cache_rule(&self, r: &crate::rule::RuleACInst) {
-        self.bump_cache_with(|m| crate::constraint::solver::reduction::bm_rule_pub(r, m));
+        self.bump_cache_with(|m| crate::constraint::solver::reduction::bm_rule(r, m));
     }
 
     /// Bump the cache by walking a guarded formula.
@@ -1526,36 +1209,13 @@ impl System {
     /// Bump the cache by walking a goal.
     #[inline]
     pub fn bump_cache_goal(&self, g: &Goal) {
-        // Bump BEFORE the cache-None early return so a goal add still moves
-        // `content_stamp` when the max-var cache is currently invalidated.
-        self.bump_content_stamp();
-        if self.max_var_idx_cache.get().is_none() {
-            return;
-        }
-        match g {
-            Goal::Action(i, fa) => {
-                self.bump_cache_lvar(i);
-                self.bump_cache_fact(fa);
-            }
-            Goal::Premise(p, fa) => {
-                self.bump_cache_lvar(&p.0);
-                self.bump_cache_fact(fa);
-            }
-            Goal::Chain(c, p) => {
-                self.bump_cache_lvar(&c.0);
-                self.bump_cache_lvar(&p.0);
-            }
-            Goal::Subterm((s, t)) => {
-                self.bump_cache_term(s);
-                self.bump_cache_term(t);
-            }
-            Goal::Disj(_) | Goal::Split(_) => {}
-        }
+        self.bump_cache_with(|m| crate::constraint::solver::reduction::bm_goal(g, m));
     }
 
     /// Add an open goal.  An equal goal already in the store is merged into
     /// (its `looping` flag ORed, its `nr` kept) rather than duplicated — but
     /// the insertion still advances `next_goal_nr`, as HS's does.
+    #[cfg(test)]
     pub fn add_goal(&mut self, g: Goal) {
         // HS has a single goal entry point: `insertGoal goal False`
         // (Reduction.hs). `add_goal` is exactly that — defer to
@@ -1580,17 +1240,24 @@ impl System {
     /// positions is structurally identical to the stored one and merges into
     /// it instead of accumulating a second, `solved=false` copy.
     pub fn add_goal_with_loop_flag(&mut self, g: Goal, looping: bool) {
-        // HS `insertGoalStatus` (Reduction.hs) reads
-        // `sNextGoalNr` then `succ`s it on EVERY call, including when
-        // the goal key already exists (where `insertWith
-        // combineGoalStatus` keeps the existing — smaller — nr).
-        let age = self.next_goal_nr;
-        self.next_goal_nr = self.next_goal_nr.wrapping_add(1);
+        self.insert_goal_status(
+            g,
+            GoalStatus {
+                looping,
+                ..Default::default()
+            },
+        );
+    }
+
+    /// HS `insertGoalStatus goal status` (Reduction.hs): give `status` the
+    /// next goal number and insert it, combining with an existing entry by
+    /// `combineGoalStatus`. The number advances even when the goal exists.
+    pub fn insert_goal_status(&mut self, g: Goal, status: GoalStatus) {
         let st = GoalStatus {
-            looping,
-            nr: age,
-            ..Default::default()
+            nr: self.next_goal_nr,
+            ..status
         };
+        self.next_goal_nr = self.next_goal_nr.wrapping_add(1);
         let slot_idx = self.goals.iter().position(|(existing, _)| *existing == g);
         if let Some(idx) = slot_idx {
             self.goals_mut()[idx].1.merge_from(&st);
@@ -1658,12 +1325,24 @@ impl System {
         // rewrites only `smaller`/`larger` and carries the reason through
         // (reduction.rs), so a reason-only change cannot turn a proven-no-op
         // skip into an observable one.
-        if let Some(existing) = self.content.less_atoms.iter_mut().find(|x| **x == l) {
-            *existing = l;
-        } else {
-            self.bump_cache_lvar(&l.smaller);
-            self.bump_cache_lvar(&l.larger);
-            self.content.less_atoms.push(l);
+        let pos = self.less_atoms.iter().position(|x| *x == l);
+        self.put_less(l, pos);
+    }
+
+    /// Store `l` at `pos`, the index of the atom equal to it, or append it.
+    /// Returns `true` iff it was appended.
+    fn put_less(&mut self, l: LessAtom, pos: Option<usize>) -> bool {
+        match pos {
+            Some(pos) => {
+                self.content.less_atoms[pos] = l;
+                false
+            }
+            None => {
+                self.bump_cache_lvar(&l.smaller);
+                self.bump_cache_lvar(&l.larger);
+                self.content.less_atoms.push(l);
+                true
+            }
         }
     }
 
@@ -1699,17 +1378,12 @@ impl System {
     /// mutators are these calls — Maude unifiability queries are read-only).
     pub fn add_less_indexed(&mut self, l: LessAtom, idx: &mut LessIndex) -> bool {
         let key = (l.smaller, l.larger);
-        if let Some(&pos) = idx.get(&key) {
-            self.content.less_atoms[pos] = l;
-            false
-        } else {
-            self.bump_cache_lvar(&l.smaller);
-            self.bump_cache_lvar(&l.larger);
-            let pos = self.less_atoms.len();
-            self.content.less_atoms.push(l);
-            idx.insert(key, pos);
-            true
+        let len = self.less_atoms.len();
+        let appended = self.put_less(l, idx.get(&key).copied());
+        if appended {
+            idx.insert(key, len);
         }
+        appended
     }
 
     /// Build the `alwaysBefore` adjacency map (`rawLessRel`) underpinning
@@ -1749,17 +1423,10 @@ impl System {
     /// reachability over `rawLessRel` is the `alwaysBefore` query itself;
     /// hoisting the adjacency build out is a pure refactor.
     pub fn always_before_with(&self, adj: &PrebuiltAdj, i: &NodeId, j: &NodeId) -> bool {
-        // DELIBERATE deviation from HS `alwaysBefore`: HS's
-        // `reachableSet [i] lessRel` seeds the visited set with `i`
-        // itself (Data/DAG/Simple.hs), so `alwaysBefore sys i i`
-        // is `True`.  We short-circuit `i == j` to `false`.  This is
-        // caller-safe: every live caller already filters equal nodes
-        // before reaching here (Less/EqE simplify guards, the
-        // `simpInjectiveFactEq` `i /= j` filter, contradictions.rs's
-        // `id == c.0` skip), exactly as HS does, so the `i == i => true`
-        // result is never observable in either codebase.
+        // HS `reachableSet [i] lessRel` contains `i` itself
+        // (Data/DAG/Simple.hs), so `alwaysBefore sys i i` is `True`.
         if i == j {
-            return false;
+            return true;
         }
         let adj = &adj.adj;
         // BFS from i until j.

@@ -1,44 +1,15 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Pre-computed intruder-variant rule loaders.
+//! Pre-computed intruder-variant rule loaders: HS `mkDhIntruderVariants` and
+//! `mkBpIntruderVariants` (src/Main/TheoryLoader.hs), which parse the
+//! embedded `data/intruder_variants_{dh,bp}.spthy` on every theory load.
 //!
-//! HS-faithful port of `Main.TheoryLoader.mkDhIntruderVariants` and
-//! `mkBpIntruderVariants` (src/Main/TheoryLoader.hs):
-//!
-//! ```haskell
-//! dhIntruderVariantsFile :: FilePath
-//! dhIntruderVariantsFile = "data/intruder_variants_dh.spthy"
-//!
-//! mkDhIntruderVariants :: MaudeSig -> [IntrRuleAC]
-//! mkDhIntruderVariants msig =
-//!     either (error . show) id $
-//!         parseIntruderRules msig dhIntruderVariantsFile
-//!           $(embedFile "data/intruder_variants_dh.spthy")
-//! ```
-//!
-//! HS embeds the cached `.spthy` file via Template Haskell's `embedFile`
-//! and parses it on every theory load.  We mirror that exactly with
-//! `include_str!` (the Rust analog: compile-time string baking, identical
-//! semantics — both fail loudly at compile time if the file is missing).
-//!
-//! The cached files at `data/intruder_variants_dh.spthy` (51 rules) and
-//! `data/intruder_variants_bp.spthy` (75 rules) were produced by HS's
-//! `Main.Mode.Intruder.run` (src/Main/Mode/Intruder.hs) — that mode
-//! invokes `dhIntruderRules False`/`bpIntruderRules False` against
-//! Maude and pretty-prints the result.  See [`crate::intruder_rules`]
-//! for the Rust port of `dhIntruderRules`, which IS still used as a
-//! regenerator (the function that PRODUCES the cache file) but is not
-//! the production runtime path.
-//!
-//! The committed BP cache holds 75 rules, one more than the regenerator
-//! emits: `minimizeIntruderRules` (IntruderRules.hs) subsumes
-//! rules via the Maude-backed `equalDuplicateRuleUpToRenaming` /
-//! `equalSubsetRuleUpToRenaming`, collapsing one `d_em` variant that the
-//! cached file still lists, so `tamarin-prover variants` on the pinned
-//! upstream tree emits 74 BP rules.  Both HS and RS parse the committed
-//! 75 rules on every theory load, so the two stay byte-identical in
-//! production; the divergence is confined to the regenerator.
+//! The committed BP file holds 75 rules, one more than
+//! [`crate::intruder_rules::bp_intruder_rules`] (and `tamarin-prover
+//! variants` at the pinned revision) regenerates: `minimizeIntruderRules`
+//! now subsumes one `d_em` variant the file still lists.  Both provers parse
+//! the committed file, so proving is unaffected.
 
 use tamarin_parser as p;
 use tamarin_term::function_symbols::FunSym;
@@ -55,30 +26,16 @@ pub const DH_INTRUDER_VARIANTS_FILE: &str = "data/intruder_variants_dh.spthy";
 /// HS `bpIntruderVariantsFile` (TheoryLoader.hs).
 pub const BP_INTRUDER_VARIANTS_FILE: &str = "data/intruder_variants_bp.spthy";
 
-/// The DH intruder-variants spthy source, embedded at compile time
-/// (HS uses `$(embedFile "data/intruder_variants_dh.spthy")` —
-/// TheoryLoader.hs).
+/// The embedded DH intruder-variants file (HS `embedFile`).
 pub const DH_INTRUDER_VARIANTS_SPTHY: &str =
     include_str!("../../../tamarin-prover/data/intruder_variants_dh.spthy");
 
-/// The BP intruder-variants spthy source, embedded at compile time
-/// (HS uses `$(embedFile "data/intruder_variants_bp.spthy")` —
-/// TheoryLoader.hs).
+/// The embedded BP intruder-variants file (HS `embedFile`).
 pub const BP_INTRUDER_VARIANTS_SPTHY: &str =
     include_str!("../../../tamarin-prover/data/intruder_variants_bp.spthy");
 
-/// HS `mkDhIntruderVariants` (TheoryLoader.hs).
-///
-/// ```haskell
-/// mkDhIntruderVariants :: MaudeSig -> [IntrRuleAC]
-/// mkDhIntruderVariants msig =
-///     either (error . show) id $
-///         parseIntruderRules msig dhIntruderVariantsFile
-///             $(embedFile "data/intruder_variants_dh.spthy")
-/// ```
-///
-/// `either (error . show) id` ≡ `unwrap_or_else(|e| panic!("{}", e))`
-/// (HS's `error . show` formats the parse error and aborts).
+/// HS `mkDhIntruderVariants` (TheoryLoader.hs); a parse error aborts, as
+/// HS's `either (error . show) id` does.
 pub fn mk_dh_intruder_variants(msig: &MaudeSig) -> Vec<IntrRuleAC> {
     parse_intruder_rules(msig, DH_INTRUDER_VARIANTS_FILE, DH_INTRUDER_VARIANTS_SPTHY)
         .unwrap_or_else(|e| {
@@ -127,17 +84,8 @@ impl std::error::Error for IntrRuleParseError {}
 ///   . T.unpack . TE.decodeUtf8
 /// ```
 ///
-/// The `setState (mkStateSig msig)` step is critical: HS's term parser
-/// (Theory/Text/Parser/Term.hs) dispatches bare identifiers via
-/// `nullaryApp` against `funSyms maudeSig` to distinguish 0-arity NoEq
-/// applications (e.g. `one`, `DH_neutral` for `dhFunSig`) from free
-/// variables.  Without it, the cached DH file's
-/// `[ ] --[ !KU( one ) ]-> [ !KU( one ) ]` rule (`c_one` in
-/// `data/intruder_variants_dh.spthy`)
-/// parses `one` as a Msg-sort variable whose !KU-action unifies with
-/// every KU goal — adding a spurious `c_one` case to every source-case
-/// enumeration and falsely closing branches with `SOLVED // trace found`.
-/// The port's `p::parse_intruder_rules` takes `msig` for the same reason.
+/// The signature lets the term parser read nullary symbols such as `one`
+/// as applications, not variables (`nullaryApp`, Theory/Text/Parser/Term.hs).
 pub fn parse_intruder_rules(
     msig: &MaudeSig,
     ctxt_desc: &str,
@@ -148,72 +96,35 @@ pub fn parse_intruder_rules(
         message: e.to_string(),
     })?;
 
-    // HS `knownFuns = S.toList (funSyms msig)`.
-    let known_funs = KnownFuns::new(msig.fun_syms.iter().copied().collect());
-
     let mut out = Vec::with_capacity(parser_rules.len());
     for r in parser_rules {
-        let intr = ast_rule_to_intr_rule_ac(&known_funs, msig, &r).map_err(|message| {
-            IntrRuleParseError {
-                ctxt_desc: ctxt_desc.to_string(),
-                message,
-            }
+        let intr = ast_rule_to_intr_rule_ac(msig, &r).map_err(|message| IntrRuleParseError {
+            ctxt_desc: ctxt_desc.to_string(),
+            message,
         })?;
         out.push(intr);
     }
     Ok(out)
 }
 
-/// HS `knownFuns = S.toList (funSyms msig)` together with a display-name
-/// index over it, so [`KnownFuns::lookup`] is one `BTreeMap` probe rather
-/// than a scan of the whole signature.  Every constructor name and every
-/// `constr_name_func` segment of both cached files (126 rules) resolves
-/// through it on each theory load.
-struct KnownFuns {
-    /// The symbols in `S.toList` order, kept for the not-found message.
-    syms: Vec<FunSym>,
-    /// `show_fun_sym_name` → the FIRST symbol of `syms` carrying that name.
-    ///
-    /// FIRST-wins is load-bearing, not an implementation detail: HS
-    /// `lookupFun` is `find ((== f) . showFunSymName) knownFuns`, which
-    /// returns the earliest match in `S.toList` order, and two DISTINCT
-    /// symbols can share a `showFunSymName` — a user-defined AC symbol and a
-    /// user-defined NoEq symbol may carry the same name, and `Ord FunSym`
-    /// (FunctionSymbols.hs) orders `NoEq` before `AC`, so the NoEq
-    /// one is the earlier.  An `insert` loop would let the later symbol win
-    /// and silently change which `FunSym` lands in the rule info.
-    by_name: std::collections::BTreeMap<std::borrow::Cow<'static, str>, FunSym>,
-}
-
-impl KnownFuns {
-    /// `syms` must already be in `S.toList` order — `MaudeSig::fun_syms` is a
-    /// `BTreeSet`, so iterating it is exactly that order.
-    fn new(syms: Vec<FunSym>) -> KnownFuns {
-        let mut by_name = std::collections::BTreeMap::new();
-        for f in &syms {
-            // `or_insert`, never `insert`: the first symbol carrying a name
-            // is the one HS's `find` returns.
-            by_name.entry(show_fun_sym_name(f)).or_insert(*f);
-        }
-        KnownFuns { syms, by_name }
-    }
-
-    /// HS `lookupFun` (Theory/Text/Parser/Rule.hs): resolve a plain function
-    /// name against the signature's known symbols (`S.toList (funSyms msig)`)
-    /// by `showFunSymName` equality.
-    fn lookup(&self, f: &str) -> Result<FunSym, String> {
-        self.by_name.get(f).copied().ok_or_else(|| {
+/// HS `lookupFun` (Theory/Text/Parser/Rule.hs): the first symbol of
+/// `knownFuns = S.toList (funSyms msig)` whose `showFunSymName` is `f`.
+fn lookup_fun(msig: &MaudeSig, f: &str) -> Result<FunSym, String> {
+    msig.fun_syms
+        .iter()
+        .copied()
+        .find(|g| show_fun_sym_name(g) == f)
+        .ok_or_else(|| {
             format!(
                 "Failed parsing intruder rule name: no function named '{}' found in the signature (symbols: {})",
                 f,
-                self.syms
+                msig.fun_syms
                     .iter()
                     .map(show_fun_sym_name)
                     .collect::<Vec<_>>()
                     .join(", ")
             )
         })
-    }
 }
 
 /// HS `constrNameFunc` (Theory/Text/Parser/Rule.hs): recover the function
@@ -223,7 +134,7 @@ impl KnownFuns {
 /// `readMaybe :: Maybe Int`); errors on an empty result.
 ///
 /// The split is unconditional, so a function symbol whose own name contains
-/// `'_'` decomposes into several segments that [`KnownFuns::lookup`] cannot resolve
+/// `'_'` decomposes into several segments that [`lookup_fun`] cannot resolve
 /// — see the FIXME beside `name_decompose` in Theory/Text/Parser/Rule.hs
 /// ("there can be underscores in the name of a function").  Dormant for the
 /// two cached files, which only name builtin DH/BP symbols.
@@ -284,11 +195,7 @@ fn constr_name_func(name: &str) -> Result<Vec<&str>, String> {
 /// `True False` are HS hard-codes — see the FIXME in
 /// Theory/Text/Parser/Rule.hs ("Currently we (wrongly) always assume
 /// that we have a subterm rule").  Subterm=True / constant=False.
-fn ast_rule_to_intr_rule_ac(
-    known_funs: &KnownFuns,
-    msig: &MaudeSig,
-    r: &p::Rule,
-) -> Result<IntrRuleAC, String> {
+pub(crate) fn ast_rule_to_intr_rule_ac(msig: &MaudeSig, r: &p::Rule) -> Result<IntrRuleAC, String> {
     // HS `intrInfo` rejects non-c/d-prefixed names.  Mirror that here.
     let bytes = r.name.as_bytes();
     if bytes.is_empty() {
@@ -300,7 +207,7 @@ fn ast_rule_to_intr_rule_ac(
             // `lookupFun knownFuns $ tail cname` — cname is `_<fun>`, so
             // `tail` strips the leading underscore.
             let cname = &r.name[1..];
-            let f = known_funs.lookup(cname.get(1..).unwrap_or(""))?;
+            let f = lookup_fun(msig, cname.get(1..).unwrap_or(""))?;
             IntrRuleACInfo::ConstrRule {
                 name: rest.to_vec(),
                 fun: f,
@@ -310,7 +217,7 @@ fn ast_rule_to_intr_rule_ac(
             let dname = &r.name[1..];
             let funs = constr_name_func(dname)?
                 .into_iter()
-                .map(|n| known_funs.lookup(n))
+                .map(|n| lookup_fun(msig, n))
                 .collect::<Result<Vec<_>, _>>()?;
             IntrRuleACInfo::DestrRule {
                 name: rest.to_vec(),
@@ -342,6 +249,13 @@ fn ast_rule_to_intr_rule_ac(
             r.name
         ));
     }
+    // HS `intrRule` reads no `letBlock` (Theory/Text/Parser/Rule.hs).
+    if !r.lets.is_empty() {
+        return Err(format!(
+            "intruder rule {} unexpectedly has a let block",
+            r.name
+        ));
+    }
     if !r.variants.is_empty() {
         return Err(format!(
             "intruder rule {} unexpectedly has variants",
@@ -358,30 +272,18 @@ fn ast_rule_to_intr_rule_ac(
     // Convert facts via the existing AST→LNFact path.  `fact_to_lnfact`
     // already handles the `KU`/`KD`/etc. tag mapping
     // (`elaborate::fact_to_lnfact`).
-    let prems: Vec<LNFact> = r
-        .premises
-        .iter()
-        .map(|f| {
-            elaborate::fact_to_lnfact(f, msig)
-                .map_err(|e| format!("intruder rule {}: premise: {}", r.name, e.message))
-        })
-        .collect::<Result<_, _>>()?;
-    let acts: Vec<LNFact> = r
-        .actions
-        .iter()
-        .map(|f| {
-            elaborate::fact_to_lnfact(f, msig)
-                .map_err(|e| format!("intruder rule {}: action: {}", r.name, e.message))
-        })
-        .collect::<Result<_, _>>()?;
-    let concs: Vec<LNFact> = r
-        .conclusions
-        .iter()
-        .map(|f| {
-            elaborate::fact_to_lnfact(f, msig)
-                .map_err(|e| format!("intruder rule {}: conclusion: {}", r.name, e.message))
-        })
-        .collect::<Result<_, _>>()?;
+    let convert = |facts: &[p::Fact], position: &str| -> Result<Vec<LNFact>, String> {
+        facts
+            .iter()
+            .map(|f| {
+                elaborate::fact_to_lnfact(f, msig)
+                    .map_err(|e| format!("intruder rule {}: {position}: {}", r.name, e.message))
+            })
+            .collect()
+    };
+    let prems = convert(&r.premises, "premise")?;
+    let acts = convert(&r.actions, "action")?;
+    let concs = convert(&r.conclusions, "conclusion")?;
 
     // HS `newVariables ps cs` — variables that appear in conclusions
     // but not premises.  The intruder-rule `.spthy` files don't have
@@ -391,12 +293,6 @@ fn ast_rule_to_intr_rule_ac(
     let new_vars = crate::fact::new_variables(&prems, &concs);
 
     Ok(Rule::new(info, prems, concs, acts).with_new_vars(new_vars))
-}
-
-/// Elaborate one top-level `rule (modulo AC)` parsed in an ordinary theory.
-pub(crate) fn intr_rule_from_ast(msig: &MaudeSig, r: &p::Rule) -> Result<IntrRuleAC, String> {
-    let known_funs = KnownFuns::new(msig.fun_syms.iter().copied().collect());
-    ast_rule_to_intr_rule_ac(&known_funs, msig, r)
 }
 
 // =============================================================================

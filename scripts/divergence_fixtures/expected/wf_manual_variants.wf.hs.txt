@@ -1,0 +1,24 @@
+WARNING: the following wellformedness checks failed!
+
+Rule has no variants
+====================
+
+  Rule Impossible has no variants.
+  
+  Most likely, this means that the rule's use of fresh variables is contradictory. For exaple, a rule with the premises In(~x) and Fr(~x) has no variants because ~x cannot be sent before it is generated.
+
+Variants
+========
+
+  Rule `R' cannot confirm manual variants:
+    1. rule (modulo AC) R___VARIANT_1:
+          [ ] --[ A( ) ]-> [ ]
+    
+    2. rule (modulo AC) R___VARIANT_2:
+          [ ] --[ A( ) ]-> [ ]
+  
+  Recomputed variants: 
+  
+    1. rule (modulo AC) R___VARIANT_1:
+          [ ] --[ A( ) ]-> [ ]
+*/

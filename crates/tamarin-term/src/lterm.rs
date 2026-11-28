@@ -12,13 +12,14 @@
 //!
 //! Pretty-printing (`Show LVar` / `Display LNTerm`) is ported in `pretty.rs`.
 //!
-//! (`varOccurences`, `eqModuloFreshnessNoAC`, `someInst`/`renamePrecise`,
-//! and `freshToFreeAvoiding` are ported elsewhere — see `subsumption.rs`,
-//! `sources.rs`, `constraint::solver::rename_precise`, and `subst_vfresh.rs`.)
+//! `varOccurences` is ported in `subsumption.rs`, `someInst`/`renamePrecise`
+//! in `bind.rs`, `freshToFreeAvoiding` in `subst_vfresh.rs`, and
+//! `eqModuloFreshnessNoAC` in `tamarin-theory`'s
+//! `tools/abstract_interpretation.rs`.
 
 use std::cmp::Ordering;
 
-use crate::function_symbols::{AcSym, FunSym, Privacy};
+use crate::function_symbols::{AcSym, FunSym};
 use crate::term::Term;
 use crate::vterm::{const_term, Lit, VTerm};
 use tamarin_utils::cow::cow_map_vec;
@@ -101,6 +102,15 @@ impl NameId {
 /// `Abbrev` is the tag `Web.Utils.shorten` (`src/Web/Utils.hs`) puts on
 /// the short constant it substitutes for a long term; it never occurs in a
 /// parsed or solved term.
+///
+/// `Skolem` is HS `SkConst LVar` of `data SkConst = SkName Name | SkConst
+/// LVar` (Guarded.hs): a free variable frozen into a constant while a
+/// guarded clause is matched.  It carries the variable's index and sort, and
+/// the `Name`'s id carries its name, so the variable is recovered exactly.
+/// Being the last variant, every skolem orders after every real name, and
+/// skolems order among themselves by `idx`, `sort`, then name, which is
+/// `LVar`'s order: together, HS's derived `Ord` on `SkConst`.  The parser
+/// cannot produce it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum NameTag {
     Fresh,
@@ -108,6 +118,7 @@ pub enum NameTag {
     Node,
     Nat,
     Abbrev,
+    Skolem { idx: u64, sort: LSort },
 }
 
 /// HS `data Name = Name {nTag :: NameTag, nId :: NameId}` with a derived `Ord`
@@ -146,6 +157,8 @@ pub fn sort_of_name(n: &Name) -> LSort {
         NameTag::Nat => LSort::Nat,
         // LTerm.hs.
         NameTag::Abbrev => LSort::Msg,
+        // `sortOfSkol (SkConst v) = lvarSort v` (Guarded.hs).
+        NameTag::Skolem { sort, .. } => sort,
     }
 }
 
@@ -259,11 +272,9 @@ pub fn sort_of_lterm<C, F: Fn(&C) -> LSort>(t: &LTerm<C>, sort_of_const: F) -> L
         Term::Lit(Lit::Con(c)) => sort_of_const(c),
         Term::Lit(Lit::Var(v)) => v.sort,
         Term::App(FunSym::Ac(AcSym::NatPlus), _) => LSort::Nat,
-        Term::App(FunSym::NoEq(s), args)
-            if args.is_empty() && s.name == crate::function_symbols::NAT_ONE_SYM_STRING =>
-        {
-            LSort::Nat
-        }
+        // HS `viewTerm2 -> NatOne`: `natOneSym` itself, so a user-declared
+        // `tone/0 [private]` stays a message.
+        t if crate::term::is_nat_one(t) => LSort::Nat,
         _ => LSort::Msg,
     }
 }
@@ -298,7 +309,7 @@ pub fn get_var(t: &LNTerm) -> Option<&LVar> {
 
 /// `containsPrivate t`: any private NoEq symbol anywhere in `t`?
 pub fn contains_private<A>(t: &Term<A>) -> bool {
-    t.any_fun_sym(|f| matches!(f, FunSym::NoEq(s) if s.privacy == Privacy::Private))
+    t.any_fun_sym(FunSym::is_private)
 }
 
 /// `containsOnlyNoEq t`: does `t` contain only NoEq function symbols (i.e.
@@ -312,9 +323,7 @@ pub fn contains_only_no_eq<A>(t: &Term<A>) -> bool {
 /// `FunSym`, so a symbol differing in arity/constructability/NDC state from
 /// its `funs` entry is not exempted.
 pub fn contains_no_private_except<A>(funs: &[FunSym], t: &Term<A>) -> bool {
-    t.all_fun_syms(|f| {
-        !matches!(f, FunSym::NoEq(s) if s.privacy == Privacy::Private) || funs.contains(f)
-    })
+    t.all_fun_syms(|f| !f.is_private() || funs.contains(f))
 }
 
 /// `isTrivialFunSymTerm t sym`: is `t` an application of `sym` whose
@@ -390,6 +399,17 @@ pub fn blterm_node_id<C>(t: &crate::term::Term<crate::vterm::Lit<C, BVar<LVar>>>
         }
         _ => None,
     }
+}
+
+/// HS `freeTerm = fmap (fmap freeLNTerm)` (LTerm.hs), i.e. `fmapTerm (fmap
+/// Free)`: every variable of the term as a free `BVar`.  The literal order is
+/// unchanged, so the `f_app` rebuild inside [`crate::term::map_lits`] keeps
+/// the AC argument order.
+pub fn lift_free<C: Ord + Clone, V: Ord + Clone>(t: &VTerm<C, V>) -> VTerm<C, BVar<V>> {
+    crate::term::map_lits(t, &mut |l| match l {
+        Lit::Con(c) => Lit::Con(c.clone()),
+        Lit::Var(v) => Lit::Var(BVar::Free(v.clone())),
+    })
 }
 
 impl<V> BVar<V> {
@@ -907,6 +927,33 @@ mod tests {
         assert!(NameTag::Pub < NameTag::Node);
         assert!(NameTag::Node < NameTag::Nat);
         assert!(NameTag::Nat < NameTag::Abbrev);
+    }
+
+    /// Guarded.hs: `data SkConst = SkName Name | SkConst LVar` with a derived
+    /// `Ord`.  Every skolem orders after every real name, and skolems order
+    /// as their variables do.
+    #[test]
+    fn skolem_names_order_like_hs_skconst() {
+        let skolem = |v: LVar| Name {
+            tag: NameTag::Skolem {
+                idx: v.idx,
+                sort: v.sort,
+            },
+            id: NameId(v.name),
+        };
+        let real = Name::new(NameTag::Abbrev, "~~~");
+        let vars = [
+            LVar::new("z", LSort::Msg, 0),
+            LVar::new("a", LSort::Msg, 2),
+            LVar::new("a", LSort::Node, 2),
+            LVar::new("b", LSort::Node, 2),
+            LVar::new("a", LSort::Pub, 10),
+        ];
+        for pair in vars.windows(2) {
+            assert!(pair[0] < pair[1]);
+            assert!(skolem(pair[0]) < skolem(pair[1]));
+        }
+        assert!(real < skolem(vars[0]));
     }
 
     /// Haskell `sortCompare` (LTerm.hs) is a PARTIAL ORDER, NOT

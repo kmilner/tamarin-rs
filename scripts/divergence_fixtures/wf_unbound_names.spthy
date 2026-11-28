@@ -1,0 +1,27 @@
+// Category: names in the rule checks — unbound variables and public-constant
+// capitalization.
+//
+//   - Order: unbound variables are listed in `Ord LVar` order (sort, then
+//     name), not source order;
+//   - Builtin: `zero` and `true` are constants only under the builtins that
+//     declare them (xor, signing); without those builtins they are
+//     variables, and unbound;
+//   - Capital: a variable named `True` is a variable too;
+//   - the two long rule names clash on 'Identifier'/'identifier', and the
+//     numbered entry wraps at the report ribbon.
+// No corpus theory has an unbound variable or a capitalization clash.
+
+theory WfUnboundNames
+begin
+
+rule Order: [ ] --[ ]-> [ Out(<ni, ~nr, $A, mi>) ]
+
+rule Builtin: [ ] --[ ]-> [ Out(<zero, true>) ]
+
+rule Capital: [ ] --[ ]-> [ Out(True) ]
+
+rule A_rule_with_a_deliberately_long_name: [ ] --[ ]-> [ Out('Identifier') ]
+
+rule Another_rule_with_a_deliberately_long_name: [ ] --[ ]-> [ Out('identifier') ]
+
+end

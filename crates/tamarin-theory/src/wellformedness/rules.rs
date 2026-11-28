@@ -31,10 +31,10 @@
 
 use std::collections::BTreeSet;
 
-use tamarin_term::function_symbols::{nat_one_sym, AcSym, FunSym};
+use tamarin_term::function_symbols::{AcSym, FunSym};
 use tamarin_term::lterm::{frees, frees_list, sort_of_name, LNTerm, LSort, LVar, Name};
 use tamarin_term::pretty::pretty_nterm;
-use tamarin_term::term::Term;
+use tamarin_term::term::{is_nat_one, Term};
 use tamarin_term::vterm::Lit;
 
 use crate::elaborate::{collect_names, collect_process_names};
@@ -45,8 +45,8 @@ use crate::sapic::{Process, ProcessCombinator};
 use crate::theory::{Theory, TheoryItem};
 
 use super::{
-    quote, show_rule_case_name, thy_proto_rules, underline_topic, WfError, WfReport,
-    WF_LINE_LENGTH, WF_RIBBON,
+    pretty_var_list, quote, show_rule_case_name, thy_proto_rules, underline_topic, WfError,
+    WfReport,
 };
 
 // =============================================================================
@@ -139,12 +139,6 @@ pub fn unbound_report(thy: &Theory) -> Vec<WfError> {
 // Nat sorts
 // =============================================================================
 
-/// HS `viewTerm2`'s `NatOne` (Term/Term/Raw.hs): the
-/// nullary application of `natOneSym`, which the source spells `%1`.
-fn is_nat_one(t: &LNTerm) -> bool {
-    matches!(t, Term::App(FunSym::NoEq(s), ts) if ts.is_empty() && *s == nat_one_sym())
-}
-
 /// HS `isNatVar` (LTerm.hs): a term that is a nat-sorted VARIABLE.
 /// A nat literal such as `%'a'` is a `Con` name and so is not one.
 fn is_nat_var(t: &LNTerm) -> bool {
@@ -201,7 +195,7 @@ fn rule_terms(ru: &ProtoRuleE) -> impl Iterator<Item = &LNTerm> {
         .iter()
         .chain(&ru.actions)
         .chain(&ru.conclusions)
-        .flat_map(|f| f.terms.iter())
+        .flat_map(|f| f.terms().iter())
 }
 
 /// Port of HS `natWellSortedReport` (Wellformedness.hs) over its rule
@@ -227,7 +221,8 @@ pub fn nat_well_sorted_report(thy: &Theory) -> Vec<WfError> {
             ]);
             out.push(WfError::new(
                 "Nat Sorts",
-                body.nest(2).render_with(WF_LINE_LENGTH, WF_RIBBON),
+                body.nest(2)
+                    .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON),
             ));
         }
     };
@@ -315,7 +310,7 @@ fn rule_names(ru: &ProtoRuleE) -> Vec<Name> {
         for_each_formula_term(phi, &mut |t| collect_names(t, &mut out));
     }
     for fa in ru.premises.iter().chain(&ru.conclusions).chain(&ru.actions) {
-        for t in fa.terms.iter() {
+        for t in fa.terms().iter() {
             collect_names(t, &mut out);
         }
     }
@@ -340,8 +335,9 @@ fn rule_names(ru: &ProtoRuleE) -> Vec<Name> {
 /// (LTerm.hs) is [`Name`]'s `Display`, and the `nest 2`
 /// `prettyWfErrorReport` applies to every body of a topic group
 /// (Wellformedness.hs) is baked in, because the break decisions
-/// depend on the body's absolute column.  [`grouped_topic_block`] joins the
-/// rendered bodies under the one `underlineTopic` header.
+/// depend on the body's absolute column.
+/// [`crate::pretty_theory::render_wf_error_report`] joins the rendered
+/// bodies under the one `underlineTopic` header.
 pub fn fresh_names_report(thy: &Theory) -> WfReport {
     let topic = "Fresh public constants";
     let mut report = Vec::new();
@@ -368,7 +364,7 @@ pub fn fresh_names_report(thy: &Theory) -> WfReport {
             topic,
             hpj::fsep(cells)
                 .nest(2)
-                .render_with(WF_LINE_LENGTH, WF_RIBBON),
+                .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON),
         ));
     }
     report
@@ -465,7 +461,7 @@ fn public_names_report_from_pairs(pairs: Vec<(String, String)>) -> WfReport {
     s.push_str(
         &hpj::numbered_prime(items)
             .nest(2)
-            .render_with(WF_LINE_LENGTH, WF_RIBBON),
+            .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON),
     );
     s.push('\n');
     vec![WfError::new(topic, s)]
@@ -501,16 +497,6 @@ pub fn public_names_report(thy: &Theory) -> Vec<WfError> {
 // Variable sort/capitalization clashes (within a single rule)
 // =============================================================================
 
-/// HS `prettyVarList = fsep . punctuate comma . map prettyLVar`
-/// (TheoryObject.hs), whose `prettyLVar = text . show`
-/// (LTerm.hs) makes each cell a leaf.
-fn pretty_var_list(vars: &[LVar]) -> Doc {
-    hpj::fsep(hpj::punctuate(
-        Doc::char(','),
-        vars.iter().map(|v| Doc::text(v.to_string())).collect(),
-    ))
-}
-
 /// Port of HS `sortsClashCheck` (Wellformedness.hs): the variables
 /// that agree modulo case and index but differ as `LVar`s clash.  Bare
 /// identifiers carry sort `msg`, so `~ltk` (fresh) and `ltk` (msg) are a
@@ -542,7 +528,7 @@ fn sorts_clash_check(info: String, vars: &[LVar]) -> Vec<WfError> {
             hpj::numbered_prime(clashes.iter().map(|grp| pretty_var_list(grp)).collect()).nest(2),
         )
         .nest(2)
-        .render_with(WF_LINE_LENGTH, WF_RIBBON);
+        .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
     vec![WfError::new(
         "Variable with mismatching sorts or capitalization",
         body,

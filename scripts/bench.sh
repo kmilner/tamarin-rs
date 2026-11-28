@@ -17,8 +17,8 @@
 #   DERIV        --derivcheck-timeout passed to both    (default: 30)
 #   HS_PATH / RS_PATH    override the prover binaries
 #   README_PATH  file to rewrite in --write mode        (default: docs/PERFORMANCE.md)
-#   BENCH_ALLOW_DEVELOP=1  permit --write with the pinned develop oracle as the
-#                          HS baseline (the block's prose says RELEASE)
+#   ALLOW_ORACLE_REV_MISMATCH=1 permit --write with an HS baseline other than
+#                          the attested build of the pinned upstream revision
 #
 # Methodology:
 #   - Core control: HS `+RTS -Nk -RTS`; RS `--processors=k` (its Maude pool
@@ -53,16 +53,14 @@ for arg in "$@"; do
     esac
 done
 
-# Default HS baseline: a *released* tamarin-prover on PATH — the benchmark tables
-# compare against what users actually run, not the develop-pinned parity
-# oracle.  Fall back to the ./setup.sh testing build; HS_PATH overrides.
-find_hs() {
-    command -v tamarin-prover 2>/dev/null \
-        || ls "$repo_root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover 2>/dev/null | head -1
-}
-HS_PATH="${HS_PATH:-$(find_hs)}"
+# Default HS baseline: the oracle the parity gates use (the ./setup.sh testing
+# build of the pinned upstream revision, which Rust's proofs follow; a release
+# can lack the replay fixes those proofs need). HS_PATH overrides.
+[ -r "$script_dir/gate_common.sh" ] || exit 2
+. "$script_dir/gate_common.sh"
+HS_PATH="$(resolve_hs_oracle "$repo_root")" || exit 2
+MAUDE="$(resolve_maude)" || exit 2
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
-[ -x "$HS_PATH" ] || { echo "bench.sh: no HS binary (set HS_PATH)" >&2; exit 2; }
 [ -x "$RS_PATH" ] || { echo "bench.sh: no RS binary at $RS_PATH" >&2; exit 2; }
 if command -v gtime >/dev/null 2>&1; then
     TIME_BIN="$(command -v gtime)"
@@ -73,31 +71,11 @@ else
     exit 2
 fi
 
-# Baseline identity check: the generated block's prose asserts a RELEASE
-# baseline, but find_hs() takes whatever `tamarin-prover` is first on PATH —
-# on a gate-configured machine, the develop oracle this repo pins.  The
-# binary's version must be the newest numeric release tag known to the pinned
-# upstream checkout. A binary with a Git revision must additionally point at
-# that exact tag; this catches develop builds at ANY revision, not just the
-# submodule pin. Tarball releases report no revision and are certified by
-# their version.
-hs_version="$("$HS_PATH" --version 2>/dev/null | sed -nE 's/.*tamarin-prover ([0-9]+(\.[0-9]+)+).*/\1/p' | head -1)"
-latest_release="$(git -C "$repo_root/tamarin-prover" tag --list '[0-9]*' --sort=-v:refname 2>/dev/null | grep -E '^[0-9]+(\.[0-9]+)+$' | head -1)"
-hs_rev="$("$HS_PATH" --version 2>/dev/null | grep -oE 'Git revision: [0-9a-f]{7,40}' | head -1)"
-hs_rev="${hs_rev#Git revision: }"
-release_tagged=1
-if [ -n "$hs_rev" ] && ! git -C "$repo_root/tamarin-prover" tag --points-at "$hs_rev" 2>/dev/null | grep -Fxq "$hs_version"; then
-    release_tagged=0
-fi
-if [ -z "$latest_release" ] || [ "$hs_version" != "$latest_release" ] || [ "$release_tagged" != 1 ]; then
-    if [ "$WRITE" = 1 ] && [ -z "${BENCH_ALLOW_DEVELOP:-}" ]; then
-        echo "bench.sh: REFUSING --write: $HS_PATH is not certified as the latest release" >&2
-        echo "  (binary=${hs_version:-unknown}, latest-tag=${latest_release:-unknown}, tagged=$release_tagged)." >&2
-        echo "  Set HS_PATH to that release, or BENCH_ALLOW_DEVELOP=1 to override." >&2
-        exit 2
-    fi
-    echo "bench.sh: WARNING: HS baseline is not certified as the latest release" >&2
-fi
+# Baseline identity check: the generated block names the pinned upstream
+# revision as the HS baseline, so --write requires the attested oracle build
+# (ALLOW_ORACLE_REV_MISMATCH=1 overrides); a plain run only warns.
+[ "$WRITE" = 1 ] || ALLOW_ORACLE_REV_MISMATCH=1
+oracle_rev_check "$HS_PATH" "$MAUDE" "$repo_root"
 
 # Sum RSS for root and every descendant present in one `ps` snapshot. Unlike
 # GNU time's `ru_maxrss`, this measures simultaneous memory across Maude
@@ -156,29 +134,9 @@ pct() {
 cell_rs_t() { case "$1" in timeout) printf 'timeout' ;; fail:*) printf 'fail' ;; *) printf '%s s%s' "$1" "$(pct "$1" "$2")" ;; esac; }
 cell_rs_m() { [ "$1" = "—" ] && printf '—' || printf '%s MB%s' "$1" "$(pct "$1" "$2")"; }
 
-# Theories whose emitted proofs the HS *release* cannot replay (upstream
-# #871 thread-count-dependent proofs / #881 reload normalisation — not port
-# failures; the ./setup.sh testing build re-verifies them).  The note is
-# rendered only when BOTH hold: the theory is one of these, AND the run failed
-# with prove_and_reverify.sh's HS-rejected code.  The code alone would
-# attribute any unreplayable proof — including one an RS regression emitted on
-# some other theory — to these two upstream issues; the name alone would
-# render the note for an RS crash on Joux/wireguard too.
-# Every other failure prints a bare `fail`, so new breakage stays loud.
-HS_REPLAY_UNSUPPORTED=" Joux wireguard "
-HS_REJECTED_RC=3
-UNSUPPORTED_TEXT="not supported ([#871](https://github.com/tamarin-prover/tamarin-prover/issues/871), [#881](https://github.com/tamarin-prover/tamarin-prover/issues/881); see below)"
-# Reverify (RS+HS) time cell: args <measured> <theory-base> <hs-time>.
-cell_rv_t() {
-    if [ "$1" = "fail:$HS_REJECTED_RC" ] && [[ "$HS_REPLAY_UNSUPPORTED" == *" $2 "* ]]; then
-        printf '%s' "$UNSUPPORTED_TEXT"
-    else
-        cell_rs_t "$1" "$3"
-    fi
-}
-
 # Emit the full marker block (header comment + per-core tables) to stdout.
 gen_block() {
+    local load_flags=(--with-maude="$MAUDE" --derivcheck-timeout="$DERIV")
     # Static header comment.  Kept in sync with the benchmark prose; this is the
     # single source of truth for "where do these numbers come from".
     cat <<'HDR' | sed "s/@DERIV@/$DERIV/g"
@@ -189,11 +147,9 @@ Regenerate these three tables in place:
     scripts/bench.sh --write     # measure, then rewrite this block
     scripts/bench.sh             # measure, print to stdout only
 
-The HS baseline is the most recent tamarin-prover RELEASE (the exact version
-is in the "last run" line below) — the prover users actually have installed —
-not the develop branch this repo's parity oracle is pinned to; develop has
-since gained performance work of its own, so the gap versus a develop build
-is smaller than these tables show.
+The HS baseline is the tamarin-prover build of the upstream revision this
+repo pins (`./setup.sh testing`; the revision is in the "last run" line
+below), the prover whose proofs Rust's follow.
 
 Both provers prove every lemma (--prove --derivcheck-timeout=@DERIV@); HS at
 `+RTS -Nk`, RS at `--processors=k`; wall-clock + peak RSS come from
@@ -209,9 +165,8 @@ binaries via the FILES, CORES, TIMEOUT, DERIV, HS_PATH, RS_PATH env vars (see
 the scripts/bench.sh header).
 -->
 HDR
-    local hs_ver
-    hs_ver="$("$HS_PATH" --version 2>/dev/null | grep -oE 'tamarin-prover [0-9]+(\.[0-9]+)*' | head -1)"
-    echo "<!-- last run: $(uname -m) $(uname -s), $(cpu_count) cores; HS baseline: ${hs_ver:-unknown version} -->"
+    # oracle_rev_check captured the version line and revision.
+    echo "<!-- last run: $(uname -m) $(uname -s), $(cpu_count) cores; HS baseline: ${HS_VERSION%%,*} at ${ORACLE_REVISION:0:8} -->"
     for k in $CORES; do
         echo
         echo "**${k} core$([ "$k" = 1 ] && echo '' || echo 's')**"
@@ -222,11 +177,11 @@ HDR
             af="$CORPUS/$f"
             base="${f##*/}"; base="${base%.spthy}"
             [ -f "$af" ] || { echo "| \`$base\` | (missing) | | | | | |"; continue; }
-            h=$(measure "$HS_PATH" +RTS -N${k} -RTS --derivcheck-timeout="$DERIV" --prove "$af")
-            r=$(measure "$RS_PATH" --processors="$k" --derivcheck-timeout="$DERIV" --prove "$af")
+            h=$(measure "$HS_PATH" +RTS -N${k} -RTS "${load_flags[@]}" --prove "$af")
+            r=$(measure "$RS_PATH" --processors="$k" "${load_flags[@]}" --prove "$af")
             p=$(measure env THREADS="$k" HS_PATH="$HS_PATH" RS_PATH="$RS_PATH" \
-                    "$repo_root/prove_and_reverify.sh" "$af" --derivcheck-timeout="$DERIV")
-            echo "| \`$base\` | $(cell_t "${h%|*}") | $(cell_rv_t "${p%|*}" "$base" "${h%|*}") | **$(cell_rs_t "${r%|*}" "${h%|*}")** | $(cell_m "${h#*|}") | $(cell_rs_m "${p#*|}" "${h#*|}") | **$(cell_rs_m "${r#*|}" "${h#*|}")** |"
+                    "$repo_root/prove_and_reverify.sh" "$af" "${load_flags[@]}")
+            echo "| \`$base\` | $(cell_t "${h%|*}") | $(cell_rs_t "${p%|*}" "${h%|*}") | **$(cell_rs_t "${r%|*}" "${h%|*}")** | $(cell_m "${h#*|}") | $(cell_rs_m "${p#*|}" "${h#*|}") | **$(cell_rs_m "${r#*|}" "${h#*|}")** |"
         done
     done
     echo

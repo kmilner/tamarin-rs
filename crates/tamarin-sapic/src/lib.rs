@@ -10,6 +10,7 @@
 //! - [`base_translation`] ← `Sapic.Basetranslation`
 //! - [`bindings`] ← `Sapic.Bindings`
 //! - [`compression`] ← `Sapic.Compression`
+//! - `exceptions` ← `Sapic.Exceptions` (the `WFerror` texts)
 //! - [`facts`] ← `Sapic.Facts`
 //! - [`let_destructors`] ← `Sapic.LetDestructors`
 //! - [`locks`] ← `Sapic.Locks` (lock annotation; `checkLocks` not ported)
@@ -28,14 +29,13 @@
 //! The parser-AST → `PlainProcess` conversion, with the process-call
 //! inlining HS performs in its parser, lives in
 //! `tamarin_theory::{process_convert, process_inline}` beside the data layer.
-//!
-//! Not yet ported: `Sapic.Exceptions`.
 
 pub mod annotation;
 pub mod apply;
 pub mod base_translation;
 pub mod bindings;
 pub mod compression;
+mod exceptions;
 pub mod facts;
 pub mod let_destructors;
 pub mod locks;

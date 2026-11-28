@@ -1,0 +1,29 @@
+// Category: the `-m`/`--output-module` documents — typing of process
+// definitions and let binders under `-m=spthytyped`.
+//
+//   - P: a parameterless `let` definition gets an empty formal list, and its
+//     `functions:` order is visible in the echo;
+//   - the `let cnext:nat = …` binder of a nat sum stays msg-sorted.
+// No corpus theory combines these with -m=spthytyped in a CI gate.
+
+theory ModuleTypedLets
+begin
+
+builtins: natural-numbers
+
+functions: hash/1
+
+let P =
+   new a;
+   let h=a in
+   out(h)
+
+process:
+  P
+  ||
+  ( in(%c);
+    let cnext:nat = %c %+ %1 in
+    event E(cnext);
+    0 )
+
+end

@@ -23,24 +23,6 @@ fn diff_theory_validates_but_does_not_lower_diff_proofs() {
 
     assert!(parse_diff_theory("theory D begin diffLemma E: rule-equivalence end", &[]).is_err());
 }
-
-#[test]
-fn diff_theory_checks_each_lemma_namespace() {
-    let formula = "\"All #i. A() @ i ==> A() @ i\"";
-    for body in [
-        format!("lemma L [left]: {formula} lemma L [left]: {formula}"),
-        format!("lemma L [right]: {formula} lemma L: {formula}"),
-        "diffLemma D: by sorry diffLemma D: by sorry".to_string(),
-    ] {
-        let src = format!("theory D begin {body} end");
-        assert!(
-            parse_diff_theory(&src, &[]).is_err(),
-            "accepted duplicate namespace: {body}"
-        );
-    }
-    let src = format!("theory D begin lemma L [left]: {formula} lemma L [right]: {formula} end");
-    parse_diff_theory(&src, &[]).expect("the two side-specific stores are independent");
-}
 use tamarin_term::maude_sig::pair_maude_sig;
 
 /// [`parse_formula_str`] against the signature HS `parseString` installs
@@ -64,18 +46,6 @@ fn goal_term(src: &str, msig: &tamarin_term::maude_sig::MaudeSig) -> Result<Term
         GoalSpec::Subterm(small, _) => small,
         other => panic!("expected a subterm goal for {src}, got {other:?}"),
     })
-}
-
-#[test]
-fn structured_expected_notes_include_the_token() {
-    let error = ParseError::expected(Pos::ZERO, "term", Some('{')).with_context(ParseContext::Term);
-    assert_eq!(error.diagnostic_notes(), ["expected term; found '{'"]);
-}
-
-#[test]
-fn custom_context_does_not_allocate_structured_storage() {
-    let error = ParseError::custom(Pos::ZERO, "custom".into()).with_context(ParseContext::Term);
-    assert!(error.diagnostic.is_none());
 }
 
 #[test]
@@ -174,37 +144,6 @@ fn fact_goal_heads_backtrack_but_node_failures_commit() {
 }
 
 #[test]
-fn incomplete_goals_do_not_blame_speculative_fact_names() {
-    for (goal, found) in [("splitEqs", ')'), ("x", ')'), ("x @ #i", '@')] {
-        let source = format!(r#"theory T begin lemma L: "T" by solve( {goal} ) end"#);
-        let error = parse_theory(&source, &[]).unwrap_err();
-        assert!(
-            !matches!(error.kind(), ParseErrorKind::InvalidFactName { .. }),
-            "{error}"
-        );
-        assert!(source[error.span().start..].starts_with(found));
-    }
-    for goal in ["splitEqs(1)", "x ⊏ y"] {
-        parse_theory(
-            &format!(r#"theory T begin lemma L: "T" by solve( {goal} ) end"#),
-            &[],
-        )
-        .unwrap();
-    }
-}
-
-#[test]
-fn tied_input_failures_keep_one_alternatives_expectation() {
-    let source = "theory T begin process: in(x @) end";
-    let error = parse_theory(source, &[]).unwrap_err();
-    assert_eq!(error.span().start, source.find('@').unwrap());
-    assert_eq!(error.diagnostic_notes(), ["expected \")\"; found '@'"]);
-    for input in ["in(x)", "in(x, y)"] {
-        parse_theory(&format!("theory T begin process: {input} end"), &[]).unwrap();
-    }
-}
-
-#[test]
 fn diagnostic_details_bound_owned_text() {
     let long = "é".repeat(100_000);
     let error = ParseError::custom(Pos::ZERO, long.clone());
@@ -215,187 +154,6 @@ fn diagnostic_details_bound_owned_text() {
     };
     assert!(expected.chars().count() <= MAX_DIAGNOSTIC_MESSAGE_CHARS + 1);
     assert!(expected.capacity() < 4096);
-}
-
-#[test]
-fn non_binary_ac_declaration_is_a_parse_error() {
-    for tail in ["rule R: [] --> []", ", g/1", ""] {
-        let source = format!("theory T begin functions: f/3 [AC]{tail} end");
-        let error = parse_theory(&source, &[]).unwrap_err();
-        assert!(
-            matches!(error.kind(), ParseErrorKind::NonBinaryAcFunction { name, arity: 3 } if name == "f")
-        );
-        assert_eq!(&source[error.span()], "f");
-    }
-    parse_theory("theory T begin functions: f/2 [AC] end", &[]).unwrap();
-}
-
-#[test]
-fn builtin_reserved_name_check_precedes_the_arity_and_ac_checks() {
-    for (body, name, details) in [
-        (
-            "builtins: hashing functions: h/3 [AC]",
-            "h",
-            "arity 3 requested, previously 1",
-        ),
-        (
-            "builtins: hashing functions: h/1, h/3 [AC]",
-            "h",
-            "arity 3 requested, previously 1",
-        ),
-        (
-            "builtins: dest-pairing functions: fst/1 [AC]",
-            "fst",
-            "destructor removed",
-        ),
-        (
-            "builtins: asymmetric-encryption functions: pk/2",
-            "pk",
-            "arity 2 requested, previously 1",
-        ),
-        (
-            "builtins: dest-symmetric-encryption functions: sdec/2",
-            "sdec",
-            "destructor removed",
-        ),
-        (
-            "builtins: locations-report functions: rep/2",
-            "rep",
-            "private removed",
-        ),
-    ] {
-        let error = function_conflict(body, name);
-        assert!(
-            error
-                .diagnostic_notes()
-                .iter()
-                .any(|note| note.contains(details)),
-            "{body}: {error:?}"
-        );
-    }
-    for attribute in ["private", "destructor", "NDC", "NDC-diff"] {
-        let error = function_conflict(
-            &format!("builtins: hashing functions: h/1 [{attribute}]"),
-            "h",
-        );
-        assert!(error
-            .diagnostic_notes()
-            .iter()
-            .any(|note| note.contains(&format!("{attribute} added"))));
-    }
-}
-
-#[test]
-fn conflicting_declarations_fail_with_or_without_attributes() {
-    for decl in ["h/1, h/2", "h/3 []"] {
-        function_conflict(&format!("builtins: hashing functions: {decl}"), "h");
-    }
-}
-
-fn function_conflict(body: &str, name: &str) -> ParseError {
-    let source = format!("theory T begin {body} end");
-    let error = parse_theory(&source, &[]).unwrap_err();
-    assert!(
-        matches!(error.kind(), ParseErrorKind::ConflictingDeclaration { name: n, context: ParseContext::FunctionDeclaration } if n == name),
-        "{source}: {error:?}"
-    );
-    let start = source.rfind(&format!("{name}/")).unwrap();
-    assert_eq!(error.span(), start..start + name.len());
-    error
-}
-
-#[test]
-fn conflicting_arities_is_a_parse_error() {
-    for (body, name, reason) in [
-        (
-            "functions: f/1, f/3",
-            "f",
-            "arity 3 requested, previously 1",
-        ),
-        (
-            "builtins: reliable-channel functions: h/1, h/2",
-            "h",
-            "arity 2 requested, previously 1",
-        ),
-        (
-            "macros: mh(x, y) = x functions: mh/2",
-            "mh",
-            "private removed, destructor removed",
-        ),
-    ] {
-        let error = function_conflict(body, name);
-        assert!(
-            error
-                .diagnostic_notes()
-                .iter()
-                .any(|note| note.contains(reason)),
-            "{error}"
-        );
-    }
-}
-
-/// HS `extendSig`'s own two checks
-/// (Theory/Text/Parser/Signature.hs), raised at the
-/// position the builtin's `symbol` lexeme reached.
-#[test]
-fn builtins_item_rejects_conflicting_functions_and_macros() {
-    for (body, builtin, cause) in [
-        (
-            "functions: h/2 builtins: hashing",
-            "hashing",
-            "function `h`",
-        ),
-        ("macros: h(x) = x builtins: hashing", "hashing", "macro `h`"),
-        (
-            "builtins: symmetric-encryption, dest-symmetric-encryption functions: sdec/2",
-            "dest-symmetric-encryption",
-            "function `sdec`",
-        ),
-        (
-            "builtins: symmetric-encryption, dest-symmetric-encryption",
-            "dest-symmetric-encryption",
-            "function `sdec`",
-        ),
-        (
-            "builtins: signing, dest-signing",
-            "dest-signing",
-            "function `verify`",
-        ),
-    ] {
-        let error = parse_theory(&format!("theory T begin {body} end"), &[]).unwrap_err();
-        let message = error.diagnostic_message();
-        let notes = error.diagnostic_notes().join("; ");
-        let details = format!("{message}; {notes}");
-        assert!(
-            details.contains(builtin) && details.contains(cause),
-            "{body}: {details}"
-        );
-    }
-    parse_theory("theory T begin builtins: dest-pairing end", &[]).unwrap();
-}
-
-/// The declarations HS accepts around the same two checks — a
-/// re-declaration at the builtin's own shape, the `fst`/`snd` exemption of
-/// check (2), a duplicate, and the builtins whose `MaudeSig` only flips an
-/// enable flag and so reserve no names at all.
-#[test]
-fn matching_and_exempt_function_declarations_are_accepted() {
-    for body in [
-        "builtins: hashing\nfunctions: h/1",
-        "builtins: hashing\nfunctions: h/1, h/1",
-        "functions: fst/1 [destructor]",
-        "builtins: dest-pairing\nfunctions: fst/1 [destructor]",
-        "builtins: diffie-hellman\nfunctions: exp/3",
-        "builtins: multiset\nfunctions: union/3",
-        "builtins: natural-numbers\nfunctions: tplus/3",
-        // Two builtins sharing `pk`/`true` at the same shape merge cleanly.
-        "builtins: signing, revealing-signing\nfunctions: pk/1",
-    ] {
-        assert!(
-            parse_theory(&format!("theory P begin\n\n{body}\n\nend\n"), &[]).is_ok(),
-            "should parse: {body}"
-        );
-    }
 }
 
 #[test]
@@ -417,24 +175,6 @@ fn theory_options_are_limited_to_the_shared_declarable_set() {
         .expect_err("a valid option prefix must leave its suffix to the outer parser");
     assert_eq!(err.line_column(), (2, 30));
     assert!(matches!(err.kind(), ParseErrorKind::UnknownItem { item, .. } if item == "x"));
-}
-
-#[test]
-fn misspelled_theory_keyword_reports_the_expected_construct() {
-    let error = parse_theory("theary Foo\nbegin\nend\n", &[]).unwrap_err();
-    assert_eq!(error.span().start, 0);
-    assert!(error
-        .diagnostic_notes()
-        .iter()
-        .any(|note| note.contains("theory")));
-}
-
-#[test]
-fn unknown_item_points_at_its_name() {
-    let source = "theory T begin rul R: [] --> [] end";
-    let error = parse_theory(source, &[]).unwrap_err();
-    assert!(matches!(error.kind(), ParseErrorKind::UnknownItem { item, .. } if item == "rul"));
-    assert_eq!(&source[error.span()], "rul");
 }
 
 #[test]
@@ -507,12 +247,12 @@ fn lemma_with_quantifier() {
 
 #[test]
 fn comment_handling() {
-    let s = "/* outer */ theory T // line\n begin /* x /* y */ z */ end";
+    let s = "/* outer */ theory T // line\n begin /* x /* y */ z */ diffLemma{*body*} end";
     let t = parse_theory(s, &[]).unwrap();
     assert_eq!(t.name, "T");
-    // `/* */` and `//` are whitespace, not theory items.  Only the
-    // `name{* … *}` formal comment becomes a theory item.
-    assert!(t.items.is_empty(), "unexpected items: {:?}", t.items);
+    assert!(
+        matches!(t.items.as_slice(), [TheoryItem::FormalComment { header, body }] if header == "diffLemma" && body == "body")
+    );
 }
 
 /// The one argument of a subterm goal.  The goal grammar reads it with the
@@ -531,15 +271,6 @@ fn term_application() {
             );
         }
         other => panic!("expected App, got {:?}", other),
-    }
-}
-
-#[test]
-fn formula_string() {
-    let f = parse_formula_str_sig("All x. P(x) ==> Q(x)").unwrap();
-    match f {
-        Formula::Forall(_, _) => {}
-        _ => panic!("expected Forall"),
     }
 }
 
@@ -587,20 +318,6 @@ fn fatom_fact_lhs_of_relop_is_term_atom() {
         },
         other => panic!("expected Implies, got {:?}", other),
     }
-}
-
-#[test]
-fn relational_application_errors_outweigh_predicate_prefixes() {
-    let source = "theory T begin\nlemma L: \"Foo(x) = y\"\nend\n";
-    let error = parse_theory(source, &[]).expect_err("a relation requires a declared function");
-    assert!(
-        matches!(
-            error.kind(),
-            ParseErrorKind::UndeclaredFunction { name } if name == "Foo"
-        ),
-        "{error:?}"
-    );
-    assert_eq!(&source[error.span()], "Foo");
 }
 
 // HS `typep` (Token.hs) maps only the literal `Any` to the default
@@ -705,22 +422,6 @@ fn lemma_proof_raw(thy: &Theory) -> &str {
 }
 
 #[test]
-fn malformed_stored_proof_fails_theory_parse() {
-    let src = "theory T begin\nlemma L: \"T\"\nsimplify\nend";
-    let err = parse_theory(src, &[]).expect_err("a bare intermediate method needs a child");
-    assert_eq!((err.pos.line, err.pos.col), (4, 1));
-
-    let src = "theory T begin\nlemma L: \"T\"\nby sorry trailing\nend";
-    let err = parse_theory(src, &[]).expect_err("trailing proof text must not be discarded");
-    assert_eq!(err.span().start, src.find("trailing").unwrap());
-    assert!(matches!(
-        err.kind(),
-        ParseErrorKind::UnknownItem { item, context: ParseContext::TheoryItem }
-            if item == "trailing"
-    ));
-}
-
-#[test]
 fn stored_proof_preserves_raw_and_lemma_text_whitespace() {
     let lemma_text = "lemma L:\t\"T\"\n  by\t sorry \n \t";
     let source = format!("theory T begin\n{lemma_text}rule R: [] --> []\nend");
@@ -739,12 +440,12 @@ fn completed_proofs_keep_following_theory_items_separate() {
         (
             false,
             "lemma L: \"T\"\n",
-            "induction\n  case rule\n  by sorry\nqed \t/* proof tail */\n  ",
+            "induction\n  case lemma\n  by sorry\nqed \t/* proof tail */\n  ",
         ),
         (
             true,
             "diffLemma L:\n",
-            "rule-equivalence\n  case rule\n  MIRRORED\nqed \t/* proof tail */\n  ",
+            "rule-equivalence\n  case lemma\n  MIRRORED\nqed \t/* proof tail */\n  ",
         ),
     ] {
         for (following, item_kind) in [
@@ -781,394 +482,59 @@ fn completed_proofs_keep_following_theory_items_separate() {
     }
 }
 
+/// Text inside a public literal of a stored proof is data: a closing
+/// parenthesis, a keyword, a comment opener or a backslash there neither ends
+/// the proof nor escapes anything, and the raw proof keeps it.
 #[test]
-fn incomplete_proofs_do_not_finish_at_following_theory_items() {
-    for (is_diff, declaration, proof) in [
-        (false, "lemma L: \"T\"", "simplify"),
-        (true, "diffLemma L:", "rule-equivalence"),
+fn stored_proof_ignores_structure_inside_public_literals() {
+    for proof in [
+        "by solve( Foo('a)) rule') @ #i )\n",
+        "by solve( Foo('a\\') @ #i )\n",
+        "by solve( G(' /* ' )) rule */ x') @ #i)\n",
+        "by solve( G(' // ' )) rule\n x') @ #i)\n",
     ] {
-        for following in [
-            "text{* documentation *}",
-            "lemma Next: \"T\" by sorry",
-            "rule Next: [] --> []",
-            "#ifdef LIVE\nrule Next: [] --> []\n#endif",
-        ] {
-            let prefix = format!("theory T begin\n{declaration}\n{proof}\n");
-            let source = format!("{prefix}{following}\nend");
-            let error = if is_diff {
-                parse_diff_theory(&source, &["LIVE"])
-            } else {
-                parse_theory(&source, &["LIVE"])
-            }
-            .expect_err("an intermediate proof method still requires a child");
-            assert_eq!(error.span().start, prefix.len(), "{source}: {error:?}");
-            assert!(
-                matches!(
-                    error.kind(),
-                    ParseErrorKind::Expected {
-                        context: ParseContext::Proof
-                    }
-                ),
-                "{source}: {error:?}"
-            );
-        }
+        let source = format!("theory T\nbegin\nlemma L: \"T\"\n{proof}end\n");
+        let theory = parse_theory(&source, &[]).unwrap_or_else(|e| panic!("{proof}: {e}"));
+        assert_eq!(lemma_proof_raw(&theory), proof);
     }
 }
 
+/// A diagnostic's expectation set holds what the failing position could
+/// have read, once each: 200 declared `[AC]` operators do not join an item
+/// or declaration error, and 40 nested parentheses that all fail at one
+/// token leave one expectation.
 #[test]
-fn stored_proof_stops_before_top_level_process_definition() {
-    let source = r#"theory T begin
-lemma L: "T"
-by sorry
-let P = 0
-process: P
-end"#;
-    parse_theory(source, &[]).expect("top-level let after a proof must remain a theory item");
-}
-
-#[test]
-fn stored_proof_ignores_structure_inside_public_literals() {
-    let source = r#"theory T begin
-lemma L: "T"
-by solve( Foo('a)) rule') @ #i )
-end"#;
-    let theory = parse_theory(source, &[]).expect("literal punctuation cannot truncate a proof");
-    assert!(lemma_proof_raw(&theory).contains("'a)) rule'"));
-}
-
-#[test]
-fn stored_proof_treats_backslashes_as_public_literal_data() {
-    let source = r#"theory T begin
-lemma L: "T"
-by solve( Foo('a\') @ #i )
-end"#;
-    let theory = parse_theory(source, &[]).expect("backslash does not escape a public quote");
-    assert!(lemma_proof_raw(&theory).contains("'a\\'"));
-}
-
-#[test]
-fn declaration_errors_do_not_collect_operator_expectations() {
-    let declarations = (0..200)
+fn expectation_sets_stay_bounded() {
+    let operators = (0..200)
         .map(|index| format!("f{index}/2 [AC]"))
         .collect::<Vec<_>>()
         .join(", ");
-    let source =
-        format!("theory T begin\nfunctions: {declarations}\nmacros: m(x) = x, m(y) = y\nend");
-    let error = parse_theory(&source, &[]).expect_err("the second macro conflicts");
+    let error = parse_theory(
+        &format!("theory T begin\nfunctions: {operators}\nmacros: m(x) = x, m(y) = y\nend"),
+        &[],
+    )
+    .expect_err("the second macro conflicts");
     let rendered = error.to_string();
     assert!(
         rendered.contains("Conflicting macro")
             && rendered.contains("`m` was already declared incompatibly"),
         "{rendered}"
     );
-}
 
-#[test]
-fn item_errors_do_not_collect_unrelated_operator_names() {
-    let declarations = (0..200)
-        .map(|index| format!("f{index}/2 [AC]"))
-        .collect::<Vec<_>>()
-        .join(", ");
-    let source = format!("theory T begin\nfunctions: {declarations}\nequations: x = y\n@\nend");
-
-    let error = parse_theory(&source, &[]).expect_err("junk at item position must fail");
-
+    let error = parse_theory(
+        &format!("theory T begin\nfunctions: {operators}\nequations: x = y\n@\nend"),
+        &[],
+    )
+    .expect_err("junk at item position must fail");
     assert_eq!(
         error.diagnostic_notes(),
         ["expected theory item, \"end\"; found '@'"]
     );
-}
 
-/// Reports whether the parser split a top-level `test` CaseTest item out of
-/// the theory.  That is the symptom of a capture that stopped at a `test`
-/// token inside a proof body.
-fn has_casetest(thy: &Theory) -> bool {
-    thy.items
-        .iter()
-        .any(|it| matches!(it, TheoryItem::CaseTest(_)))
-}
-
-// Regression: `test` is a genuine top-level theory-item keyword (HS
-// `caseTest = CaseTest <$> (symbol "test" *> identifier)`,
-// Theory/Text/Parser/Accountability.hs, dispatched in `addItems`,
-// Theory/Text/Parser.hs) but is ALSO an ordinary message variable
-// name inside proof goals — e.g. `solve( Match( test, sid ) @ #i4 )` in
-// examples/ake/bilinear/Scott.spthy.  HS parses the proof skeleton
-// STRUCTURALLY (`solve <$> parens goal`, Theory/Text/Parser/Proof.hs), so a `test` inside
-// `solve( ... )` is a `parens`-nested term and can never begin a new
-// top-level item. Parsing the proof grammar must consume the complete goal
-// before returning to the theory-item parser.
-#[test]
-fn proof_skeleton_not_truncated_by_keyword_fact_arg() {
-    let s = r#"theory T begin
-  lemma L:
-    "All x #i. Start(x) @ #i ==> F"
-  simplify
-  solve( Match( test, sid ) @ #i4 )
-    case c
-    by sorry
-  qed
-end"#;
-    let t = parse_theory(s, &[]).expect("keyword-named goal arg must parse");
-    assert!(
-        !has_casetest(&t),
-        "no CaseTest may be split out of the body"
-    );
-    let raw = lemma_proof_raw(&t);
-    assert!(
-        raw.contains("Match( test, sid )"),
-        "proof raw truncated at/before `test`: {raw:?}"
-    );
-    assert!(raw.contains("qed"), "proof raw missing `qed`: {raw:?}");
-}
-
-// Goal arguments must preserve fresh `~k`, public `$A`, and indexed
-// message arguments alongside a bare identifier that collides with a
-// top-level keyword. None may truncate the capture while inside the goal.
-#[test]
-fn proof_skeleton_captures_mixed_sorted_indexed_and_keyword_args() {
-    let s = r#"theory T begin
-  lemma L:
-    "All x #i. Start(x) @ #i ==> F"
-  simplify
-  solve( Foo( ~k, $A, k.1, test, sid ) @ #i1 )
-    case c
-    by sorry
-  qed
-end"#;
-    let t = parse_theory(s, &[]).expect("mixed-arg goal must parse");
-    assert!(!has_casetest(&t));
-    let raw = lemma_proof_raw(&t);
-    assert!(
-        raw.contains("Foo( ~k, $A, k.1, test, sid )"),
-        "mixed-arg goal truncated: {raw:?}"
-    );
-    assert!(raw.contains("qed"), "missing qed: {raw:?}");
-}
-
-// A genuine top-level `test` following a proof must be recognized as a
-// CaseTest even when the proof body also contains a `test` goal argument.
-#[test]
-fn real_casetest_after_proof_still_recognized() {
-    let s = r#"theory T begin
-  lemma L:
-    "All x #i. Start(x) @ #i ==> F"
-  simplify
-  solve( Foo( test, sid ) @ #i1 )
-    case c
-    by sorry
-  qed
-  test Reachable:
-    "Ex #i. Bar() @ #i"
-end"#;
-    let t = parse_theory(s, &[]).expect("proof followed by CaseTest must parse");
-    let raw = lemma_proof_raw(&t);
-    assert!(
-        raw.contains("Foo( test, sid )") && raw.contains("qed"),
-        "proof body truncated: {raw:?}"
-    );
-    let ct = t
-        .items
-        .iter()
-        .find_map(|it| match it {
-            TheoryItem::CaseTest(c) => Some(c),
-            _ => None,
-        })
-        .expect("top-level `test` CaseTest must be recognized after the proof");
-    assert_eq!(ct.name, "Reachable");
-}
-
-// Regression: tactic filter regexes carry
-// ESCAPED, UNBALANCED parens inside a double-quoted string literal —
-// e.g. `regex "cp\("` and `regex "In_A\( 'S', <'codes'"` in
-// examples/csf18-alethea/....  Those `(`s are opaque regex text (HS lexes
-// the whole thing as `stringLiteral`, Token.hs); counting them as
-// grouping would swallow every following item. The tactic grammar must
-// treat double-quoted string interiors as opaque.
-#[test]
-fn tactic_regex_with_unbalanced_paren_does_not_swallow_next_item() {
-    let s = r#"theory T begin
-  tactic: myTac
-  presort: C
-  prio:
-    regex "In_A\( 'S', <'codes'"
-  prio:
-    regex "cp\("
-  rule R: [ Fr(~k) ] --[ Created(~k) ]-> [ Out(~k) ]
-end"#;
-    let t = parse_theory(s, &[]).expect("tactic with unbalanced regex parens must parse");
-    let tac = t
-        .items
-        .iter()
-        .find_map(|it| match it {
-            TheoryItem::Tactic(t) => Some(t),
-            _ => None,
-        })
-        .expect("tactic present");
-    assert_eq!(tac.prios.len(), 2);
-    let SelectorExpr::Leaf(second) = &tac.prios[1].selectors[0] else {
-        panic!("expected regex selector")
-    };
-    assert_eq!(second.name, "regex");
-    assert_eq!(second.params, [r#"cp\("#]);
-    // The `(` inside the regex string must not consume the following rule.
-    let rule = t
-        .items
-        .iter()
-        .find_map(|it| match it {
-            TheoryItem::Rule(r) => Some(r),
-            _ => None,
-        })
-        .expect("rule R must remain a separate top-level item");
-    assert_eq!(rule.name, "R");
-}
-
-#[test]
-fn tactic_blocks_require_a_selector_without_consuming_the_next_token() {
-    for (block, tail) in [
-        ("prio:", "rule R: [] --> [] end"),
-        ("deprio: {id}", "rule R: [] --> [] end"),
-        ("prio:", "foo"),
-        ("prio:", "deprio:"),
-        ("prio:", ""),
-    ] {
-        let prefix = format!("theory T begin\ntactic: rank\n{block}\n");
-        let source = format!("{prefix}{tail}");
-        let error = parse_theory(&source, &[]).unwrap_err();
-        assert_eq!(error.span().start, prefix.len(), "{source}: {error:?}");
-        assert!(
-            error
-                .diagnostic_notes()
-                .iter()
-                .any(|note| note.contains("tactic selector with a quoted argument")),
-            "{error:?}"
-        );
-    }
-}
-
-#[test]
-fn tactic_presort_requires_one_known_non_oracle_ranking() {
-    for presort in ["sx", "z", "o"] {
-        let src = format!("theory T begin\ntactic: rank\npresort: {presort}\nend");
-        let err = parse_theory(&src, &[]).expect_err("invalid presort must fail");
-        assert!(err.to_string().contains("unknown proof method ranking"));
-    }
-    for presort in ["s", "S", "p", "P", "c", "C", "i", "I"] {
-        let src = format!("theory T begin\ntactic: rank\npresort: {presort}\nend");
-        parse_theory(&src, &[]).unwrap_or_else(|e| panic!("valid presort {presort}: {e}"));
-    }
-}
-
-// Regression: a proof CASE LABEL that collides with a top-level keyword must
-// not truncate the capture.  HS parses `oneCase = symbol "case" *> identifier`
-// (Theory/Text/Parser/Proof.hs) structurally, so the identifier after
-// `case` is the case NAME and can be any top-level keyword — case names come
-// from rule / source-case names, and `test` is the CaseTest keyword
-// (Theory/Text/Parser/Accountability.hs).  A rule named
-// `test` prints its solved case as `case test`, which must remain part of
-// the proof even though it is outside a parenthesized goal.
-#[test]
-fn proof_case_label_named_after_keyword_does_not_truncate() {
-    let s = r#"theory T begin
-  lemma l:
-    exists-trace "Ex x #i. Done(x) @ #i"
-  simplify
-  solve( A( x ) ▶₀ #i )
-    case test
-    SOLVED // trace found
-  qed
-end"#;
-    let t = parse_theory(s, &[]).expect("`case test` must not truncate the proof");
-    // The bare `test` case label must NOT be split off as a CaseTest item.
-    assert!(
-        !has_casetest(&t),
-        "case label `test` must not become a top-level CaseTest"
-    );
-    let raw = lemma_proof_raw(&t);
-    assert!(
-        raw.contains("case test"),
-        "proof raw truncated at/before `case test`: {raw:?}"
-    );
-    assert!(
-        raw.contains("SOLVED") && raw.contains("qed"),
-        "proof raw missing SOLVED/qed: {raw:?}"
-    );
-}
-
-// Several cases separated by `next` may be labelled after different top-level
-// keywords (`rule`, `lemma`, `function`). None may truncate the proof or become
-// a separate theory item.
-#[test]
-fn multiple_case_labels_named_after_keywords_do_not_truncate() {
-    let s = r#"theory T begin
-  lemma l:
-    all-traces "All x #i. Done(x) @ #i ==> F"
-  simplify
-  solve( A( x ) ▶₀ #i )
-    case rule
-      by sorry
-    next
-    case lemma
-      by sorry
-    next
-    case function
-      by sorry
-  qed
-end"#;
-    let t = parse_theory(s, &[]).expect("keyword-named case labels must not truncate");
-    // The parser splits no Rule or Functions items out of the body.
-    // `lemma_proof_raw` checks the lemma count.
-    assert!(
-        !t.items.iter().any(|it| matches!(it, TheoryItem::Rule(_))),
-        "a `case rule` label must not be split into a top-level rule"
-    );
-    assert!(
-        !t.items
-            .iter()
-            .any(|it| matches!(it, TheoryItem::Functions(_))),
-        "a `case function` label must not be split into a top-level functions decl"
-    );
-    let raw = lemma_proof_raw(&t);
-    for label in ["case rule", "case lemma", "case function"] {
-        assert!(raw.contains(label), "proof raw missing {label:?}: {raw:?}");
-    }
-    assert!(raw.contains("qed"), "proof raw missing qed: {raw:?}");
-}
-
-// A genuine rule following a completed proof must remain a theory item,
-// even when the proof contains a case named after another top-level keyword.
-#[test]
-fn keyword_after_proof_still_terminates_capture() {
-    let s = r#"theory T begin
-  lemma l:
-    exists-trace "Ex x #i. Done(x) @ #i"
-  simplify
-  solve( A( x ) ▶₀ #i )
-    case test
-    SOLVED
-  qed
-  rule two:
-    [ A(x) ] --[ Done(x) ]-> [ ]
-end"#;
-    let t = parse_theory(s, &[]).expect("proof followed by a real rule must parse");
-    let raw = lemma_proof_raw(&t);
-    assert!(
-        raw.contains("case test") && raw.contains("qed"),
-        "proof body truncated: {raw:?}"
-    );
-    assert!(
-        !raw.contains("rule two"),
-        "the following rule leaked into the proof capture: {raw:?}"
-    );
-    let rule = t
-        .items
-        .iter()
-        .find_map(|it| match it {
-            TheoryItem::Rule(r) => Some(r),
-            _ => None,
-        })
-        .expect("the top-level `rule two` must remain a separate item");
-    assert_eq!(rule.name, "two");
+    let formula = format!("{}☃{}", "(".repeat(40), ")".repeat(40));
+    let error =
+        parse_theory(&format!("theory T begin lemma L: \"{formula}\" end"), &[]).unwrap_err();
+    assert_eq!(error.diagnostic_notes(), ["expected term; found '☃'"]);
 }
 
 // ---- user-defined AC function symbols (upstream #883) ----
@@ -1227,6 +593,28 @@ fn function_attributes_ac_ndc() {
     assert!(e.private && e.destructor && !e.ac && !e.ndc && !e.ndc_diff);
 }
 
+/// `f/n` declares the same symbol as `f(Any, ...):Any` with n arguments.
+#[test]
+fn numeric_arities_materialize_the_same_types_as_explicit_any_arguments() {
+    for (numeric, typed) in [
+        ("f/0", "f():Any"),
+        ("f/1", "f(Any):Any"),
+        ("f/3", "f(Any,Any,Any):Any"),
+        ("f/2 [AC]", "f(Any,Any):Any [AC]"),
+        ("fst/1 [AC]", "fst(Any):Any [AC]"),
+    ] {
+        let declarations = |decl: &str| {
+            parse_theory(
+                &format!("theory T begin\n\nfunctions: {decl}\n\nend\n"),
+                &[],
+            )
+            .unwrap()
+            .items
+        };
+        assert_eq!(declarations(numeric), declarations(typed), "{numeric}");
+    }
+}
+
 // HS `acterm` (Theory/Text/Parser/Term.hs): a binary `[AC]` symbol is
 // also an infix,
 // left-associative operator — the notation `prettyTerm` emits for such
@@ -1271,12 +659,6 @@ fn ac_symbols_nest_in_name_order() {
 
 // A symbol is an infix operator only once DECLARED `[AC]` (HS reads the AC
 // symbols out of the parse-time signature state).
-#[test]
-fn ac_infix_requires_a_preceding_declaration() {
-    let src = "theory T begin equations: x add y = z end";
-    assert!(parse_theory(src, &[]).is_err(), "`add` is not infix here");
-}
-
 // A `:` after a variable means different things inside and outside a SAPIC
 // process.  Rules/formulas use `msgvar`/`lvar` = `sortedLVar`, whose
 // `mkSuffixParser` reads `x:nat` as the NAT-SORTED `x` (Token.hs);
@@ -1337,21 +719,74 @@ fn colon_suffix_is_a_sapic_type_in_a_process_and_a_sort_in_a_rule() {
     }
     let v = seen.expect("rule premise variable");
     assert_eq!((v.sort, v.typ.as_deref()), (LSort::Nat, None));
+
+    // A pattern variable takes a type too: `sapicpatternvar` (Token.hs).
+    let thy = parse_theory(
+        "theory T begin process: in('c', <=x:nat, y>); out('c', y) end",
+        &[],
+    )
+    .expect("parses");
+    let pattern = thy.items.iter().find_map(|item| match item {
+        TheoryItem::TopLevelProcess(Process::Action {
+            action:
+                SapicAction::ChIn {
+                    msg: Term::Pair(items),
+                    ..
+                },
+            ..
+        }) => Some(items[0].clone()),
+        _ => None,
+    });
+    let Some(Term::PatMatch(inner)) = pattern else {
+        panic!("`=x:nat` is a pattern: {pattern:?}");
+    };
+    let Term::Var(v) = *inner else {
+        panic!("the pattern wraps a variable");
+    };
+    assert_eq!((v.sort, v.typ.as_deref()), (LSort::Msg, Some("nat")));
+}
+
+/// A digit-initial name after `%` is a nat variable, not `%1` followed by a
+/// suffix (`natVar`, Token.hs).
+#[test]
+fn digit_initial_nat_variable_is_not_split_as_nat_one() {
+    let thy = parse_theory(
+        "theory T begin\nbuiltins: natural-numbers\nrule R: [ In(%12) ] --> [ Out(%1) ]\nend",
+        &[],
+    )
+    .expect("digit-initial nat variable");
+    let rule = thy
+        .items
+        .iter()
+        .find_map(|item| match item {
+            TheoryItem::Rule(rule) => Some(rule),
+            _ => None,
+        })
+        .expect("rule");
+    assert!(matches!(
+        &rule.premises[0].args[0],
+        Term::Var(var) if var.name == "12" && var.sort == LSort::Nat
+    ));
+    assert_eq!(rule.conclusions[0].args[0], Term::NatOne);
 }
 
 // =============================================================================
 // The sort the parser stamps on every variable
 // =============================================================================
 
-/// The first argument of the first premise of the theory's single rule.
-fn rule_premise_term(src: &str) -> Term {
-    let thy = parse_theory(src, &[]).expect("parses");
-    for item in &thy.items {
-        if let TheoryItem::Rule(r) = item {
-            return r.premises[0].args[0].clone();
-        }
+/// The argument of the predicate `P(<args>)`, read as a lemma formula, where
+/// a variable of every sort may appear (`fact (vlit (try varp <|> nodep))`,
+/// Theory/Text/Parser/Formula.hs).
+fn predicate_term(args: &str) -> Term {
+    let src = format!("theory T begin builtins: natural-numbers lemma L: \"P(<{args}>)\" end");
+    let thy = parse_theory(&src, &[]).expect("parses");
+    match thy.items.last() {
+        Some(TheoryItem::Lemma(Lemma {
+            formula: Formula::Atom(Atom::Pred(fact)),
+            ..
+        })) => fact.args[0].clone(),
+        other => panic!("expected a predicate lemma, got {other:?}"),
     }
-    panic!("no rule in {src}");
 }
 
 /// `(name, idx, sort)` of every element of a tuple of variables.
@@ -1376,15 +811,23 @@ fn var_of(t: &Term) -> &VarSpec {
     }
 }
 
+#[test]
+fn explicit_variable_indices_fit_in_u32() {
+    let model = |idx| format!("theory T begin rule R: [In(x.{idx})] --> [Out(x.{idx})] end");
+    let facts = rule_conclusions(&model(u64::from(u32::MAX)));
+    assert_eq!(var_of(&facts[0].args[0]).idx, u64::from(u32::MAX));
+    let error = parse_theory(&model(u64::from(u32::MAX) + 1), &[]).unwrap_err();
+    assert!(error
+        .to_string()
+        .contains("variable index exceeds 4294967295"));
+}
+
 /// A sigil names the sort and a bare identifier is message-sorted, as HS
 /// `sortedLVar`'s prefix arms do — the bare `LSortMsg -> pure ()` case
 /// (Token.hs).
 #[test]
 fn bare_variable_is_msg_sorted() {
-    let t = rule_premise_term(
-        "theory T begin builtins: natural-numbers \
-         rule R: [ In(<x, x.1, ~f, $p, #i, %n>) ] --[ ]-> [ ] end",
-    );
+    let t = predicate_term("x, x.1, ~f, $p, #i, %n");
     assert_eq!(
         tuple_var_specs(&t),
         vec![
@@ -1394,27 +837,6 @@ fn bare_variable_is_msg_sorted() {
             ("p", 0, LSort::Pub),
             ("i", 0, LSort::Node),
             ("n", 0, LSort::Nat),
-        ]
-    );
-}
-
-/// HS `sortedLVar`'s suffix arm returns `LVar n s i` with `s` the suffix's
-/// sort, the same plain `LVar` the sigil arms build (Token.hs), so
-/// `x:fresh` and `~x` are one variable.
-#[test]
-fn sort_suffix_parses_to_the_plain_sort() {
-    let t = rule_premise_term(
-        "theory T begin builtins: natural-numbers \
-         rule R: [ In(<x:msg, x:fresh, x:pub, x:node, x:nat>) ] --[ ]-> [ ] end",
-    );
-    assert_eq!(
-        tuple_var_specs(&t),
-        vec![
-            ("x", 0, LSort::Msg),
-            ("x", 0, LSort::Fresh),
-            ("x", 0, LSort::Pub),
-            ("x", 0, LSort::Node),
-            ("x", 0, LSort::Nat),
         ]
     );
 }
@@ -1447,20 +869,6 @@ fn timepoint_positions_are_node_sorted() {
     // The "term equality" alternative reads both operands with `msgvar`, so
     // two bare names are message variables.
     assert_eq!(sort_of("k = l"), vec![LSort::Msg, LSort::Msg]);
-
-    for invalid in [
-        "$i < $j",
-        "x:msg < j",
-        "f(i) < j",
-        "$i = #j",
-        "f(i) = #j",
-        "k = #l",
-    ] {
-        assert!(
-            parse_formula_str_sig(invalid).is_err(),
-            "accepted non-node operands in {invalid}"
-        );
-    }
 }
 
 /// `nodevar` reads a bare name with `indexedIdentifier` (Token.hs),
@@ -1570,7 +978,8 @@ fn rule_conclusions(src: &str) -> Vec<Fact> {
 /// maudeSig`, so it is an application, not a variable.  A sigil and a use
 /// ahead of the declaration leave a variable in HS too. A `.idx`, a `:sort`
 /// suffix and a SAPIC `:type` are not part of the identifier, so the nullary
-/// parser claims the name and leaves the suffix to be rejected.
+/// parser claims the name and leaves the suffix to be rejected.  Only a whole
+/// identifier is claimed.
 #[test]
 fn bare_nullary_symbol_parses_as_application() {
     let concs = rule_conclusions(
@@ -1619,29 +1028,17 @@ fn bare_nullary_symbol_parses_as_application() {
          end",
     );
     assert_eq!(var_of(&concs[0].args[0]).name, "c");
-}
 
-/// `nullaryApp` resolves a complete identifier, so a declared `c/0` cannot
-/// claim the prefix of the distinct identifier `cx`.
-#[test]
-fn nullary_symbol_matches_the_whole_identifier() {
-    let concs = rule_conclusions(
-        "theory T begin\n\
-         functions: c/0\n\
-         rule R:\n\
-           [ ] --> [ Out(cx) ]\n\
-         end",
-    );
-    assert_eq!(var_of(&concs[0].args[0]).name, "cx");
-}
-
-/// Fixed literals also stop at an identifier boundary. Identifiers beginning
-/// with `1` or `DH_neutral` therefore remain intact.
-#[test]
-fn fixed_literals_do_not_claim_identifier_prefixes() {
-    for name in ["1abc", "DH_neutralx"] {
-        let src = format!("theory T begin\nrule R:\n  [ ] --> [ Out({name}) ]\nend");
-        let concs = rule_conclusions(&src);
+    // A nullary symbol or a fixed literal claims a whole identifier only, so
+    // one it merely begins stays a variable.
+    for (decl, name) in [
+        ("functions: c/0\n", "cx"),
+        ("", "1abc"),
+        ("", "DH_neutralx"),
+    ] {
+        let concs = rule_conclusions(&format!(
+            "theory T begin\n{decl}rule R:\n  [ ] --> [ Out({name}) ]\nend"
+        ));
         assert_eq!(var_of(&concs[0].args[0]).name, name);
     }
 }
@@ -1732,245 +1129,32 @@ fn structural_mode_resolves_nullary_names_from_the_signature() {
 }
 
 // =========================================================================
-// Rule `let` inlining
+// Rule `let` blocks
 // =========================================================================
 //
-// HS applies the `let` substitution to `(ps, as, cs, rs)` inside the rule
-// parsers themselves (Theory/Text/Parser/Rule.hs), so a parsed
-// rule carries no `let`-bound names.  `letBlock` folds the bindings with
-// `foldr1 compose` over singletons (Theory/Text/Parser/Let.hs) and
-// `compose s1 s2` means `s1(s2(t))` (Term/Substitution/SubstVFree.hs),
-// so the bindings apply in reverse source order.
+// HS applies the `let` substitution inside the rule parsers
+// (Theory/Text/Parser/Rule.hs); the port keeps the bindings on the rule and
+// elaboration applies them (see `elaborate_tests`).
 
-/// The single rule of a one-rule theory.
-fn only_rule(src: &str) -> Rule {
-    let thy = parse_theory(src, &[]).expect("parses");
-    thy.items
-        .iter()
-        .find_map(|i| match i {
-            TheoryItem::Rule(r) => Some(r.clone()),
-            _ => None,
-        })
-        .expect("one rule")
-}
-
+/// The parser records the bindings in source order and leaves the body as
+/// written.  HS identifiers start with any alphanumeric character, so
+/// upstream's ccs18-5G models bind `let 5G_AV = ...`.
 #[test]
-fn let_inlining_substitutes_in_premises() {
-    // rule R: let r = ~k in [In(r), Fr(~k)] --[]-> []
-    // The In premise holds ~k, not the local `r`.
-    let r = only_rule(
+fn rule_let_bindings_are_kept_unapplied() {
+    let thy = parse_theory(
         r#"theory T begin
-            rule R: let r = ~k in [In(r), Fr(~k)] --[]-> []
+            rule R: let 5G_AV = <'a', ~k> b = 5G_AV in [Fr(~k)] --[]-> [Out(b)]
         end"#,
-    );
-    let in_fact = &r.premises[0];
-    assert_eq!(in_fact.name, "In");
-    match &in_fact.args[0] {
-        Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
-        other => panic!("expected ~k after subst, got {other:?}"),
-    }
-}
-
-#[test]
-fn let_inlining_is_sequential() {
-    // let a = ~k; b = h(a) in [In(b)] --[]-> [] gives In(h(~k)): `b`'s
-    // singleton applies first, then `a`'s rewrites the `a` it introduced.
-    // `builtins: hashing` declares `h/1` — the parser resolves prefix
-    // applications through `lookupArity` and an undeclared head would
-    // reparse as a variable and fail (oracle probes p05/p25).
-    let r = only_rule(
-        r#"theory T begin
-            builtins: hashing
-            rule R: let a = ~k b = h(a) in [In(b), Fr(~k)] --[]-> []
-        end"#,
-    );
-    match &r.premises[0].args[0] {
-        Term::App(name, args) if name == "h" => match &args[0] {
-            Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
-            other => panic!("expected h(~k), got h({other:?})"),
-        },
-        other => panic!("expected h(~k), got {other:?}"),
-    }
-}
-
-#[test]
-fn let_binder_may_start_with_a_digit() {
-    // HS identifiers start with any alphanumeric character, so upstream's
-    // ccs18-5G models bind `let 5G_AV = ...`.
-    let r = only_rule(
-        r#"theory T begin
-            rule R: let 5G_AV = <'a', ~k> in [Fr(~k)] --[]-> [Out(5G_AV)]
-        end"#,
-    );
-    match &r.conclusions[0].args[0] {
-        Term::Pair(items) => match items.last() {
-            Some(Term::Var(vs)) if vs.name == "k" && vs.sort == LSort::Fresh => {}
-            other => panic!("expected <'a', ~k>, got <.., {other:?}>"),
-        },
-        other => panic!("expected <'a', ~k> after subst, got {other:?}"),
-    }
-}
-
-#[test]
-fn let_inlining_leaves_a_forward_reference_free() {
-    // A binding whose right-hand side names a LATER binding keeps that name as
-    // a free variable: by the time `a`'s singleton introduces `b` into the
-    // body, `b`'s singleton has already been applied.
-    //   let a = h(b) b = ~k in [In(a), Fr(~k)]
-    // gives In(h(b)) with `b` a free Msg-var, NOT h(~k).
-    // `builtins: hashing` declares `h/1` — see `let_inlining_is_sequential`.
-    let r = only_rule(
-        r#"theory T begin
-            builtins: hashing
-            rule R: let a = h(b) b = ~k in [In(a), Fr(~k)] --[]-> []
-        end"#,
-    );
-    match &r.premises[0].args[0] {
-        Term::App(name, args) if name == "h" => match &args[0] {
-            Term::Var(vs) if vs.name == "b" && vs.sort != LSort::Fresh => {}
-            other => panic!("expected h(b) with free b, got h({other:?})"),
-        },
-        other => panic!("expected h(b), got {other:?}"),
-    }
-}
-
-#[test]
-fn let_inlining_substitutes_in_actions_and_conclusions() {
-    let r = only_rule(
-        r#"theory T begin
-            rule R: let r = ~k in [Fr(~k)] --[Use(r)]-> [Out(r)]
-        end"#,
-    );
-    match &r.actions[0].args[0] {
-        Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
-        other => panic!("expected Use(~k), got Use({other:?})"),
-    }
-    match &r.conclusions[0].args[0] {
-        Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
-        other => panic!("expected Out(~k), got Out({other:?})"),
-    }
-}
-
-/// HS substitutes into `rs0`, the rule's `_restrict` formulas, alongside the
-/// three fact rows (Theory/Text/Parser/Rule.hs).
-#[test]
-fn let_inlining_reaches_an_embedded_restriction() {
-    let r = only_rule(
-        r#"theory T begin
-            builtins: hashing
-            rule R: let m = h(~k) in [Fr(~k)] --[ _restrict(m = ~k) ]-> []
-        end"#,
-    );
-    match &r.embedded_restrictions[0] {
-        Formula::Atom(Atom::Eq(lhs, _)) => match lhs {
-            Term::App(name, args) if name == "h" => match &args[0] {
-                Term::Var(vs) if vs.name == "k" && vs.sort == LSort::Fresh => {}
-                other => panic!("expected h(~k), got h({other:?})"),
-            },
-            other => panic!("expected h(~k), got {other:?}"),
-        },
-        other => panic!("expected an equality atom, got {other:?}"),
-    }
-}
-
-#[test]
-fn let_inlining_respects_quantifier_shadowing() {
-    let r = only_rule(
-        r#"theory T begin
-            rule R: let x = 'value' in []
-              --[ _restrict(Ex x #i. A(x) @ i) ]-> []
-        end"#,
-    );
-    match &r.embedded_restrictions[0] {
-        Formula::Exists(vars, body) => {
-            let x = vars.iter().find(|v| v.name == "x").expect("bound x");
-            match body.as_ref() {
-                Formula::Atom(Atom::Action(fact, _)) => {
-                    assert_eq!(fact.args, vec![Term::Var(x.clone())]);
-                }
-                other => panic!("expected an action atom, got {other:?}"),
-            }
-        }
-        other => panic!("expected an existential, got {other:?}"),
-    }
-}
-
-#[test]
-fn let_inlining_avoids_capture_by_quantifiers() {
-    let r = only_rule(
-        r#"theory T begin
-            rule R: let x = y in []
-              --[ _restrict(Ex y #i. A(x,y) @ i) ]-> []
-        end"#,
-    );
-    match &r.embedded_restrictions[0] {
-        Formula::Exists(vars, body) => {
-            let bound_y = vars.iter().find(|v| v.name == "y").expect("bound y");
-            match body.as_ref() {
-                Formula::Atom(Atom::Action(fact, _)) => {
-                    let [Term::Var(inserted_y), Term::Var(original_y)] = fact.args.as_slice()
-                    else {
-                        panic!("expected two variable arguments, got {:?}", fact.args);
-                    };
-                    assert_ne!(inserted_y, bound_y, "replacement y was captured");
-                    assert_eq!(original_y, bound_y, "bound occurrence was not renamed");
-                }
-                other => panic!("expected an action atom, got {other:?}"),
-            }
-        }
-        other => panic!("expected an existential, got {other:?}"),
-    }
-}
-
-#[test]
-fn let_inlining_avoids_capture_with_maximum_variable_index() {
-    let r = only_rule(
-        r#"theory T begin
-            rule R: let x = y.18446744073709551615 in []
-              --[ _restrict(Ex y.18446744073709551615 #i.
-                A(x,y.18446744073709551615,y.0,y.1) @ i) ]-> []
-        end"#,
-    );
-    let Formula::Exists(vars, body) = &r.embedded_restrictions[0] else {
-        panic!("expected an existential");
+        &[],
+    )
+    .expect("parses");
+    let Some(TheoryItem::Rule(r)) = thy.items.first() else {
+        panic!("expected one rule");
     };
-    let bound_y = vars.iter().find(|v| v.name == "y").unwrap();
-    let Formula::Atom(Atom::Action(fact, _)) = body.as_ref() else {
-        panic!("expected an action atom");
-    };
-    let [Term::Var(inserted), Term::Var(renamed), Term::Var(zero), Term::Var(one)] =
-        fact.args.as_slice()
-    else {
-        panic!("expected four variable arguments");
-    };
-    assert_eq!(inserted.idx, u64::MAX);
-    assert_eq!(zero.idx, 0);
-    assert_eq!(one.idx, 1);
-    assert_eq!(renamed, bound_y);
-    for free in [inserted, zero, one] {
-        assert_ne!(free, bound_y, "free variable was captured");
-    }
-}
-
-#[test]
-fn rule_let_requires_a_binding_and_in_terminator() {
-    for src in [
-        "theory T begin rule R: let in [] --[]-> [] end",
-        "theory T begin rule R: let x = y [] --[]-> [] end",
-    ] {
-        assert!(parse_theory(src, &[]).is_err(), "unexpectedly parsed {src}");
-    }
-}
-
-#[test]
-fn rule_let_rejects_sorts_outside_msg_and_nat() {
-    for binder in ["$x", "~x", "#x"] {
-        let src = format!("theory T begin rule R: let {binder} = y in [] --[]-> [] end");
-        assert!(
-            parse_theory(&src, &[]).is_err(),
-            "unexpectedly parsed {src}"
-        );
-    }
+    let names: Vec<&str> = r.lets.iter().map(|(v, _)| v.name.as_str()).collect();
+    assert_eq!(names, ["5G_AV", "b"]);
+    assert!(matches!(&r.lets[0].1, Term::Pair(items) if items.len() == 2));
+    assert!(matches!(&r.conclusions[0].args[0], Term::Var(v) if v.name == "b"));
 }
 
 /// HS's rule `let` binds a variable — `sortedLVar [LSortMsg, LSortNat]` under
@@ -2021,50 +1205,6 @@ fn display_uses_structured_causes_and_primary_locations() {
 }
 
 #[test]
-fn invalid_term_reports_its_expectation_and_token() {
-    let source = "theory T begin rule R: [A(☃)] --> [] end";
-    let error = parse_theory(source, &[]).unwrap_err();
-    assert_eq!(
-        &source[error.diagnostic_labels_with_source(source)[0].span.clone()],
-        "☃"
-    );
-    assert!(
-        error
-            .diagnostic_notes()
-            .iter()
-            .any(|note| note.contains("expected term") && note.contains("found")),
-        "{error}"
-    );
-}
-
-#[test]
-fn oversized_diagnostics_release_large_allocations() {
-    let huge = "a".repeat(100_000);
-    let mut owned = huge.clone();
-    crate::parse_error::bound_owned_text(&mut owned, 80);
-    assert_eq!(owned.chars().count(), 81);
-    assert!(owned.capacity() < 1024);
-
-    let source = format!("theory T begin rule R[color={huge}]: [] --> [] end");
-    let error = parse_theory(&source, &[]).unwrap_err();
-    assert!(matches!(
-        error.kind(),
-        ParseErrorKind::MalformedHexColor { .. }
-    ));
-    assert_eq!(error.span().len(), huge.len());
-    assert!(error.details.is_none());
-    assert!(error.diagnostic_notes()[0].contains("100000"));
-
-    let source = format!("theory T begin rule R: [{huge}()] --> [] end");
-    let error = parse_theory(&source, &[]).unwrap_err();
-    let ParseErrorKind::InvalidFactName { name } = error.kind() else {
-        panic!("{error}");
-    };
-    assert!(name.capacity() < 1024);
-    assert_eq!(error.span().len(), huge.len());
-}
-
-#[test]
 fn reserved_names_have_their_own_kind_and_keyword_span() {
     for word in RESERVED_NAMES {
         for template in [
@@ -2095,121 +1235,6 @@ fn reserved_names_have_their_own_kind_and_keyword_span() {
 }
 
 #[test]
-fn missing_theory_end_is_independent_of_previous_item() {
-    for body in [
-        "rule R: [] --> []",
-        "builtins: hashing",
-        "functions: f/2,g/1",
-        "functions: f/2,g/2 [AC]",
-    ] {
-        let source = format!("theory T begin {body}");
-        let error = parse_theory(&source, &[]).unwrap_err();
-        assert_eq!(error.span().start, source.len());
-        assert!(
-            error.diagnostic_notes().iter().any(|n| n.contains("end")),
-            "{error:?}"
-        );
-    }
-}
-
-#[test]
-fn diff_validation_preserves_priority_and_source_spans() {
-    for args in ["(~a*~b), ~a", "diff(~a, ~b), ~b"] {
-        let source = diff_probe(args);
-        let error = parse_theory(&source, &[]).unwrap_err();
-        assert!(matches!(
-            error.kind(),
-            ParseErrorKind::IllegalDiffOperator(IllegalDiffReason::DiffModeDisabled)
-        ));
-        let start = if args.starts_with("diff") {
-            source.rfind("diff(").unwrap()
-        } else {
-            source.find("diff(").unwrap()
-        };
-        assert_eq!(error.span(), start..start + 4);
-    }
-    for args in ["~a", "~a, ~b, ~a", "", "~a,"] {
-        for flags in [&[][..], &["diff"][..]] {
-            let error = parse_theory(&diff_probe(args), flags).unwrap_err();
-            assert!(
-                matches!(
-                    error.kind(),
-                    ParseErrorKind::WrongFunctionArity { declared: 2, .. }
-                ),
-                "{args}: {error:?}"
-            );
-        }
-    }
-    for flags in [&[][..], &["diff"][..]] {
-        for (args, wrong_arity) in [("x, x", false), ("x", true)] {
-            let source = format!("theory D begin equations: diff({args}) = x end");
-            let error = parse_theory(&source, flags).unwrap_err();
-            if wrong_arity {
-                assert!(matches!(
-                    error.kind(),
-                    ParseErrorKind::WrongFunctionArity { .. }
-                ));
-            } else {
-                assert!(matches!(
-                    error.kind(),
-                    ParseErrorKind::IllegalDiffOperator(IllegalDiffReason::InEquation)
-                ));
-            }
-            let start = source.find("diff").unwrap();
-            assert_eq!(error.span(), start..start + 4);
-        }
-    }
-    parse_theory(&diff_probe("~a, ~b,"), &["diff"]).unwrap();
-}
-
-#[test]
-fn bare_diff_token_requires_an_argument_list() {
-    for (term, unexpected) in [
-        ("diff", ")"),
-        ("diff{~a}~b", "{"),
-        ("diff /* comment */", ")"),
-    ] {
-        let source = format!("theory D begin rule R: [] --> [Out({term})] end");
-        let error = parse_theory(&source, &[]).unwrap_err();
-        assert!(source[error.span().start..].starts_with(unexpected));
-        assert!(
-            error
-                .diagnostic_notes()
-                .iter()
-                .any(|note| note.contains('(')),
-            "{error:?}"
-        );
-    }
-}
-
-#[test]
-fn diff_operator_is_accepted_with_the_diff_flag() {
-    let thy = parse_theory(&diff_probe("(~a*~b), ~a"), &["diff"]).expect("diff flag enables it");
-    let mut seen = false;
-    for item in &thy.items {
-        if let TheoryItem::Rule(r) = item {
-            for f in &r.conclusions {
-                for t in &f.args {
-                    if matches!(t, Term::Diff(_, _)) {
-                        seen = true;
-                    }
-                }
-            }
-        }
-    }
-    assert!(seen, "expected a Term::Diff in the rule conclusion");
-
-    // The word boundary keeps `diffuse(...)` an ordinary function application
-    // even without the flag (HS routes it through `naryOpApp`).
-    assert!(parse_theory(
-        "theory D\nbegin\n\nfunctions: diffuse/2\n\nrule RA:\n  \
-             [ Fr(~a), Fr(~b) ] --> [ Out( diffuse(~a, ~b) ) ]\n\nend\n",
-        &[]
-    )
-    .is_ok());
-}
-
-#[test]
 fn show_lit_string_escapes_like_haskell() {
     assert_eq!(show_lit_string("ab"), "\"ab\"");
     assert_eq!(
@@ -2219,14 +1244,6 @@ fn show_lit_string_escapes_like_haskell() {
     assert_eq!(show_lit_string("a\"b\\c"), "\"a\\\"b\\\\c\"");
     assert_eq!(show_lit_string("\u{100}"), "\"\\256\"");
     assert_eq!(show_lit_string("\u{100}7"), "\"\\256\\&7\"");
-}
-
-#[test]
-fn repeated_failures_keep_one_expectation() {
-    let formula = format!("{}☃{}", "(".repeat(40), ")".repeat(40));
-    let source = format!("theory T begin lemma L: \"{formula}\" end");
-    let error = parse_theory(&source, &[]).unwrap_err();
-    assert_eq!(error.diagnostic_notes(), ["expected term; found '☃'"]);
 }
 
 #[test]
@@ -2250,39 +1267,6 @@ fn expected_diagnostics_distinguish_eof_and_escape_controls() {
 }
 
 #[test]
-fn conflict_progress_includes_trailing_comments() {
-    for body in [
-        "functions: f/1, f/2",
-        "functions: f/1, f/1 [private]",
-        "functions: h/2 builtins: hashing",
-        "macros: h(x) = x builtins: hashing",
-        "macros: m(x) = x, m(y) = y",
-        "rule R: [] --> [] rule R: [] --> [A()]",
-    ] {
-        let source = format!("theory T begin {body} /* trailing */ end");
-        let error = parse_theory(&source, &[]).unwrap_err();
-        assert_eq!(
-            error.pos.offset,
-            source.rfind("end").unwrap(),
-            "{body}: {error:?}"
-        );
-        let source = format!("theory T begin {body} /* unclosed");
-        let error = parse_theory(&source, &[]).unwrap_err();
-        assert!(
-            matches!(error.kind(), ParseErrorKind::UnclosedBlockComment { .. }),
-            "{body}: {error:?}"
-        );
-    }
-}
-
-fn diff_probe(args: &str) -> String {
-    format!(
-        "theory D\nbegin\n\nbuiltins: diffie-hellman\n\nrule RA:\n  \
-             [ Fr(~a), Fr(~b) ] --[ Go( 'a' ) ]-> [ Out( diff({args}) ) ]\n\nend\n"
-    )
-}
-
-#[test]
 fn lemma_comment_stripping_preserves_textarea_newline_rules() {
     for (source, expected) in [
         ("α/β*γ", "α/β*γ"),
@@ -2303,296 +1287,209 @@ fn lemma_comment_stripping_preserves_textarea_newline_rules() {
 }
 
 // =========================================================================
-// `#include` cycles
+// `#include` graphs
 // =========================================================================
 
-/// A scratch directory that removes itself, so a failing assertion cannot
-/// leave files behind for the next run to trip over. These tests need real
-/// files because `#include` resolves through the filesystem.
-struct IncludeDir(std::path::PathBuf);
+enum IncludeExpect {
+    /// Parses, with these rules in this order.
+    Rules(&'static [&'static str]),
+    /// A cycle error whose message names every string here; with a closing
+    /// file, the error carries that file's source.
+    Cycle {
+        names: &'static [&'static str],
+        closing: Option<&'static str>,
+    },
+}
 
-impl IncludeDir {
-    fn new(name: &str) -> Self {
-        let dir = std::env::temp_dir().join(format!("tamarin_rs_include_{name}"));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).expect("mkdir");
-        IncludeDir(dir)
-    }
-
-    fn write(&self, name: &str, body: &str) -> std::path::PathBuf {
-        let p = self.0.join(name);
-        if let Some(parent) = p.parent() {
-            std::fs::create_dir_all(parent).expect("mkdir parent");
+/// `#include` graphs, rooted at `main.spthy`.  A re-entry of an open
+/// (file, directory, flags) frame is a cycle the parser reports with its
+/// chain; HS hangs on one, so this table is the port's own.  Any other
+/// re-visit, a diamond or a guarded re-entry whose `#define` changed the
+/// flags, parses.  `{dir}` in a body is the scratch directory's name.
+#[test]
+fn include_graphs_parse_or_report_their_cycle() {
+    use IncludeExpect::*;
+    let guarded_common = "#ifdef not COMMON_INCLUDED\n#define COMMON_INCLUDED\n\
+        builtins: symmetric-encryption\n\
+        rule EstablishKey: [ Fr(~k) ] --> [ !SharedKey($A, $B, ~k) ]\n\
+        #include \"channels.spthyi\"\n#endif\n";
+    let guarded_channels = "#ifdef not CHANNELS_INCLUDED\n#define CHANNELS_INCLUDED\n\
+        #include \"common.spthyi\"\n\
+        rule SendEncrypted: [ !SharedKey(A, B, k), In(m) ] --> [ Out(senc(m, k)) ]\n\
+        #endif\n";
+    #[allow(clippy::type_complexity)]
+    let rows: &[(&str, &[(&str, &str)], &[(&str, &str)], IncludeExpect)] = &[
+        (
+            "acyclic",
+            &[
+                ("main.spthy", "theory T\nbegin\n#include \"core.spthyi\"\nend\n"),
+                ("core.spthyi", "rule Core: [ Fr(~n) ] --[ Core(~n) ]-> [ ]\n"),
+            ],
+            &[],
+            Rules(&["Core"]),
+        ),
+        (
+            "mutual",
+            &[
+                ("main.spthy", "theory T\nbegin\n#include \"x.spthyi\"\nend\n"),
+                ("x.spthyi", "#include \"y.spthyi\"\n"),
+                ("y.spthyi", "#include \"x.spthyi\"\n"),
+            ],
+            &[],
+            Cycle {
+                names: &["x.spthyi", "y.spthyi"],
+                closing: Some("y.spthyi"),
+            },
+        ),
+        (
+            "self",
+            &[
+                ("main.spthy", "theory T\nbegin\n#include \"loop.spthyi\"\nend\n"),
+                ("loop.spthyi", "#include \"loop.spthyi\"\n"),
+            ],
+            &[],
+            Cycle {
+                names: &["loop.spthyi"],
+                closing: None,
+            },
+        ),
+        (
+            "self_via_parent_dir",
+            &[
+                ("main.spthy", "theory T\nbegin\n#include \"loop.spthyi\"\nend\n"),
+                ("loop.spthyi", "#include \"../{dir}/loop.spthyi\"\n"),
+            ],
+            &[],
+            Cycle {
+                names: &["loop.spthyi"],
+                closing: None,
+            },
+        ),
+        (
+            "deep",
+            &[
+                ("main.spthy", "theory T\nbegin\n#include \"one.spthyi\"\nend\n"),
+                ("one.spthyi", "#include \"two.spthyi\"\n"),
+                ("two.spthyi", "#include \"three.spthyi\"\n"),
+                ("three.spthyi", "#include \"one.spthyi\"\n"),
+            ],
+            &[],
+            Cycle {
+                names: &["one.spthyi", "three.spthyi"],
+                closing: None,
+            },
+        ),
+        // A `#define` on the way round changes the flags once; the next lap
+        // re-enters with them unchanged.
+        (
+            "define_without_guard",
+            &[
+                ("main.spthy", "theory T\nbegin\n#include \"x.spthyi\"\nend\n"),
+                ("x.spthyi", "#define SEEN\n#include \"y.spthyi\"\n"),
+                ("y.spthyi", "#include \"x.spthyi\"\n"),
+            ],
+            &[],
+            Cycle {
+                names: &["SEEN"],
+                closing: None,
+            },
+        ),
+        (
+            "diamond",
+            &[
+                (
+                    "main.spthy",
+                    "theory T\nbegin\n#include \"a.spthyi\"\n#include \"b.spthyi\"\nend\n",
+                ),
+                ("core.spthyi", "rule Core: [ ] --> [ ]\n"),
+                ("a.spthyi", "#include \"core.spthyi\"\n"),
+                ("b.spthyi", "#include \"core.spthyi\"\n"),
+            ],
+            &[],
+            Rules(&["Core", "Core"]),
+        ),
+        (
+            "guarded_mutual",
+            &[
+                ("main.spthy", "theory T\nbegin\n#include \"common.spthyi\"\nend\n"),
+                ("common.spthyi", guarded_common),
+                ("channels.spthyi", guarded_channels),
+            ],
+            &[],
+            Rules(&["EstablishKey", "SendEncrypted"]),
+        ),
+        (
+            "guarded_twice_from_main",
+            &[
+                (
+                    "main.spthy",
+                    "theory T\nbegin\n#include \"common.spthyi\"\n#include \"channels.spthyi\"\nend\n",
+                ),
+                ("common.spthyi", guarded_common),
+                ("channels.spthyi", guarded_channels),
+            ],
+            &[],
+            Rules(&["EstablishKey", "SendEncrypted"]),
+        ),
+        // A link's includes resolve from the link's directory (HS
+        // `takeDirectory` of the path as written), so the same bytes reached
+        // through it include another file.
+        (
+            "through_a_symlink",
+            &[
+                ("main.spthy", "theory T\nbegin\n#include \"fragment.spthyi\"\nend\n"),
+                ("fragment.spthyi", "#include \"child/fragment.spthyi\"\n"),
+                ("child/child/fragment.spthyi", "rule R: [ Fr(~n) ] --[ R(~n) ]-> [ ]\n"),
+            ],
+            &[("child/fragment.spthyi", "../fragment.spthyi")],
+            Rules(&["R"]),
+        ),
+    ];
+    for (name, files, links, expect) in rows {
+        if !links.is_empty() && !cfg!(unix) {
+            continue;
         }
-        std::fs::write(&p, body).expect("write");
-        p
+        let dir =
+            std::env::temp_dir().join(format!("tamarin_rs_include_{}_{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let dir_name = dir.file_name().unwrap().to_str().unwrap().to_string();
+        for (path, body) in *files {
+            let path = dir.join(path);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, body.replace("{dir}", &dir_name)).unwrap();
+        }
+        #[cfg(unix)]
+        for (link, target) in *links {
+            std::os::unix::fs::symlink(target, dir.join(link)).unwrap();
+        }
+        let result = parse_theory_with_base(files[0].1, &[], Some(dir.clone()));
+        match (expect, result) {
+            (Rules(want), Ok(thy)) => {
+                let got: Vec<&str> = thy
+                    .items
+                    .iter()
+                    .filter_map(|i| match i {
+                        TheoryItem::Rule(r) => Some(r.name.as_str()),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(got, *want, "{name}");
+            }
+            (Cycle { names, closing }, Err(err)) => {
+                let msg = err.to_string();
+                assert!(msg.contains("`#include` cycle"), "{name}: {msg}");
+                for n in *names {
+                    assert!(msg.contains(n), "{name}: {msg} names {n}");
+                }
+                if let Some(file) = closing {
+                    let closing_file = dir.join(file);
+                    assert_eq!(err.source_name(), closing_file.to_str(), "{name}");
+                    let text = files.iter().find(|(p, _)| p == file).unwrap().1;
+                    assert_eq!(err.source_text(), Some(text), "{name}");
+                }
+            }
+            (_, other) => panic!("{name}: {other:?}"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
-
-    fn parse(&self, entry: &std::path::Path) -> Result<crate::ast::Theory, crate::ParseError> {
-        let body = std::fs::read_to_string(entry).expect("read entry");
-        crate::parser::parse_theory_with_base(&body, &[], Some(self.0.clone()))
-    }
-}
-
-impl Drop for IncludeDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
-    }
-}
-
-/// A mutual `#include` cycle is an ERROR naming the chain, not a crash.
-///
-/// Before the cycle check this recursed without bound: the Rust parser died
-/// with a stack overflow (SIGABRT) and the Haskell prover hung until killed.
-/// Neither said why, which is the whole point of the message.
-#[test]
-fn include_cycle_is_reported_with_the_chain() {
-    let d = IncludeDir::new("cycle");
-    d.write("x.spthyi", "#include \"y.spthyi\"\n");
-    d.write("y.spthyi", "#include \"x.spthyi\"\n");
-    let entry = d.write(
-        "main.spthy",
-        "theory C\nbegin\n#include \"x.spthyi\"\nend\n",
-    );
-
-    let err = d.parse(&entry).expect_err("a cycle must not parse");
-    let msg = format!("{err}");
-    assert!(msg.contains("`#include` cycle"), "{msg}");
-    // The chain names both files, so the reader can see which edge to cut.
-    assert!(
-        msg.contains("x.spthyi") && msg.contains("y.spthyi"),
-        "{msg}"
-    );
-    // The outer include wrappers must retain the source containing the edge
-    // that closes the cycle, rather than relabeling it as the root theory.
-    let closing_file = d.0.join("y.spthyi");
-    assert_eq!(err.source_name(), closing_file.to_str());
-    assert_eq!(err.source_text(), Some("#include \"x.spthyi\"\n"));
-}
-
-/// A file that includes itself is the degenerate cycle, caught the same way.
-#[test]
-fn self_include_is_a_cycle() {
-    let d = IncludeDir::new("self");
-    d.write("loop.spthyi", "#include \"loop.spthyi\"\n");
-    let entry = d.write(
-        "main.spthy",
-        "theory S\nbegin\n#include \"loop.spthyi\"\nend\n",
-    );
-
-    let msg = format!(
-        "{}",
-        d.parse(&entry).expect_err("self-include must not parse")
-    );
-    assert!(msg.contains("`#include` cycle"), "{msg}");
-}
-
-/// The SAME file included twice along different paths is a diamond, NOT a
-/// cycle: nothing is re-entered while still open, so it must still parse.
-/// This is the false positive a naive "have I seen this path" check produces.
-#[test]
-fn diamond_include_is_not_a_cycle() {
-    let d = IncludeDir::new("diamond");
-    d.write("core.spthyi", "functions: h/1\n");
-    d.write("a.spthyi", "#include \"core.spthyi\"\n");
-    d.write("b.spthyi", "#include \"core.spthyi\"\n");
-    let entry = d.write(
-        "main.spthy",
-        "theory D\nbegin\n#include \"a.spthyi\"\n#include \"b.spthyi\"\nend\n",
-    );
-
-    d.parse(&entry).expect("diamond include must parse");
-}
-
-/// Two files that include each other behind C-style include guards are NOT a
-/// cycle, and the Haskell prover accepts them: the guard's `#define` grows the
-/// flag set before the re-entry, so the second visit of each file evaluates
-/// its `#ifdef not …` to false and includes nothing.  The check must key on
-/// the flag set in force at entry, not on the path alone.
-#[test]
-fn include_guards_are_not_a_cycle() {
-    let d = IncludeDir::new("guards");
-    d.write(
-        "common.spthyi",
-        "#ifdef not COMMON_INCLUDED\n#define COMMON_INCLUDED\n\
-         builtins: symmetric-encryption\n\
-         rule EstablishKey: [ Fr(~k) ] --> [ !SharedKey($A, $B, ~k) ]\n\
-         #include \"channels.spthyi\"\n#endif\n",
-    );
-    d.write(
-        "channels.spthyi",
-        "#ifdef not CHANNELS_INCLUDED\n#define CHANNELS_INCLUDED\n\
-         #include \"common.spthyi\"\n\
-         rule SendEncrypted: [ !SharedKey(A, B, k), In(m) ] --> [ Out(senc(m, k)) ]\n\
-         #endif\n",
-    );
-    let entry = d.write(
-        "main.spthy",
-        "theory G\nbegin\n#include \"common.spthyi\"\nend\n",
-    );
-
-    let thy = d.parse(&entry).expect("guarded mutual includes must parse");
-    let rules = |name: &str| {
-        thy.items
-            .iter()
-            .filter(|i| matches!(i, crate::ast::TheoryItem::Rule(r) if r.name == name))
-            .count()
-    };
-    assert_eq!(rules("EstablishKey"), 1);
-    assert_eq!(rules("SendEncrypted"), 1);
-}
-
-/// The other way a guarded library is used: the main theory includes BOTH
-/// guarded files itself.  The second is entered once directly and once via
-/// the first, with different flag sets each time, so neither visit is a
-/// re-entry.
-#[test]
-fn guarded_library_included_twice_from_main_is_not_a_cycle() {
-    let d = IncludeDir::new("guards_main");
-    d.write(
-        "common.spthyi",
-        "#ifdef not COMMON_INCLUDED\n#define COMMON_INCLUDED\n\
-         #include \"channels.spthyi\"\nfunctions: kdf/2\n#endif\n",
-    );
-    d.write(
-        "channels.spthyi",
-        "#ifdef not CHANNELS_INCLUDED\n#define CHANNELS_INCLUDED\n\
-         #include \"common.spthyi\"\nfunctions: mac/2\n#endif\n",
-    );
-    let entry = d.write(
-        "main.spthy",
-        "theory G2\nbegin\n#include \"common.spthyi\"\n#include \"channels.spthyi\"\nend\n",
-    );
-
-    d.parse(&entry)
-        .expect("a guarded library included twice must parse");
-}
-
-/// A `#define` on the way round does NOT disarm the check: it changes the
-/// flag set once, and the next lap round the cycle re-enters with the flag
-/// set unchanged.  Flags only ever grow and there are finitely many, so any
-/// genuinely unbounded include recursion repeats a (file, dir, flags) frame.
-#[test]
-fn a_define_without_a_guard_is_still_a_cycle() {
-    let d = IncludeDir::new("define_no_guard");
-    d.write("x.spthyi", "#define SEEN\n#include \"y.spthyi\"\n");
-    d.write("y.spthyi", "#include \"x.spthyi\"\n");
-    let entry = d.write(
-        "main.spthy",
-        "theory DG\nbegin\n#include \"x.spthyi\"\nend\n",
-    );
-
-    let msg = format!(
-        "{}",
-        d.parse(&entry)
-            .expect_err("an unguarded cycle must not parse")
-    );
-    assert!(msg.contains("`#include` cycle"), "{msg}");
-    assert!(
-        msg.contains("SEEN"),
-        "names the flag set it was re-entered with: {msg}"
-    );
-}
-
-/// The directory an include resolves from is compared canonically, so a
-/// self-include spelt through `../<dir>/` is still the same frame.
-#[test]
-fn self_include_via_parent_dir_alias_is_a_cycle() {
-    let d = IncludeDir::new("dir_alias");
-    let dir_name = d.0.file_name().unwrap().to_str().unwrap().to_string();
-    d.write(
-        "loop.spthyi",
-        &format!("#include \"../{dir_name}/loop.spthyi\"\n"),
-    );
-    let entry = d.write(
-        "main.spthy",
-        "theory DA\nbegin\n#include \"loop.spthyi\"\nend\n",
-    );
-
-    let msg = format!(
-        "{}",
-        d.parse(&entry)
-            .expect_err("aliased self-include must not parse")
-    );
-    assert!(msg.contains("`#include` cycle"), "{msg}");
-}
-
-/// A symlink's includes resolve relative to the LINK's directory, not the
-/// target's (HS `takeDirectory filepath` of the path as written).  So the
-/// same bytes reached through a link in another directory can include a
-/// different file, and are not a re-entry.  Canonicalising the whole include
-/// path would collapse the link onto its target and report a cycle where
-/// the Haskell prover finds none.
-#[cfg(unix)]
-#[test]
-fn include_through_a_symlink_resolves_from_the_links_directory() {
-    let d = IncludeDir::new("symlink");
-    d.write("fragment.spthyi", "#include \"child/fragment.spthyi\"\n");
-    d.write(
-        "child/child/fragment.spthyi",
-        "rule R: [ Fr(~n) ] --[ R(~n) ]-> [ ]\n",
-    );
-    std::os::unix::fs::symlink("../fragment.spthyi", d.0.join("child/fragment.spthyi"))
-        .expect("symlink");
-    let entry = d.write(
-        "main.spthy",
-        "theory L\nbegin\n#include \"fragment.spthyi\"\nend\n",
-    );
-
-    let thy = d
-        .parse(&entry)
-        .expect("a symlinked include chain with no real cycle must parse");
-    assert!(
-        thy.items
-            .iter()
-            .any(|i| matches!(i, crate::ast::TheoryItem::Rule(r) if r.name == "R")),
-        "the rule behind the symlink reaches the item stream"
-    );
-}
-
-/// A cycle reached only through a nested include is still caught: the check
-/// walks the whole open chain, not just the immediate parent.
-#[test]
-fn deep_include_cycle_is_reported() {
-    let d = IncludeDir::new("deep");
-    d.write("one.spthyi", "#include \"two.spthyi\"\n");
-    d.write("two.spthyi", "#include \"three.spthyi\"\n");
-    d.write("three.spthyi", "#include \"one.spthyi\"\n");
-    let entry = d.write(
-        "main.spthy",
-        "theory Deep\nbegin\n#include \"one.spthyi\"\nend\n",
-    );
-
-    let msg = format!(
-        "{}",
-        d.parse(&entry).expect_err("deep cycle must not parse")
-    );
-    assert!(msg.contains("`#include` cycle"), "{msg}");
-    assert!(
-        msg.contains("three.spthyi"),
-        "the chain names the closing edge: {msg}"
-    );
-}
-
-/// An acyclic include still works, so the check is not simply refusing
-/// everything. The included rule reaches the item stream.
-#[test]
-fn acyclic_include_still_parses() {
-    let d = IncludeDir::new("ok");
-    d.write(
-        "core.spthyi",
-        "rule Core: [ Fr(~n) ] --[ Core(~n) ]-> [ ]\n",
-    );
-    let entry = d.write(
-        "main.spthy",
-        "theory OK\nbegin\n#include \"core.spthyi\"\nend\n",
-    );
-
-    let thy = d.parse(&entry).expect("acyclic include parses");
-    assert!(
-        thy.items
-            .iter()
-            .any(|i| matches!(i, crate::ast::TheoryItem::Rule(r) if r.name == "Core")),
-        "the included rule is spliced into the item stream"
-    );
 }

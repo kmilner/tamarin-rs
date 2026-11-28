@@ -1,0 +1,17 @@
+// Category: proof corners no corpus proof reaches — `--auto-sources`.
+//
+// An explicit identity member of a manual variant family is annotated with
+// the `AUTO_OUT_` facts auto-sources adds, and both lemmas are proven.  The
+// upstream roundtrip sidecars cover replay generically, not an identity
+// member.
+
+theory TrivialSource begin
+builtins: symmetric-encryption
+rule Start:
+  [Fr(~k), Fr(~v)] --[Sent(~v)]-> [!Key(~k), Out(senc(<'tag',~v>,~k))]
+variants rule (modulo AC) Start___VARIANT_1:
+  [Fr(~k), Fr(~v)] --[Sent(~v)]-> [!Key(~k), Out(senc(<'tag',~v>,~k))]
+rule Consume:
+  [!Key(k), In(c)] --[Got(snd(sdec(c,k)))]-> [Out(snd(sdec(c,k)))]
+lemma witness: exists-trace "Ex x #i. Got(x)@i"
+end

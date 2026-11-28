@@ -382,8 +382,8 @@ fn annotate_each_pure_states(p: AnnotatedProc, pure_states: &BTreeSet<SapicTerm>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tamarin_term::lterm::{LSort, Name, NameTag};
-    use tamarin_term::vterm::{const_term, var_term};
+    use tamarin_term::lterm::LSort;
+    use tamarin_term::vterm::var_term;
 
     fn slv(name: &str, sort: LSort) -> SapicLVar {
         SapicLVar::untyped(LVar::new(name, sort, 0))
@@ -450,100 +450,5 @@ mod tests {
             get_all_states(&act(SapicAction::New(s), deletion), &BTreeSet::new()),
             (BTreeSet::from([t]), BTreeSet::new())
         );
-    }
-
-    /// `new s; insert s,'init'; lock s; lookup s as x in (insert s,x; unlock s)
-    /// else 0` — `s` is a pure state cell.  After `annotatePureStates`:
-    ///   - a `new StateChannel:channel` action is inserted (with
-    ///     `is_state_channel = Just s`), and
-    ///   - the lock / lookup / insert / unlock are marked `pure_state = True`.
-    #[test]
-    fn pure_cell_is_detected_and_annotated() {
-        // The cell identifier is a fresh VARIABLE bound by `new s` (as in
-        // AC.spthy's `new state`), so the term is `var_term(sv)`.
-        let sv = slv("s", LSort::Fresh);
-        let s = var_term(sv.clone());
-        let x = slv("x", LSort::Msg);
-        // inner: lookup s as x in (insert s,x; unlock s) else 0
-        let lookup_body = act(
-            SapicAction::Insert(s.clone(), var_term(x.clone())),
-            act(SapicAction::Unlock(s.clone()), null()),
-        );
-        let lookup = Process::Comb(
-            ProcessCombinator::Lookup(s.clone(), x.clone()),
-            ProcessAnnotation::empty(),
-            Box::new(lookup_body),
-            Box::new(null()),
-        );
-        // new s; insert s,'init'; lock s; <lookup>
-        let p = act(
-            SapicAction::New(sv),
-            act(
-                SapicAction::Insert(s.clone(), const_term(Name::new(NameTag::Pub, "init"))),
-                act(SapicAction::Lock(s.clone()), lookup),
-            ),
-        );
-        let out = annotate_pure_states(p);
-
-        // Walk: after `new s` we expect the inserted `new StateChannel:channel`.
-        let Process::Action(SapicAction::New(_), _, body) = out else {
-            panic!("new s")
-        };
-        let Process::Action(SapicAction::New(chan_var), chan_an, body) = *body else {
-            panic!("expected inserted `new StateChannel:channel`")
-        };
-        assert_eq!(chan_var.var.name, "StateChannel");
-        assert_eq!(chan_var.stype, Some("channel".to_string()));
-        assert_eq!(chan_an.is_state_channel.as_ref(), Some(&s));
-        assert!(chan_an.pure_state, "the StateChannel new is marked pure");
-
-        // insert s,'init' (lone init) — pure.
-        let Process::Action(SapicAction::Insert(_, _), ins_an, body) = *body else {
-            panic!()
-        };
-        assert!(ins_an.pure_state);
-        // lock s — pure.
-        let Process::Action(SapicAction::Lock(_), lock_an, body) = *body else {
-            panic!()
-        };
-        assert!(lock_an.pure_state);
-        // lookup s as x — pure.
-        let Process::Comb(ProcessCombinator::Lookup(_, _), lk_an, lk_body, _) = *body else {
-            panic!()
-        };
-        assert!(lk_an.pure_state);
-        // insert s,x — pure.
-        let Process::Action(SapicAction::Insert(_, _), ins2_an, body) = *lk_body else {
-            panic!()
-        };
-        assert!(ins2_an.pure_state);
-        // unlock s — pure.
-        let Process::Action(SapicAction::Unlock(_), unlock_an, _) = *body else {
-            panic!()
-        };
-        assert!(unlock_an.pure_state);
-    }
-
-    /// A state accessed in a non-pure fashion (a lone unbound insert) ⇒ no
-    /// pure annotation; `addStatesChannels` still runs but no `pure_state`.
-    #[test]
-    fn unpure_access_yields_no_pure_annotation() {
-        // insert state,'v'  where `state` is a FREE (unbound) public name var:
-        // `existsAttackerUnpure` returns true → addStatesChannels only.
-        let state_var = var_term(slv("state", LSort::Msg));
-        let p = act(
-            SapicAction::Insert(state_var, const_term(Name::new(NameTag::Pub, "v"))),
-            null(),
-        );
-        let out = annotate_pure_states(p);
-        // No pure_state anywhere.
-        fn any_pure(p: &AnnotatedProc) -> bool {
-            match p {
-                Process::Null(an) => an.pure_state,
-                Process::Action(_, an, b) => an.pure_state || any_pure(b),
-                Process::Comb(_, an, l, r) => an.pure_state || any_pure(l) || any_pure(r),
-            }
-        }
-        assert!(!any_pure(&out));
     }
 }

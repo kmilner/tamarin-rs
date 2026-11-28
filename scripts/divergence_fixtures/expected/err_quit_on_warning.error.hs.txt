@@ -1,0 +1,2 @@
+rc 1
+kind quit-on-warning mode selected - aborting

@@ -83,21 +83,8 @@ maude_on_path "$MAUDE"
 oracle_rev_check "$hs_path" "$MAUDE" "$repo_root"
 execution_fingerprint "$MAUDE" "$DERIVCHECK_TIMEOUT" || exit 2
 
-# `tamarin-prover` is the PACKAGE; its only bin target is `tamarin-rs`, so
-# --bin tamarin-prover selects nothing and cargo errors out.
-if [ -z "${TAM_RS_NO_AUTO_BUILD:-}" ]; then
-    if ! cargo build --release -p tamarin-prover \
-            --manifest-path "$repo_root/Cargo.toml" >&2; then
-        echo "diff_proof_raw.sh: cargo build -p tamarin-prover failed" >&2
-        exit 2
-    fi
-fi
 rs_path="$repo_root/target/release/tamarin-rs"
-if [ ! -x "$rs_path" ]; then
-    echo "diff_proof_raw.sh: RS binary not built at $rs_path" >&2
-    exit 2
-fi
-rs_stale_check "$rs_path" "$repo_root"
+ensure_rs_binary diff_proof_raw.sh "$rs_path" "$repo_root"
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT

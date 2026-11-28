@@ -34,8 +34,8 @@
 //!   [`deriv_check`] ← message-derivation checks
 //! - [`theory`] ← top-level `Theory` (open/closed theories);
 //!   [`elaborate`] ← theory elaboration/closing
-//! - [`tactic`] ← heuristic tactics; [`proof_skeleton`] / [`replay`] /
-//!   [`prove`] ← proof skeletons, replay, and the per-lemma prover driver
+//! - [`tactic`] ← heuristic tactics; [`replay`] / [`prove`] ← stored-proof
+//!   replay and the per-lemma prover driver
 //! - [`pretty_theory`] / [`pretty_system`] / [`pretty_formula`] /
 //!   [`pretty_hpj`] ← theory / system / formula pretty-printing;
 //!   [`pretty_sapic`] ← `Theory.Sapic.{Term,Process}` pretty-printing
@@ -51,6 +51,7 @@ pub mod apply;
 pub mod atom;
 pub mod auto_sources;
 pub mod close_rule;
+pub mod closed_theory;
 pub mod constraint;
 pub mod deriv_check;
 pub mod elaborate;
@@ -68,7 +69,6 @@ pub mod pretty_system;
 pub mod pretty_theory;
 pub mod process_convert;
 pub mod process_inline;
-pub mod proof_skeleton;
 pub mod prove;
 pub mod replay;
 pub mod restriction;
@@ -80,6 +80,8 @@ pub mod tactic;
 pub(crate) mod test_corpus;
 #[cfg(test)]
 mod test_corpus_common;
+#[cfg(test)]
+mod test_corpus_common_tests;
 pub mod theory;
 pub mod tools;
 pub mod wellformedness;

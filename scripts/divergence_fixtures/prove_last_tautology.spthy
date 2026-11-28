@@ -1,0 +1,11 @@
+// Category: proof corners no corpus proof reaches.
+//
+// The negated `last` tautology `not last(i) | last(i)` closes by the
+// upstream cyclic contradiction (`by contradiction /* cyclic */`), not from
+// the formulas.  The corpus regression/trace/last.spthy has no such
+// disjunction.
+
+theory LastTautology begin
+rule Emit: [] --[A()]-> []
+lemma nested: "All #i. A()@i ==> (not last(i) | last(i))"
+end

@@ -1,0 +1,28 @@
+theory ModuleTypedLets
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: natural-numbers
+functions: fst/1, hash/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+let  P () = new a.1;
+            let h.1=a.1 in
+                out(h.1)
+
+process:
+  P() | (in(%c.1);
+         let cnext.1:nat=(%c.1%+%1) in
+             event E( cnext.1:nat ))
+
+/* All wellformedness checks were successful. */
+
+/*
+Generated from:
+Tamarin version 1.13.0
+Maude version 3.5.1
+*/
+
+end

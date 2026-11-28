@@ -1,0 +1,15 @@
+WARNING: the following wellformedness checks failed!
+
+Unbound variables
+=================
+
+  rule `Evmrestrictkb_0_1' has unbound variables: 
+    k.5
+
+Rule has no variants
+====================
+
+  Rule NoVar has no variants.
+  
+  Most likely, this means that the rule's use of fresh variables is contradictory. For exaple, a rule with the premises In(~x) and Fr(~x) has no variants because ~x cannot be sent before it is generated.
+*/

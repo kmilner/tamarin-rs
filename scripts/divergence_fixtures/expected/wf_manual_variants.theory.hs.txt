@@ -1,0 +1,32 @@
+theory WfManualVariants
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) Impossible:
+   [ In( ~x ), Fr( ~x ) ] --> [ Out( ~x ) ]
+
+rule (modulo E) R:
+   [ ] --[ A( ) ]-> [ ]
+ variants
+  rule (modulo AC) R___VARIANT_1:
+     [ ] --[ A( ) ]-> [ ]
+  ,
+  rule (modulo AC) R___VARIANT_2:
+     [ ] --[ A( ) ]-> [ ]
+
+lemma witness:
+  exists-trace "∃ #i. A( ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ #i. (A( ) @ #i)"
+*/
+by sorry
+
+
+
+end

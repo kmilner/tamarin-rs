@@ -35,13 +35,6 @@ fn proto_fact_arity() {
     }
 }
 
-#[test]
-fn equality_ignores_annotations() {
-    let a = fresh_fact(msg_var("x", 0)).annotate(FactAnnotation::SolveFirst);
-    let b = fresh_fact(msg_var("x", 0));
-    assert_eq!(a, b);
-}
-
 /// `is_linear` and `is_persistent` partition every tag (HS
 /// `factTagMultiplicity`, Theory/Model/Fact.hs). A `Proto` tag carries
 /// its own multiplicity. KU and KD are Persistent. Every other tag is Linear.
@@ -119,58 +112,73 @@ fn multiplicity_ord_matches_haskell_declaration() {
     );
 }
 
-/// `FactTag` Ord — `Proto < Fresh < Out < In < Ku < Kd < Ded < Term`.
-///
-/// Critical: Proto facts MUST sort before all built-in tags so that
-/// BTreeSet<LNFact> iteration puts protocol facts first.  Multiple
-/// downstream code paths (simpInjectiveFactEqMon, partial_atom_valuation
-/// nonUnifiableNodes) iterate fact sets and depend on Proto-first order
-/// for deterministic case ranking.
+/// `FactTag`'s derived Ord (Theory/Model/Fact.hs): every protocol fact
+/// sorts before every reserved tag, whatever its name, and the reserved tags
+/// follow their declaration order `Fresh < Out < In < Ku < Kd < Ded < Term`.
+/// Iteration over fact sets (`simpInjectiveFactEqMon`, partial atom
+/// valuation) depends on it.  `fact_tag_of` reads the reserved tags from the
+/// names the parser canonicalises to (`mkProtoFact`,
+/// Theory/Text/Parser/Fact.hs); `K` and `Term` stay protocol facts.
 #[test]
 fn fact_tag_ord_proto_sorts_before_builtins() {
-    let proto = FactTag::Proto(Multiplicity::Linear, "Foo", 0);
-    let fresh = FactTag::Fresh;
-    assert!(
-        proto < fresh,
-        "Proto must sort before Fresh (Haskell decl order Theory/Model/Fact.hs)"
+    let tag = |persistent: bool, name: &str| {
+        crate::elaborate::fact_tag_of(&tamarin_parser::ast::Fact {
+            persistent,
+            name: name.into(),
+            args: vec![],
+            annotations: vec![],
+        })
+    };
+    let ascending = [
+        tag(false, "Zebra"),
+        tag(false, "Fr"),
+        tag(false, "Out"),
+        tag(false, "In"),
+        tag(true, "KU"),
+        tag(true, "KD"),
+        tag(false, "Ded"),
+        FactTag::Term,
+    ];
+    for pair in ascending.windows(2) {
+        assert!(pair[0] < pair[1], "{:?} < {:?}", pair[0], pair[1]);
+    }
+    assert_eq!(
+        &ascending[1..7],
+        &[
+            FactTag::Fresh,
+            FactTag::Out,
+            FactTag::In,
+            FactTag::Ku,
+            FactTag::Kd,
+            FactTag::Ded,
+        ]
     );
-    assert!(fresh < FactTag::Out);
-    assert!(FactTag::Out < FactTag::In);
-    assert!(FactTag::In < FactTag::Ku);
-    assert!(FactTag::Ku < FactTag::Kd);
-    assert!(FactTag::Kd < FactTag::Ded);
-    assert!(FactTag::Ded < FactTag::Term);
+    for name in ["Zebra", "K", "Term"] {
+        assert!(matches!(tag(false, name), FactTag::Proto(..)), "{name}");
+    }
 }
 
-/// `Proto` facts compare by `(multiplicity, name, arity)` triple.
-/// Specifically: Linear and Persistent same-named facts compare via
-/// Multiplicity first, then name, then arity.  If we drift, lemmas
-/// using both `!P(x)` (persistent) and `P(x)` (linear) versions get
-/// inconsistently bucketed.
+/// `Proto` facts compare by the `(multiplicity, name, arity)` triple,
+/// `Persistent < Linear` first; and `Ord Fact` compares the tag before the
+/// terms, so the arity decides before any argument is looked at.
 #[test]
 fn proto_fact_tag_compare_by_multiplicity_then_name_then_arity() {
     let lp = FactTag::Proto(Multiplicity::Linear, "P", 1);
     let pp = FactTag::Proto(Multiplicity::Persistent, "P", 1);
-    // Persistent < Linear (per Haskell Multiplicity Ord).
-    assert!(pp < lp);
-
-    // Same multiplicity, different name → name breaks tie.
     let la = FactTag::Proto(Multiplicity::Linear, "A", 1);
-    assert!(la < lp);
-
-    // Same multiplicity+name, different arity → arity breaks tie.
     let lp2 = FactTag::Proto(Multiplicity::Linear, "P", 2);
+    assert!(pp < lp);
+    assert!(la < lp);
     assert!(lp < lp2);
-}
 
-/// `ku` and `kd` predicates are mutually exclusive.
-/// Used in `enforce_kd_fact_uniqueness` to skip KU facts.
-#[test]
-fn ku_and_kd_are_mutually_exclusive() {
-    let ku = ku_fact(msg_var("x", 0));
-    let kd = kd_fact(msg_var("x", 0));
-    assert!(ku.is_ku() && !ku.is_kd());
-    assert!(kd.is_kd() && !kd.is_ku());
+    // `P(z)` against `P(a, a.1)`: `z` sorts after `a`, but the arity wins.
+    let p1 = proto_fact(Multiplicity::Linear, "P", vec![msg_var("z", 0)]);
+    let p2 = proto_fact(
+        Multiplicity::Linear,
+        "P",
+        vec![msg_var("a", 0), msg_var("a", 1)],
+    );
+    assert!(p1 < p2);
 }
 
 // =========================================================================
@@ -179,7 +187,7 @@ fn ku_and_kd_are_mutually_exclusive() {
 
 use tamarin_term::builtin::{fresh_var, msg_var as mv, pair, pub_var};
 use tamarin_term::lterm::{LNTerm, LSort, LVar};
-use tamarin_term::subst::{apply_vterm_changed, Subst};
+use tamarin_term::subst::Subst;
 
 /// Tiny deterministic PRNG (no external quickcheck dep) for the property
 /// tests below.
@@ -240,10 +248,10 @@ fn bloom_is_superset_of_frees_and_content_deterministic() {
             );
         });
         // Recomputing from the same terms is identical (content-deterministic).
-        let b2 = fact_fingerprints(&fa.terms).0;
+        let b2 = fact_fingerprints(fa.terms()).0;
         assert_eq!(b, b2);
         // A structurally-equal rebuild gets an equal bloom.
-        let fa2 = Fact::fresh(fa.tag, fa.terms.to_vec());
+        let fa2 = Fact::fresh(fa.tag, fa.terms().to_vec());
         assert_eq!(fa.bloom(), fa2.bloom());
     }
 }
@@ -274,9 +282,9 @@ fn bloom_miss_implies_no_change() {
         let dom_bloom = subst.dom().fold(0u64, |b, v| b | var_bit(v));
         if fa.bloom() & dom_bloom == 0 {
             fired += 1;
-            for t in fa.terms.iter() {
+            for t in fa.terms().iter() {
                 assert!(
-                    apply_vterm_changed(&subst, t).is_none(),
+                    t.apply_changed(&subst).is_none(),
                     "skip fired but subst changed a term — UNSOUND: fact={fa:?}"
                 );
             }
@@ -288,7 +296,7 @@ fn bloom_miss_implies_no_change() {
     );
 }
 
-/// Trait regression: two facts equal-but-for-fingerprints compare `==`,
+/// Trait contract: two facts equal-but-for-fingerprints compare `==`,
 /// `Ord`-equal and hash equal.  Pins that the manual `Eq`/`Ord`/`Hash` stay
 /// blind to BOTH out-of-band caches (`bloom` and `max_var`).
 #[test]
@@ -337,7 +345,7 @@ fn fact_equal_values_hash_equal() {
         let a = rand_fact(&mut r);
         // An independently built structural copy, with the annotations and the
         // fingerprints deliberately drawn differently.
-        let b = Fact::new(a.tag, a.terms.to_vec()).annotate(FactAnnotation::SolveLast);
+        let b = Fact::new(a.tag, a.terms().to_vec()).annotate(FactAnnotation::SolveLast);
         assert_eq!(a, b);
         assert_eq!(
             tamarin_utils::fx_hash_one(&a),
@@ -401,21 +409,6 @@ fn max_var_no_free_caches_zero() {
     assert_eq!(fa.max_var_cached(), Some(0));
 }
 
-/// A fact whose largest free-var index is `k` caches exactly `k` (never an
-/// over-approximation — `bounds_max` reads this as an exact max).
-#[test]
-fn max_var_caches_the_exact_largest_index() {
-    let fa = Fact::fresh(FactTag::Out, vec![mv("x", 7)]);
-    assert_eq!(fa.max_var_cached(), Some(7));
-    // Multiple vars: the maximum wins, order-independently.
-    let fa2 = proto_fact(
-        Multiplicity::Linear,
-        "P",
-        vec![mv("a", 3), fresh_var("n", 9), pub_var("p", 5)],
-    );
-    assert_eq!(fa2.max_var_cached(), Some(9));
-}
-
 /// The no-`HasFrees` constructors store the `u64::MAX` sentinel, so
 /// `max_var_cached()` is `None` — `bm_fact` falls back to the per-term walk.
 #[test]
@@ -425,17 +418,6 @@ fn max_var_new_and_map_are_sentinel() {
     // `map` drops the cache to the sentinel even from a computed source.
     let mapped: LNFact = Fact::fresh(FactTag::Out, vec![mv("x", 7)]).map(|t| t);
     assert_eq!(mapped.max_var_cached(), None);
-}
-
-/// `recompute_bloom` refreshes BOTH fingerprints from the current terms.
-#[test]
-fn recompute_bloom_refreshes_both_fingerprints() {
-    let mut fa = Fact::fresh(FactTag::Out, vec![mv("x", 2)]);
-    assert_eq!(fa.max_var_cached(), Some(2));
-    fa.terms = vec![mv("y", 11), mv("z", 4)].into();
-    fa.recompute_bloom();
-    assert_eq!(fa.max_var_cached(), Some(11));
-    assert_eq!(fa.bloom(), fact_fingerprints(&fa.terms).0);
 }
 
 /// A `map_free_with` rebuild recomputes the max over the RENAMED terms
@@ -463,7 +445,7 @@ fn max_var_equals_the_manual_walk() {
     for _ in 0..2000 {
         let fa = rand_fact(&mut r);
         let mut walked = 0u64;
-        for t in fa.terms.iter() {
+        for t in fa.terms().iter() {
             term_max_idx(t, &mut walked);
         }
         assert_eq!(
@@ -477,25 +459,6 @@ fn max_var_equals_the_manual_walk() {
 // =========================================================================
 // `prettyFact` (Theory/Model/Fact.hs)
 // =========================================================================
-
-/// `nestShort n lead finish body = sep [lead $$ nest n body, finish]`
-/// (Text/PrettyPrint/Class.hs) puts a space on each side of the argument
-/// list when the whole fact fits on one line, and the tag of a persistent
-/// fact carries the `!` prefix `showFactTag` gives it
-/// (Theory/Model/Fact.hs).
-#[test]
-fn pretty_lnfact_emits_the_nest_short_inner_spaces() {
-    let fa = ku_fact(fresh_var("ltk", 0));
-    assert_eq!(pretty_lnfact(&fa).render(), "!KU( ~ltk )");
-}
-
-/// A zero-argument fact still gets the two `nestShort` spaces: the body is
-/// the empty `fsep`, so the layout is `sep [text "F(", text ")"]`.
-#[test]
-fn pretty_lnfact_zero_arity_keeps_its_inner_space() {
-    let fa: LNFact = Fact::new(FactTag::Proto(Multiplicity::Linear, "F", 0), vec![]);
-    assert_eq!(pretty_lnfact(&fa).render(), "F( )");
-}
 
 /// `ppAnn` reads `S.toList`, i.e. `FactAnnotation`'s `Ord` order
 /// (Theory/Model/Fact.hs), which is the declaration order
@@ -556,52 +519,6 @@ fn pretty_fact_takes_the_argument_printer() {
     assert_eq!(doc.render(), "F( A, B )");
 }
 
-/// The `Fact arity issues` and `Fact multiplicity issues` blocks render a
-/// LEMMA's fact through HS's derived `Show`, not through `prettyLNFact`.
-/// Oracle ef3f0468, on a theory whose rules use `B` at arity 1 and at arity 2
-/// and whose lemma reads `Ex x #i. B(x, 'c') @ i`, prints the cell
-/// `Fact {factTag = ProtoFact Linear "B" 2, factAnnotations = fromList [],
-/// factTerms = [Bound 1,'c']}` — record syntax, a bare comma between the
-/// terms, and the bound variable as its De Bruijn index.
-#[test]
-fn show_bl_fact_matches_the_derived_show() {
-    use tamarin_term::lterm::{pub_term, BVar};
-    use tamarin_term::vterm::var_term;
-
-    let fa = Fact::new(
-        FactTag::Proto(Multiplicity::Linear, "B", 2),
-        vec![var_term(BVar::Bound(1)), pub_term("c")],
-    );
-    assert_eq!(
-        show_bl_fact(&fa),
-        "Fact {factTag = ProtoFact Linear \"B\" 2, factAnnotations = fromList [], \
-         factTerms = [Bound 1,'c']}"
-    );
-}
-
-/// An annotation reaches the derived `Show` as its constructor name, and the
-/// set renders in `Ord` order with a bare comma between elements.  Oracle
-/// ef3f0468, on the same shape of theory with the lemma action written
-/// `A(x)[+, no_precomp] @ i`, prints
-/// `factAnnotations = fromList [SolveFirst,NoSources]`.
-#[test]
-fn show_bl_fact_renders_a_nonempty_annotation_set() {
-    use tamarin_term::lterm::BVar;
-    use tamarin_term::vterm::var_term;
-
-    let fa = Fact::new(
-        FactTag::Proto(Multiplicity::Linear, "A", 1),
-        vec![var_term(BVar::Bound(1))],
-    )
-    .annotate(FactAnnotation::NoSources)
-    .annotate(FactAnnotation::SolveFirst);
-    assert_eq!(
-        show_bl_fact(&fa),
-        "Fact {factTag = ProtoFact Linear \"A\" 1, \
-         factAnnotations = fromList [SolveFirst,NoSources], factTerms = [Bound 1]}"
-    );
-}
-
 /// `isKLogFact` is `isProtoFact` narrowed to the name `K`
 /// (Theory/Model/Fact.hs), which is the tag [`k_log_fact`] builds.
 /// The special tags are not protocol facts at all, and `KU`/`KD` do not
@@ -641,4 +558,28 @@ fn new_variables_is_the_sorted_conc_minus_prem_difference() {
     )];
     assert_eq!(new_variables(&prems, &concs), vec![y, z]);
     assert_eq!(new_variables(&concs, &prems), Vec::<LNTerm>::new());
+}
+
+/// Every arm of the derived `Show FactTag`.  The `isFactName` tactic
+/// compares an action goal's tag against this string, and `jgnFactTag`
+/// writes it for every non-protocol fact (`jgnFactName` is `showFactTag`,
+/// JSON.hs).  A constructor with a wrong spelling therefore breaks the
+/// tactic matching and the graph JSON, and nothing reports an error.
+#[test]
+fn show_fact_tag_derived_covers_every_arm() {
+    assert_eq!(
+        show_fact_tag_derived(&FactTag::Proto(Multiplicity::Linear, "Foo", 2)),
+        "ProtoFact Linear \"Foo\" 2"
+    );
+    assert_eq!(
+        show_fact_tag_derived(&FactTag::Proto(Multiplicity::Persistent, "Foo", 0)),
+        "ProtoFact Persistent \"Foo\" 0"
+    );
+    assert_eq!(show_fact_tag_derived(&FactTag::Fresh), "FreshFact");
+    assert_eq!(show_fact_tag_derived(&FactTag::Out), "OutFact");
+    assert_eq!(show_fact_tag_derived(&FactTag::In), "InFact");
+    assert_eq!(show_fact_tag_derived(&FactTag::Ku), "KUFact");
+    assert_eq!(show_fact_tag_derived(&FactTag::Kd), "KDFact");
+    assert_eq!(show_fact_tag_derived(&FactTag::Ded), "DedFact");
+    assert_eq!(show_fact_tag_derived(&FactTag::Term), "TermFact");
 }

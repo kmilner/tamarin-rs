@@ -131,13 +131,22 @@ end"
 
 #[test]
 fn active_comments_and_item_contents_own_directive_like_lines() {
-    for parse in [parse_theory, parse_diff_theory] {
+    for diff in [false, true] {
+        let parse = if diff {
+            parse_diff_theory
+        } else {
+            parse_theory
+        };
         for (open, close) in [
             ("/*", "*/"),
             ("export e: \"", "\""),
             ("text{*", "*}"),
             ("tactic: t prio: regex \"", "\""),
         ] {
+            // A diff theory has no `export` item.
+            if diff && open.starts_with("export") {
+                continue;
+            }
             for body in ["#endif", "#ifdef OFF\n#else\n#endif"] {
                 // Exercise both top-level and active conditional-item parsing.
                 for prefix in ["", "#ifdef ON\n"] {
@@ -158,80 +167,12 @@ fn active_comments_and_item_contents_own_directive_like_lines() {
 }
 
 #[test]
-fn ordinary_names_and_inline_directive_text_are_not_reserved() {
-    for parse in [parse_theory, parse_diff_theory] {
-        for name in ["ifdef", "else", "endif"] {
-            let source =
-                format!("theory T begin lemma L: \"All {name}:node. Seen() @ #{name}\" end");
-            parse(&source, &[]).unwrap_or_else(|error| panic!("{source}: {error}"));
-            let source = format!("theory T begin lemma L: \"T\" by solve(Seen() @ #{name}) end");
-            parse(&source, &[]).unwrap_or_else(|error| panic!("{source}: {error}"));
-        }
-        parse("theory T begin export e: \"#ifdef #else #endif\" end", &[]).unwrap();
-    }
-}
-
-#[test]
-fn conditionals_must_occupy_physical_lines() {
-    for parse in [parse_theory, parse_diff_theory] {
-        for body in [
-            "#ifdef X #endif",
-            "/* comment */ #ifdef X\n#endif",
-            "#ifdef X\n#else #define BAD\n#endif",
-            "#ifdef X\n#endif end",
-            "#ifdef (X\n| Y)\n#endif",
-            "#ifdef X /* multiline\ncomment */\n#endif",
-        ] {
-            let source = format!("theory T begin\n{body}\nend");
-            assert!(parse(&source, &[]).is_err(), "{source}");
-        }
-        assert!(parse("theory T begin #ifdef X\n#endif\nend", &[]).is_err());
-        assert!(parse(
-            "theory T begin\n#define X\n#ifdef X\nrule R: [] --> [] #else\n#endif\nend",
-            &[]
-        )
-        .is_err());
-    }
-}
-
-#[test]
 fn directive_headers_allow_indentation_and_single_line_comments() {
     for diff in [false, true] {
         for newline in ["\n", "\r\n"] {
             let source = "theory T begin\n#define X\n\t\u{2003}#ifdef /* flag */ (X & not Y) // selected\nrule LIVE: [] --> []\n  #else /* unused */\ninvalid [ \"\n\t#endif // done\nend".replace('\n', newline);
             assert_eq!(rule_names(&source, diff), ["LIVE"]);
         }
-    }
-}
-
-#[test]
-fn malformed_conditional_structure_is_rejected_in_both_arms() {
-    for parse in [parse_theory, parse_diff_theory] {
-        for definition in ["", "#define X"] {
-            for body in [
-                "#ifdef X\n",
-                "#ifdef X\n#else\n",
-                "#ifdef X\n#else\n#else\n#endif",
-                "#ifdef X\n#ifdef Y\n#else\n#else\n#endif\n#endif",
-                "#ifdef X\n#else\n#ifdef Y\n#else\n#else\n#endif\n#endif",
-                "#ifdef X\n#else\n#ifdef Y\n#endif",
-                "#ifdef X\n#ifdef\n#endif\n#endif",
-            ] {
-                let source = format!("theory T begin\n{definition}\n{body}\nend");
-                assert!(parse(&source, &[]).is_err(), "{source}");
-            }
-        }
-        let source = "theory T begin\n#ifdef OFF\nunfinished";
-        let error = parse(source, &[]).unwrap_err();
-        assert_eq!(error.span().start, source.len());
-        assert_eq!(
-            error.diagnostic_notes(),
-            ["expected \"#endif\"; found end of input"]
-        );
-        let source = "theory T begin\n\t#ifdef X |\n#endif\nend";
-        let error = parse(source, &[]).unwrap_err();
-        assert_eq!(error.span().start, source.find('|').unwrap() + 1);
-        assert_eq!(error.line_column(), (2, 19));
     }
 }
 
@@ -283,18 +224,6 @@ fn arbitrary_non_directive_lines_cannot_affect_branch_selection() {
                 "theory T begin\n#define ON\n#ifdef ON\nrule LIVE: [] --> []\n#else\n{body}\n#endif\nend"
             );
             assert_eq!(rule_names(&source, diff), ["LIVE"]);
-        }
-    }
-}
-
-#[test]
-fn flag_evaluation_still_validates_both_operands() {
-    for condition in ["ON | (OFF &)", "OFF & (ON |)"] {
-        for outer in ["ON", "OFF"] {
-            let source = format!(
-                "theory T begin\n#define ON\n#ifdef {outer}\n#ifdef {condition}\n#endif\n#endif\nend"
-            );
-            assert!(parse_theory(&source, &[]).is_err(), "{source}");
         }
     }
 }

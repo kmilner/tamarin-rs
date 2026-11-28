@@ -7,7 +7,7 @@
 //! frontend reads/writes these indices in URLs like
 //! `/thy/trace/<idx>/main/...`.
 //!
-//! The elaborated typed theory is what [`ProofState::new`] builds the
+//! The closed theory is what [`ProofState::new`] builds the
 //! live prover session from, what the web renderers print, and what the
 //! accessor helpers (lemma list, restriction count, …) read.
 //!
@@ -20,11 +20,10 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tamarin_utils::cancellation::{CancellableOnce, Cancelled};
+use tamarin_utils::cancellation::Cancelled;
+use tamarin_utils::parallel::SharedOnce;
 
 use chrono::{DateTime, Local};
-
-use tamarin_theory::theory::Theory as TypedTheory;
 
 use crate::handlers::proof_tree::ProofState;
 
@@ -33,10 +32,10 @@ use crate::handlers::proof_tree::ProofState;
 pub struct TheoryEntry {
     /// Stable index used in URLs.  Set by `TheoryStore::insert`.
     pub idx: usize,
-    /// Elaborated, typed theory — the accessor helpers' source and the
-    /// theory the lazily built [`ProofState`] proves.  Wrapped in `Arc`
-    /// so we can clone the entry cheaply.
-    pub typed_theory: Arc<TypedTheory>,
+    /// The closed theory (HS `closeThy`, which every web load runs) — the
+    /// accessor helpers' source and the theory the lazily built
+    /// [`ProofState`] proves. Shared, so the entry clones cheaply.
+    pub typed_theory: tamarin_theory::closed_theory::ClosedTheory,
     /// The signature every Maude process for this theory loads its module
     /// from, taken before the load joins `check_close_intr_rule`'s verdicts
     /// into [`typed_theory`](Self::typed_theory)'s signature.  A symbol's NDC
@@ -44,6 +43,8 @@ pub struct TheoryEntry {
     /// rules and the theory's terms keep their untagged symbols, so a module
     /// built from the joined signature declares operators nothing else names.
     pub prover_maude_sig: Arc<tamarin_term::maude_sig::MaudeSig>,
+    /// The prover session's cut strategy, resolved at load time.
+    pub cut: tamarin_theory::constraint::solver::context::CutStrategy,
     /// Where the theory came from.
     pub origin: TheoryOrigin,
     /// Load time for the UI.
@@ -56,28 +57,27 @@ pub struct TheoryEntry {
     /// for both wellformedness renderings: the `/* WARNING: ... */` comment in
     /// the `source`/`message` routes (`format_wf_block`) and the
     /// `<div class="wf-warning">` header banner in the `help`/`overview` routes
-    /// (`errors_html`).  Empty ⇒ no warnings (theory is well-formed).
+    /// (`theory_io::make_wf_errors_html`, HS `errorsHtml`).  Empty ⇒ no
+    /// warnings (theory is well-formed).
     pub wf_report: Arc<[tamarin_theory::wellformedness::WfError]>,
-    /// HTML for the wellformedness warning banner shown in the theory
-    /// page header (HS `errorsHtml`, rendered raw via
-    /// `preEscapedToMarkup info.errorsHtml` at `src/Web/Theory.hs`).
-    /// Populated from [`wf_report`](Self::wf_report) at load time,
-    /// mirroring HS `makeWfErrorsHtml` (`src/Web/Handler.hs`), which wraps
-    /// `renderHtmlDoc (htmlDoc $ prettyWfErrorReport report)` of the
-    /// *closed* theory's wellformedness report in a `<div class="wf-warning">`.
-    /// Empty string when the report is empty (HS `makeWfErrorsHtml [] = ""`).
-    pub errors_html: Arc<str>,
-    /// The theory's once-per-load NDC-checked intruder cache
-    /// (`close_rule::check_close_intr_rule`, run in `theory_io` before
-    /// the derivation checks). Injected into the lazily built prover session,
-    /// whose context factory reuses it for every operation. `None` when the
-    /// load-time Maude boot failed.
-    pub ndc_cache: Option<tamarin_theory::constraint::solver::context::IntrRuleCache>,
+    /// The NDC-checked intruder rules shared with the theory's proof session.
+    pub ndc_cache: tamarin_theory::constraint::solver::context::IntrRuleCache,
     /// A detached/materialized proof state. Stored entries always keep this
     /// `None`: their generation cell is the sole authoritative proof owner.
     /// Materialized snapshots attach that generation's state here so existing
     /// rendering and detached-edit code can consume one self-contained value.
     pub proof_state: Option<Arc<ProofState>>,
+}
+
+impl TheoryEntry {
+    /// The materialized proof state. Every route that renders or edits a
+    /// proof reads an entry from [`TheoryStore::materialized_snapshot`] or
+    /// [`TheoryStore::detached_fork`], which always attach one.
+    pub fn proof(&self) -> &Arc<ProofState> {
+        self.proof_state
+            .as_ref()
+            .expect("materialized entries always have a proof state")
+    }
 }
 
 /// Lightweight data needed by the theory index page.
@@ -161,28 +161,26 @@ impl std::error::Error for StoreError {}
 #[derive(Clone)]
 pub struct TheorySnapshot {
     pub entry: TheoryEntry,
-    idx: usize,
     generation: Arc<StoredGeneration>,
 }
 
-struct StoredGeneration {
-    proof: RetryCell<Arc<ProofState>, StoreError>,
-}
+/// A generation's proof state. Each store write allocates a fresh `Arc`, so
+/// `Arc::ptr_eq` on it is the generation token.
+type StoredGeneration = RetryCell<Arc<ProofState>, StoreError>;
 
-/// One single-flight attempt at a time. Callers which observed the same slot
-/// share its result; a failed slot is replaced so the next request can retry.
+/// One single-flight attempt at a time. Callers that joined the same attempt
+/// share its result, including a failure; a failed attempt is then replaced,
+/// so the next request builds again. A cancelled build is retried by a
+/// waiter within the same attempt, as [`SharedOnce`] does.
 struct RetryCell<T, E> {
-    attempt: Mutex<Arc<CancellableOnce<Result<T, E>, Cancelled>>>,
+    attempt: parking_lot::Mutex<Arc<SharedOnce<Result<T, E>>>>,
 }
 
 impl<T: Clone, E: Clone + From<Cancelled>> RetryCell<T, E> {
     fn new(value: Option<T>) -> Self {
-        let attempt = Arc::new(match value {
-            Some(value) => CancellableOnce::from_result(Ok(Ok(value))),
-            None => CancellableOnce::default(),
-        });
+        let attempt = value.map_or_else(SharedOnce::default, |value| SharedOnce::from(Ok(value)));
         Self {
-            attempt: Mutex::new(attempt),
+            attempt: parking_lot::Mutex::new(Arc::new(attempt)),
         }
     }
 
@@ -193,14 +191,16 @@ impl<T: Clone, E: Clone + From<Cancelled>> RetryCell<T, E> {
 
     fn run_attempt(
         &self,
-        attempt: Arc<CancellableOnce<Result<T, E>, Cancelled>>,
+        attempt: Arc<SharedOnce<Result<T, E>>>,
         build: impl FnOnce() -> Result<T, E>,
     ) -> Result<T, E> {
-        let result = attempt.get_or_init(|| Ok(build()))?;
+        let result = attempt
+            .get_or_try_init(|| Ok::<_, Cancelled>(build()))?
+            .clone();
         if result.is_err() {
             let mut current = self.attempt.lock();
             if Arc::ptr_eq(&current, &attempt) {
-                *current = Arc::new(CancellableOnce::default());
+                *current = Arc::default();
             }
         }
         result
@@ -232,7 +232,6 @@ impl TheoryStore {
         let stored = inner.by_idx.get(&idx).ok_or(StoreError::NotFound(idx))?;
         Ok(TheorySnapshot {
             entry: stored.entry.clone(),
-            idx,
             generation: stored.generation.clone(),
         })
     }
@@ -252,8 +251,6 @@ impl TheoryStore {
     /// The stored theory's name at `idx`, or `None` when no theory is stored
     /// there. This avoids cloning the rest of the entry when only its label is
     /// needed.
-    ///
-    /// [`get`]: Self::get
     pub fn name(&self, idx: usize) -> Option<String> {
         self.inner
             .lock()
@@ -293,11 +290,8 @@ impl TheoryStore {
         cfg: &crate::ServerConfig,
     ) -> Result<TheoryEntry, StoreError> {
         let mut clone = self.materialized_snapshot(src_idx, cfg)?;
-        let proof = clone
-            .proof_state
-            .clone()
-            .expect("materialized_snapshot always has a proof state");
-        clone.proof_state = Some(Arc::new(proof.fork().map_err(StoreError::Build)?));
+        let proof = clone.proof().fork().map_err(StoreError::Build)?;
+        clone.proof_state = Some(Arc::new(proof));
         clone.idx = 0;
         clone.primary = false;
         Ok(clone)
@@ -335,7 +329,7 @@ impl TheoryStore {
         snapshot: &TheorySnapshot,
         mut entry: TheoryEntry,
     ) -> Result<usize, StoreError> {
-        let idx = snapshot.idx;
+        let idx = snapshot.entry.idx;
         let mut inner = self.inner.lock();
         let is_current = inner
             .by_idx
@@ -368,21 +362,16 @@ impl TheoryStore {
         snapshot: &TheorySnapshot,
         cfg: &crate::ServerConfig,
     ) -> Result<Arc<ProofState>, StoreError> {
-        let idx = snapshot.idx;
+        let idx = snapshot.entry.idx;
         let generation = snapshot.generation.clone();
-        generation.proof.get_or_try_init(|| {
+        generation.get_or_try_init(|| {
             // A waiter may reach this closure after an earlier builder
             // discovered that reload/removal made the generation stale.
             // Reject it before booting another Maude process; the caller
             // will retry from a fresh snapshot. The post-build check below
             // still closes the race with replacement during the build.
             self.validate_generation(idx, &generation)?;
-            let built = ProofState::new(
-                &snapshot.entry.typed_theory,
-                (*snapshot.entry.prover_maude_sig).clone(),
-                snapshot.entry.ndc_cache.as_ref(),
-                cfg,
-            );
+            let built = ProofState::new(&snapshot.entry, cfg);
 
             // Publish only into the exact generation that elected this
             // builder.  Removal, reload, and index reuse all replace the Arc.
@@ -397,14 +386,6 @@ impl TheoryStore {
     }
 }
 
-impl StoredGeneration {
-    fn new(proof: Option<Arc<ProofState>>) -> Self {
-        Self {
-            proof: RetryCell::new(proof),
-        }
-    }
-}
-
 /// App-wide state, used by every handler.
 pub struct AppState {
     pub proof_requests: crate::cancellation::ProofRequests,
@@ -416,28 +397,38 @@ pub struct AppState {
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
-    use tamarin_term::maude_sig::minimal_maude_sig;
-    use tamarin_theory::theory::OpenProtoRule;
 
-    fn entry(name: &str) -> TheoryEntry {
-        let prover_maude_sig = minimal_maude_sig(false);
-        let typed_theory = TypedTheory::<OpenProtoRule>::new(name, prover_maude_sig.clone());
-        TheoryEntry {
-            idx: 0,
-            typed_theory: Arc::new(typed_theory),
-            prover_maude_sig: Arc::new(prover_maude_sig),
-            origin: TheoryOrigin::Interactive,
-            loaded_at: Local::now(),
-            primary: true,
-            wf_report: Arc::default(),
-            errors_html: Arc::default(),
-            ndc_cache: None,
-            proof_state: None,
-        }
+    type Cell = RetryCell<usize, StoreError>;
+
+    fn init(
+        cell: &Cell,
+        build: impl FnOnce() -> Result<usize, StoreError>,
+    ) -> Result<usize, StoreError> {
+        cell.get_or_try_init(build)
+    }
+
+    /// A builder of entries holding a closed empty theory, or `None` (the
+    /// test skips) when no Maude is available to close it.
+    fn entries() -> Option<impl Fn(&str) -> TheoryEntry> {
+        let mut cfg = crate::ServerConfig::new(
+            "127.0.0.1:0".parse().unwrap(),
+            None,
+            tamarin_test_support::require_maude_path()?,
+        );
+        cfg.load.derivation_checks = tamarin_theory::deriv_check::DerivCheckTimeout::Disabled;
+        Some(move |name: &str| {
+            crate::theory_io::load_from_source(
+                &format!("theory {name} begin end"),
+                TheoryOrigin::Interactive,
+                &cfg,
+            )
+            .expect("load an empty theory")
+        })
     }
 
     #[test]
     fn stale_snapshot_cannot_replace_reused_index() {
+        let Some(entry) = entries() else { return };
         let store = TheoryStore::default();
         let idx = store.insert(entry("first"));
         let snapshot = store.snapshot(idx).unwrap();
@@ -458,6 +449,7 @@ mod tests {
 
     #[test]
     fn current_snapshot_replaces_in_place_as_modified() {
+        let Some(entry) = entries() else { return };
         let store = TheoryStore::default();
         let idx = store.insert(entry("first"));
         let snapshot = store.snapshot(idx).unwrap();
@@ -477,25 +469,25 @@ mod tests {
 
     #[test]
     fn failed_single_flight_build_can_be_retried() {
-        let cell = RetryCell::<usize, StoreError>::new(None);
+        let cell = Cell::new(None);
         let attempts = AtomicUsize::new(0);
 
         assert_eq!(
-            cell.get_or_try_init(|| {
+            init(&cell, || {
                 attempts.fetch_add(1, Ordering::SeqCst);
                 Err::<usize, _>(StoreError::Build("transient".into()))
             }),
             Err(StoreError::Build("transient".into()))
         );
         assert_eq!(
-            cell.get_or_try_init(|| {
+            init(&cell, || {
                 attempts.fetch_add(1, Ordering::SeqCst);
                 Ok::<_, StoreError>(7)
             }),
             Ok(7)
         );
         assert_eq!(
-            cell.get_or_try_init(|| {
+            init(&cell, || {
                 attempts.fetch_add(1, Ordering::SeqCst);
                 Ok::<_, StoreError>(8)
             }),
@@ -505,90 +497,10 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_session_build_is_retryable_for_a_concurrent_request() {
-        use std::sync::mpsc;
-        use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
-        let cell = Arc::new(RetryCell::<usize, StoreError>::new(None));
-        let token = CancellationToken::default();
-        let owner_token = token.clone();
-        let owner_cell = cell.clone();
-        let (started_tx, started_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let owner = std::thread::spawn(move || {
-            let _guard = CancellationGuard::new(Some(owner_token));
-            owner_cell.get_or_try_init(|| {
-                started_tx.send(()).unwrap();
-                release_rx.recv().unwrap();
-                Err(StoreError::Build("interrupted Maude".into()))
-            })
-        });
-        started_rx.recv().unwrap();
-        let waiter_cell = cell.clone();
-        let waiter = std::thread::spawn(move || waiter_cell.get_or_try_init(|| Ok(42)));
-        token.cancel();
-        release_tx.send(()).unwrap();
-        assert_eq!(owner.join().unwrap(), Err(StoreError::Cancelled));
-        assert_eq!(waiter.join().unwrap(), Ok(42));
-        assert_eq!(
-            cell.get_or_try_init(|| panic!("successful retry was lost")),
-            Ok(42)
-        );
-    }
-
-    #[test]
-    fn seeded_single_flight_value_skips_build() {
-        let cell = RetryCell::<usize, StoreError>::new(Some(7));
-        assert_eq!(
-            cell.get_or_try_init(|| panic!("seeded cell rebuilt")),
-            Ok(7)
-        );
-    }
-
-    #[test]
-    fn concurrent_successful_build_is_single_flight() {
-        use std::sync::mpsc;
-
-        let cell = Arc::new(RetryCell::<usize, StoreError>::new(None));
-        let attempts = Arc::new(AtomicUsize::new(0));
-        let (started_tx, started_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-
-        let first_cell = cell.clone();
-        let first_attempts = attempts.clone();
-        let first = std::thread::spawn(move || {
-            first_cell
-                .get_or_try_init(|| {
-                    first_attempts.fetch_add(1, Ordering::SeqCst);
-                    started_tx.send(()).unwrap();
-                    release_rx.recv().unwrap();
-                    Ok(7)
-                })
-                .unwrap()
-        });
-        started_rx.recv().unwrap();
-
-        let second_cell = cell.clone();
-        let second_attempts = attempts.clone();
-        let second = std::thread::spawn(move || {
-            second_cell
-                .get_or_try_init(|| {
-                    second_attempts.fetch_add(1, Ordering::SeqCst);
-                    Ok(8)
-                })
-                .unwrap()
-        });
-
-        release_tx.send(()).unwrap();
-        assert_eq!(first.join().unwrap(), 7);
-        assert_eq!(second.join().unwrap(), 7);
-        assert_eq!(attempts.load(Ordering::SeqCst), 1);
-    }
-
-    #[test]
     fn concurrent_callers_share_a_failed_attempt_before_retry() {
         use std::sync::mpsc;
 
-        let cell = Arc::new(RetryCell::<usize, StoreError>::new(None));
+        let cell = Arc::new(Cell::new(None));
         let attempt = cell.attempt.lock().clone();
         let attempts = Arc::new(AtomicUsize::new(0));
         let (started_tx, started_rx) = mpsc::channel();
@@ -627,12 +539,84 @@ mod tests {
         );
         assert_eq!(attempts.load(Ordering::SeqCst), 1);
         assert_eq!(
-            cell.get_or_try_init(|| {
+            init(&cell, || {
                 attempts.fetch_add(1, Ordering::SeqCst);
                 Ok(7)
             }),
             Ok(7)
         );
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[test]
+    fn cancelled_session_build_is_retryable_for_a_concurrent_request() {
+        use std::sync::mpsc;
+        use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
+        let cell = Arc::new(Cell::new(None));
+        let token = CancellationToken::default();
+        let owner_token = token.clone();
+        let owner_cell = cell.clone();
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let owner = std::thread::spawn(move || {
+            let _guard = CancellationGuard::new(Some(owner_token));
+            init(&owner_cell, || {
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Err(StoreError::Build("interrupted Maude".into()))
+            })
+        });
+        started_rx.recv().unwrap();
+        let waiter_cell = cell.clone();
+        let waiter = std::thread::spawn(move || init(&waiter_cell, || Ok(42)));
+        token.cancel();
+        release_tx.send(()).unwrap();
+        assert_eq!(owner.join().unwrap(), Err(StoreError::Cancelled));
+        assert_eq!(waiter.join().unwrap(), Ok(42));
+        assert_eq!(init(&cell, || panic!("successful retry was lost")), Ok(42));
+    }
+
+    #[test]
+    fn seeded_single_flight_value_skips_build() {
+        let cell = Cell::new(Some(7));
+        assert_eq!(init(&cell, || panic!("seeded cell rebuilt")), Ok(7));
+    }
+
+    #[test]
+    fn concurrent_successful_build_is_single_flight() {
+        use std::sync::mpsc;
+
+        let cell = Arc::new(Cell::new(None));
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+
+        let first_cell = cell.clone();
+        let first_attempts = attempts.clone();
+        let first = std::thread::spawn(move || {
+            init(&first_cell, || {
+                first_attempts.fetch_add(1, Ordering::SeqCst);
+                started_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                Ok(7)
+            })
+            .unwrap()
+        });
+        started_rx.recv().unwrap();
+
+        let second_cell = cell.clone();
+        let second_attempts = attempts.clone();
+        let second = std::thread::spawn(move || {
+            init(&second_cell, || {
+                second_attempts.fetch_add(1, Ordering::SeqCst);
+                Ok(8)
+            })
+            .unwrap()
+        });
+
+        release_tx.send(()).unwrap();
+        assert_eq!(first.join().unwrap(), 7);
+        assert_eq!(second.join().unwrap(), 7);
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 }

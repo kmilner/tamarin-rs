@@ -1,0 +1,20 @@
+// Category: the --parse-only open-theory printer (`prettyOpenTheory`),
+// which no corpus gate runs: the gates load and close every theory.
+//
+// Signature-heavy theory: builtin function/equation declarations are
+// recovered from the signature rather than repeated as translation items.
+
+theory Sig
+begin
+
+builtins: symmetric-encryption, hashing, diffie-hellman
+functions: f/2, g/1 [private], unwrap/1 [destructor], mac/2
+equations: unwrap(f(x,y)) = x
+
+macros: m1(x) = h(x)
+
+rule A:
+  let k2 = h(~k) in
+  [ Fr(~k) ] --[ Key(k2) ]-> [ Out(senc(m1(~k), k2)) ]
+
+end

@@ -1,0 +1,15 @@
+theory FormalCommentEnd begin
+
+/* A formal comment may quote a column-0 `end`; the gate slicers must keep
+   the theory through its closing `end`, so the rule after the block stays in
+   the theory slice. */
+text{*
+This note quotes the end of a theory:
+end
+*}
+
+rule First: [] --[ A() ]-> []
+
+lemma goal: exists-trace "Ex #i. A() @ #i"
+
+end

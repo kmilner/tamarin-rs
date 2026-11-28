@@ -1,0 +1,24 @@
+// Category: the variant checks the batch driver splices into the
+// wellformedness report after the static pass (they need Maude).
+//
+// The report follows source-rule order: Impossible ("Rule has no variants")
+// comes before R, whose two supplied manual variants do not match the single
+// recomputed one ("Variants"); the recomputed member is numbered
+// `R___VARIANT_1`.  A "Variants" entry is fatal in a proving load, so the
+// row runs under -m=msr, which prints the whole report and goes on.  The
+// translated echo keeps Impossible: only closing drops a zero-variant rule.
+// No corpus theory has a mismatched manual family.
+
+theory WfManualVariants
+begin
+
+rule Impossible: [ In(~x), Fr(~x) ] --> [ Out(~x) ]
+
+rule R: [] --[A()]-> []
+variants
+rule (modulo AC) R___VARIANT_1: [] --[A()]-> [],
+rule (modulo AC) R___VARIANT_2: [] --[A()]-> []
+
+lemma witness: exists-trace "Ex #i. A()@i"
+
+end

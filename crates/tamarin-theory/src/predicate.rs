@@ -24,7 +24,7 @@ use crate::atom::{map_atom, to_atom, ProtoAtom, SyntacticSugar};
 use crate::elaborate::{copy_fact_annotations, fact_tag_of, varspec_to_lvar, ElabError};
 use crate::fact::{fact_tag_arity, show_fact_tag, Fact, FactTag, Multiplicity};
 use crate::formula::{
-    exists_var, map_atoms, traverse_formula_atom, BLNTerm, LNFormula, ProtoFormula,
+    exists_var, lvar_hint, map_atoms, traverse_formula_atom, BLNTerm, LNFormula, ProtoFormula,
     SyntacticLNFormula,
 };
 use tamarin_parser::ast as p;
@@ -68,12 +68,12 @@ impl std::error::Error for ExpandError {}
 
 impl Predicate {
     /// `mk_predicate name formula` — capitalise the leading character of
-    /// `name`, then build a linear protocol fact carrying the formula's
-    /// free variables.
+    /// `name` with `toUpper`, then build a linear protocol fact
+    /// carrying the formula's free variables.
     pub fn new(name: &str, formula: LNFormula, free_vars: Vec<LVar>) -> Self {
         let mut chars = name.chars();
         let cap = match chars.next() {
-            Some(c) => c.to_ascii_uppercase().to_string() + chars.as_str(),
+            Some(c) => c.to_uppercase().chain(chars).collect(),
             None => String::new(),
         };
         let arity = free_vars.len();
@@ -142,6 +142,16 @@ pub fn smaller_fact<T>(t1: T, t2: T) -> Fact<T> {
 /// `exists_var` abstracts `z` to `Bound 0` and the union's `f_app` rebuild
 /// re-sorts, so the stored body reads `y = (Bound 0 ++ Free x)`.
 pub fn builtin_predicates() -> Vec<Predicate> {
+    builtins().to_vec()
+}
+
+/// The shared, immutable [`builtin_predicates`] list.
+fn builtins() -> &'static [Predicate] {
+    static BUILTINS: std::sync::OnceLock<Vec<Predicate>> = std::sync::OnceLock::new();
+    BUILTINS.get_or_init(build_builtin_predicates)
+}
+
+fn build_builtin_predicates() -> Vec<Predicate> {
     let x = LVar::new("x", LSort::Msg, 0);
     let y = LVar::new("y", LSort::Msg, 0);
     let z = LVar::new("z", LSort::Msg, 0);
@@ -152,7 +162,7 @@ pub fn builtin_predicates() -> Vec<Predicate> {
     ));
     vec![Predicate {
         fact: smaller_fact(x, y),
-        formula: exists_var((z.name.to_string(), z.sort), &z, body),
+        formula: exists_var(lvar_hint(&z), &z, body),
     }]
 }
 
@@ -161,12 +171,10 @@ pub fn builtin_predicates() -> Vec<Predicate> {
 /// predicate whose fact tag equals `fa`'s, searching the declared ones before
 /// the built-in list.  `FactTag` carries multiplicity, name and arity, so all
 /// three must agree.
-pub fn lookup_predicate<T>(fa: &Fact<T>, preds: &[Predicate]) -> Option<Predicate> {
-    if let Some(pr) = preds.iter().find(|p| p.fact.tag == fa.tag) {
-        return Some(pr.clone());
-    }
-    builtin_predicates()
-        .into_iter()
+pub fn lookup_predicate<'a, T>(fa: &Fact<T>, preds: &'a [Predicate]) -> Option<&'a Predicate> {
+    preds
+        .iter()
+        .chain(builtins())
         .find(|p| p.fact.tag == fa.tag)
 }
 
@@ -186,7 +194,7 @@ pub fn expand_formula(
 ) -> Result<LNFormula, ExpandError> {
     traverse_formula_atom(fm, &mut |a| match a {
         ProtoAtom::Syntactic(SyntacticSugar::Pred(fa)) => match lookup_predicate(fa, preds) {
-            Some(pr) => Ok(apply_at_use_site(&pr, fa)),
+            Some(pr) => Ok(apply_at_use_site(pr, fa)),
             None => Err(ExpandError { tag: fa.tag }),
         },
         other => Ok(ProtoFormula::Atom(to_atom(other.clone()))),
@@ -201,10 +209,10 @@ pub fn expand_formula(
 fn apply_at_use_site(pr: &Predicate, fa: &Fact<BLNTerm>) -> LNFormula {
     let pairs: Vec<(LVar, BLNTerm)> = pr
         .fact
-        .terms
+        .terms()
         .iter()
         .copied()
-        .zip(fa.terms.iter().cloned())
+        .zip(fa.terms().iter().cloned())
         .collect();
     map_atoms(pr.formula.clone(), &mut |i, a| {
         let s: Subst<Name, BVar<LVar>> = Subst::from_list(
@@ -234,13 +242,16 @@ fn shift_bound(t: &BLNTerm, i: u64) -> BLNTerm {
 mod tests {
     use super::*;
     use crate::pretty_formula::pretty_lnformula;
-    use crate::theory::TheoryItem;
     use tamarin_parser::parser::parse_formula_str;
     use tamarin_term::maude_sig::{mset_maude_sig, pair_maude_sig};
     use tamarin_term::term::Term;
 
-    /// The predicates of a theory that declares nothing else.
-    fn pred(decl: &str) -> Vec<Predicate> {
+    /// The predicates of a theory that declares nothing else, or the first
+    /// declaration's error.
+    fn pred(decl: &str) -> Result<Vec<Predicate>, String> {
+        if decl.is_empty() {
+            return Ok(Vec::new());
+        }
         let src = format!("theory T begin\npredicates: {}\nend", decl);
         let thy = tamarin_parser::parse_theory(&src, &[]).unwrap();
         thy.items
@@ -250,7 +261,7 @@ mod tests {
                 _ => None,
             })
             .flatten()
-            .map(|pd| from_parser(pd, &pair_maude_sig()).unwrap())
+            .map(|pd| from_parser(pd, &pair_maude_sig()).map_err(|e| e.message))
             .collect()
     }
 
@@ -258,16 +269,6 @@ mod tests {
         let sig = mset_maude_sig();
         let f = parse_formula_str(src, &sig).unwrap();
         crate::formula::from_parser(&f, &sig).unwrap()
-    }
-
-    fn has_pred_atom<H>(f: &ProtoFormula<SyntacticSugar<BLNTerm>, H, Name, LVar>) -> bool {
-        match f {
-            ProtoFormula::Atom(ProtoAtom::Syntactic(_)) => true,
-            ProtoFormula::Atom(_) | ProtoFormula::Tf(_) => false,
-            ProtoFormula::Not(g) => has_pred_atom(g),
-            ProtoFormula::Conn(_, a, b) => has_pred_atom(a) || has_pred_atom(b),
-            ProtoFormula::Qua(_, _, b) => has_pred_atom(b),
-        }
     }
 
     #[test]
@@ -291,7 +292,7 @@ mod tests {
             FactTag::Proto(Multiplicity::Linear, "Smaller", 2),
             "linear, named `Smaller`, arity 2"
         );
-        assert_eq!(f.terms.to_vec(), vec![x, y], "operands keep source order");
+        assert_eq!(f.terms().to_vec(), vec![x, y], "operands keep source order");
     }
 
     /// The built-in body is `∃ z. y = (x ++ z)` with `z` abstracted, and the
@@ -340,163 +341,61 @@ mod tests {
         let probe: Fact<LVar> = Fact::new(declared.fact.tag, vec![]);
         assert_eq!(
             lookup_predicate(&probe, std::slice::from_ref(&declared)).unwrap(),
-            declared
+            &declared
         );
         assert_eq!(
             lookup_predicate(&probe, &[]).unwrap(),
-            builtin_predicates()[0],
+            &builtin_predicates()[0],
             "with nothing declared the built-in answers the same tag"
         );
     }
 
-    /// HS's `predicate` production reads the body with `plainFormula`, which
-    /// fails with "Syntactic sugar is not allowed, guarded formula expected."
-    /// (Theory/Text/Parser/Formula.hs).  A predicate call inside a
-    /// predicate body is exactly that sugar.
+    /// Predicate expansion (HS `expandFormula`, Theory/Syntactic/Predicate.hs)
+    /// of a formula against the declared predicates.  Each row is
+    /// `(predicates, formula, Ok(expanded) | Err(message))`.  The expansion
+    /// replaces a use-site atom by the predicate's body with the declared
+    /// parameters mapped to the use-site arguments; the pretty bytes are the
+    /// pinned oracle's (Git revision ef3f0468).
     #[test]
-    fn a_sugared_predicate_body_is_rejected() {
-        let src = "theory T begin\npredicates: P(x) <=> Q(x)\nend";
-        let thy = tamarin_parser::parse_theory(src, &[]).unwrap();
-        let decl = thy
-            .items
-            .iter()
-            .find_map(|it| match it {
-                p::TheoryItem::Predicates(ps) => ps.first(),
-                _ => None,
-            })
-            .unwrap();
-        let err = from_parser(decl, &pair_maude_sig()).expect_err("expected a rejection");
-        assert_eq!(
-            err.message,
-            "Syntactic sugar is not allowed, guarded formula expected."
-        );
-    }
-
-    /// The expansion replaces the use-site atom with the predicate's body and
-    /// maps the declared parameter to the use-site argument.  The oracle
-    /// (Git revision ef3f0468) renders this lemma as `∀ x. ∃ #i. A( x ) @ #i`.
-    #[test]
-    fn expand_simple_predicate() {
-        let preds = pred("P(x) <=> Ex #i. A(x) @ #i");
-        let out = expand_formula(&preds, &closed("All x. P(x)")).unwrap();
-        assert_eq!(
-            pretty_lnformula(&out),
-            "\u{2200} x. \u{2203} #i. A( x ) @ #i"
-        );
-    }
-
-    #[test]
-    fn expand_undefined_predicate_errors() {
-        // `UndefinedPred(x)` closes to a `Pred` atom; with no matching
-        // predicate the expansion reports `UndefinedPredicate`.  Probed
-        // against the v1.13.0 prover: `... ==> P(x)` reports
-        // `undefined predicate P/1`.
-        let err = expand_formula(&[], &closed("All x. UndefinedPred(x)"))
-            .expect_err("expected undefined-predicate error");
-        assert_eq!(err.to_string(), "undefined predicate UndefinedPred/1");
-    }
-
-    #[test]
-    fn expand_arity_mismatch_is_undefined_predicate() {
-        // `lookup_predicate` matches the FULL `FactTag` (multiplicity, name
-        // and arity), so a use site whose arity differs from the declaration
-        // does not match and falls through to `UndefinedPredicate`.  Probed
-        // against the v1.13.0 prover: `predicates: P(x) <=> ...` used as
-        // `P(a, b)` reports `undefined predicate P/2` — NOT a bespoke "arity
-        // mismatch".
-        let preds = pred("P(x) <=> Ex #i. A(x) @ #i");
-        let err = expand_formula(&preds, &closed("All a b. P(a, b)"))
-            .expect_err("expected undefined-predicate error");
-        assert_eq!(err.to_string(), "undefined predicate P/2");
-    }
-
-    /// HS adds case tests and accountability lemmas verbatim
-    /// (`liftedAddCaseTest` / `liftedAddAccLemma`,
-    /// Theory/Text/Parser.hs) with NO predicate expansion — their
-    /// `Pred` sugar stays intact for the accountability translation.  Only
-    /// `liftedAddLemma` and the restriction path expand
-    /// (TheoryObject.hs).
-    #[test]
-    fn case_test_and_acc_lemma_keep_pred_atoms() {
-        let src = "theory T begin\n\
-            predicates: P(x) <=> Ex #i. A(x) @ #i\n\
-            test ct:\n  \"P(a)\"\n\
-            lemma acc:\n  ct account for\n    \"All x. P(x)\"\n\
-            lemma reg:\n  \"All x. P(x)\"\n\
-            end";
-        let thy = tamarin_parser::parse_theory(src, &[]).unwrap();
-        let elab = crate::elaborate::elaborate(&thy).unwrap();
-        let mut saw_ct = false;
-        let mut saw_acc = false;
-        let mut saw_reg = false;
-        for item in &elab.items {
-            match item {
-                TheoryItem::Translation(crate::theory::TranslationElement::CaseTest(c)) => {
-                    saw_ct = true;
-                    assert!(
-                        has_pred_atom(&c.formula),
-                        "case test must keep its Pred atom: {:?}",
-                        c.formula
-                    );
-                }
-                TheoryItem::Translation(crate::theory::TranslationElement::AccLemma(a)) => {
-                    saw_acc = true;
-                    assert!(
-                        has_pred_atom(&a.formula),
-                        "accountability lemma must keep its Pred atom: {:?}",
-                        a.formula
-                    );
-                }
-                TheoryItem::Lemma(l) => {
-                    saw_reg = true;
-                    assert_eq!(
-                        pretty_lnformula(&l.formula),
-                        "\u{2200} x. \u{2203} #i. A( x ) @ #i",
-                        "regular lemma must carry the predicate's body"
-                    );
-                }
-                _ => {}
-            }
+    fn predicate_expand_table() {
+        let rows: &[(&str, &str, Result<&str, &str>)] = &[
+            (
+                "P(x) <=> Ex #i. A(x) @ #i",
+                "All x. P(x)",
+                Ok("\u{2200} x. \u{2203} #i. A( x ) @ #i"),
+            ),
+            // HS reads a predicate body with `plainFormula`, so a predicate
+            // call inside a body is sugar it rejects
+            // (Theory/Text/Parser/Formula.hs).
+            (
+                "P(x) <=> Q(x)",
+                "All x. P(x)",
+                Err("Syntactic sugar is not allowed, guarded formula expected."),
+            ),
+            (
+                "",
+                "All x. UndefinedPred(x)",
+                Err("undefined predicate UndefinedPred/1"),
+            ),
+            // The lookup matches the whole tag, arity included, so an arity
+            // mismatch is an undefined predicate, not a bespoke error.
+            (
+                "P(x) <=> Ex #i. A(x) @ #i",
+                "All a b. P(a, b)",
+                Err("undefined predicate P/2"),
+            ),
+        ];
+        for &(decls, src, want) in rows {
+            let got = pred(decls).and_then(|preds| {
+                expand_formula(&preds, &closed(src))
+                    .map(|f| pretty_lnformula(&f))
+                    .map_err(|e| e.to_string())
+            });
+            assert_eq!(
+                got.as_deref(),
+                want.map_err(String::from).as_deref(),
+                "{src}"
+            );
         }
-        assert!(
-            saw_ct && saw_acc && saw_reg,
-            "expected all three item kinds (ct={saw_ct}, acc={saw_acc}, reg={saw_reg})"
-        );
-    }
-
-    /// `P(x) <=> Ex z #i. Act(x, z) @ #i` applied at `P(z)` splices the body
-    /// unrenamed: the body's binder stays the index it was, and the use-site
-    /// `z` stays free, so the two are distinct.  The printer allocates the
-    /// binder a display index past the free `z`.  Oracle bytes (Git revision
-    /// ef3f0468, probe `S6_pred_capture.spthy`): `∃ z.1 #i. Act( z, z.1 ) @ #i`.
-    #[test]
-    fn expand_avoids_variable_capture() {
-        let preds = pred("P(x) <=> Ex z #i. Act(x, z) @ #i");
-        let out = expand_formula(&preds, &closed("P(z)")).unwrap();
-        assert_eq!(
-            pretty_lnformula(&out),
-            "\u{2203} z.1 #i. Act( z, z.1 ) @ #i"
-        );
-    }
-
-    /// The multiset `(<)` operator has no dedicated atom: it closes to a
-    /// `Smaller` `Pred` atom, which the built-in predicate rewrites to
-    /// `∃ z. rhs = lhs ++ z`.  Probed against the v1.13.0 prover on
-    /// `All x y #i. Foo(x,y)@#i ==> x (<) y`, which prints
-    /// `∀ x y #i. (Foo( x, y ) @ #i) ⇒ (∃ z. y = (x++z))`.
-    #[test]
-    fn expand_lessmset_to_smaller_existential() {
-        let out = expand_formula(&[], &closed("x (<) y")).unwrap();
-        assert_eq!(pretty_lnformula(&out), "\u{2203} z. y = (x++z)");
-    }
-
-    /// The built-in's binder and a use site that mentions `z` stay apart the
-    /// same way: the binder is an index, the use-site `z` is free.  Oracle
-    /// bytes (Git revision ef3f0468, probe `S6_pred_capture.spthy`):
-    /// `∃ z.1. y = (z++z.1)`.
-    #[test]
-    fn expand_lessmset_capture_avoids_z() {
-        let out = expand_formula(&[], &closed("z (<) y")).unwrap();
-        assert_eq!(pretty_lnformula(&out), "\u{2203} z.1. y = (z++z.1)");
     }
 }

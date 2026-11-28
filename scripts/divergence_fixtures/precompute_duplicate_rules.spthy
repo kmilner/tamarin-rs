@@ -1,0 +1,9 @@
+// Category: the `--precompute-only` statistics document.  Two identical
+// rules under one name count once among the multiset rewriting rules.  No
+// corpus theory repeats a rule.
+
+theory DuplicateCount begin
+rule R: [In(x)] --[A(x)]-> [Out(x)]
+rule R: [In(x)] --[A(x)]-> [Out(x)]
+lemma witness: exists-trace "Ex x #i. A(x)@i"
+end

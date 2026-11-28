@@ -16,62 +16,11 @@ use crate::lterm::{HasFrees, LVar};
 use tamarin_utils::fresh::{MonadFresh, PreciseFreshState};
 use tamarin_utils::FastMap;
 
-/// Binding-store key wrapping the bound `LVar`.
-///
-/// `Hash` delegates to `LVar`'s content-based derive, so two vars with equal
-/// *content* always hash to the same bucket even when their interned name
-/// pointers differ (a rare non-canonical literal name vs the pooled copy) —
-/// this is what keeps the dedup correct and the `--prove` output byte-identical.
-/// Only `Eq` is optimised, via [`lvar_fast_eq`] — same relation as `LVar`'s derive.
-#[derive(Clone, Debug)]
-struct VarKey(LVar);
-
-impl PartialEq for VarKey {
-    #[inline]
-    fn eq(&self, other: &Self) -> bool {
-        lvar_fast_eq(&self.0, &other.0)
-    }
-}
-impl Eq for VarKey {}
-impl std::hash::Hash for VarKey {
-    #[inline]
-    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.0.hash(state)
-    }
-}
-
-/// Exactly `LVar`'s content equality, faster: interned names share one
-/// canonical pointer (intern guarantees content-equal ⇒ pointer-equal), so a
-/// pointer+len match confirms the name without the byte compare; anything else
-/// falls back to the full content compare, so the relation is unchanged.
-#[inline]
-fn lvar_fast_eq(a: &LVar, b: &LVar) -> bool {
-    // Destructure without `..` so a new `LVar` field forces an equality decision
-    // here, keeping this fast path in step with `LVar`'s derived Eq.
-    let LVar {
-        name: a_name,
-        sort: a_sort,
-        idx: a_idx,
-    } = a;
-    let LVar {
-        name: b_name,
-        sort: b_sort,
-        idx: b_idx,
-    } = b;
-    // idx (u64) first — most discriminating, cheapest — then sort, so a
-    // hash-collision mismatch is rejected before the name is touched.
-    if a_idx != b_idx || a_sort != b_sort {
-        return false;
-    }
-    (std::ptr::eq(a_name.as_ptr(), b_name.as_ptr()) && a_name.len() == b_name.len())
-        || a_name == b_name
-}
-
-/// The store: keyed by [`VarKey`] (content hash, fast pointer eq).  Haskell's
-/// `Bindings` is a `Data.Map` (Control/Monad/Bind.hs); iteration order is
-/// never observed here — [`Bindings::iter`]'s only consumers build a `Subst`
-/// (a re-sorted `BTreeMap`) and a distinct-key substitution applied by lookup.
-type BindMap = FastMap<VarKey, LVar>;
+/// The store.  Haskell's `Bindings` is a `Data.Map` (Control/Monad/Bind.hs);
+/// iteration order is never observed here — [`Bindings::iter`]'s only
+/// consumers build a `Subst` (a re-sorted `BTreeMap`) and a distinct-key
+/// substitution applied by lookup.
+type BindMap = FastMap<LVar, LVar>;
 
 /// `Bindings LVar LVar` (Control/Monad/Bind.hs) — one binding per variable, allocated
 /// on first occurrence by [`Bindings::import`].
@@ -110,13 +59,7 @@ impl Bindings {
     /// first call for `v` draws an index from `fresh` under the hint `name` and
     /// binds `v` to it; later calls return that binding.
     fn import_named<M: MonadFresh>(&mut self, v: &LVar, name: &'static str, fresh: &mut M) -> LVar {
-        // `LVar` is `Copy`, so the probe key costs a register copy.  Its `eq`
-        // short-circuits on the interned name POINTER — skipping the byte-wise
-        // `str` compare — with a content fallback that keeps the equality
-        // RELATION exactly `LVar`'s.  The hash is content-based (see
-        // `VarKey`), so equal-content vars — even with different name
-        // pointers — dedup into one slot.
-        if let Some(bound) = self.map.get(&VarKey(*v)) {
+        if let Some(bound) = self.map.get(v) {
             return *bound;
         }
         let idx = fresh.fresh_ident(name);
@@ -130,7 +73,7 @@ impl Bindings {
             sort: v.sort,
             idx,
         };
-        self.map.insert(VarKey(*v), bound);
+        self.map.insert(*v, bound);
         bound
     }
 
@@ -138,15 +81,15 @@ impl Bindings {
     /// `k`.  Seeding `k -> k` is how a caller keeps a variable unchanged
     /// across [`some_inst`] (HS `keepVarBindings`).
     pub fn insert(&mut self, k: LVar, v: LVar) {
-        if !lvar_fast_eq(&k, &v) {
+        if k != v {
             self.changed = true;
         }
-        self.map.insert(VarKey(k), v);
+        self.map.insert(k, v);
     }
 
     /// `lookupBinding` (Control/Monad/Bind.hs).
     pub fn get(&self, v: &LVar) -> Option<LVar> {
-        self.map.get(&VarKey(*v)).copied()
+        self.map.get(v).copied()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -162,7 +105,7 @@ impl Bindings {
 
     /// Every `(bound variable, its binding)` pair, in the store's own order.
     pub fn iter(&self) -> impl Iterator<Item = (LVar, LVar)> + '_ {
-        self.map.iter().map(|(k, v)| (k.0, *v))
+        self.map.iter().map(|(k, v)| (*k, *v))
     }
 }
 

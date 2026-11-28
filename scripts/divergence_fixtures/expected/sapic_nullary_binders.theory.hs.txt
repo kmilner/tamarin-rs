@@ -1,0 +1,260 @@
+theory SapicNullaryBinders
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: c/0, fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+heuristic: p
+
+predicate: Eq( a, b )<=>a = b
+
+rule (modulo E) Init[color=#ffffff, process="|", issapicrule,
+                     role='Process']:
+   [ ] --[ Init( ) ]-> [ State_( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) p_0_[color=#ffffff, process="|", issapicrule,
+                     role='Process']:
+   [ State_( ) ] --> [ State_1( ), State_2( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) newc_0_1[color=#ffffff, process="new c.1;", issapicrule,
+                         role='Process']:
+   [ State_1( ), Fr( c.1 ) ] --> [ State_11( c.1 ) ]
+
+  /*
+  rule (modulo AC) newc_0_1[color=#ffffff, process="new c.1;", issapicrule,
+                            role='Process']:
+     [ State_1( ), Fr( c ) ] --> [ State_11( c ) ]
+  */
+
+restriction Restr_ifEqcx_0_11_1:
+  "∀ #NOW. (Restr_ifEqcx_0_11_1( ) @ #NOW) ⇒ (c = 'x')"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ #NOW. (Restr_ifEqcx_0_11_1( ) @ #NOW) ⇒ (c = 'x')"
+  */
+
+rule (modulo E) ifEqcx_0_11[color=#ffffff, process="if Eq( c, 'x' )",
+                            issapicrule, role='Process']:
+   [ State_11( c.1 ) ] --[ Restr_ifEqcx_0_11_1( ) ]-> [ State_111( c.1 ) ]
+
+  /*
+  rule (modulo AC) ifEqcx_0_11[color=#ffffff, process="if Eq( c, 'x' )",
+                               issapicrule, role='Process']:
+     [ State_11( c ) ] --[ Restr_ifEqcx_0_11_1( ) ]-> [ State_111( c ) ]
+  */
+
+restriction Restr_ifEqcx_1_11_1:
+  "∀ #NOW. (Restr_ifEqcx_1_11_1( ) @ #NOW) ⇒ (¬(c = 'x'))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ #NOW. (Restr_ifEqcx_1_11_1( ) @ #NOW) ⇒ (¬(c = 'x'))"
+  */
+
+rule (modulo E) ifEqcx_1_11[color=#ffffff, process="if Eq( c, 'x' )",
+                            issapicrule, role='Process']:
+   [ State_11( c.1 ) ] --[ Restr_ifEqcx_1_11_1( ) ]-> [ State_112( c.1 ) ]
+
+  /*
+  rule (modulo AC) ifEqcx_1_11[color=#ffffff, process="if Eq( c, 'x' )",
+                               issapicrule, role='Process']:
+     [ State_11( c ) ] --[ Restr_ifEqcx_1_11_1( ) ]-> [ State_112( c ) ]
+  */
+
+rule (modulo E) outyes_0_111[color=#ffffff, process="out('yes');",
+                             issapicrule, role='Process']:
+   [ State_111( c.1 ) ] --> [ State_1111( c.1 ), Out( 'yes' ) ]
+
+  /*
+  rule (modulo AC) outyes_0_111[color=#ffffff, process="out('yes');",
+                                issapicrule, role='Process']:
+     [ State_111( c ) ] --> [ State_1111( c ), Out( 'yes' ) ]
+  */
+
+rule (modulo E) p_0_1111[color=#ffffff, process="0", issapicrule,
+                         role='Process']:
+   [ State_1111( c.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_1111[color=#ffffff, process="0", issapicrule,
+                            role='Process']:
+     [ State_1111( c ) ] --> [ ]
+  */
+
+rule (modulo E) outno_0_112[color=#ffffff, process="out('no');",
+                            issapicrule, role='Process']:
+   [ State_112( c.1 ) ] --> [ State_1121( c.1 ), Out( 'no' ) ]
+
+  /*
+  rule (modulo AC) outno_0_112[color=#ffffff, process="out('no');",
+                               issapicrule, role='Process']:
+     [ State_112( c ) ] --> [ State_1121( c ), Out( 'no' ) ]
+  */
+
+rule (modulo E) p_0_1121[color=#ffffff, process="0", issapicrule,
+                         role='Process']:
+   [ State_1121( c.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_1121[color=#ffffff, process="0", issapicrule,
+                            role='Process']:
+     [ State_1121( c ) ] --> [ ]
+  */
+
+rule (modulo E) lookupkasc_0_2[color=#ffffff,
+                               process="lookup 'k' as c.2", no_derivcheck, issapicrule, role='Process']:
+   [ State_2( ) ] --[ IsIn( 'k', c.2 ) ]-> [ State_21( c.2 ) ]
+
+  /*
+  rule (modulo AC) lookupkasc_0_2[color=#ffffff,
+                                  process="lookup 'k' as c.2", no_derivcheck, issapicrule, role='Process']:
+     [ State_2( ) ] --[ IsIn( 'k', c ) ]-> [ State_21( c ) ]
+  */
+
+rule (modulo E) lookupkasc_1_2[color=#ffffff,
+                               process="lookup 'k' as c.2", no_derivcheck, issapicrule, role='Process']:
+   [ State_2( ) ] --[ IsNotSet( 'k' ) ]-> [ State_22( ) ]
+
+  /* has exactly the trivial AC variant */
+
+restriction Restr_ifEqcx_0_21_1:
+  "∀ #NOW. (Restr_ifEqcx_0_21_1( ) @ #NOW) ⇒ (c = 'x')"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ #NOW. (Restr_ifEqcx_0_21_1( ) @ #NOW) ⇒ (c = 'x')"
+  */
+
+rule (modulo E) ifEqcx_0_21[color=#ffffff, process="if Eq( c, 'x' )",
+                            issapicrule, role='Process']:
+   [ State_21( c.2 ) ] --[ Restr_ifEqcx_0_21_1( ) ]-> [ State_211( c.2 ) ]
+
+  /*
+  rule (modulo AC) ifEqcx_0_21[color=#ffffff, process="if Eq( c, 'x' )",
+                               issapicrule, role='Process']:
+     [ State_21( c ) ] --[ Restr_ifEqcx_0_21_1( ) ]-> [ State_211( c ) ]
+  */
+
+restriction Restr_ifEqcx_1_21_1:
+  "∀ #NOW. (Restr_ifEqcx_1_21_1( ) @ #NOW) ⇒ (¬(c = 'x'))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ #NOW. (Restr_ifEqcx_1_21_1( ) @ #NOW) ⇒ (¬(c = 'x'))"
+  */
+
+rule (modulo E) ifEqcx_1_21[color=#ffffff, process="if Eq( c, 'x' )",
+                            issapicrule, role='Process']:
+   [ State_21( c.2 ) ] --[ Restr_ifEqcx_1_21_1( ) ]-> [ State_212( c.2 ) ]
+
+  /*
+  rule (modulo AC) ifEqcx_1_21[color=#ffffff, process="if Eq( c, 'x' )",
+                               issapicrule, role='Process']:
+     [ State_21( c ) ] --[ Restr_ifEqcx_1_21_1( ) ]-> [ State_212( c ) ]
+  */
+
+rule (modulo E) outyes_0_211[color=#ffffff, process="out('yes');",
+                             issapicrule, role='Process']:
+   [ State_211( c.2 ) ] --> [ State_2111( c.2 ), Out( 'yes' ) ]
+
+  /*
+  rule (modulo AC) outyes_0_211[color=#ffffff, process="out('yes');",
+                                issapicrule, role='Process']:
+     [ State_211( c ) ] --> [ State_2111( c ), Out( 'yes' ) ]
+  */
+
+rule (modulo E) p_0_2111[color=#ffffff, process="0", issapicrule,
+                         role='Process']:
+   [ State_2111( c.2 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_2111[color=#ffffff, process="0", issapicrule,
+                            role='Process']:
+     [ State_2111( c ) ] --> [ ]
+  */
+
+rule (modulo E) outno_0_212[color=#ffffff, process="out('no');",
+                            issapicrule, role='Process']:
+   [ State_212( c.2 ) ] --> [ State_2121( c.2 ), Out( 'no' ) ]
+
+  /*
+  rule (modulo AC) outno_0_212[color=#ffffff, process="out('no');",
+                               issapicrule, role='Process']:
+     [ State_212( c ) ] --> [ State_2121( c ), Out( 'no' ) ]
+  */
+
+rule (modulo E) p_0_2121[color=#ffffff, process="0", issapicrule,
+                         role='Process']:
+   [ State_2121( c.2 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_2121[color=#ffffff, process="0", issapicrule,
+                            role='Process']:
+     [ State_2121( c ) ] --> [ ]
+  */
+
+rule (modulo E) outno_0_22[color=#ffffff, process="out('no');",
+                           issapicrule, role='Process']:
+   [ State_22( ) ] --> [ State_221( ), Out( 'no' ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) p_0_221[color=#ffffff, process="0", issapicrule,
+                        role='Process']:
+   [ State_221( ) ] --> [ ]
+
+  /* has exactly the trivial AC variant */
+
+restriction set_in:
+  "∀ x y #t3.
+    (IsIn( x, y ) @ #t3) ⇒
+    (∃ #t2.
+      ((Insert( x, y ) @ #t2) ∧ (#t2 < #t3)) ∧
+      (∀ #t1 yp.
+        (Insert( x, yp ) @ #t1) ⇒ (((#t1 < #t2) ∨ (#t1 = #t2)) ∨ (#t3 < #t1))))"
+
+  /*
+  expanded formula:
+  "∀ x y #t3.
+    (IsIn( x, y ) @ #t3) ⇒
+    (∃ #t2.
+      ((Insert( x, y ) @ #t2) ∧ (#t2 < #t3)) ∧
+      (∀ #t1 yp.
+        (Insert( x, yp ) @ #t1) ⇒ (((#t1 < #t2) ∨ (#t1 = #t2)) ∨ (#t3 < #t1))))"
+  */
+
+restriction set_notin:
+  "∀ x #t3.
+    (IsNotSet( x ) @ #t3) ⇒ (∀ #t1 y. (Insert( x, y ) @ #t1) ⇒ (#t3 < #t1))"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #t3.
+    (IsNotSet( x ) @ #t3) ⇒ (∀ #t1 y. (Insert( x, y ) @ #t1) ⇒ (#t3 < #t1))"
+  */
+
+restriction single_session:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  */
+
+
+
+end

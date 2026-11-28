@@ -1,0 +1,38 @@
+// Category: the multiplication-restriction report (`multRestrictedReport'`,
+// Theory/Tools/Wellformedness.hs) beyond the two single triggers that
+// mult_restricted_report pins.
+//
+//   - Both: one rule trips both triggers, so its entry lists the products
+//     AND the rhs-only variables back to back, and the unsupported-product
+//     report follows;
+//   - RFresh / RPub / RShared: rhs-only variables drop public sorts, and a
+//     repeated reducible premise term shares ONE abstraction (`x.1`);
+//   - Attrs: the attribute block renders in HS field order and wraps under
+//     the rule header;
+//   - the process: a generated rule's `process=` attribute renders from the
+//     translated process.
+// Products outside exponents abort a plain load, so the row runs under
+// -m=msr, which only warns.  No corpus rule is mult-unrestricted.
+
+theory WfMultRestricted
+begin
+
+builtins: diffie-hellman
+
+rule Both:
+  [ In( fst(x) ), Fr(~a), Fr(~b) ] --[ Go( x ) ]-> [ Out( <x, (~a*~b)> ) ]
+
+rule RFresh: [ In( fst(~x) ) ] --[ Go( 'a' ) ]-> [ Out( ~x ) ]
+
+rule RPub: [ In( fst($p) ) ] --[ Go( 'b' ) ]-> [ Out( $p ) ]
+
+rule RShared:
+  [ In( fst(z) ), In( fst(z) ), In( snd(w) ) ] --[ Go( 'c' ) ]-> [ Out( <z, w> ) ]
+
+rule Attrs [color=Ff00Aa, no_derivcheck, role='Alice', issapicrule]:
+  [ In( fst(x) ) ] --[ Go( x ) ]-> [ Out( x ) ]
+
+process:
+  [ In( fst(x) ) ] --[ Go( x ) ]-> [ Out( x ) ]
+
+end

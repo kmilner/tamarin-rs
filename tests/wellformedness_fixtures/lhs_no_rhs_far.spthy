@@ -1,0 +1,11 @@
+// Fixture: triggers `Facts occur in the left-hand-side but not in any
+// right-hand-side`.  The only rhs fact is past edit distance three, so the
+// entry carries no suggestion.
+theory LhsNoRhsFar
+begin
+
+rule A: [ Abc(x) ] --[ ]-> [ ]
+
+rule B: [ ] --[ ]-> [ Abcdefg(x) ]
+
+end

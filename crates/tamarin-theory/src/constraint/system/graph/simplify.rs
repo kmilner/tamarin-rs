@@ -53,55 +53,40 @@ pub fn compress_system(mut sys: RenderSystem) -> RenderSystem {
 
 /// Drop `LessAtom`s that are implied by the edge relation.
 fn drop_entailed_ord_constraints(mut sys: RenderSystem) -> RenderSystem {
-    // Build adjacency from `rawEdgeRel` = edges ++ unsolvedChains
-    // (Simplification.hs / System.hs).
-    let adj = build_raw_edge_adjacency(&sys);
-    // HS `entailed (LessAtom from to _) = to `S.member` reachableSet [from] edges`
-    // (Simplification.hs).  `Dag.reachableSet [from]` ALWAYS
-    // contains the start node `from` itself (DAG/Simple.hs: `visit` inserts
-    // `x` before recursing), so a REFLEXIVE atom (`from == to`) is unconditionally
-    // entailed — hence dropped from the display graph.  `reachable` below is
-    // strict-path (returns false for `from == to`), so the reflexive case must be
-    // added explicitly to match HS; otherwise a `#t1 < #t1` born from a
-    // `#t1 < #t2` less-atom collapsed under a `t2 = t1` subst survives here and
-    // renders as a spurious dashed self-loop that HS never draws.
+    // HS `entailed (LessAtom from to _) = to `S.member` Dag.reachableSet [from]
+    // (rawEdgeRel se)` (Simplification.hs).  The reachable set contains
+    // `from` itself, so a reflexive atom `#t < #t` is always dropped.
+    let mut adj: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
+    for (from, to) in raw_edge_rel(&sys) {
+        adj.entry(from).or_default().push(to);
+    }
     sys.content_mut()
         .less_atoms
-        .retain(|la| la.smaller != la.larger && !reachable(&adj, &la.smaller, &la.larger));
+        .retain(|la| !reachable(&adj, &la.smaller, &la.larger));
     sys
 }
 
-/// Adjacency for `rawEdgeRel sys = edges ++ unsolvedChains sys`
-/// (System.hs).
-fn build_raw_edge_adjacency(sys: &System) -> BTreeMap<NodeId, Vec<NodeId>> {
-    let mut adj: BTreeMap<NodeId, Vec<NodeId>> = BTreeMap::new();
-    for e in &sys.edges {
-        adj.entry(e.src.0).or_default().push(e.tgt.0);
-    }
-    // `unsolvedChains` (System.hs) projected to node ids via
-    // `nodeConcNode *** nodePremNode`.
-    for (from, to) in sys.unsolved_chains() {
-        adj.entry(from.0).or_default().push(to.0);
-    }
-    adj
+/// HS `rawEdgeRel sys = edges ++ unsolvedChains sys` (System.hs), the
+/// chains projected to node ids via `nodeConcNode *** nodePremNode`.
+fn raw_edge_rel(sys: &System) -> impl Iterator<Item = (NodeId, NodeId)> + '_ {
+    sys.edges
+        .iter()
+        .map(|e| (e.src.0, e.tgt.0))
+        .chain(sys.unsolved_chains().map(|(from, to)| (from.0, to.0)))
 }
 
+/// `to ∈ Dag.reachableSet [from]` over `adj`; reflexive, as the reachable
+/// set includes its start node.
 fn reachable(adj: &BTreeMap<NodeId, Vec<NodeId>>, from: &NodeId, to: &NodeId) -> bool {
-    if from == to {
-        return false;
-    }
     let mut stack: Vec<NodeId> = vec![*from];
-    let mut visited: BTreeSet<NodeId> = BTreeSet::new();
-    visited.insert(*from);
+    let mut visited: BTreeSet<NodeId> = BTreeSet::from([*from]);
     while let Some(cur) = stack.pop() {
-        if let Some(nbrs) = adj.get(&cur) {
-            for nb in nbrs {
-                if nb == to {
-                    return true;
-                }
-                if visited.insert(*nb) {
-                    stack.push(*nb);
-                }
+        if cur == *to {
+            return true;
+        }
+        for nb in adj.get(&cur).into_iter().flatten() {
+            if visited.insert(*nb) {
+                stack.push(*nb);
             }
         }
     }
@@ -155,7 +140,7 @@ fn try_hide_action(v: &NodeId, sys: RenderSystem) -> Result<RenderSystem, Render
     // Collect KU action atoms at v.
     let ku_actions: Vec<(NodeId, crate::fact::LNFact)> = sys
         .unsolved_action_atoms()
-        .filter(|(n, fa)| n == v && matches!(fa.tag, FactTag::Ku) && !fa.terms.is_empty())
+        .filter(|(n, fa)| n == v && matches!(fa.tag, FactTag::Ku) && !fa.terms().is_empty())
         .map(|(n, fa)| (n, fa.clone()))
         .collect();
     if ku_actions.is_empty() {
@@ -164,7 +149,7 @@ fn try_hide_action(v: &NodeId, sys: RenderSystem) -> Result<RenderSystem, Render
     // All KU terms must be pair, inverse, pub, or nat — otherwise bail.
     if !ku_actions
         .iter()
-        .all(|(_, fa)| fa.terms.first().is_some_and(eligible_term))
+        .all(|(_, fa)| fa.terms().first().is_some_and(eligible_term))
     {
         return Err(sys);
     }
@@ -380,10 +365,7 @@ fn transitive_reduction(sys: RenderSystem, total_red: bool) -> RenderSystem {
         .iter()
         .map(|la| (la.smaller, la.larger))
         .collect();
-    for e in &sys.edges {
-        old_lesses.push((e.src.0, e.tgt.0));
-    }
-    old_lesses.extend(sys.unsolved_chains().map(|(from, to)| (from.0, to.0)));
+    old_lesses.extend(raw_edge_rel(&sys));
     // If there's a cycle in the combined graph we bail, matching Haskell's
     // `Dag.cyclic` guard (Simplification.hs).
     if tamarin_utils::dag::cyclic(&old_lesses) {

@@ -6,8 +6,8 @@ Commands below run from the repository root.
 
 ## Building
 
-Building requires Rust, Node.js (22.12+ or 24+), npm, Git, and Bash. The default
-installation workflow also uses Make.
+Building requires Rust 1.96 or later, Node.js (22.12+ or 24+), npm, Git, and Bash.
+The default installation workflow also uses Make.
 Maude is needed to run the prover. Graphviz (`dot`, or `--with-dot=/path/to/dot`)
 is needed for server-rendered SVG graphs; interactive graphs render in the browser.
 
@@ -122,7 +122,7 @@ tamarin-parser/         .spthy AST + lexer + parser + #include resolver
 tamarin-theory/         elaborator, wellformedness, constraint system, solver, simplify, sources, replay
 tamarin-sapic/          SAPiC process: frontend — translation to multiset-rewrite rules
 tamarin-accountability/ accountability frontend — case tests → VC lemmas
-tamarin-test-support/   maude resolution shared by every crate's maude-gated tests
+tamarin-test-support/   shared test helpers for Maude, Graphviz, corpus paths and oracle identity
 tamarin-server/         interactive HTTP server (Axum)
 tamarin-prover/         the binary: CLI parser + run dispatch
 ```
@@ -133,7 +133,6 @@ tamarin-prover/         the binary: CLI parser + run dispatch
 suites, including the server's asset and graph route tests. CI also runs a
 Chromium test that copies only the binary to a temporary installation and
 checks page loading and graph rendering from an unrelated working directory.
-
 
 The two headline parity tests compare against
 the branch's Haskell oracle and automatically fill/reuse its caches:

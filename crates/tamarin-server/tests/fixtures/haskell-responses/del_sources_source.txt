@@ -1,0 +1,28 @@
+theory SourceLemma
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+lemma goal:
+  all-traces "¬(∃ x #i. K( x ) @ #i)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ x #i. (K( x ) @ #i)"
+*/
+by sorry
+
+/* All wellformedness checks were successful. */
+
+/*
+Generated from:
+Tamarin version 1.13.0
+Maude version 3.5.1
+Git revision: a75fec7ff13cbfcbb0a67813afb16707e981c06e, branch: HEAD
+Compiled at: 2026-11-23 10:15:57.50640506 UTC
+*/
+
+end

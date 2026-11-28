@@ -1,0 +1,21 @@
+// Category: the Subterm Convergence Warning (`checkSubtermConvergence`,
+// Theory/Tools/Wellformedness.hs) and the `[convergent]` equation flag.
+//
+// The mirror of wf_convergent_last_regular: the `[convergent]` block comes
+// last, so the flag it sets suppresses the warning for the earlier
+// non-subterm-convergent `f(x) = g(x)` and the report is the success line.
+// The eight corpus theories that use `[convergent]` have a single equations
+// block.
+
+theory WfConvergentLastConvergent
+begin
+
+functions: f/1, g/1, a/0, b/0
+
+equations: f(x) = g(x)
+
+equations [convergent]: g(y) = a
+
+rule Test: [ ] --[ ]-> [ ]
+
+end

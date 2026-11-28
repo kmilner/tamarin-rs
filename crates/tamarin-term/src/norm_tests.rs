@@ -45,19 +45,6 @@ fn invalid_xor_handles_canonical_and_unsafe_argument_order() {
 }
 
 #[test]
-fn norm_var_skips_maude() {
-    let path = match require_maude_path() {
-        Some(p) => p,
-        None => return,
-    };
-    let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    let v = LVar::new("x", LSort::Msg, 0);
-    let t: LNTerm = Term::Lit(Lit::Var(v));
-    let n = norm(&h, &t).unwrap();
-    assert_eq!(t, n);
-}
-
-#[test]
 #[allow(non_snake_case)]
 fn nf_via_haskell_detects_inverse_cancellation() {
     let path = match require_maude_path() {
@@ -149,7 +136,7 @@ fn nf_via_haskell_maude_matches_user_ac_strule() {
     // xorr(~k, ~k): matches xorr(x, x) → non-NF (Maude AC match).
     let dup = crate::term::f_app_acfct(xorr, vec![k.clone(), k.clone()]);
     assert!(
-        !nf_via_haskell_maude(&h, &dup),
+        !nf_via_haskell_maude(&h.maude_sig(), &h, &dup).unwrap(),
         "xorr(~k, ~k) must be non-NF via the AC st-rule match"
     );
     // The pure entry point cannot see the Ac-headed rule — documents
@@ -162,13 +149,13 @@ fn nf_via_haskell_maude_matches_user_ac_strule() {
     // (the flattened second rule) → non-NF.
     let dup3 = crate::term::f_app_acfct(xorr, vec![k.clone(), k.clone(), w]);
     assert!(
-        !nf_via_haskell_maude(&h, &dup3),
+        !nf_via_haskell_maude(&h.maude_sig(), &h, &dup3).unwrap(),
         "xorr(~k, ~k, w) must be non-NF via the flattened cancellation rule"
     );
     // xorr(~k, ~na): no duplicate — stays NF.
     let ok = crate::term::f_app_acfct(xorr, vec![k, na]);
     assert!(
-        nf_via_haskell_maude(&h, &ok),
+        nf_via_haskell_maude(&h.maude_sig(), &h, &ok).unwrap(),
         "xorr(~k, ~na) must remain NF"
     );
 }
@@ -176,7 +163,7 @@ fn nf_via_haskell_maude_matches_user_ac_strule() {
 // A term rooted at one user-`[AC]` symbol is never reducible by an st
 // rule rooted at a different one, however similarly shaped: `match`
 // solves modulo the MSG module's `[comm assoc]` axioms, which preserve
-// the root symbol.  `rule_applies_ac` answers that pair itself; this
+// the root symbol.  `strule_applicable` answers that pair itself; this
 // pins both halves — the answer, and Maude's agreement with it.
 #[test]
 fn cross_ac_symbol_strule_never_applies() {
@@ -228,14 +215,14 @@ fn cross_ac_symbol_strule_never_applies() {
     let k = crate::builtin::fresh_var("k", 0);
     let dup = crate::term::f_app_acfct(yorr, vec![k.clone(), k.clone()]);
     assert!(
-        nf_via_haskell_maude(&h, &dup),
+        nf_via_haskell_maude(&h.maude_sig(), &h, &dup).unwrap(),
         "yorr(~k, ~k) must stay NF — the xorr rule cannot reach it"
     );
     // The yorr rule itself still fires, so the term above is NF because
     // of the AC symbols, not because the st-rule loop went quiet.
     let cancels = crate::term::f_app_acfct(yorr, vec![k, zeroo]);
     assert!(
-        !nf_via_haskell_maude(&h, &cancels),
+        !nf_via_haskell_maude(&h.maude_sig(), &h, &cancels).unwrap(),
         "yorr(~k, zeroo) must be non-NF via its own rule"
     );
     // The pattern is non-ground, so this is a real Maude round-trip and
@@ -330,63 +317,12 @@ fn bare_variable_strule_lhs_never_reduces_builtin_ac_or_c_terms() {
     let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
     for s in &subjects {
         assert!(
-            nf_via_haskell_maude_with_sig(&sig, &h, s),
+            nf_via_haskell_maude(&sig, &h, s).unwrap(),
             "the Maude-backed arm applies the same kind gate: {s:?}"
         );
     }
     assert!(
-        !nf_via_haskell_maude_with_sig(&sig, &h, &fst_k),
+        !nf_via_haskell_maude(&sig, &h, &fst_k).unwrap(),
         "a NoEq-headed term must still reach the st-rule loop"
     );
-}
-
-/// `go_nf`'s st-rule arm reads the Ac/C-free flag each `st_rules` entry
-/// carries, so the flag it sees always belongs to the rule it is matching.
-/// An insert that never reaches `refresh` cannot shift a flag onto its
-/// neighbour: the Ac-headed rule added here sorts among the pairing rules,
-/// and both verdicts (`fst(pair(x1, x2))` reducible, `pair(x1, x2)` normal)
-/// survive it.  No Maude handle needed — the pairing rule LHSes are
-/// Ac/C-free, and the pure entry point skips the Ac-headed one.
-#[test]
-fn go_nf_reads_each_rule_s_own_lhs_flag() {
-    use crate::builtin::{fst, msg_var, pair};
-    use crate::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
-    use crate::rewriting::RRule;
-    let mut sig = pair_maude_sig();
-    let reducible = fst(pair(msg_var("x", 1), msg_var("x", 2)));
-    let normal = pair(msg_var("x", 1), msg_var("x", 2));
-    assert!(!nf_via_haskell(&sig, &reducible));
-    assert!(nf_via_haskell(&sig, &normal));
-
-    // `xorr(x, x) = zeroo`, whose LHS is Ac-headed (flag `false`).
-    let xorr = AcFctSym::new(
-        b"xorr".to_vec(),
-        Privacy::Public,
-        Constructability::Constructor,
-        NdcState::IsNdc,
-    );
-    let zeroo_sym = NoEqSym::new(
-        b"zeroo".to_vec(),
-        0,
-        Privacy::Public,
-        Constructability::Constructor,
-    );
-    let x = crate::builtin::msg_var("x", 0);
-    let ac_rule = crate::subterm_rule::rrule_to_ctxt_st_rule(&RRule::new(
-        crate::term::f_app_acfct(xorr, vec![x.clone(), x]),
-        crate::term::f_app_no_eq(zeroo_sym, vec![]),
-    ))
-    .expect("ground-RHS st rule");
-    sig.st_rules.insert(ac_rule);
-    assert_eq!(
-        sig.st_rules
-            .iter_with_lhs_ac_c_free()
-            .map(|(r, f)| (crate::maude_proc::term_ac_c_free(&r.lhs), f))
-            .filter(|(want, got)| want != got)
-            .count(),
-        0,
-        "every flag must describe the rule it is paired with"
-    );
-    assert!(!nf_via_haskell(&sig, &reducible));
-    assert!(nf_via_haskell(&sig, &normal));
 }

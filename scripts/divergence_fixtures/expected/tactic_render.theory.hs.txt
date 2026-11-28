@@ -1,0 +1,65 @@
+theory TacticRender
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+tactic: helping
+presort: s
+prio: {id}
+  regex".*!K.\(\(.*~r0\.1.*" | regex".*!K.\(\(.*~r0.*" | regex".*!K.\(~r.*"
+tactic: boundaries
+presort: s
+prio: {id}
+  regex"nota | bnot c & d"
+tactic: quoted
+presort: s
+prio: {id}
+  regex"|""&""not"
+tactic: priodeprio
+presort: s
+prio: {id}
+  regex".*!Tag\(.*"
+deprio: {id}
+  regex".*TagK\(.*"
+tactic: presort_C
+presort: C
+prio: {id}
+  regex"a"
+tactic: presort_c
+presort: c
+prio: {id}
+  regex"a"
+tactic: presort_default
+presort: s
+prio: {id}
+  regex"a"
+tactic: unicode
+presort: C
+prio: {id}
+  regex"a" & regex"b"
+prio: {id}
+  regex"c" | regex"d"
+prio: {id}
+  not regex"e"
+tactic: rank
+presort: C
+prio: {id}
+  regex"Out"
+
+heuristic: s o "oracle" p {rank} O "./my-oracle" {.}
+
+lemma L:
+  exists-trace "⊤"
+/*
+guarded formula characterizing all satisfying traces:
+"⊤"
+*/
+by sorry
+
+
+
+end

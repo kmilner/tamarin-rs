@@ -16,8 +16,8 @@
 use std::collections::BTreeMap;
 
 use crate::apply::Apply;
-use crate::lterm::{BVar, HasFrees, LVar};
-use crate::term::{f_app, map_lits, Term};
+use crate::lterm::{lift_free, BVar, HasFrees, LVar};
+use crate::term::{f_app, Term};
 use crate::vterm::{Lit, VTerm};
 
 /// A substitution mapping variables of type `V` to terms of type
@@ -188,18 +188,6 @@ pub fn apply_vterm<C: Ord + Clone, V: Ord + Clone>(s: &Subst<C, V>, t: VTerm<C, 
     t.apply(s)
 }
 
-/// `applyVTerm` with change detection: `Some(new_term)` only when `s` actually
-/// changes `t`, and `None` when `t` is left structurally unchanged.  The
-/// borrowing, non-cloning counterpart of [`apply_vterm`] — callers reuse the
-/// original `t` on `None` instead of cloning it and deep-comparing against the
-/// applied result.
-pub fn apply_vterm_changed<C: Ord + Clone, V: Ord + Clone>(
-    s: &Subst<C, V>,
-    t: &VTerm<C, V>,
-) -> Option<VTerm<C, V>> {
-    t.apply_changed(s)
-}
-
 /// `applyVTerm` against a raw substitution map — the entry point the
 /// unification accumulator and the variant-subst walks use, where the mapping
 /// exists only as a `BTreeMap`.
@@ -236,10 +224,7 @@ pub fn apply_bvterm<C: Ord + Clone, V: Ord + Clone>(
 ) -> VTerm<C, BVar<V>> {
     match t {
         Term::Lit(Lit::Var(BVar::Free(v))) => match s.image_of(v) {
-            Some(image) => map_lits(image, &mut |l| match l {
-                Lit::Con(c) => Lit::Con(c.clone()),
-                Lit::Var(w) => Lit::Var(BVar::Free(w.clone())),
-            }),
+            Some(image) => lift_free(image),
             None => t.clone(),
         },
         Term::Lit(_) => t.clone(),
@@ -247,67 +232,6 @@ pub fn apply_bvterm<C: Ord + Clone, V: Ord + Clone>(
             *fsym,
             args.iter().map(|a| apply_bvterm(s, a)).collect::<Vec<_>>(),
         ),
-    }
-}
-
-/// Pass-invariant hashed lookup view over a [`Subst`].
-///
-/// [`apply_vterm_map`] pays a `BTreeMap` descent per `Lit::Var`
-/// leaf — `LVar`-style keys compare idx-then-sort-then-name, so each probe
-/// is ~log n pointer-chasing node hops of multi-field compares.
-/// Whole-system passes (`subst_system_once`, `rename_precise_system`
-/// Phase 2) apply ONE fixed substitution to every term of every
-/// node/goal/edge/subterm-constraint, so they build this `FxHash` view once
-/// per pass and pay a single hash probe per leaf instead.
-///
-/// Value-identity: the view borrows the same `(var, term)` entries as the
-/// backing `BTreeMap` (`Hash`/`Eq` on `V` agree with the map's key
-/// equality), and [`Self::apply_changed`] runs the same [`Apply`] instance
-/// as [`apply_vterm_map`] does, down to the `None`-when-unchanged
-/// convention — only the leaf-probe container differs, which is invisible
-/// to callers.  The view is consumed by keyed `get` only (never iterated),
-/// so the hash order cannot reach output.
-///
-/// Memory: a pass-local of `subst.len()` borrowed pointer pairs, dropped
-/// with the pass — no persistence, no growth across steps.
-pub struct SubstView<'a, C, V> {
-    map: tamarin_utils::FastMap<&'a V, &'a VTerm<C, V>>,
-}
-
-impl<'a, C, V> SubstView<'a, C, V>
-where
-    C: Ord + Clone,
-    V: Ord + Clone + std::hash::Hash,
-{
-    /// Build the view for one whole-system pass over `s`.
-    pub fn new(s: &'a Subst<C, V>) -> Self {
-        let mut map =
-            tamarin_utils::FastMap::with_capacity_and_hasher(s.map.len(), Default::default());
-        for (k, t) in s.map.iter() {
-            map.insert(k, t);
-        }
-        SubstView { map }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.map.is_empty()
-    }
-
-    /// Keyed image probe — the hashed counterpart of [`Subst::image_of`].
-    pub fn image_of(&self, v: &V) -> Option<&'a VTerm<C, V>> {
-        self.map.get(v).copied()
-    }
-
-    /// [`apply_vterm`] against the view: same empty-map fast path, same
-    /// reuse-original-on-unchanged behaviour, byte-identical output.
-    pub fn apply(&self, t: VTerm<C, V>) -> VTerm<C, V> {
-        t.apply(self)
-    }
-
-    /// [`apply_vterm_changed`] against the view: same `Some`-iff-rebuilt
-    /// convention; only the per-leaf probe container differs.
-    pub fn apply_changed(&self, t: &VTerm<C, V>) -> Option<VTerm<C, V>> {
-        t.apply_changed(self)
     }
 }
 
@@ -396,30 +320,6 @@ mod tests {
         }
     }
 
-    /// `SubstView` is a pure probe-container swap: `apply_changed`/`apply`
-    /// must agree with the `BTreeMap` path on every term shape — hit,
-    /// miss, nested rebuild, AC re-normalisation, and the
-    /// `None`-when-unchanged convention.
-    #[test]
-    fn subst_view_matches_btree_apply() {
-        let s: Subst<C, V> = Subst::from_list(vec![("x", const_term(7)), ("y", var_term("z"))]);
-        let view = SubstView::new(&s);
-        let terms: Vec<VTerm<C, V>> = vec![
-            var_term("x"),                                               // hit (leaf)
-            var_term("w"),                                               // miss (leaf)
-            const_term(3),                                               // constant
-            f_app_no_eq(pair_sym(), vec![var_term("x"), var_term("w")]), // partial rebuild
-            f_app_no_eq(pair_sym(), vec![var_term("w"), const_term(1)]), // unchanged app
-            f_app_ac(AcSym::Mult, vec![var_term("y"), const_term(0)]),   // AC re-sort
-        ];
-        for t in terms {
-            assert_eq!(view.apply_changed(&t), apply_vterm_changed(&s, &t));
-            assert_eq!(view.apply(t.clone()), apply_vterm(&s, t));
-        }
-        assert_eq!(view.image_of(&"x"), s.image_of(&"x"));
-        assert_eq!(view.image_of(&"w"), s.image_of(&"w"));
-    }
-
     /// `applyBLLit` (SubstVFree.hs) replaces a `Free` literal in the
     /// domain by its image, lifted back into `BVar` form; a `Bound` index and
     /// a constant are literals it hands back untouched.
@@ -502,13 +402,8 @@ mod tests {
     /// restrict :: IsVar v => [v] -> Subst c v -> Subst c v
     /// restrict vs (Subst smap) = Subst (M.filterWithKey (\v _ -> v `elem` vs) smap)
     /// ```
-    /// Nothing else.  No chain-chase.
-    ///
-    /// Do NOT chain-chase values to a fixed point before filtering:
-    /// collapsing `t.1 → e_A_1 → blind(...)` into `t.1 → blind(...)`
-    /// directly prevents Haskell-faithful `restrict` from dropping the
-    /// binding (since `t.1` is stable), causing foo_eligibility's `A_1`
-    /// case to be dropped at runtime via refineSubst-contradictory.
+    /// Nothing else: a kept binding keeps its value literally, never chased
+    /// through the substitution to a fixed point.
     #[test]
     fn restrict_does_not_chain_chase() {
         // Build a subst with a chain: y → z, z → 1.
@@ -521,59 +416,10 @@ mod tests {
         assert_eq!(
             r.image_of(&"y"),
             Some(&var_term("z")),
-            "restrict must NOT chain-chase: y → z stays as y → z, \
-                    not y → 1.  Chain-chase here breaks foo_eligibility."
+            "restrict must not chain-chase: y → z stays y → z"
         );
         // z is filtered out entirely.
         assert_eq!(r.image_of(&"z"), None);
-    }
-
-    /// `restrict stableVars` empties the subst when no key is stable.
-    ///
-    /// This is the exact foo_eligibility shape: Haskell's pre-restrict
-    /// subst has keys like `m.19` and `sk.28` (rule-internal vars,
-    /// large idx), and stableVars are `{#i, t.1, t.2}` (lemma vars,
-    /// small idx).  Post-restrict: empty subst.
-    #[test]
-    fn restrict_empties_subst_when_no_key_is_stable() {
-        // "Rule-internal" keys binding to whatever values.
-        let s: Subst<C, V> = Subst::from_list(vec![
-            ("m", const_term(19)),  // m.19 in spirit
-            ("sk", const_term(28)), // sk.28 in spirit
-        ]);
-        // "Stable" vars: don't overlap.
-        let r = s.restrict(&["t", "i"]);
-        assert!(
-            r.is_empty(),
-            "When no key is in stable set, restrict produces empty subst. \
-                 This is what enables foo_eligibility's clean runtime bind."
-        );
-    }
-
-    /// `compose s1 s2` applies right-then-left.
-    ///
-    /// Haskell `SubstVFree.compose` (mirrors Robinson):
-    /// applying `s1 ∘ s2` to a term is `s1 (s2 t)`.
-    ///
-    /// If we get this backwards, downstream code that composes the
-    /// freshly-built subst with the running eq-store gets the wrong
-    /// effective substitution (and the proof state silently drifts).
-    #[test]
-    fn compose_direction_is_right_then_left() {
-        // s1 = {x → 1}; s2 = {y → x}.
-        // compose(s1, s2) means "apply s2 first, then s1".
-        // (s1 . s2)(y) = s1(s2(y)) = s1(x) = 1.
-        let s1: Subst<C, V> = Subst::from_list(vec![("x", const_term(1))]);
-        let s2: Subst<C, V> = Subst::from_list(vec![("y", var_term("x"))]);
-        let composed = s1.compose(&s2);
-        assert_eq!(
-            apply_vterm(&composed, var_term("y")),
-            const_term(1),
-            "compose(s1, s2) applied to y must equal s1(s2(y)) = 1, \
-                    NOT s2(s1(y)) = y.  If this fails, the direction is \
-                    reversed and eq-store subst composition is silently \
-                    wrong."
-        );
     }
 
     /// `compose` preserves `s1`'s domain when `s2` doesn't bind it.

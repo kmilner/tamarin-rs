@@ -1,0 +1,43 @@
+// Category: SAPIC translation corners that no corpus process reaches.
+//
+// One parallel branch per corner:
+//   - a condition quantifying a timepoint binds it (`Ex #j. Foo(x) @ #j`);
+//   - a `let` feeding an `@` location substitutes the compound term;
+//   - a `let` feeding an embedded MSR substitutes into its `_restrict`;
+//   - `report(..)` under another unary function, and inside a condition,
+//     is rewritten under its location (upstream #922);
+//   - a call substitutes a compound term into its definition's location;
+//   - a call with too many arguments truncates like `zip`;
+//   - a user AC term inside an embedded `_restrict` prints infix, flattened;
+//   - embedded MSR facts keep their `[+]`/`[no_precomp]` annotations;
+//   - the all-traces `<=>` lemma follows HS's fixity for the `in_event`
+//     restriction.
+// The corpus processes never combine these with locations, lets or calls.
+
+theory SapicProcessCorners
+begin
+
+builtins: locations-report
+
+functions: f/1, h/1, add/2 [AC]
+
+predicates: Report(x, y) <=> not (y = 'loc')
+
+let P(l) = (out('payload'))@l
+
+let Q(x) = out(x)
+
+process:
+  ( in(x); if Ex #j. Foo(x) @ #j then 0 )
+  || ( let hloc = <'site', 'device'> in (out('payload'))@hloc )
+  || ( let hh = 't' in [ ] --[ Ev(hh), _restrict(hh = 'b') ]-> [ ] )
+  || ( (out(h(report('c'))))@'loc' )
+  || ( (if report('c') = report('c') then 0)@'loc' )
+  || P(<'loc', 'a'>)
+  || Q('a', 'b')
+  || ( new k; [ ] --[ Ev2(add(k, 'a')), _restrict(add(k, 'a') = k) ]-> [ ] )
+  || ( in(x5); [ St(x5)[+] ] --[ Ev3(x5)[no_precomp] ]-> [ Out(x5) ] )
+
+lemma weird: all-traces "(Ex #i. A() @ #i) <=> (Ex #j. K('a') @ #j)"
+
+end

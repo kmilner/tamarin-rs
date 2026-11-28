@@ -1,0 +1,9 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// A call to a process defined later: `process not defined`.
+// No corpus theory fails this way.
+
+theory ProcessForwardCall begin
+process: P
+let P = out('too-late')
+end

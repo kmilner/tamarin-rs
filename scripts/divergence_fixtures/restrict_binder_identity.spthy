@@ -1,0 +1,19 @@
+// Category: embedded `_restrict` formulas of ordinary rules.
+//
+// The abstraction of a restriction's free terms keys a binder on the whole
+// variable, sort included: in `All #i. A(i) @ #i` the message `i` is a
+// different variable from the node `#i` and is abstracted, while in
+// `All x:msg #i. A(x) @ #i` nothing is free.  s6_restrict_action_timepoint
+// and s6_restrict_free_ac pin other abstraction shapes; no corpus rule
+// reuses a binder's name at another sort.
+
+theory RestrictBinderIdentity
+begin
+
+rule Mixed:
+  [ In(i) ] --[ A(i), _restrict(All #i. A(i) @ #i) ]-> [ ]
+
+rule Bound:
+  [ In(x) ] --[ A(x), _restrict(All x:msg #i. A(x) @ #i) ]-> [ ]
+
+end

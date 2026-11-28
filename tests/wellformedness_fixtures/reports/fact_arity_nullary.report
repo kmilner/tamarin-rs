@@ -1,0 +1,27 @@
+# source: oracle a75fec7f, --derivcheck-timeout=0
+/*
+WARNING: the following wellformedness checks failed!
+
+Fact arity issues
+=================
+
+Same fact is used with different arities, i.e., Fact('A','B') is different from Fact('A'). 
+Check the arguments of your facts.
+  
+
+  Fact `a':
+
+    1. Rule `R1', arity 0
+         A( )
+    
+    2. Rule `R2', arity 1
+         A( x )
+  
+
+Facts occur in the left-hand-side but not in any right-hand-side 
+=================================================================
+
+  1. in rule "R1":  factName `A' arity: 0 multiplicity: Linear
+  
+  2. in rule "R2":  factName `A' arity: 1 multiplicity: Linear
+*/

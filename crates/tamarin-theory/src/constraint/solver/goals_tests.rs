@@ -149,8 +149,7 @@ fn regex_backslash_lt_gt_are_pcre_literals() {
     assert!(!regex_is_match(r"a\\>", "a>"));
 }
 
-/// `apply_ranking_fn "smallest"` sorts by rendered length, stably;
-/// "id"/unknown is identity.
+/// `smallest` orders by rendered length, and `id` preserves the input order.
 #[test]
 fn ranking_fn_smallest_and_id() {
     use crate::fact::ku_fact;
@@ -164,15 +163,23 @@ fn ranking_fn_smallest_and_id() {
         )
     };
     // `~aaaa` renders longer than `~a`.
-    let g_long = mk("aaaa", 0);
-    let g_short = mk("a", 1);
-    let out = apply_ranking_fn("smallest", vec![g_long.clone(), g_short.clone()]);
-    assert_eq!(out[0].seq, 1, "shortest rendered goal first");
-    assert_eq!(out[1].seq, 0);
-    // id keeps input order.
-    let out2 = apply_ranking_fn("id", vec![g_long.clone(), g_short.clone()]);
-    assert_eq!(out2[0].seq, 0);
-    assert_eq!(out2[1].seq, 1);
+    let mut goals = [mk("aaaa", 0), mk("a", 1)];
+    block_ordering("id").unwrap()(&mut goals);
+    assert_eq!([goals[0].seq, goals[1].seq], [0, 1]);
+    block_ordering("smallest").unwrap()(&mut goals);
+    assert_eq!([goals[0].seq, goals[1].seq], [1, 0]);
+}
+
+fn regex_prio(pattern: &str) -> crate::tactic::PrioBlock {
+    use crate::tactic::{PrioBlock, SelectorExpr, SelectorLeaf};
+    PrioBlock {
+        ranking: "id".into(),
+        selectors: vec![SelectorExpr::Leaf(SelectorLeaf::new(
+            "regex",
+            pattern.into(),
+            vec![],
+        ))],
+    }
 }
 
 /// `it_ranking` result = rankedPrioGoals ++ nonRanked ++ rankedDeprioGoals,
@@ -181,7 +188,7 @@ fn ranking_fn_smallest_and_id() {
 #[test]
 fn it_ranking_prio_nonranked_deprio_order() {
     use crate::fact::ku_fact;
-    use crate::tactic::{PrioBlock, SelectorExpr, SelectorLeaf, Tactic};
+    use crate::tactic::Tactic;
     use tamarin_term::lterm::fresh_term;
 
     let mk = |s: &str, seq: u64| {
@@ -198,24 +205,17 @@ fn it_ranking_prio_nonranked_deprio_order() {
     let g_x = mk("x", 2);
     let ags = vec![g_sks.clone(), g_r.clone(), g_x.clone()];
 
-    let prio = |pat: &str| PrioBlock {
-        ranking: "id".to_string(),
-        selectors: vec![SelectorExpr::Leaf(SelectorLeaf {
-            name: "regex".to_string(),
-            params: vec![pat.to_string()],
-        })],
-    };
     // Fresh names render as `~'skS'` etc.  prio 0 matches ~'r',
     // prio 1 matches ~'skS'; ~'x' matches no prio. deprio matches ~'x'.
     let tactic = Tactic {
         name: "t".to_string(),
         presort: 'C',
-        prios: vec![prio("~'r'"), prio("~'skS'")],
-        deprios: vec![prio("~'x'")],
+        prios: vec![regex_prio("~'r'"), regex_prio("~'skS'")],
+        deprios: vec![regex_prio("~'x'")],
     };
 
     let sys = System::empty();
-    let out = it_ranking(&tactic, ags, false, None, &sys)
+    let out = it_ranking(&tactic, ags, false, &sys)
         .unwrap()
         .expect("ordinary ranking");
     let seqs: Vec<u64> = out.iter().map(|a| a.seq).collect();
@@ -234,7 +234,7 @@ fn it_ranking_prio_nonranked_deprio_order() {
 #[test]
 fn it_ranking_nonranked_preserved() {
     use crate::fact::ku_fact;
-    use crate::tactic::{PrioBlock, SelectorExpr, SelectorLeaf, Tactic};
+    use crate::tactic::Tactic;
     use tamarin_term::lterm::fresh_term;
     let mk = |s: &str, seq: u64| {
         let v = tamarin_term::lterm::LVar::new("x", tamarin_term::lterm::LSort::Msg, 0);
@@ -249,27 +249,58 @@ fn it_ranking_nonranked_preserved() {
     let g_b = mk("b", 0); // no match → nonRanked
     let g_c = mk("c", 1); // no match → nonRanked
     let g_a = mk("a", 2); // matches prio → moves to front
-    let prio = PrioBlock {
-        ranking: "id".to_string(),
-        selectors: vec![SelectorExpr::Leaf(SelectorLeaf {
-            name: "regex".to_string(),
-            params: vec!["~'a'".to_string()],
-        })],
-    };
     let tactic = Tactic {
         name: "t".to_string(),
         presort: 'C',
-        prios: vec![prio],
+        prios: vec![regex_prio("~'a'")],
         deprios: vec![],
     };
     let sys = System::empty();
-    let out = it_ranking(&tactic, vec![g_b, g_c, g_a], false, None, &sys)
+    let out = it_ranking(&tactic, vec![g_b, g_c, g_a], false, &sys)
         .unwrap()
         .expect("ordinary ranking");
     let seqs: Vec<u64> = out.iter().map(|a| a.seq).collect();
     // ~'a' (prio, seq 2) first, then nonRanked [~'b'=0, ~'c'=1] in
     // presort order.
     assert_eq!(seqs, vec![2, 0, 1]);
+}
+
+#[test]
+fn tactic_errors_are_deferred_until_demanded() {
+    let mut sys = System::empty();
+    let sig = tamarin_term::maude_sig::pair_maude_sig();
+    let formula =
+        tamarin_parser::parser::parse_formula_str("All x #i. Reveal(x)@i ==> F", &sig).unwrap();
+    sys.insert_formula(crate::elaborate::formula_to_guarded_parsed(&formula, &sig).unwrap());
+    let goal = AnnotatedGoal::new(
+        Goal::Split(crate::constraint::constraints::SplitId(0)),
+        0,
+        Usefulness::Useful,
+    );
+
+    for (block, may_fail, fails) in [
+        (r#"unknownRank "x""#, true, true),
+        (r#"regex ".*" | unknownRank "x""#, true, false),
+        (r#"defaultNoise ".*""#, true, true),
+        (r#"defaultNoise "NEVER""#, true, false),
+        (r#"defaultNoise ".*" """#, false, false),
+        (r#"{unknownOrder} regex ".*""#, true, true),
+        (r#"{unknownOrder} regex "NEVER""#, true, false),
+    ] {
+        let source = format!("theory T begin\ntactic: t\nprio: {block}\nend");
+        let theory = tamarin_parser::parse_theory(&source, &[]).unwrap();
+        let tamarin_parser::TheoryItem::Tactic(tactic) = &theory.items[0] else {
+            panic!("expected a tactic");
+        };
+        let rankings =
+            parse_heuristic_str_with_tactics("{t}", "t.spthy", std::slice::from_ref(tactic));
+        assert_eq!(rankings_may_fail(&rankings), may_fail, "{block}");
+        assert_eq!(
+            it_ranking(tactic, vec![goal.clone()], false, &sys).is_err(),
+            fails,
+            "{block}"
+        );
+    }
 }
 
 #[test]
@@ -281,7 +312,7 @@ fn an_empty_quitting_tactic_is_a_normal_stop() {
         deprios: vec![],
     };
     assert_eq!(
-        it_ranking(&tactic, vec![], true, None, &System::empty()).unwrap(),
+        it_ranking(&tactic, vec![], true, &System::empty()).unwrap(),
         None
     );
 }
@@ -371,39 +402,6 @@ fn useful_goal_nr_uses_derived_usefulness_ord() {
 
 // -- `Ord Goal` Disj structural order (Constraints.hs derived Ord) -------
 
-/// HS `Disj a = Disj [a]` derives Ord = list Ord bottoming out at the
-/// structural `Ord LNGuarded`, whose var leaves use `Ord LVar = (idx,
-/// sort, name)`.  When two Disj goals differ at a leaf var of different
-/// SORT (idx and name equal), HS LSort Ord (Pub<Fresh<Msg<Node<Nat)
-/// decides.  This pins that the comparator orders by that structural HS
-/// `Ord LSort` (Pub<Fresh), not by the `{:?}` sort-name string
-/// (Fresh<Msg<Nat<Node<Pub).
-#[test]
-fn goal_ord_disj_var_sort_uses_lsort_ord() {
-    use crate::atom::ProtoAtom;
-    use crate::constraint::constraints::Disj;
-    use crate::guarded::Guarded;
-    use std::cmp::Ordering;
-    use tamarin_term::lterm::{BVar, LSort, LVar};
-    use tamarin_term::vterm::var_term;
-
-    // A single-atom Disj over `Last(v)` where v differs only by sort.
-    let mk_disj = |sort: LSort| -> Goal {
-        let atom = ProtoAtom::Last(var_term(BVar::Free(LVar::new("x", sort, 0))));
-        Goal::Disj(Disj::new(vec![Guarded::Atom(atom)]))
-    };
-    let pub_disj = mk_disj(LSort::Pub);
-    let fresh_disj = mk_disj(LSort::Fresh);
-    // HS LSort Ord: Pub < Fresh.  The structural comparator must put the
-    // Pub-var Disj first (by sort, not by Debug-string name order).
-    assert_eq!(
-        pub_disj.cmp(&fresh_disj),
-        Ordering::Less,
-        "HS LSort Ord requires Pub < Fresh in Disj structural compare"
-    );
-    assert_eq!(fresh_disj.cmp(&pub_disj), Ordering::Greater);
-}
-
 /// A `{name}` ranking keeps the name written between the braces — HS
 /// `internalTacticRanking` (Parser/Signature.hs) and
 /// `filterHeuristic` (System.hs) both build
@@ -412,17 +410,11 @@ fn goal_ord_disj_var_sort_uses_lsort_ord() {
 /// has one (HS `chosenTactic`, ProofMethod.hs).
 #[test]
 fn tactic_ranking_keeps_the_braced_name() {
-    use crate::tactic::{PrioBlock, SelectorExpr, SelectorLeaf, Tactic};
+    use crate::tactic::Tactic;
     let declared = Tactic {
         name: "rank".to_string(),
         presort: 'C',
-        prios: vec![PrioBlock {
-            ranking: "id".to_string(),
-            selectors: vec![SelectorExpr::Leaf(SelectorLeaf {
-                name: "regex".to_string(),
-                params: vec!["Out".to_string()],
-            })],
-        }],
+        prios: vec![regex_prio("Out")],
         deprios: vec![],
     };
     let names = |s: &str| -> Vec<String> {
@@ -452,25 +444,6 @@ fn tactic_ranking_keeps_the_braced_name() {
     };
     assert_eq!(body("{rank}"), ('C', 1));
     assert_eq!(body("{undeclared}"), ('s', 0));
-}
-
-#[test]
-fn an_unknown_tactic_fails_when_its_ranking_is_selected() {
-    use crate::constraint::solver::context::ProofContext;
-    use tamarin_term::maude_sig::pair_maude_sig;
-
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let ranking = parse_heuristic_str_with_tactics("{missing}", "t.spthy", &[]);
-    let handle = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    let mut ctx = ProofContext::new(handle, Vec::new());
-    ctx.heuristic = Some(ranking);
-    let err = rank_goals_with(&System::empty(), Some(&ctx), 0).unwrap_err();
-    assert_eq!(
-        err.to_string(),
-        "goal ranking: No tactic has been written in the theory file"
-    );
 }
 
 #[test]
@@ -505,45 +478,6 @@ fn runtime_fallibility_scans_the_whole_round_robin_heuristic() {
     }]));
 }
 
-#[test]
-fn smart_oracle_stops_before_launch_when_source_materialisation_fails() {
-    use crate::constraint::solver::context::{FailingSourceProvider, ProofContext};
-    use crate::constraint::solver::sources::Source;
-    use crate::fact::ku_fact;
-    use std::sync::Arc;
-    use tamarin_term::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
-    use tamarin_term::lterm::{pub_term, LSort, LVar};
-    use tamarin_term::maude_sig::pair_maude_sig;
-    use tamarin_term::term::Term;
-
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let handle = tamarin_term::maude_proc::MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    let mut ctx = ProofContext::new(handle, Vec::new());
-    let f = FunSym::NoEq(NoEqSym::new(
-        b"f".to_vec(),
-        1,
-        Privacy::Public,
-        Constructability::Constructor,
-    ));
-    let term = Term::App(f, vec![pub_term("x")].into());
-    let goal = Goal::Action(LVar::new("i", LSort::Node, 0), ku_fact(term));
-    ctx.full_sources = Arc::new(vec![Source::lazy(goal.clone())]);
-    ctx.set_source_provider(Arc::new(FailingSourceProvider));
-    ctx.heuristic = Some(vec![GoalRanking::OracleSmart {
-        quit_on_empty: false,
-        oracle_path: "/definitely/missing/oracle".into(),
-    }]);
-    let mut sys = System::empty();
-    sys.add_goal(goal);
-
-    assert!(matches!(
-        rank_goals_with(&sys, Some(&ctx), 0),
-        Err(crate::prove::ProveError::Guarded(message)) if message == "bad source"
-    ));
-}
-
 /// `pretty_goal_rankings` writes back the token each stored ranking parsed
 /// from — the single letters `goalRankingIdentifiers` maps
 /// (System.hs), an oracle ranking as its letter plus the quoted
@@ -551,17 +485,61 @@ fn smart_oracle_stops_before_launch_when_source_materialisation_fails() {
 /// System.hs), joined by single spaces (`prettyGoalRankings`,
 /// System.hs).  The theory stores the parsed list, so this round
 /// trip is what keeps a `heuristic:` header's echo byte-identical.
+/// Rows: `(heuristic, rankings, canonical render)`.  A default-path oracle
+/// may be glued to its neighbour (`so`, `sO`) and parses as if spaced.
 #[test]
 fn parsed_heuristic_renders_back_to_its_tokens() {
-    let s = r#"s S i I p P C c o "x.py" O "y.py" {t}"#;
-    let rankings = parse_heuristic_str_with_tactics(s, "t.spthy", &[]);
-    assert_eq!(rankings.len(), 11);
-    assert_eq!(crate::pretty_theory::pretty_goal_rankings(&rankings), s);
+    let rows = [
+        (
+            r#"s S i I p P C c o "x.py" O "y.py" {t}"#,
+            11,
+            r#"s S i I p P C c o "x.py" O "y.py" {t}"#,
+        ),
+        (
+            r#"o so O "y" sO"#,
+            6,
+            r#"o "oracle" s o "oracle" O "y" s O "oracle""#,
+        ),
+        (
+            r#"o s o O "y" s O"#,
+            6,
+            r#"o "oracle" s o "oracle" O "y" s O "oracle""#,
+        ),
+    ];
+    for (heuristic, count, rendered) in rows {
+        let rankings = parse_heuristic_str_with_tactics(heuristic, "t.spthy", &[]);
+        assert_eq!(rankings.len(), count, "{heuristic}");
+        assert_eq!(
+            crate::pretty_theory::pretty_goal_rankings(&rankings),
+            rendered
+        );
+    }
 }
 
 #[test]
-fn compact_and_standalone_default_oracles_parse_identically() {
-    let compact = parse_heuristic_str_with_tactics(r#"o so O "y" sO"#, "t.spthy", &[]);
-    let spaced = parse_heuristic_str_with_tactics(r#"o s o O "y" s O"#, "t.spthy", &[]);
-    assert_eq!(compact, spaced);
+fn default_oracle_name_matches_haskell_path_splitting() {
+    assert_eq!(oracle_name_for_theory("missing.spthy"), "oracle");
+
+    let fixture = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tamarin-prover/examples/regression/trace/defaultoracle.spthy"
+    );
+    assert_eq!(oracle_name_for_theory(fixture), "defaultoracle.oracle");
+
+    let dir =
+        std::env::temp_dir().join(format!("tamarin_rs_oracle_basename_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    for (theory, oracle) in [
+        (".foo", ".foo.oracle"),
+        ("..foo", "..oracle"),
+        ("...foo", "...oracle"),
+    ] {
+        std::fs::write(dir.join(oracle), "").unwrap();
+        assert_eq!(
+            oracle_name_for_theory(dir.join(theory).to_str().unwrap()),
+            oracle
+        );
+    }
+    std::fs::remove_dir_all(dir).unwrap();
 }

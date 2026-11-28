@@ -1,0 +1,308 @@
+# The server-response table: one HTTP request per row, replayed against the
+# port by tests/server_responses.rs and against the pinned Haskell server by
+# tests/capture_haskell_fixtures.sh, which writes the captures under
+# haskell-responses/.  Add a row, re-run the capture, commit both.
+#
+# SERVE <theory> [config...]
+#   Start one fresh server with <theory> as theory index 1 (a bare name is a
+#   file of tests/fixtures/, anything else is workspace-relative).  The rows
+#   below it run against that server in file order, on both sides, so a
+#   stateful sequence replays identically.  Config tokens tweak only the
+#   port's harness: `maude=missing` points every proof session started after
+#   the load at a missing Maude.
+#
+# <method> <path> <status> <content-type> <compare> <capture>
+#   method   GET, POST, or UPLOAD:<file> (POST / with the file as the
+#            `uploadedTheory` form field; workspace-relative or absolute).
+#   status, content-type
+#            The port's answer, which the capture also checks against the
+#            oracle's (except for `diverge` rows; a `redirect` row only needs
+#            a 3xx from the oracle).  `-` leaves the content type unchecked.
+#   compare  bytes       the body, byte for byte
+#            load-stamp  the same, with the theory's load time and origin path
+#                        blanked (a capture run cannot share them)
+#            banner      the same, with the build values of the `Generated
+#                        from:` banner blanked (the port prints them empty)
+#            contains:<a>\n<b>  each line occurs in both bodies (where the
+#                        port's wording or framing differs by design)
+#            redirect    the Location header (the capture holds the oracle's)
+#            diverge     a documented divergence: the body must differ from
+#                        the oracle's
+#            diverge:<c> a documented divergence: the oracle answers something
+#                        else (checked at capture time), the port answers the
+#                        capture <c>
+#   capture  The file under haskell-responses/; `-` for none.  Several rows
+#            may name one capture: the capture script checks that the oracle
+#            answers each of them with the same bytes.
+
+# The read-only routes on one theory.
+SERVE	tamarin-prover/examples/regression/trace/issue193.spthy
+GET	/	200	text/html; charset=utf-8	load-stamp	index.html
+GET	/favicon.ico	308	-	redirect	favicon.txt
+GET	/robots.txt	200	text/plain; charset=utf-8	bytes	robots.txt
+# The port answers `invalidArgs`' widget without the `defaultLayout` frame.
+GET	/kill	400	text/html; charset=utf-8	contains:<h1>Invalid Arguments</h1>\n<li>No path to kill specified!</li>	kill.txt
+GET	/kill?path=foo	200	text/plain; charset=utf-8	bytes	kill_path.txt
+GET	/thy/trace/1/overview/help	200	text/html; charset=utf-8	load-stamp	overview_help.html
+# `PathPiece Int` reads a leading zero and a plus sign, and Yesod dispatches on
+# percent-decoded segments: all of these are theory 1.
+GET	/thy/trace/01/overview/help	200	text/html; charset=utf-8	load-stamp	overview_help.html
+GET	/thy/trace/+1/overview/help	200	text/html; charset=utf-8	load-stamp	overview_help.html
+GET	/thy/trace/%31/overview/help	200	text/html; charset=utf-8	load-stamp	overview_help.html
+GET	/thy/trace/%30%31/overview/help	200	text/html; charset=utf-8	load-stamp	overview_help.html
+GET	/thy/trace/%2B1/overview/help	200	text/html; charset=utf-8	load-stamp	overview_help.html
+GET	/thy/trace/1/main/help	200	application/json; charset=utf-8	load-stamp	main_help.json
+GET	/thy/trace/1/main/rules	200	application/json; charset=utf-8	bytes	main_rules.json
+GET	/thy/trace/1/main/message	200	application/json; charset=utf-8	bytes	main_message.json
+GET	/thy/trace/1/main/lemma/debug	200	application/json; charset=utf-8	bytes	main_lemma.json
+GET	/thy/trace/1/source	200	text/plain; charset=utf-8	banner	source.txt
+GET	/thy/trace/1/message	200	text/plain; charset=utf-8	banner	message.json
+GET	/thy/trace/1/download/x.spthy	200	application/octet-stream	banner	download.txt
+# `next`/`prev` walk the theory paths for the `normal` section only.
+GET	/thy/trace/1/next/main/lemma/debug	200	text/plain; charset=utf-8	bytes	next.txt
+GET	/thy/trace/1/prev/main/lemma/debug	200	text/plain; charset=utf-8	bytes	prev.txt
+GET	/thy/trace/1/next/main/help	200	text/plain; charset=utf-8	bytes	next_help.txt
+# `verify/lemma` falls through to the help view.
+GET	/thy/trace/1/verify/lemma/debug	200	application/json; charset=utf-8	load-stamp	verify.json
+# Alerts that allocate no theory.
+GET	/thy/trace/1/del/path/rules	200	application/json; charset=utf-8	bytes	del_path_bad.json
+GET	/thy/trace/1/del/path/lemma/notALemma	200	application/json; charset=utf-8	bytes	del_path_missing_lemma.json
+GET	/thy/trace/1/del/path/proof/debug/_missing	200	application/json; charset=utf-8	bytes	del_path_missing_step.json
+GET	/thy/trace/1/autoprove/idfs/0/False/rules	200	application/json; charset=utf-8	bytes	autoprove_on_rules.json
+GET	/thy/trace/1/autoprove/idfs/0/False/proof/notALemma	200	application/json; charset=utf-8	bytes	autoprove_unknown_lemma.json
+# Past the end of the ranked methods (two at the `debug` root) is the
+# "Sorry" alert.  A non-positive index passes upstream's `length methods >= i`
+# guard and raises in `!!` (minBound wraps to maxBound), an alert quoting the
+# GHC CallStack; the port answers the one "Sorry" alert for all of them.
+GET	/thy/trace/1/main/method/debug/3	200	application/json; charset=utf-8	bytes	method_out_of_range.json
+GET	/thy/trace/1/main/method/debug/9999	200	application/json; charset=utf-8	bytes	method_out_of_range.json
+GET	/thy/trace/1/main/method/debug/0	200	application/json; charset=utf-8	diverge:method_out_of_range.json	-
+GET	/thy/trace/1/main/method/debug/-1	200	application/json; charset=utf-8	diverge:method_out_of_range.json	-
+GET	/thy/trace/1/main/method/debug/-9223372036854775808	200	application/json; charset=utf-8	diverge:method_out_of_range.json	-
+# Yesod's Not Found page echoes the raw request path (percent-encoding kept,
+# query dropped), whatever raised it: an unknown index, an index piece
+# `PathPiece Int` cannot read, a theory path `parseTheoryPath` rejects, or no
+# route at all.  Never a path-extractor 400.  /static is a separate WAI app
+# with its own bare miss.
+GET	/thy/trace/99/overview/help	404	text/html; charset=utf-8	bytes	missing_idx_overview.html
+GET	/thy/trace/99/main/help	404	text/html; charset=utf-8	bytes	missing_idx_main.html
+GET	/thy/trace/99/download/x.spthy	404	text/html; charset=utf-8	bytes	missing_idx_download.html
+GET	/thy/trace/99/autoprove/idfs/0/False/proof/debug	404	text/html; charset=utf-8	bytes	missing_idx_autoprove.html
+GET	/thy/trace/99/autoprove/idfs/0/False/rules	404	text/html; charset=utf-8	bytes	missing_idx_autoprove_rules.html
+GET	/thy/trace/999/del/path/rules	404	text/html; charset=utf-8	bytes	missing_idx_del_path.html
+GET	/thy/trace/999/verify/not-a-path	404	text/html; charset=utf-8	bytes	malformed_verify_path.html
+GET	/thy/trace/1/json/main	404	text/html; charset=utf-8	bytes	not_found_theory_path.html
+GET	/nonexistent	404	text/html; charset=utf-8	bytes	not_found_unknown_route.html
+GET	/a&b'c%3Cd	404	text/html; charset=utf-8	bytes	not_found_escaped_path.html
+GET	/caf%C3%A9?q=1	404	text/html; charset=utf-8	bytes	not_found_query.html
+GET	/thy/trace/-1/overview/help	404	text/html; charset=utf-8	bytes	not_found_negative_idx.html
+GET	/thy/trace/1x/overview/help	404	text/html; charset=utf-8	bytes	not_found_unparsed_idx.html
+GET	/thy/trace/99999999999999999999/overview/help	404	text/html; charset=utf-8	bytes	not_found_huge_idx.html
+GET	/thy/trace/1%2F2/overview/help	404	text/html; charset=utf-8	bytes	not_found_escaped_slash.html
+GET	/thy/trace/%FF/overview/help	404	text/html; charset=utf-8	bytes	not_found_invalid_utf8.html
+GET	/static/js/does-not-exist.js	404	text/plain	bytes	static_not_found.txt
+# `PathPiece Bool` reads only `True`/`False`, the bound is an `Int`, and
+# autoproveAll's path must parse.
+GET	/thy/trace/1/autoprove/idfs/0/false/proof/debug	404	text/html; charset=utf-8	bytes	autoprove_lowercase_bool.html
+GET	/thy/trace/1/autoprove/idfs/nope/False/proof/debug	404	text/html; charset=utf-8	bytes	autoprove_malformed_bound.html
+GET	/thy/trace/1/autoproveAll/idfs/0/not-a-path	404	text/html; charset=utf-8	bytes	autoprove_all_malformed_path.html
+# The graph routes.  `/intdot` is a shell whatever the path, its `dotsrc` the
+# same path on the json route; the dot routes draw source cases and proof
+# nodes, and every other theory path is their catch-all `error`, a 500.  The
+# json route answers an unresolvable proof path with an empty 200, the dot
+# routes with Not Found.
+GET	/thy/trace/1/intdot/lemma/debug	200	text/html; charset=utf-8	bytes	intdot.html
+GET	/thy/trace/1/intdot/proof/debug/_	200	text/html; charset=utf-8	bytes	intdot_proof_case.html
+GET	/thy/trace/1/interactive-graph-def/proof/debug	200	text/plain; charset=utf-8	bytes	igd_proof.dot
+GET	/thy/trace/1/interactive-graph-def/cases/refined/1/1	200	text/plain; charset=utf-8	bytes	igd_cases_refined.dot
+GET	/thy/trace/1/interactive-graph-def/cases/raw/1/1	200	text/plain; charset=utf-8	bytes	igd_cases_raw.dot
+GET	/thy/trace/1/json/proof/debug	200	.json	bytes	json_proof.json
+GET	/thy/trace/1/json/cases/refined/1/1	200	.json	bytes	json_cases_refined.json
+GET	/thy/trace/1/json/proof/debug/_/no_such_case	200	.json	bytes	json_unresolvable.json
+GET	/thy/trace/1/json/proof/notALemma	200	.json	bytes	json_unresolvable.json
+GET	/thy/trace/1/interactive-graph-def/proof/debug/_	404	text/html; charset=utf-8	bytes	igd_unresolvable.html
+GET	/thy/trace/1/interactive-graph-def/proof/notALemma	404	text/html; charset=utf-8	bytes	igd_unknown_lemma.html
+GET	/thy/trace/1/graph/proof/notALemma	404	text/html; charset=utf-8	bytes	graph_unknown_lemma.html
+GET	/thy/trace/1/graph/help	500	text/html; charset=utf-8	bytes	graph_unhandled_path.html
+GET	/thy/trace/1/graph/rules	500	text/html; charset=utf-8	bytes	graph_unhandled_path.html
+GET	/thy/trace/1/graph/lemma/debug	500	text/html; charset=utf-8	bytes	graph_unhandled_path.html
+GET	/thy/trace/1/interactive-graph-def/rules	500	text/html; charset=utf-8	bytes	igd_unhandled_path.html
+GET	/thy/trace/1/interactive-graph-def/lemma/debug	500	text/html; charset=utf-8	bytes	igd_unhandled_path.html
+GET	/thy/trace/1/json/rules	500	text/html; charset=utf-8	bytes	json_rules.html
+GET	/thy/trace/1/json/lemma/debug	500	text/html; charset=utf-8	bytes	json_rules.html
+# An invalid source or case index reaches one of the two unchecked `!!`s of
+# `cases !! (i-1) !! (j-1)`: the source lookup fails first, whatever the case
+# index, and minBound wraps to maxBound when one is subtracted.
+GET	/thy/trace/1/json/cases/refined/0/1	500	text/html; charset=utf-8	bytes	json_source_negative.html
+GET	/thy/trace/1/json/cases/refined/-1/1	500	text/html; charset=utf-8	bytes	json_source_negative.html
+GET	/thy/trace/1/json/cases/refined/0/0	500	text/html; charset=utf-8	bytes	json_source_negative.html
+GET	/thy/trace/1/json/cases/refined/-1/-1	500	text/html; charset=utf-8	bytes	json_source_negative.html
+GET	/thy/trace/1/json/cases/refined/9999/1	500	text/html; charset=utf-8	bytes	json_source_large.html
+GET	/thy/trace/1/json/cases/refined/9999/9999	500	text/html; charset=utf-8	bytes	json_source_large.html
+GET	/thy/trace/1/json/cases/refined/9999/0	500	text/html; charset=utf-8	bytes	json_source_large.html
+GET	/thy/trace/1/json/cases/refined/-9223372036854775808/1	500	text/html; charset=utf-8	bytes	json_source_large.html
+GET	/thy/trace/1/json/cases/refined/-9223372036854775808/-1	500	text/html; charset=utf-8	bytes	json_source_large.html
+GET	/thy/trace/1/json/cases/refined/1/0	500	text/html; charset=utf-8	bytes	json_case_negative.html
+GET	/thy/trace/1/json/cases/refined/1/-1	500	text/html; charset=utf-8	bytes	json_case_negative.html
+GET	/thy/trace/1/json/cases/refined/1/9999	500	text/html; charset=utf-8	bytes	json_case_large.html
+GET	/thy/trace/1/json/cases/refined/1/-9223372036854775808	500	text/html; charset=utf-8	bytes	json_case_large.html
+GET	/thy/trace/1/json/cases/raw/0/1	500	text/html; charset=utf-8	bytes	json_source_negative.html
+GET	/thy/trace/1/json/cases/raw/-1/1	500	text/html; charset=utf-8	bytes	json_source_negative.html
+GET	/thy/trace/1/json/cases/raw/0/0	500	text/html; charset=utf-8	bytes	json_source_negative.html
+GET	/thy/trace/1/json/cases/raw/-1/-1	500	text/html; charset=utf-8	bytes	json_source_negative.html
+GET	/thy/trace/1/json/cases/raw/9999/1	500	text/html; charset=utf-8	bytes	json_source_large.html
+GET	/thy/trace/1/json/cases/raw/9999/9999	500	text/html; charset=utf-8	bytes	json_source_large.html
+GET	/thy/trace/1/json/cases/raw/9999/0	500	text/html; charset=utf-8	bytes	json_source_large.html
+GET	/thy/trace/1/json/cases/raw/-9223372036854775808/1	500	text/html; charset=utf-8	bytes	json_source_large.html
+GET	/thy/trace/1/json/cases/raw/-9223372036854775808/-1	500	text/html; charset=utf-8	bytes	json_source_large.html
+GET	/thy/trace/1/json/cases/raw/1/0	500	text/html; charset=utf-8	bytes	json_case_negative.html
+GET	/thy/trace/1/json/cases/raw/1/-1	500	text/html; charset=utf-8	bytes	json_case_negative.html
+GET	/thy/trace/1/json/cases/raw/1/9999	500	text/html; charset=utf-8	bytes	json_case_large.html
+GET	/thy/trace/1/json/cases/raw/1/-9223372036854775808	500	text/html; charset=utf-8	bytes	json_case_large.html
+GET	/thy/trace/1/graph/cases/refined/0/1	500	text/html; charset=utf-8	bytes	graph_source_negative.html
+GET	/thy/trace/1/graph/cases/refined/-1/1	500	text/html; charset=utf-8	bytes	graph_source_negative.html
+GET	/thy/trace/1/graph/cases/refined/0/0	500	text/html; charset=utf-8	bytes	graph_source_negative.html
+GET	/thy/trace/1/graph/cases/refined/-1/-1	500	text/html; charset=utf-8	bytes	graph_source_negative.html
+GET	/thy/trace/1/graph/cases/refined/9999/1	500	text/html; charset=utf-8	bytes	graph_source_large.html
+GET	/thy/trace/1/graph/cases/refined/9999/9999	500	text/html; charset=utf-8	bytes	graph_source_large.html
+GET	/thy/trace/1/graph/cases/refined/9999/0	500	text/html; charset=utf-8	bytes	graph_source_large.html
+GET	/thy/trace/1/graph/cases/refined/-9223372036854775808/1	500	text/html; charset=utf-8	bytes	graph_source_large.html
+GET	/thy/trace/1/graph/cases/refined/-9223372036854775808/-1	500	text/html; charset=utf-8	bytes	graph_source_large.html
+GET	/thy/trace/1/graph/cases/refined/1/0	500	text/html; charset=utf-8	bytes	graph_case_negative.html
+GET	/thy/trace/1/graph/cases/refined/1/-1	500	text/html; charset=utf-8	bytes	graph_case_negative.html
+GET	/thy/trace/1/graph/cases/refined/1/9999	500	text/html; charset=utf-8	bytes	graph_case_large.html
+GET	/thy/trace/1/graph/cases/refined/1/-9223372036854775808	500	text/html; charset=utf-8	bytes	graph_case_large.html
+GET	/thy/trace/1/graph/cases/raw/0/1	500	text/html; charset=utf-8	bytes	graph_source_negative.html
+GET	/thy/trace/1/graph/cases/raw/-1/1	500	text/html; charset=utf-8	bytes	graph_source_negative.html
+GET	/thy/trace/1/graph/cases/raw/0/0	500	text/html; charset=utf-8	bytes	graph_source_negative.html
+GET	/thy/trace/1/graph/cases/raw/-1/-1	500	text/html; charset=utf-8	bytes	graph_source_negative.html
+GET	/thy/trace/1/graph/cases/raw/9999/1	500	text/html; charset=utf-8	bytes	graph_source_large.html
+GET	/thy/trace/1/graph/cases/raw/9999/9999	500	text/html; charset=utf-8	bytes	graph_source_large.html
+GET	/thy/trace/1/graph/cases/raw/9999/0	500	text/html; charset=utf-8	bytes	graph_source_large.html
+GET	/thy/trace/1/graph/cases/raw/-9223372036854775808/1	500	text/html; charset=utf-8	bytes	graph_source_large.html
+GET	/thy/trace/1/graph/cases/raw/-9223372036854775808/-1	500	text/html; charset=utf-8	bytes	graph_source_large.html
+GET	/thy/trace/1/graph/cases/raw/1/0	500	text/html; charset=utf-8	bytes	graph_case_negative.html
+GET	/thy/trace/1/graph/cases/raw/1/-1	500	text/html; charset=utf-8	bytes	graph_case_negative.html
+GET	/thy/trace/1/graph/cases/raw/1/9999	500	text/html; charset=utf-8	bytes	graph_case_large.html
+GET	/thy/trace/1/graph/cases/raw/1/-9223372036854775808	500	text/html; charset=utf-8	bytes	graph_case_large.html
+GET	/thy/trace/1/interactive-graph-def/cases/refined/0/1	500	text/html; charset=utf-8	bytes	interactive-graph-def_source_negative.html
+GET	/thy/trace/1/interactive-graph-def/cases/refined/-1/1	500	text/html; charset=utf-8	bytes	interactive-graph-def_source_negative.html
+GET	/thy/trace/1/interactive-graph-def/cases/refined/0/0	500	text/html; charset=utf-8	bytes	interactive-graph-def_source_negative.html
+GET	/thy/trace/1/interactive-graph-def/cases/refined/-1/-1	500	text/html; charset=utf-8	bytes	interactive-graph-def_source_negative.html
+GET	/thy/trace/1/interactive-graph-def/cases/refined/9999/1	500	text/html; charset=utf-8	bytes	interactive-graph-def_source_large.html
+GET	/thy/trace/1/interactive-graph-def/cases/refined/9999/9999	500	text/html; charset=utf-8	bytes	interactive-graph-def_source_large.html
+GET	/thy/trace/1/interactive-graph-def/cases/refined/9999/0	500	text/html; charset=utf-8	bytes	interactive-graph-def_source_large.html
+GET	/thy/trace/1/interactive-graph-def/cases/refined/-9223372036854775808/1	500	text/html; charset=utf-8	bytes	interactive-graph-def_source_large.html
+GET	/thy/trace/1/interactive-graph-def/cases/refined/-9223372036854775808/-1	500	text/html; charset=utf-8	bytes	interactive-graph-def_source_large.html
+GET	/thy/trace/1/interactive-graph-def/cases/refined/1/0	500	text/html; charset=utf-8	bytes	interactive-graph-def_case_negative.html
+GET	/thy/trace/1/interactive-graph-def/cases/refined/1/-1	500	text/html; charset=utf-8	bytes	interactive-graph-def_case_negative.html
+GET	/thy/trace/1/interactive-graph-def/cases/refined/1/9999	500	text/html; charset=utf-8	bytes	interactive-graph-def_case_large.html
+GET	/thy/trace/1/interactive-graph-def/cases/refined/1/-9223372036854775808	500	text/html; charset=utf-8	bytes	interactive-graph-def_case_large.html
+GET	/thy/trace/1/interactive-graph-def/cases/raw/0/1	500	text/html; charset=utf-8	bytes	interactive-graph-def_source_negative.html
+GET	/thy/trace/1/interactive-graph-def/cases/raw/-1/1	500	text/html; charset=utf-8	bytes	interactive-graph-def_source_negative.html
+GET	/thy/trace/1/interactive-graph-def/cases/raw/0/0	500	text/html; charset=utf-8	bytes	interactive-graph-def_source_negative.html
+GET	/thy/trace/1/interactive-graph-def/cases/raw/-1/-1	500	text/html; charset=utf-8	bytes	interactive-graph-def_source_negative.html
+GET	/thy/trace/1/interactive-graph-def/cases/raw/9999/1	500	text/html; charset=utf-8	bytes	interactive-graph-def_source_large.html
+GET	/thy/trace/1/interactive-graph-def/cases/raw/9999/9999	500	text/html; charset=utf-8	bytes	interactive-graph-def_source_large.html
+GET	/thy/trace/1/interactive-graph-def/cases/raw/9999/0	500	text/html; charset=utf-8	bytes	interactive-graph-def_source_large.html
+GET	/thy/trace/1/interactive-graph-def/cases/raw/-9223372036854775808/1	500	text/html; charset=utf-8	bytes	interactive-graph-def_source_large.html
+GET	/thy/trace/1/interactive-graph-def/cases/raw/-9223372036854775808/-1	500	text/html; charset=utf-8	bytes	interactive-graph-def_source_large.html
+GET	/thy/trace/1/interactive-graph-def/cases/raw/1/0	500	text/html; charset=utf-8	bytes	interactive-graph-def_case_negative.html
+GET	/thy/trace/1/interactive-graph-def/cases/raw/1/-1	500	text/html; charset=utf-8	bytes	interactive-graph-def_case_negative.html
+GET	/thy/trace/1/interactive-graph-def/cases/raw/1/9999	500	text/html; charset=utf-8	bytes	interactive-graph-def_case_large.html
+GET	/thy/trace/1/interactive-graph-def/cases/raw/1/-9223372036854775808	500	text/html; charset=utf-8	bytes	interactive-graph-def_case_large.html
+# The port does not serve diff theories (they need `ClosedDiffTheory`): it
+# answers an alert where the oracle answers its Not Found page.
+GET	/thy/equiv/1/overview/help	200	application/json; charset=utf-8	diverge	equiv_overview.json
+# The rows that replace theory 1 in place come last: `verify/proof` rebuilds
+# the proof, `reload` re-reads the file.
+GET	/thy/trace/1/verify/proof/debug	200	application/json; charset=utf-8	bytes	verify_proof.json
+# No lemma is marked modified, so nothing is appended to the file.
+POST	/thy/trace/1/get_and_append/whatever	200	application/json; charset=utf-8	load-stamp	get_and_append.json
+POST	/thy/trace/1/reload	200	application/json; charset=utf-8	bytes	reload.json
+
+# Navigation reads only the loaded theory: it answers without the prover.
+# (`next normal` walks Help to Message.)
+SERVE	tamarin-prover/examples/regression/trace/issue193.spthy	maude=missing
+GET	/thy/trace/1/next/normal/help	200	text/plain; charset=utf-8	bytes	next_normal_help.txt
+
+# Autoprove and a method application each allocate the next index, on both
+# sides.  Autoproving the proved snapshot still answers a fresh index; a
+# negative bound means unbounded.  The searched node keeps its system (the
+# web session's SysRetention::KeepAll), so its graph is not empty.
+SERVE	tamarin-prover/examples/regression/trace/issue193.spthy
+GET	/thy/trace/1/autoprove/idfs/0/False/proof/debug	200	application/json; charset=utf-8	bytes	autoprove.json
+GET	/thy/trace/2/main/proof/debug/_	200	application/json; charset=utf-8	bytes	autoproved_method.json
+GET	/thy/trace/2/overview/proof/debug	200	text/html; charset=utf-8	load-stamp	autoproved_overview.html
+GET	/thy/trace/2/json/proof/debug/_/ONE/ONE	200	.json	bytes	autoproved_graph.json
+GET	/thy/trace/2/autoprove/idfs/0/False/proof/debug	200	application/json; charset=utf-8	bytes	autoprove_on_proven.json
+GET	/thy/trace/1/autoproveAll/idfs/0/proof/debug	200	application/json; charset=utf-8	bytes	autoprove_all.json
+GET	/thy/trace/1/autoprove/idfs/-1/False/proof/debug	200	application/json; charset=utf-8	bytes	autoprove_unbounded.json
+GET	/thy/trace/1/main/method/debug/1	200	application/json; charset=utf-8	bytes	method_apply.json
+
+# Deleting a lemma or a proof step publishes the edited theory at the next
+# index.
+SERVE	tamarin-prover/examples/regression/trace/issue193.spthy
+GET	/thy/trace/1/del/path/lemma/debug	200	application/json; charset=utf-8	bytes	del_path.json
+GET	/thy/trace/2/source	200	text/plain; charset=utf-8	banner	del_path_source.txt
+GET	/thy/trace/1/del/path/proof/debug	200	application/json; charset=utf-8	bytes	del_path_proof.json
+GET	/thy/trace/3/source	200	text/plain; charset=utf-8	banner	del_path_proof_source.txt
+
+# An explicitly removed proof step still renders as removed after deleting
+# the reusable lemma that precedes it.
+SERVE	hide_reuse_lemma.spthy
+GET	/thy/trace/1/del/path/proof/keeps_helper	200	application/json; charset=utf-8	bytes	del_reuse_step.json
+GET	/thy/trace/2/del/path/lemma/helper	200	application/json; charset=utf-8	bytes	del_reuse_lemma.json
+GET	/thy/trace/3/source	200	text/plain; charset=utf-8	banner	del_reuse_source.txt
+
+# A [sources] lemma is deleted like any other.
+SERVE	source_lemma.spthy
+GET	/thy/trace/1/del/path/lemma/typing	200	application/json; charset=utf-8	bytes	del_sources_lemma.json
+GET	/thy/trace/2/source	200	text/plain; charset=utf-8	banner	del_sources_source.txt
+
+# An unguarded source lemma blocks publication while it survives. Removing
+# the lemma also removes its assumption, so the port can publish the edit.
+SERVE	unguarded_lemma.spthy
+GET	/thy/trace/1/del/path/lemma/unused	200	application/json; charset=utf-8	contains:unguarded variable	del_unguarded_unused.json
+GET	/thy/trace/2/overview/help	404	text/html; charset=utf-8	bytes	del_unguarded_unpublished.html
+GET	/thy/trace/1/del/path/lemma/typing	200	application/json; charset=utf-8	diverge:del_sources_lemma.json	del_unguarded_unused.json
+
+# Uploads (`POST /`): a theory is installed at the next index; an empty file
+# and a parse failure are banners over the index.  The port's parse
+# diagnostic differs from Parsec's by design.  Unloading redirects to the
+# index, which then lists only the upload.
+SERVE	tamarin-prover/examples/regression/trace/issue193.spthy
+UPLOAD:tamarin-prover/examples/Tutorial.spthy	/	200	text/html; charset=utf-8	load-stamp	upload.html
+UPLOAD:/dev/null	/	200	text/html; charset=utf-8	load-stamp	upload_empty.html
+UPLOAD:crates/tamarin-server/tests/fixtures/not_a_theory.spthy	/	200	text/html; charset=utf-8	contains:<body><p class="message">Theory loading failed:	upload_unparsable.html
+GET	/thy/trace/1/unload	303	-	redirect	unload.txt
+GET	/	200	text/html; charset=utf-8	load-stamp	index_after_unload.html
+
+# `abbrevInBackend` abbreviates every premise and conclusion term of size >= 30.
+SERVE	BigTermProved.spthy
+GET	/thy/trace/1/json/proof/done/_/Init/Init?abbrevInBackend=1	200	.json	bytes	json_proof_abbrev.json
+GET	/thy/trace/1/json/proof/done/_/Init/Init	200	.json	bytes	json_proof_unabbreviated.json
+
+# A failing oracle (`heuristic=o`, no ./oracle next to the theory) is an alert
+# for the request that ranked, and publishes nothing.  The oracle's alert is
+# the exception `evalInThread` caught; the port answers the prover-failure
+# alert instead (its ranking failure is typed, not an exception).
+SERVE	oracle_missing.spthy
+GET	/thy/trace/1/autoprove/idfs/0/False/proof/test	200	application/json; charset=utf-8	diverge:autoprove_unknown_lemma.json	-
+GET	/thy/trace/2/main/help	404	text/html; charset=utf-8	bytes	oracle_missing_unpublished.html
+
+# A terminal proof node renders without resolving the unused, missing tactic.
+SERVE	terminal_bad_heuristic.spthy
+GET	/thy/trace/1/main/proof/done	200	application/json; charset=utf-8	bytes	terminal_bad_heuristic.json
+
+# `makeWfErrorsHtml` puts the wellformedness report into the banner unescaped.
+SERVE	mult_restricted_pair.spthy
+GET	/thy/trace/1/overview/help	200	text/html; charset=utf-8	load-stamp	mult_restricted_overview.html
+
+# The overview counts the rules of the deduplicated protocol cache.
+SERVE	duplicate_rule.spthy
+GET	/thy/trace/1/overview/help	200	text/html; charset=utf-8	load-stamp	duplicate_rule_overview.html
+
+# A source case name too long for the ribbon wraps at the HTML line width.
+SERVE	long_source_name.spthy
+GET	/thy/trace/1/main/cases/raw/1/1	200	application/json; charset=utf-8	bytes	long_source_name.json

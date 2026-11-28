@@ -9,10 +9,14 @@
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-use tamarin_theory::proof_skeleton::render;
 use tamarin_theory::prove::prove_lemma;
 
 mod common;
+#[allow(dead_code)]
+#[path = "../tests/support/proof_skeleton.rs"]
+mod proof_skeleton;
+
+use proof_skeleton::render;
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();

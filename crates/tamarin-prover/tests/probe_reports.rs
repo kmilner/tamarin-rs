@@ -207,35 +207,15 @@ const MISSING_MAUDE_STDERR: &str = "maude tool: '/nonexistent/maude'\n\
      CallStack (from HasCallStack):\n\
      \x20 error, called at src/Main/Console.hs:147:9 in main:Main.Console\n";
 
-/// Oracle (`test --with-maude=/nonexistent/maude`): the version probe's spawn
-/// throws, and because it is a maude probe the handler raises rather than
-/// returning — so the `test` command never reaches its dot block or its
-/// summary, and the run exits 1 with the two topic lines already on stdout.
+/// A maude that cannot be spawned aborts every mode that needs it, before
+/// any other work, with the shared HS block on stderr: one row per mode
+/// (argv, expected stdout).  The version probe's spawn throws, and because it
+/// is a maude probe the handler raises rather than returning, so `test`
+/// exits after its two topic lines and never reaches its summary; the batch,
+/// `variants` and `interactive` modes print nothing (`interactive` aborts
+/// before binding its port).
 #[test]
-fn missing_maude_aborts_the_test_command() {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
-    let out = cmd
-        .args(["test", "--with-maude=/nonexistent/maude"])
-        .output()
-        .expect("spawn tamarin-rs");
-    assert_eq!(out.status.code(), Some(1));
-    assert_eq!(
-        String::from_utf8(out.stdout).expect("utf-8 stdout"),
-        "Self-testing the tamarin-prover installation.\n\
-         \n\
-         *** Testing the availability of the required tools ***\n"
-    );
-    assert_eq!(
-        String::from_utf8(out.stderr).expect("utf-8 stderr"),
-        MISSING_MAUDE_STDERR
-    );
-}
-
-/// Oracle (`--with-maude=/nonexistent/maude tiny.spthy`): a batch run's
-/// `ensureMaudeAndGetVersion` (Batch.hs) aborts in the same place, before
-/// the first `[Theory …]` marker, leaving stdout completely empty.
-#[test]
-fn missing_maude_aborts_a_batch_run() {
+fn missing_maude_aborts_every_mode() {
     let dir = std::env::temp_dir().join("tamarin_rs_probe_reports_nomaude");
     std::fs::create_dir_all(&dir).expect("mkdir");
     let thy = dir.join("tiny.spthy");
@@ -244,67 +224,40 @@ fn missing_maude_aborts_a_batch_run() {
         "theory Tiny\nbegin\n\nrule Init:\n  [ Fr(~x) ] --> [ Out(~x) ]\n\nend\n",
     )
     .expect("write theory");
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
-    let out = cmd
-        .arg("--with-maude=/nonexistent/maude")
-        .arg(&thy)
-        .output()
-        .expect("spawn tamarin-rs");
-    assert_eq!(out.status.code(), Some(1));
-    assert_eq!(String::from_utf8(out.stdout).expect("utf-8 stdout"), "");
-    assert_eq!(
-        String::from_utf8(out.stderr).expect("utf-8 stderr"),
-        MISSING_MAUDE_STDERR
-    );
+    let thy = thy.to_str().expect("utf-8 path");
+    let wd = dir.to_str().expect("utf-8 path");
+    let nomaude = "--with-maude=/nonexistent/maude";
+    let rows: [(&str, Vec<&str>, &str); 4] = [
+        (
+            "test",
+            vec!["test", nomaude],
+            "Self-testing the tamarin-prover installation.\n\
+             \n\
+             *** Testing the availability of the required tools ***\n",
+        ),
+        ("batch", vec![nomaude, thy], ""),
+        ("variants", vec!["variants", nomaude], ""),
+        ("interactive", vec!["interactive", nomaude, wd], ""),
+    ];
+    for (mode, argv, stdout) in rows {
+        let out = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"))
+            .args(&argv)
+            .output()
+            .expect("spawn tamarin-rs");
+        assert_eq!(out.status.code(), Some(1), "{mode}");
+        assert_eq!(
+            String::from_utf8(out.stdout).expect("utf-8 stdout"),
+            stdout,
+            "{mode}"
+        );
+        assert_eq!(
+            String::from_utf8(out.stderr).expect("utf-8 stderr"),
+            MISSING_MAUDE_STDERR,
+            "{mode}"
+        );
+    }
 }
 
-/// `variants` runs the same probe (Intruder.hs) and dies the same way,
-/// before it writes any variant computation output.  The oracle's stdout is
-/// empty here.  A run that aborts after it prints a variant table has a
-/// different stdout.
-#[test]
-fn missing_maude_aborts_the_variants_command() {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
-    let out = cmd
-        .args(["variants", "--with-maude=/nonexistent/maude"])
-        .output()
-        .expect("spawn tamarin-rs");
-    assert_eq!(out.status.code(), Some(1));
-    assert_eq!(String::from_utf8(out.stdout).expect("utf-8 stdout"), "");
-    assert_eq!(
-        String::from_utf8(out.stderr).expect("utf-8 stderr"),
-        MISSING_MAUDE_STDERR
-    );
-}
-
-/// `interactive` probes through `ensureMaudeAndGetVersion`
-/// (Interactive.hs) and dies before binding any socket — no port
-/// allocation is needed.  The oracle's stdout is empty.  That is the half
-/// that shows the abort comes first.  The `Finished loading theories …
-/// server ready at` line (Interactive.hs) is a stdout `println!`.
-#[test]
-fn missing_maude_aborts_interactive_before_binding() {
-    let dir = std::env::temp_dir().join("tamarin_rs_probe_reports_nomaude_wd");
-    std::fs::create_dir_all(&dir).expect("mkdir");
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));
-    let out = cmd
-        .args(["interactive", "--with-maude=/nonexistent/maude"])
-        .arg(&dir)
-        .output()
-        .expect("spawn tamarin-rs");
-    assert_eq!(out.status.code(), Some(1));
-    assert_eq!(String::from_utf8(out.stdout).expect("utf-8 stdout"), "");
-    assert_eq!(
-        String::from_utf8(out.stderr).expect("utf-8 stderr"),
-        MISSING_MAUDE_STDERR
-    );
-}
-
-/// A maude that STARTS but reports an unsupported version is not fatal: the
-/// version probe's `Left` reason is `errMsg`, the installation probe still
-/// runs, and the run carries on (`ensureMaude`'s `Bool` is discarded
-/// everywhere but `test`).  `echo` stands in: it answers `--version`
-/// with non-Maude output and, run bare, writes nothing to stderr.
 #[test]
 fn unsupported_maude_reports_but_does_not_abort() {
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_tamarin-rs"));

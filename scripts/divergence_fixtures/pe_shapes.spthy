@@ -1,0 +1,39 @@
+// Category: partial evaluation (`--partial-evaluation=summary`), which no
+// CI gate runs over the corpus (pe_sweep.sh is local).
+//
+//   - A / B: two rules produce the same abstract state fact, once plain and
+//     once annotated `[+]`; the abstract state keeps the last-inserted
+//     annotations;
+//   - PA / PB / PC: PC consumes a state that PA and PB produce with different
+//     shapes, so partial evaluation multiplies it into one refined rule per
+//     producer, named with `_PE_` hints;
+//   - Key / Secret: refining Secret over the persistent `!Key` yields an
+//     identity family whose members are canonically renamed (`~m.1`), and
+//     the `@prove` row proves `reachable` over it under --quit-on-warning;
+//   - the lemmas let the `@prove` row prove the refined theory.
+// s7_pe_macro_rule pins macro expansion under partial evaluation.
+
+theory PeShapes
+begin
+
+builtins: hashing, symmetric-encryption
+
+rule A: [ Fr(~k) ] --> [ St1(~k) ]
+
+rule B: [ Fr(~k) ] --> [ St1(~k)[+] ]
+
+rule PA: [ Fr(~k) ] --> [ St('a', ~k) ]
+
+rule PB: [ Fr(~k) ] --> [ St('b', h(~k)) ]
+
+rule PC: [ St(x, y) ] --[ Seen(y) ]-> [ Out(y) ]
+
+rule Key: [ Fr(~k) ] --> [ !Key(~k) ]
+
+rule Secret: [ Fr(~m), !Key(~k) ] --[ Secret(~m) ]-> [ Out(senc(~m,~k)) ]
+
+lemma seen: exists-trace "Ex y #i. Seen(y) @ #i"
+
+lemma reachable: exists-trace "Ex m #i. Secret(m) @ i"
+
+end

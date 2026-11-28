@@ -1,81 +1,19 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Port of Haskell's `Theory.Constraint.System.Dot` +
-//! `Theory.Constraint.System.Graph.*` — convert a `System` into a
-//! Graphviz DOT representation suitable for `dot -Tsvg`.
+//! Port of HS `Theory.Constraint.System.Dot` (`dotSystemCompact`): render a
+//! `System`'s graph (Graph.hs, GraphRepr.hs) as a Graphviz DOT document.
 //!
-//! A `System` becomes the same kinds of nodes / edges / clusters HS draws, as
-//! a single self-contained DOT document with an HTML-table legend for the
-//! chosen abbreviations and similar-name / role clustering.
+//! This module holds the content layer — labels, colours (`nodeColorMap`,
+//! `roleColor`), row filtering and ordering; `showdot` builds the `Text.Dot`
+//! element tree and renders it through `showDot`. The batch `--output-dot`
+//! writer renders at each trace's label, the web routes at `"G"`.
 //!
-//! This module is the entry point and the CONTENT layer — the label,
-//! colour, filtering and ordering helpers, all of them HS's: fact rendering
-//! (`prettyLNFact`), action-row filtering (Diff / auto-source), the preamble
-//! and cluster attribute blocks, the `roleColor` cluster styling and the
-//! less-edge colours.  The bytes themselves are `showdot`'s, which builds a
-//! `Text.Dot` element tree ([`tamarin_utils::dot`]) and renders it through
-//! `showDot`.
-//!
-//! Upstream has exactly one such serializer — `dotSystemCompact graphOptions
-//! dotOptions system` — and hands it to `D.showDot` UNWRAPPED at the batch
-//! `--output-dot` writer (`Batch.hs`, at the trace's own label) and at the
-//! interactive DOT route (`dotGraphString`, `Web/Theory.hs`, at the
-//! fixed label `"G"`).  Both of RS's callers go through this module at those
-//! two labels.
-//!
-//! Upstream's seven other `showDot "G"` sites serialise the same thing and
-//! belong to three functions RS has no counterpart for.  `imgThyPath`
-//! and `imgDiffThyPath` WRITE a file and
-//! shell out to graphviz, so what they answer with is an image;
-//! `interactiveDotDiffThyPath` returns its text,
-//! but only over `DiffTheory*` paths, and RS's `/thy/equiv/` routes are stubs
-//! that draw nothing.
-//! Three of the seven run the document through `prefixedShowDot`,
-//! which `unlines` two
-//! `// protocol rules: …` / `// message deduction rules: …` comment lines
-//! ahead of it; the other four, the proof-path arms of the two diff
-//! functions, do not.  A DOT comment is invisible to graphviz, so on the image
-//! routes the prefix cannot reach the rendering at all.
-//!
-//! Per-rule node FILL colours are a faithful port of HS `nodeColorMap`
-//! (System/Dot.hs): the size-dependent light-HSV palette keyed by
-//! `(groupIdx, memberIdx)` — see `build_node_color_map` / `NodeColorMap` in
-//! [`crate::constraint::system::graph::color`]. An explicit per-rule
-//! `color:` attribute and a cluster's `manualNodeColor` still take priority
-//! (HS `dotNodeCompact`, System/Dot.hs).
-//! Each rule record also carries HS's `fontcolor` (`colorUsesWhiteFont` of the
-//! palette colour, System/Dot.hs) and `role` (System/Dot.hs)
-//! attributes.
-//!
-//! The `uncompact`/`FullBoringNodes` toggle belongs to HS `DotOptions`, which
-//! RS has no counterpart for, so the renderer is always compact — matching
-//! the HS default (`defaultDotOptions`, System/Dot.hs) and the
-//! interactive route's own default (`getOptions`, Handler.hs, which
-//! selects `CompactBoringNodes` when the `uncompact` query param is absent).
-//!
-//! Reference:
-//!   - `lib/theory/src/Theory/Constraint/System/Dot.hs`
-//!   - `lib/theory/src/Theory/Constraint/System/Graph/Graph.hs`
-//!   - `lib/theory/src/Theory/Constraint/System/Graph/GraphRepr.hs`
-//!
-//! Each rule node is rendered as a Graphviz record:
-//!
-//! ```text
-//!     +------------+------------+
-//!     |  prem_0    |  prem_1    |
-//!     +------------+------------+
-//!     |      #i : RuleName      |
-//!     +------------+------------+
-//!     |  conc_0    |  conc_1    |
-//!     +------------+------------+
-//! ```
-//!
-//! with a port per field so that edges from the `sEdges` set can target the
-//! correct slot.
+//! HS `DotOptions`' `FullBoringNodes` (`uncompact`) is not ported: nodes
+//! always render compact, the HS default.
 
 use crate::constraint::system::{NodeRuleMap, System};
-use crate::fact::{FactTag, LNFact};
+use crate::fact::{is_proto_fact, FactTag, LNFact};
 use crate::pretty_hpj::{self, Doc, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON};
 use crate::rule::{
     prefix_if_reserved, rule_name_string, ProtoRuleName, Rule, RuleACInst, RuleInfo,
@@ -92,25 +30,13 @@ use crate::constraint::system::graph::options::GraphOptions;
 use crate::constraint::system::graph::repr::{
     extract_base_name, extract_role, GEdge, GNode, MissingHint, NodeType,
 };
-use crate::constraint::system::graph::{system_to_graph, Graph};
+use crate::constraint::system::graph::{
+    edge_fact_check, resolve_node_conc_fact, resolve_node_prem_fact, system_to_graph, Graph,
+};
 
 // ---------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------
-
-/// Render a [`System`] into a Graphviz DOT document with default graph
-/// options.  Returns a self-contained `digraph "G" { … }` block.
-///
-/// The options are the pair the batch writer picks (`defaultGraphOptions` —
-/// SL2, no auto-source, no clustering, abbreviate, compress — Graph.hs,
-/// and `defaultDotOptions`, System/Dot.hs, both named at `Batch.hs`); the
-/// label is the one the web routes fix.  No upstream
-/// call site combines the two — `dotSystemCompact` takes its options from
-/// whoever calls it — so this is a test-only convenience, `pub` because
-/// `tamarin-server`'s route tests render through it too.
-pub fn system_to_dot(sys: &System) -> String {
-    system_to_dot_with(sys, &GraphOptions::default())
-}
 
 /// Render a [`System`] into a Graphviz DOT document under the given
 /// options — the interactive graph routes' entry point.
@@ -233,7 +159,7 @@ fn scale_indent(s: String) -> String {
 /// `Fact (ProtoFact Linear ("Diff" ++ getRuleNameDiff ru) 0) S.empty []`
 /// is dropped before rendering. `getRuleNameDiff` (Theory/Model/Rule.hs) prefixes
 /// the rule's `getRuleName` with `"Intr"`/`"Proto"` depending on the rule
-/// kind. Returns `true` when the fact should be KEPT.
+/// kind.
 fn diff_annotation_name(ru: &RuleACInst) -> String {
     match &ru.info {
         RuleInfo::Intr(_) => format!("DiffIntr{}", rule_name_string(ru)),
@@ -241,11 +167,12 @@ fn diff_annotation_name(ru: &RuleACInst) -> String {
     }
 }
 
+/// `true` when the fact should be kept.
 fn is_not_diff_annotation(diff_fact_name: &str, fa: &LNFact) -> bool {
     let is_diff = matches!(&fa.tag,
         FactTag::Proto(crate::fact::Multiplicity::Linear, n, 0)
             if **n == *diff_fact_name)
-        && fa.terms.is_empty();
+        && fa.terms().is_empty();
     !is_diff
 }
 
@@ -416,55 +343,18 @@ fn classify_edge(
     src: &crate::constraint::constraints::NodeConc,
     tgt: &crate::constraint::constraints::NodePrem,
 ) -> EdgeKind {
-    // Look up tag of the source-conclusion or target-premise.
-    let conc_tag = lookup_conc_tag(orig_node_map, src);
-    let prem_tag = lookup_prem_tag(orig_node_map, tgt);
-    let is_proto = |t: Option<&FactTag>| -> bool { matches!(t, Some(FactTag::Proto(_, _, _))) };
-    // HS `isPersistentFact` (Theory/Model/Fact.hs) reads the tag's
-    // multiplicity, and HS `factTagMultiplicity` (Theory/Model/Fact.hs)
-    // makes `KUFact`/`KDFact`
-    // persistent alongside `ProtoFact Persistent _ _`.  Only the proto arm can
-    // fire below: the branch is gated on `check isProtoFact`, and both endpoints
-    // of an `Edge` carry the same tag because HS `insertEdges`
-    // (Reduction.hs) unifies the two facts through `solveFactEqs`, whose
-    // first act is `contradictoryIf` on unequal tags (Reduction.hs).
-    let is_persistent = |t: Option<&FactTag>| -> bool {
-        t.is_some_and(|tag| {
-            crate::fact::fact_tag_multiplicity(tag) == crate::fact::Multiplicity::Persistent
-        })
-    };
-    let is_k = |t: Option<&FactTag>| -> bool { matches!(t, Some(FactTag::Ku) | Some(FactTag::Kd)) };
-    if is_proto(conc_tag.as_ref()) || is_proto(prem_tag.as_ref()) {
+    let prem = resolve_node_prem_fact(tgt, orig_node_map);
+    let conc = resolve_node_conc_fact(src, orig_node_map);
+    let check = |p: fn(&LNFact) -> bool| edge_fact_check(prem, conc, p);
+    if check(is_proto_fact) {
         EdgeKind::Proto {
-            persistent: is_persistent(conc_tag.as_ref()) || is_persistent(prem_tag.as_ref()),
+            persistent: check(LNFact::is_persistent),
         }
-    } else if is_k(conc_tag.as_ref()) || is_k(prem_tag.as_ref()) {
+    } else if check(LNFact::is_k_fact) {
         EdgeKind::K
     } else {
         EdgeKind::Other
     }
-}
-
-/// HS `resolveNodeConcFact` (System.hs) reached through Graph.hs,
-/// keeping only the tag `dotEdge`'s predicates test.
-fn lookup_conc_tag(
-    orig_node_map: &NodeRuleMap<'_>,
-    nc: &crate::constraint::constraints::NodeConc,
-) -> Option<FactTag> {
-    let (nid, idx) = nc;
-    let ru = orig_node_map.get(nid)?;
-    ru.conclusions.get(idx.0).map(|fa| fa.tag)
-}
-
-/// HS `resolveNodePremFact` (System.hs) reached through Graph.hs,
-/// keeping only the tag `dotEdge`'s predicates test.
-fn lookup_prem_tag(
-    orig_node_map: &NodeRuleMap<'_>,
-    np: &crate::constraint::constraints::NodePrem,
-) -> Option<FactTag> {
-    let (nid, idx) = np;
-    let ru = orig_node_map.get(nid)?;
-    ru.premises.get(idx.0).map(|fa| fa.tag)
 }
 
 /// Port of Haskell `roleColor` (System/Dot.hs): a deterministic per-role

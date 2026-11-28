@@ -1,0 +1,875 @@
+# The parser accept/reject table; tests/parse_table.rs documents the columns.
+# `hs` is written by scripts/capture_parse_refs.sh, never by hand.
+# A `# ~` line gives the reason for the deliberate divergence of the `~` rows under it.
+# oracle: a75fec7ff13cbfcbb0a67813afb16707e981c06e
+# name	mode	hs	rs	input
+
+# --- Variable grammar per context: a rule, lemma, restriction, macro body or proof goal reads msgvar; a formula reads timepoints with nodevar; equations read llitNoPub; macro and predicate parameters lvar; a process sapicvar (Token.hs, Formula.hs, Sapic.hs).
+vars_rule_term_1	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] rule B: [ In(x:pub) ] --[ M(~k, $p, %n, x.1, n:nat, f:fresh) ]-> [ Out(f(x)) ] end
+vars_rule_term_2	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] rule B: [] --[ M(#j) ]-> [] end
+vars_rule_term_3	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] rule B: [ In(<x, j:node>) ] --> [] end
+vars_rule_term_4	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] rule B: [] --> [ Out(f(#j)) ] end
+vars_rule_term_5	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] rule B: [] --[ M(x:custom) ]-> [] end
+vars_rule_term_6	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] rule B: [] --[ M(#j:msg) ]-> [] end
+vars_rule_term_7	theory	err	Expected(Rule)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] rule B: [ In($x:pub) ] --> [] end
+vars_rule_let_1	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] rule B: let x = #j in [] --[ M(x) ]-> [] end
+vars_rule_let_2	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] rule B: let x = 'a' %n = %1 y:nat = %1 in [] --[ M(x, %n, y) ]-> [] end
+vars_rule_let_3	theory	err	Expected(Rule)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] rule B: let $x = 'a' in [] --> [] end
+vars_rule_let_4	theory	err	Expected(Rule)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] rule B: let ~x = 'a' in [] --> [] end
+vars_rule_let_5	theory	err	Expected(Rule)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] rule B: let #x = 'a' in [] --> [] end
+vars_rule_let_6	theory	err	Expected(Rule)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] rule B: let x:pub = 'a' in [] --> [] end
+vars_formula_message_1	theory	err	Expected(Lemma)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "All #j. M(#j) @ #j ==> F" end
+vars_formula_message_2	theory	err	Expected(Lemma)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "All #j #i. M(<'a', #j>) @ #i ==> F" end
+vars_formula_message_3	theory	err	Expected(Lemma)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "All j:node #i. M(j:node) @ #i ==> F" end
+vars_formula_message_4	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "All x #j. f(#j) = x ==> F" end
+vars_formula_message_5	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "All x #j. x = f(#j) ==> F" end
+vars_formula_message_6	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "All x #j. x << f(#j) ==> F" end
+vars_formula_message_7	theory	err	Expected(Restriction)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] restriction r: "All #j. M(#j) @ #j ==> F" end
+vars_formula_message_8	theory	err	Expected(Rule)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] rule B: [] --[ _restrict(All #j. M(#j) @ #j ==> F) ]-> [] end
+vars_formula_message_9	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "All j #i. M(j) @ #i ==> F" end
+vars_formula_message_10	theory	err	Expected(Formula)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "All x:foo #i. M(x) @ i ==> F" end
+vars_formula_message_11	theory	err	Expected(Formula)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "All $x:pub #i. M($x) @ i ==> F" end
+vars_formula_message_12	theory	err	Expected(Formula)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "All #i:node. M('a') @ i ==> F" end
+vars_formula_timepoint_1	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] rule B: [] --[ _restrict(All #i #j. #i < #j | i = j) ]-> [] end
+vars_formula_message_13	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "All x #j. x (<) #j ==> F" end
+vars_formula_timepoint_2	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "All #i #j. #i = #j | #i < #j | last(#i) | i < j | #i = j | j:node = #i | last(i:node) | M('a') @ i:node" end
+vars_formula_timepoint_3	theory	err	Expected(Lemma)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex #i. M('a') @ #i:node" end
+vars_formula_timepoint_4	theory	err	Expected(Lemma)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex #i. M('a') @ #i:foo" end
+vars_formula_timepoint_5	theory	err	Custom	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex #i. M('a') @ $i:node" end
+vars_formula_timepoint_6	theory	err	Custom	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex #i. M('a') @ $i" end
+vars_formula_timepoint_7	theory	err	Expected(Lemma)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex #i. M('a') @ f(i)" end
+vars_formula_timepoint_8	theory	err	Custom	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex #i. M('a') @ i:msg" end
+vars_formula_timepoint_9	theory	err	UndeclaredFunction(last)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex #i. last($i)" end
+vars_formula_timepoint_10	theory	err	Expected(Formula)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex #i. (#i) < #i" end
+vars_formula_timepoint_11	theory	err	Expected(Formula)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex #i. c() < #i" end
+vars_formula_timepoint_12	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex #i. c < #i | #i = c | last(c) | M('a') @ c" end
+vars_formula_timepoint_13	theory	err	Custom	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex #i. #i = 'a'" end
+vars_formula_timepoint_14	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex #i. 'a' = #i" end
+vars_formula_timepoint_15	theory	err	Expected(Formula)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex i j. $i < $j" end
+vars_formula_timepoint_16	theory	err	Expected(Formula)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex i j. x:msg < j" end
+vars_formula_timepoint_17	theory	err	Expected(Formula)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex i j. f(i) < j" end
+vars_formula_timepoint_18	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex #i #j. $i = #j" end
+vars_formula_timepoint_19	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex #i #j. f(i) = #j" end
+vars_formula_timepoint_20	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex #i #j. i = #j" end
+vars_formula_timepoint_21	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] functions: last/1 lemma l: "last('a') = last('a')" end
+vars_formula_timepoint_22	theory	err	Expected(Formula)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex #j. (i) < #j" end
+vars_formula_timepoint_23	theory	err	Expected(Formula)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex #j. <i> < #j" end
+vars_formula_timepoint_24	theory	err	Expected(Formula)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] functions: join/2 [AC] lemma l: "Ex #j. join(i) < #j" end
+vars_formula_timepoint_25	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "Ex #j. (x:msg = y) & i < #j" end
+vars_predicate_1	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] predicates: Q(y) <=> T lemma l: "All x #i. M(x) @ i ==> x = 'a' | x << f(x) | x (<) x | Q(x)" end
+vars_predicate_2	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] predicates: P(#i, x:node, $y, z) <=> M(z) @ i end
+vars_predicate_3	theory	err	Expected(Predicate)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] predicates: P(x:foo) <=> T end
+vars_predicate_4	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] predicates: Q(a, b, c, d) <=> T lemma l: "All #i. Q(#i, i:node, x, $y) ==> F" end
+vars_predicate_5	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] predicates: Q(y) <=> T lemma l: "Ex x. Q(x:foo)" end
+vars_equation_1	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] equations: f(f(x)) = x end
+vars_equation_2	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] equations: f(f(~'n')) = ~'n' end
+vars_equation_3	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] equations: f(f($x)) = $x end
+vars_equation_4	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] equations: f(f(#i)) = #i end
+vars_equation_5	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] equations: f(f('a')) = 'a' end
+vars_macro_1	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] macros: m(x, #i, y:pub) = <x, y> end
+vars_macro_2	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] macros: m(x) = <x, #i> end
+vars_macro_3	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] macros: m(x) = <x, y:foo> end
+vars_proof_goal_1	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "T" solve( M(x) @ #i ) by sorry end
+vars_proof_goal_2	theory	err	Expected(Proof)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "T" solve( M(#j) @ #i ) by sorry end
+vars_proof_goal_3	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "T" solve( M(x) ▶₀ #i ) by sorry end
+vars_proof_goal_4	theory	err	Expected(Proof)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "T" solve( M(#j) ▶₀ #i ) by sorry end
+vars_proof_goal_5	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "T" solve( x ⊏ f(x) ) by sorry end
+vars_proof_goal_6	theory	err	Expected(Formula)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "T" solve( #i ⊏ x ) by sorry end
+vars_proof_goal_7	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "T" solve( (M(x) @ #i) ∥ (#i < #j) ) by sorry end
+vars_proof_goal_8	theory	err	Expected(Formula)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] lemma l: "T" solve( (M(#j) @ #i) ∥ (#i < #j) ) by sorry end
+vars_process_formula_1	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] process: if Ex x #j. M(#j) @ #j & f(#j) = x & #j << x then 0 end
+vars_process_formula_2	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] process: [] --[ _restrict(All #j. M(#j) @ #j ==> F) ]-> []; 0 end
+vars_process_formula_3	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] process: [] --[ _restrict(Ex #i. M('a') @ i:node) ]-> [] end
+vars_process_formula_4	theory	err	Expected(Process)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] process: [] --[ _restrict(Ex #i. M('a') @ #i:wrong) ]-> [] end
+vars_process_formula_5	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] process: [] --[ _restrict(Ex #i. #i = 'a' | 'a' = #i | #i = x:node | last(i:node)) ]-> [] end
+vars_process_formula_6	theory	err	Expected(Formula)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] process: [] --[ _restrict(Ex #i. (#i) < #i) ]-> [] end
+vars_process_formula_7	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] process: [] --[ _restrict(Ex x:foo #i:Any. Q(x:foo, #i:Any)) ]-> [] end
+vars_process_term_1	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] process: new x:nat; out(<x, #t, $p:pub, y:node>); event M(y:custom); 0 end
+vars_process_term_2	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] process: out(x:) end
+vars_process_term_3	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] process: lookup #k as #v in 0 end
+vars_process_pattern_1	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] process: [ In(=x) ] --[ M(#j, x) ]-> [ Out(#j:Any) ] end
+vars_process_pattern_2	theory	err	Expected(Term)	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] process: out(=x) end
+vars_process_pattern_3	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] process: in(<=x, #j>); 0 end
+vars_process_pattern_4	theory	ok	ok	theory T begin builtins: multiset, natural-numbers functions: f/1, c/0 rule A: [] --[ M('a') ]-> [] process: let =x = #j in 0 end
+
+# --- Formal comments: `\*` and `\\` are the only escapes, and a body that fails is an error (formalComment, Token.hs).
+formal_comment_escapes	theory	ok	ok	theory T\nbegin\n\nnote{* a\\*b\\\\c *}\n\nend\n
+formal_comment_bare_star	theory	err	UnknownItem(note,TheoryItem)	theory T\nbegin\n\nnote{* a*b *}\n\nend\n
+formal_comment_bad_escape	theory	err	UnknownItem(note,TheoryItem)	theory T\nbegin\n\nnote{* a\\qb *}\n\nend\n
+formal_comment_unterminated	theory	err	UnknownItem(note,TheoryItem)	theory T\nbegin\n\nnote{* unterminated\n\nend\n
+
+# --- Items and restriction attributes that only a plain or only a diff theory has (theory / diffTheory, Theory/Text/Parser.hs; Restriction.hs).
+item_diff_lemma_in_theory	theory	err	UnknownItem(diffLemma,TheoryItem)	theory T begin\ndiffLemma d: rule-equivalence\ncase R by sorry\nqed\nend\n
+item_options_in_theory	theory	ok	ok	theory T begin\noptions: translation-progress\nend\n
+item_case_test_in_theory	theory	ok	ok	theory T begin\ntest t: "F"\nend\n
+item_accountability_lemma_in_theory	theory	ok	ok	theory T begin\ntest t: "F"\nlemma a: t accounts for "F"\nend\n
+item_process_in_theory	theory	ok	ok	theory T begin\nprocess: 0\nend\n
+item_process_def_in_theory	theory	ok	ok	theory T begin\nlet P = 0\nend\n
+item_equiv_lemma_in_theory	theory	ok	ok	theory T begin\nequivLemma: 0 0\nend\n
+item_diff_equiv_lemma_in_theory	theory	ok	ok	theory T begin\ndiffEquivLemma: 0\nend\n
+item_predicates_in_theory	theory	ok	ok	theory T begin\npredicates: P(x) <=> T\nend\n
+item_export_in_theory	theory	ok	ok	theory T begin\nexport e: "x"\nend\n
+item_sided_lemma_in_theory	theory	ok	ok	theory T begin\nlemma l [left]: "F"\nend\n
+item_sided_restriction_in_theory	theory	err	Expected(Restriction)	theory T begin\nrestriction r [left]: "F"\nend\n
+item_both_restriction_in_theory	theory	err	Expected(Restriction)	theory T begin\nrestriction r [both]: "F"\nend\n
+item_empty_restriction_attributes_in_theory	theory	err	Expected(Restriction)	theory T begin\nrestriction r []: "F"\nend\n
+item_trailing_comma_restriction_attributes_in_theory	theory	err	Expected(Restriction)	theory T begin\nrestriction r [left,]: "F"\nend\n
+item_two_restriction_attributes_in_theory	theory	err	Expected(Restriction)	theory T begin\nrestriction r [left, right]: "F"\nend\n
+item_sided_axiom_in_theory	theory	err	Expected(Restriction)	theory T begin\naxiom r [right]: "F"\nend\n
+item_unknown_restriction_attribute_in_theory	theory	err	Expected(Restriction)	theory T begin\nrestriction r [up]: "F"\nend\n
+item_diff_lemma_in_diff	diff	ok	ok	theory T begin\ndiffLemma d: rule-equivalence\ncase R by sorry\nqed\nend\n
+item_options_in_diff	diff	err	UnknownItem(options,TheoryItem)	theory T begin\noptions: translation-progress\nend\n
+item_case_test_in_diff	diff	err	UnknownItem(test,TheoryItem)	theory T begin\ntest t: "F"\nend\n
+item_accountability_lemma_in_diff	diff	err	UnknownItem(test,TheoryItem)	theory T begin\ntest t: "F"\nlemma a: t accounts for "F"\nend\n
+item_process_in_diff	diff	err	UnknownItem(process,TheoryItem)	theory T begin\nprocess: 0\nend\n
+item_process_def_in_diff	diff	err	UnknownItem(let,TheoryItem)	theory T begin\nlet P = 0\nend\n
+item_equiv_lemma_in_diff	diff	err	UnknownItem(equivLemma,TheoryItem)	theory T begin\nequivLemma: 0 0\nend\n
+item_diff_equiv_lemma_in_diff	diff	err	UnknownItem(diffEquivLemma,TheoryItem)	theory T begin\ndiffEquivLemma: 0\nend\n
+item_predicates_in_diff	diff	err	UnknownItem(predicates,TheoryItem)	theory T begin\npredicates: P(x) <=> T\nend\n
+item_export_in_diff	diff	err	UnknownItem(export,TheoryItem)	theory T begin\nexport e: "x"\nend\n
+item_sided_lemma_in_diff	diff	ok	ok	theory T begin\nlemma l [left]: "F"\nend\n
+item_sided_restriction_in_diff	diff	ok	ok	theory T begin\nrestriction r [left]: "F"\nend\n
+item_both_restriction_in_diff	diff	ok	ok	theory T begin\nrestriction r [both]: "F"\nend\n
+item_empty_restriction_attributes_in_diff	diff	ok	ok	theory T begin\nrestriction r []: "F"\nend\n
+item_trailing_comma_restriction_attributes_in_diff	diff	ok	ok	theory T begin\nrestriction r [left,]: "F"\nend\n
+item_two_restriction_attributes_in_diff	diff	ok	ok	theory T begin\nrestriction r [left, right]: "F"\nend\n
+item_sided_axiom_in_diff	diff	ok	ok	theory T begin\naxiom r [right]: "F"\nend\n
+item_unknown_restriction_attribute_in_diff	diff	err	UnknownItem(up,RestrictionAttribute)	theory T begin\nrestriction r [up]: "F"\nend\n
+
+# --- A rule role is the raw text up to the first quote of either kind (parseRole, Parser/Rule.hs).
+role_backslash	theory	ok	ok	theory T begin rule R [role="abc\\q"]: [] --> [] end
+role_unclosed_at_end_of_input	theory	err	UnclosedDelimiter(")	theory T begin rule R [role="unfinished
+role_backslash_n	theory	ok	ok	theory T begin rule R [role="abc\\n"]: [] --> [] end
+role_single_quoted	theory	ok	ok	theory T begin rule R [role='abc']: [] --> [] end
+role_empty	theory	ok	ok	theory T begin rule R [role=""]: [] --> [] end
+role_leading_comment	theory	ok	ok	theory T begin rule R [role='/* ignored */ abc']: [] --> [] end
+role_closes_at_either_quote	theory	err	Expected(Rule)	theory T begin\nrule R [role="abc'"]: [] --> []\nend\n
+role_unclosed	theory	err	UnclosedDelimiter(")	theory T begin\nrule R [role="abc]: [] --> []\nend\n
+
+# --- Error classification across items, delimiters, comments, attributes, includes and proofs.
+semantic_errors_keep_the_offending_token_span_1	theory	err	UnknownItem(hasing,Builtin)	theory T begin\nbuiltins: hasing\nend\n
+semantic_errors_keep_the_offending_token_span_2	theory	err	UnknownItem(not_an_item,TheoryItem)	theory T begin\nnot_an_item: x\nend\n
+theory_item_errors_name_their_construct_1	theory	err	Expected(Options)	theory T begin\noptions:\nend\n
+theory_item_errors_name_their_construct_2	theory	err	Expected(Predicate)	theory T begin\npredicates\nend\n
+theory_item_errors_name_their_construct_3	theory	err	Expected(Heuristic)	theory T begin\nheuristic\nend\n
+theory_item_errors_name_their_construct_4	theory	err	Expected(Tactic)	theory T begin\ntactic: t presort: ?\nend\n
+theory_item_errors_name_their_construct_5	theory	err	Expected(CaseTest)	theory T begin\ntest t = x\nend\n
+theory_item_errors_name_their_construct_6	theory	err	Expected(Export)	theory T begin\nexport tag\nend\n
+formula_facts_preserve_nested_and_arity_errors_1	theory	err	UndeclaredFunction(g)	theory T begin\nlemma L: "All #i. Foo(g('a')) @ #i"\nend\n
+formula_facts_preserve_nested_and_arity_errors_2	theory	err	FactArity(Out,0)	theory T begin\nlemma L: "All #i. Out() @ #i"\nend\n
+proof_errors_keep_their_exact_nested_and_tabbed_spans_1	theory	err	UndeclaredFunction(g)	theory T begin\nfunctions: Foo/1\nlemma L: "T"\nby solve( Foo(g('a')) @ #i )\nend\n
+proof_errors_keep_their_exact_nested_and_tabbed_spans_2	theory	err	Expected(Proof)	theory T begin\nlemma L: "T"\nby\t?\nend\n
+proof_errors_keep_their_exact_nested_and_tabbed_spans_3	theory	err	Expected(Proof)	theory T begin\nlemma L: "T"\n    by\t?\nend\n
+proof_errors_keep_their_exact_nested_and_tabbed_spans_4	theory	err	UndeclaredFunction(g)	theory T begin\nfunctions: Foo/1\nlemma L: "T"\n    by solve(\tFoo(g('a')) @ #i )\nend\n
+proof_errors_keep_their_exact_nested_and_tabbed_spans_5	diff	err	Expected(Proof)	theory D begin\ndiffLemma E:\n    rule-equivalence\n    case R\n    by step(\t? )\n    qed\nend\n
+unknown_attributes_report_their_context_1	theory	err	UnknownItem(bogus,RuleAttribute)	theory T begin\nrule R [bogus]: [ ] --> [ ]\nend\n
+unknown_attributes_report_their_context_2	theory	err	UnknownItem(bogus,LemmaAttribute)	theory T begin\nrule R: [ ] --> [ ]\nlemma L [bogus]: "T"\nend\n
+unknown_attributes_report_their_context_3	theory	err	Expected(Restriction)	theory T begin\nrestriction R [bogus]: "T"\nend\n
+invalid_fact_and_diff_errors_are_classified_1	theory	err	InvalidFactName(lower)	theory T begin\nrule R: [ lower() ] --> [ ]\nend\n
+invalid_fact_and_diff_errors_are_classified_2	theory	err	IllegalDiffOperator(DiffModeDisabled)	theory T begin\nrule R: [ ] --> [ Out(diff(a,b)) ]\nend\n
+invalid_fact_and_diff_errors_are_classified_3	theory -D=diff	err	IllegalDiffOperator(InEquation)	theory T begin\nequations: diff(x,y) = x\nend\n
+a_missing_list_separator_is_not_an_unclosed_delimiter	theory	err	Expected(Rule)	theory T begin\nrule R: [ In('a') In('b') ] --> [ ]\nend\n
+punctuation_attributes_use_the_source_character_span	theory	err	UnknownItem(?,RuleAttribute)	theory T begin\nrule R [?]: [ ] --> [ ]\nend\n
+delayed_semantic_errors_point_at_the_declaration_1	theory	err	DuplicateDeclaration(R,Restriction)	theory T begin\nrestriction R: "T"\nrestriction R: "T"\nend\n
+delayed_semantic_errors_point_at_the_declaration_2	theory	err	DuplicateDeclaration(L,Lemma)	theory T begin\nlemma L: "T"\nlemma L: "T"\nend\n
+delayed_semantic_errors_point_at_the_declaration_3	theory	err	ConflictingDeclaration(R,Rule)	theory T begin\nrule R: [ ] --> [ Out('a') ]\nrule R: [ ] --> [ Out('b') ]\nend\n
+empty_and_trailing_comma_lists_report_the_opening_delimiter_1	theory	err	UnclosedDelimiter([)	theory T begin\nrule R: [
+empty_and_trailing_comma_lists_report_the_opening_delimiter_2	theory	err	UnclosedDelimiter([)	theory T begin\nrule R: [ In('a'),
+stray_closers_are_not_reported_as_unclosed_lists	theory	err	Expected(Rule)	theory T begin\nrule R: [ In('a') } ] --> [ ]\nend\n
+builtin_spans_preserve_whitespace_before_hyphens	theory	err	UnknownItem(diffie-helman,Builtin)	theory T begin\nbuiltins: diffie -helman\nend\n
+duplicate_macro_arguments_point_at_the_name_after_a_sigil	theory	err	DuplicateMacroArgument(foobar)	theory T begin\nmacros: m($foobar, $   foobar) = $foobar\nend\n
+line_columns_are_derived_from_source_text	theory	err	UnknownItem(unknown,TheoryItem)	theory T begin\n\tunknown: x\nend\n
+semantic_errors_survive_a_missing_outer_delimiter_1	theory	err	InvalidFactName(lower)	theory T begin\nrule R: [ lower()\nend\n
+semantic_errors_survive_a_missing_outer_delimiter_2	theory	err	WrongFunctionArity(f,2,1)	theory T begin\nfunctions: f/2\nrule R: [ Out(f(x))\nend\n
+raw_semantic_failures_are_not_relabelled_as_unclosed_delimiters_1	theory	err	Custom	theory T begin\nprocess: out(%x\nend\n
+raw_semantic_failures_are_not_relabelled_as_unclosed_delimiters_2	theory	err	Custom	theory T begin\nprocess: out(%1\nend\n
+raw_semantic_failures_are_not_relabelled_as_unclosed_delimiters_3	theory	err	Custom	theory T begin\nprocess: out(1:nat\nend\n
+balanced_malformed_symmetric_delimiters_keep_the_syntax_error_1	theory	err	Expected(Restriction)	theory T begin\nrestriction A: "x=x lemma L: all-traces"\nend\n
+balanced_malformed_symmetric_delimiters_keep_the_syntax_error_2	theory	err	Expected(Restriction)	theory T begin\nrestriction A: "x=x rule R: [ ] --> [ ]"\nend\n
+balanced_malformed_symmetric_delimiters_keep_the_syntax_error_3	theory	err	Expected(Restriction)	theory T begin\nrestriction A: "x=x garbage"\nrestriction B: "T\nend\n
+balanced_malformed_symmetric_delimiters_keep_the_syntax_error_4	theory	err	Expected(Rule)	theory T begin\nrule R [color='#12 rule X: [']: [ ] --> [ ]\nend\n
+pipe_delimited_process_attributes_do_not_panic	theory	err	Expected(Theory)	theory T begin process: 0 | bogus
+backtracked_comment_errors_keep_their_cause_and_spans_1	theory	err	UnclosedBlockComment	theory T begin process: in(=x /* unfinished
+backtracked_comment_errors_keep_their_cause_and_spans_2	theory	ok	ok	theory T begin process: in(=x /* unfinished */ ) end
+backtracked_comment_errors_keep_their_cause_and_spans_3	theory	err	UnclosedBlockComment	theory T begin lemma L: "x = /* unfinished
+backtracked_comment_errors_keep_their_cause_and_spans_4	theory	ok	ok	theory T begin lemma L: "x = /* unfinished */ y" end
+backtracked_comment_errors_keep_their_cause_and_spans_5	theory	err	UnclosedBlockComment	theory T begin lemma L: "last( /* unfinished
+backtracked_comment_errors_keep_their_cause_and_spans_6	theory	ok	ok	theory T begin lemma L: "last( /* unfinished */ #i)" end
+backtracked_comment_errors_keep_their_cause_and_spans_7	theory	err	UnclosedBlockComment	theory T begin functions: f/1 lemma L: "f(x) /* unfinished
+backtracked_comment_errors_keep_their_cause_and_spans_8	theory	ok	ok	theory T begin functions: f/1 lemma L: "f(x) /* unfinished */ = x" end
+backtracked_comment_errors_keep_their_cause_and_spans_9	theory	err	UnclosedBlockComment	theory T begin lemma L: "((x = /* unfinished
+backtracked_comment_errors_keep_their_cause_and_spans_10	theory	ok	ok	theory T begin lemma L: "((x = /* unfinished */ y))" end
+backtracked_comment_errors_keep_their_cause_and_spans_11	theory	err	UnclosedBlockComment	theory T begin lemma L: "G(x) @ /* unfinished
+backtracked_comment_errors_keep_their_cause_and_spans_12	theory	ok	ok	theory T begin lemma L: "G(x) @ /* unfinished */ #i" end
+unterminated_comments_have_their_own_diagnostic_1	theory	err	UnclosedBlockComment	theory T begin /* unfinished
+unterminated_comments_have_their_own_diagnostic_2	theory	err	UnclosedBlockComment	theory T begin end /* unfinished
+unterminated_comments_have_their_own_diagnostic_3	theory	err	UnclosedBlockComment	theory T begin rule R: [ /* unfinished
+unterminated_comments_have_their_own_diagnostic_4	theory	err	UnclosedBlockComment	theory T begin lemma L: "T" by sorry /* unfinished
+unterminated_comments_have_their_own_diagnostic_5	theory	err	UnclosedBlockComment	theory T begin\nlemma l: "T /* unfinished"\nend\n
+unterminated_comments_have_their_own_diagnostic_6	intruder	-	UnclosedBlockComment	/* unfinished
+unterminated_comments_have_their_own_diagnostic_7	theory	err	UnclosedBlockComment	theory T begin\nlemma l: "T"\nby solve( /* unfinished\nend\n
+dual_function_names_label_the_resolved_declaration_1	theory	err	WrongFunctionArity(f,2,1)	theory T begin\nfunctions: f/2 [AC], f/2\nrule R: [ ] --> [ Out(f(x)) ]\nend\n
+dual_function_names_label_the_resolved_declaration_2	theory	err	WrongFunctionArity(f,2,1)	theory T begin\nfunctions: f/2, f/2 [AC]\nrule R: [ ] --> [ Out(f(x)) ]\nend\n
+builtin_conflicts_label_the_exact_function_variant	theory	err	ConflictingDeclaration(symmetric-encryption,Builtin)	theory T begin\nfunctions: senc/2 [AC], senc/1\nbuiltins: symmetric-encryption\nend\n
+diff_lemma_declarations_are_secondary_labels_1	diff	err	DuplicateDeclaration(L,Lemma)	theory D begin\nlemma L [left]: "T"\nlemma L [left]: "T"\nend\n
+diff_lemma_declarations_are_secondary_labels_2	diff	err	DuplicateDeclaration(L,Lemma)	theory D begin\nlemma L [right]: "T"\nlemma L [right]: "T"\nend\n
+diff_lemma_declarations_are_secondary_labels_3	diff	err	DuplicateDeclaration(L,Lemma)	theory D begin\nlemma L [left]: "T"\nlemma L: "T"\nend\n
+diff_lemma_declarations_are_secondary_labels_4	diff	err	DuplicateDeclaration(L,Lemma)	theory D begin\ndiffLemma L: by sorry\ndiffLemma L: by sorry\nend\n
+declaration_labels_use_the_original_source_positions_1	theory	err	WrongFunctionArity(f,2,1)	theory T begin functions: f/2 rule R: [] --> [Out(f(x))] end
+declaration_labels_use_the_original_source_positions_2	theory	err	ConflictingDeclaration(f,FunctionDeclaration)	theory T begin functions: f/2, f/3 end
+declaration_labels_use_the_original_source_positions_3	theory	err	DuplicateDeclaration(L,Lemma)	theory T begin lemma L: "T" lemma L: "T" end
+declaration_labels_use_the_original_source_positions_4	theory	err	DuplicateDeclaration(R,Restriction)	theory T begin restriction R: "T" restriction R: "T" end
+declaration_labels_use_the_original_source_positions_5	theory	err	WrongFunctionArity(senc,2,1)	theory T begin builtins: symmetric-encryption rule R: [] --> [Out(senc(x))] end
+declaration_labels_use_the_original_source_positions_6	theory	err	WrongFunctionArity(f,2,1)	theory T begin functions: f/2 lemma L: "T" by solve(Out(f(x)) @ #i) end
+quoted_path_errors_keep_the_actual_failure_position_1	theory	err	Expected(Include)	theory T begin\n#include "bad\\q"\nend
+quoted_path_errors_keep_the_actual_failure_position_2	theory	err	UnclosedDelimiter(")	theory T begin #include "unfinished
+lemma_attribute_labels_cover_the_keyword_only	theory	err	UnknownItem(bogus,LemmaAttribute)	theory T begin lemma L [bogus=something]: "T" end
+parenthesized_terms_remain_valid_formula_operands_1	theory	ok	ok	theory T begin\nfunctions: F/1\nlemma L: "(F(x)) = F(x)"\nend\n
+parenthesized_terms_remain_valid_formula_operands_2	theory	ok	ok	theory T begin\nfunctions: F/1\nlemma L: "(F(x)) << F(x)"\nend\n
+parenthesized_terms_preserve_semantic_failures	theory	err	WrongFunctionArity(F,2,1)	theory T begin\nfunctions: F/2\nlemma L: "(F(x)) = x"\nend\n
+identifier_spans_do_not_erase_comment_failures_1	theory	err	UnclosedBlockComment	theory T begin\nlemma l: "x = y /* unfinished"\nend\n
+identifier_spans_do_not_erase_comment_failures_2	theory	err	UnclosedBlockComment	theory T begin\nlemma l: "P(x) @ #i /* unfinished"\nend\n
+identifier_spans_do_not_erase_comment_failures_3	theory	err	UnclosedBlockComment	theory T begin lemma L: "x = y /* unfinished
+identifier_spans_do_not_erase_comment_failures_4	theory	err	UnclosedBlockComment	theory T begin rule R: [Out(x /* unfinished
+later_proof_comments_do_not_replace_earlier_failures_1	theory	err	WrongFunctionArity(f,2,1)	theory T begin functions: f/2 lemma L: "T" by solve(Out(f(x)) @ #i) /* unfinished
+later_proof_comments_do_not_replace_earlier_failures_2	theory	err	Expected(Proof)	theory T begin lemma L: "T" by nonsense /* unfinished
+parenthesized_formulas_preserve_inner_failures_1	theory	err	UndeclaredFunction(g)	theory T begin lemma L: "(Out(g(x)) @ #i)" end
+parenthesized_formulas_preserve_inner_failures_2	theory	err	FactArity(Out,2)	theory T begin lemma L: "(Out(x,y) @ #i)" end
+parenthesized_formulas_preserve_inner_failures_3	theory	err	Expected(Term)	theory T begin lemma L: "(P(x) & ?)" end
+long_duplicate_names_keep_the_original_declaration_label_1	theory	err	DuplicateDeclaration(LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL…,Lemma)	theory T begin lemma LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL: "T" lemma LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL: "T" end
+long_duplicate_names_keep_the_original_declaration_label_2	theory	err	DuplicateDeclaration(λλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλ…,Lemma)	theory T begin lemma λλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλ: "T" lemma λλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλλ: "T" end
+malformed_goal_heads_preserve_the_furthest_failure_1	theory	err	Expected(Proof)	theory T begin lemma L: "T" by solve(G(x) ▶x #i) end
+malformed_goal_heads_preserve_the_furthest_failure_2	theory	err	Expected(Proof)	theory T begin lemma L: "T" by solve((#i, x) ~~> (#j, 0)) end
+malformed_goal_heads_preserve_the_furthest_failure_3	theory	ok	ok	theory T begin lemma L: "T" by solve(G(x) ▶₀ #i) end
+malformed_goal_heads_preserve_the_furthest_failure_4	theory	ok	ok	theory T begin lemma L: "T" by solve((#i, 0) ~~> (#j, 0)) end
+malformed_goal_heads_preserve_the_furthest_failure_5	theory	ok	ok	theory T begin lemma L: "T" by solve(G(x) @ #i) end
+malformed_goal_heads_preserve_the_furthest_failure_6	theory	ok	ok	theory T begin lemma L: "T" by solve(x = y) end
+relation_errors_preserve_application_causes_1	theory	err	UndeclaredFunction(g)	theory T begin lemma L: "g(x) = x" end
+relation_errors_preserve_application_causes_2	theory	err	UndeclaredFunction(g)	theory T begin lemma L: "(g(x)) = x" end
+relation_errors_preserve_application_causes_3	theory	err	UndeclaredFunction(g)	theory T begin lemma L: "g{x}x = x" end
+relation_errors_preserve_application_causes_4	theory	err	UndeclaredFunction(G)	theory T begin lemma L: "G(x) = x" end
+relation_errors_preserve_application_causes_5	theory	err	WrongFunctionArity(G,2,1)	theory T begin functions: G/2 lemma L: "G(x) = x" end
+relation_errors_preserve_application_causes_6	theory	err	WrongFunctionArity(G,2,1)	theory T begin functions: G/2 lemma L: "(G(x)) = x" end
+# ~ An undeclared predicate: HS rejects it while parsing, the port when it elaborates (the CLI outcome is the same).
+relation_errors_preserve_application_causes_7	theory	err	~ok	theory T begin functions: G/2 lemma L: "G(x)" end
+relation_errors_preserve_application_causes_8	theory	err	~ok	theory T begin functions: G/2 lemma L: "(G(x))" end
+relation_errors_preserve_application_causes_9	theory	ok	ok	theory T begin functions: G/2 lemma L: "G(x) @ #i" end
+relation_errors_preserve_application_causes_10	theory	err	~ok	theory T begin functions: G/2 lemma L: "G(x) ==> G(x)" end
+literal_comment_failures_keep_the_consumed_position_1	theory	err	UnclosedBlockComment	theory T begin rule R: [Out('/* unfinished
+literal_comment_failures_keep_the_consumed_position_2	theory	err	UnclosedBlockComment	theory T begin lemma L: "T" by solve(Out('/* unfinished
+literal_comment_failures_keep_the_consumed_position_3	theory	err	UnclosedBlockComment	theory T begin lemma L: "Out('/* unfinished
+literal_comment_failures_keep_the_consumed_position_4	theory	err	UnclosedBlockComment	theory T begin rule R: [Out(~'/* unfinished
+literal_comment_failures_keep_the_consumed_position_5	theory	err	UnclosedBlockComment	theory T begin builtins: natural-numbers rule R: [Out(%'/* unfinished
+literal_comment_failures_keep_the_consumed_position_6	theory	err	Expected(Term)	theory T begin lemma L: "T" by solve(Out('bad\n)) /* later
+failed_formula_alternatives_do_not_leak_identifier_offsets_1	theory	err	Expected(Formula)	theory T begin builtins: diffie-hellman functions: Q/1 predicates: P(x) <=> T, P(x) <=> Q(x) ^ z end
+failed_formula_alternatives_do_not_leak_identifier_offsets_2	theory	err	Expected(Formula)	theory T begin builtins: diffie-hellman functions: Q/0 predicates: P(x) <=> T, P(x) <=> Q() ^ z end
+fact_fallback_preserves_consumed_comments_1	theory	err	UnclosedBlockComment	theory T begin\nlemma l: "G(x) /* unfinished"\nend\n
+fact_fallback_preserves_consumed_comments_2	theory	err	UnclosedBlockComment	theory T begin\nlemma l: "G() /* unfinished"\nend\n
+fact_fallback_preserves_consumed_comments_3	theory	err	UnclosedBlockComment	theory T begin\nlemma l: "(G(x)) /* unfinished"\nend\n
+malformed_compound_operands_keep_application_errors_1	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: diffie-hellman functions: G/2 lemma L: "G(x) ^ y = z" end
+malformed_compound_operands_keep_application_errors_2	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: diffie-hellman functions: G/2 lemma L: "(G(x)) ^ y = z" end
+malformed_compound_operands_keep_application_errors_3	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: diffie-hellman functions: G/2 lemma L: "((G(x))) ^ y = z" end
+malformed_compound_operands_keep_application_errors_4	theory	err	UndeclaredFunction(missing)	theory T begin builtins: diffie-hellman functions: G/1 lemma L: "G(x) ^ missing(y) = z" end
+malformed_compound_operands_keep_application_errors_5	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: diffie-hellman functions: G/2 lemma L: "G(x) * y = z" end
+malformed_compound_operands_keep_application_errors_6	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: diffie-hellman functions: G/2 lemma L: "(G(x)) * y = z" end
+malformed_compound_operands_keep_application_errors_7	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: diffie-hellman functions: G/2 lemma L: "((G(x))) * y = z" end
+malformed_compound_operands_keep_application_errors_8	theory	err	UndeclaredFunction(missing)	theory T begin builtins: diffie-hellman functions: G/1 lemma L: "G(x) * missing(y) = z" end
+malformed_compound_operands_keep_application_errors_9	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: multiset functions: G/2 lemma L: "G(x) ++ y = z" end
+malformed_compound_operands_keep_application_errors_10	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: multiset functions: G/2 lemma L: "(G(x)) ++ y = z" end
+malformed_compound_operands_keep_application_errors_11	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: multiset functions: G/2 lemma L: "((G(x))) ++ y = z" end
+malformed_compound_operands_keep_application_errors_12	theory	err	UndeclaredFunction(missing)	theory T begin builtins: multiset functions: G/1 lemma L: "G(x) ++ missing(y) = z" end
+malformed_compound_operands_keep_application_errors_13	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: xor functions: G/2 lemma L: "G(x) ⊕ y = z" end
+malformed_compound_operands_keep_application_errors_14	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: xor functions: G/2 lemma L: "(G(x)) ⊕ y = z" end
+malformed_compound_operands_keep_application_errors_15	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: xor functions: G/2 lemma L: "((G(x))) ⊕ y = z" end
+malformed_compound_operands_keep_application_errors_16	theory	err	UndeclaredFunction(missing)	theory T begin builtins: xor functions: G/1 lemma L: "G(x) ⊕ missing(y) = z" end
+malformed_compound_operands_keep_application_errors_17	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: xor functions: G/2 lemma L: "G(x) XOR y = z" end
+malformed_compound_operands_keep_application_errors_18	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: xor functions: G/2 lemma L: "(G(x)) XOR y = z" end
+malformed_compound_operands_keep_application_errors_19	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: xor functions: G/2 lemma L: "((G(x))) XOR y = z" end
+malformed_compound_operands_keep_application_errors_20	theory	err	UndeclaredFunction(missing)	theory T begin builtins: xor functions: G/1 lemma L: "G(x) XOR missing(y) = z" end
+malformed_compound_operands_keep_application_errors_21	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: multiset functions: G/2 lemma L: "G(x) + y = z" end
+malformed_compound_operands_keep_application_errors_22	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: multiset functions: G/2 lemma L: "(G(x)) + y = z" end
+malformed_compound_operands_keep_application_errors_23	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: multiset functions: G/2 lemma L: "((G(x))) + y = z" end
+malformed_compound_operands_keep_application_errors_24	theory	err	UndeclaredFunction(missing)	theory T begin builtins: multiset functions: G/1 lemma L: "G(x) + missing(y) = z" end
+malformed_compound_operands_keep_application_errors_25	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: natural-numbers functions: G/2 lemma L: "G(x) %+ y = z" end
+malformed_compound_operands_keep_application_errors_26	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: natural-numbers functions: G/2 lemma L: "(G(x)) %+ y = z" end
+malformed_compound_operands_keep_application_errors_27	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: natural-numbers functions: G/2 lemma L: "((G(x))) %+ y = z" end
+malformed_compound_operands_keep_application_errors_28	theory	err	UndeclaredFunction(missing)	theory T begin builtins: natural-numbers functions: G/1 lemma L: "G(x) %+ missing(y) = z" end
+malformed_compound_operands_keep_application_errors_29	theory	err	WrongFunctionArity(G,2,1)	theory T begin functions: X/2 [AC] functions: G/2 lemma L: "G(x) X y = z" end
+malformed_compound_operands_keep_application_errors_30	theory	err	WrongFunctionArity(G,2,1)	theory T begin functions: X/2 [AC] functions: G/2 lemma L: "(G(x)) X y = z" end
+malformed_compound_operands_keep_application_errors_31	theory	err	WrongFunctionArity(G,2,1)	theory T begin functions: X/2 [AC] functions: G/2 lemma L: "((G(x))) X y = z" end
+malformed_compound_operands_keep_application_errors_32	theory	err	UndeclaredFunction(missing)	theory T begin functions: X/2 [AC] functions: G/1 lemma L: "G(x) X missing(y) = z" end
+# ~ An undeclared predicate: HS rejects it while parsing, the port when it elaborates (the CLI outcome is the same).
+malformed_compound_operands_keep_application_errors_33	theory	err	~ok	theory T begin functions: G/2 lemma L: "(G(x)) & T" end
+malformed_compound_operands_keep_application_errors_34	theory	err	~ok	theory T begin functions: G/2 lemma L: "G()" end
+malformed_compound_operands_keep_application_errors_35	theory	err	~ok	theory T begin functions: G/2 lemma L: "G(x)" functions: h/0 end
+malformed_compound_operands_keep_application_errors_36	theory	err	UndeclaredFunction(missing)	theory T begin functions: G/2 lemma L: "G(x) & missing(x) = y" end
+predicate_syntax_errors_do_not_become_function_errors_1	theory	ok	ok	theory T begin  predicates: G(x) <=> T lemma L: "G(x)" end
+predicate_syntax_errors_do_not_become_function_errors_2	theory	err	Expected(Lemma)	theory T begin  predicates: G(x) <=> T lemma L: "G(x) garbage" end
+predicate_syntax_errors_do_not_become_function_errors_3	theory	err	UnclosedBlockComment	theory T begin  predicates: G(x) <=> T lemma L: "G(x) /* unfinished
+predicate_syntax_errors_do_not_become_function_errors_4	theory	ok	ok	theory T begin  predicates: G(x) <=> T lemma L: "(G(x))" end
+predicate_syntax_errors_do_not_become_function_errors_5	theory	err	Expected(Lemma)	theory T begin  predicates: G(x) <=> T lemma L: "(G(x)) garbage" end
+predicate_syntax_errors_do_not_become_function_errors_6	theory	err	UnclosedBlockComment	theory T begin  predicates: G(x) <=> T lemma L: "(G(x)) /* unfinished
+predicate_syntax_errors_do_not_become_function_errors_7	theory	ok	ok	theory T begin  predicates: G(x) <=> T lemma L: "((G(x)))" end
+predicate_syntax_errors_do_not_become_function_errors_8	theory	err	Expected(Lemma)	theory T begin  predicates: G(x) <=> T lemma L: "((G(x))) garbage" end
+predicate_syntax_errors_do_not_become_function_errors_9	theory	err	UnclosedBlockComment	theory T begin  predicates: G(x) <=> T lemma L: "((G(x))) /* unfinished
+predicate_syntax_errors_do_not_become_function_errors_10	theory	err	Expected(Formula)	theory T begin  predicates: G(x) <=> T lemma L: "(G(x)" end
+predicate_syntax_errors_do_not_become_function_errors_11	theory	err	Expected(Formula)	theory T begin  predicates: G(x) <=> T lemma L: "((G(x))" end
+predicate_syntax_errors_do_not_become_function_errors_12	theory	err	Expected(Lemma)	theory T begin  predicates: G(x) <=> T lemma L: "G(x) ^ y = z" end
+predicate_syntax_errors_do_not_become_function_errors_13	theory	err	Expected(Lemma)	theory T begin  predicates: G(x) <=> T lemma L: "G(x) * y = z" end
+predicate_syntax_errors_do_not_become_function_errors_14	theory	err	Expected(Lemma)	theory T begin  predicates: G(x) <=> T lemma L: "G(x) ++ y = z" end
+predicate_syntax_errors_do_not_become_function_errors_15	theory	err	Expected(Lemma)	theory T begin  predicates: G(x) <=> T lemma L: "G(x) %+ y = z" end
+predicate_syntax_errors_do_not_become_function_errors_16	theory	err	Expected(Lemma)	theory T begin  predicates: G(x) <=> T lemma L: "G(x) ⊕ y = z" end
+predicate_syntax_errors_do_not_become_function_errors_17	theory	err	Expected(Lemma)	theory T begin  predicates: G(x) <=> T lemma L: "G(x) XOR y = z" end
+predicate_syntax_errors_do_not_become_function_errors_18	theory	err	Expected(Lemma)	theory T begin  predicates: G(x) <=> T lemma L: "G(x) XORsuffix" end
+predicate_syntax_errors_do_not_become_function_errors_19	theory	ok	ok	theory T begin functions: G/2 predicates: G(x) <=> T lemma L: "G(x)" end
+predicate_syntax_errors_do_not_become_function_errors_20	theory	err	Expected(Lemma)	theory T begin functions: G/2 predicates: G(x) <=> T lemma L: "G(x) garbage" end
+predicate_syntax_errors_do_not_become_function_errors_21	theory	err	UnclosedBlockComment	theory T begin functions: G/2 predicates: G(x) <=> T lemma L: "G(x) /* unfinished
+predicate_syntax_errors_do_not_become_function_errors_22	theory	ok	ok	theory T begin functions: G/2 predicates: G(x) <=> T lemma L: "(G(x))" end
+predicate_syntax_errors_do_not_become_function_errors_23	theory	err	Expected(Lemma)	theory T begin functions: G/2 predicates: G(x) <=> T lemma L: "(G(x)) garbage" end
+predicate_syntax_errors_do_not_become_function_errors_24	theory	err	UnclosedBlockComment	theory T begin functions: G/2 predicates: G(x) <=> T lemma L: "(G(x)) /* unfinished
+predicate_syntax_errors_do_not_become_function_errors_25	theory	ok	ok	theory T begin functions: G/2 predicates: G(x) <=> T lemma L: "((G(x)))" end
+predicate_syntax_errors_do_not_become_function_errors_26	theory	err	Expected(Lemma)	theory T begin functions: G/2 predicates: G(x) <=> T lemma L: "((G(x))) garbage" end
+predicate_syntax_errors_do_not_become_function_errors_27	theory	err	UnclosedBlockComment	theory T begin functions: G/2 predicates: G(x) <=> T lemma L: "((G(x))) /* unfinished
+predicate_syntax_errors_do_not_become_function_errors_28	theory	err	Expected(Formula)	theory T begin functions: G/2 predicates: G(x) <=> T lemma L: "(G(x)" end
+predicate_syntax_errors_do_not_become_function_errors_29	theory	err	Expected(Formula)	theory T begin functions: G/2 predicates: G(x) <=> T lemma L: "((G(x))" end
+predicate_syntax_errors_do_not_become_function_errors_30	theory	err	Expected(Lemma)	theory T begin functions: G/2 predicates: G(x) <=> T lemma L: "G(x) ^ y = z" end
+predicate_syntax_errors_do_not_become_function_errors_31	theory	err	Expected(Lemma)	theory T begin functions: G/2 predicates: G(x) <=> T lemma L: "G(x) * y = z" end
+predicate_syntax_errors_do_not_become_function_errors_32	theory	err	Expected(Lemma)	theory T begin functions: G/2 predicates: G(x) <=> T lemma L: "G(x) ++ y = z" end
+predicate_syntax_errors_do_not_become_function_errors_33	theory	err	Expected(Lemma)	theory T begin functions: G/2 predicates: G(x) <=> T lemma L: "G(x) %+ y = z" end
+predicate_syntax_errors_do_not_become_function_errors_34	theory	err	Expected(Lemma)	theory T begin functions: G/2 predicates: G(x) <=> T lemma L: "G(x) ⊕ y = z" end
+predicate_syntax_errors_do_not_become_function_errors_35	theory	err	Expected(Lemma)	theory T begin functions: G/2 predicates: G(x) <=> T lemma L: "G(x) XOR y = z" end
+predicate_syntax_errors_do_not_become_function_errors_36	theory	err	Expected(Lemma)	theory T begin functions: G/2 predicates: G(x) <=> T lemma L: "G(x) XORsuffix" end
+term_operator_prefixes_keep_the_predicate_error_1	theory	err	Expected(Lemma)	theory T begin builtins: xor functions: G/2 predicates: G(x) <=> T lemma L: "G(x) XORsuffix" end
+term_operator_prefixes_keep_the_predicate_error_2	theory	err	Expected(Lemma)	theory T begin functions: X/2 [AC] functions: G/2 predicates: G(x) <=> T lemma L: "G(x) Xsuffix" end
+term_operator_prefixes_keep_the_predicate_error_3	theory	err	Expected(Lemma)	theory T begin builtins: multiset functions: G/2 predicates: G(x) <=> T lemma L: "G(x) +>" end
+term_operator_prefixes_keep_the_predicate_error_4	theory	err	Expected(Lemma)	theory T begin builtins: diffie-hellman functions: G/2 predicates: G(x) <=> T lemma L: "G(x) *}" end
+incomplete_term_continuations_preserve_application_errors_1	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: diffie-hellman functions: G/2 lemma L: "G(x)^y =" end
+incomplete_term_continuations_preserve_application_errors_2	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: diffie-hellman functions: G/2 lemma L: "(G(x))^missing(y)" end
+incomplete_term_continuations_preserve_application_errors_3	theory	err	WrongFunctionArity(G,2,1)	theory T begin builtins: diffie-hellman functions: G/2 lemma L: "G(x) = missing(" end
+standalone_proof_errors_have_proof_context_1	theory	err	Expected(Proof)	theory T begin\nlemma l: "T"\nby\nend\n
+standalone_proof_errors_have_proof_context_2	theory	err	UnknownItem(trailing,TheoryItem)	theory T begin\nlemma l: "T"\nby sorry trailing\nend\n
+raw_attribute_values_report_the_required_delimiter_1	theory	err	Expected(Rule)	theory T begin rule R [process=(abc(def))] : [] --> [] end
+raw_attribute_values_report_the_required_delimiter_2	theory	err	UnclosedDelimiter(()	theory T begin rule R [process=(abc
+raw_attribute_values_report_the_required_delimiter_3	theory	err	Expected(Rule)	theory T begin rule R [x-demo=(abc(def))] : [] --> [] end
+raw_attribute_values_report_the_required_delimiter_4	theory	err	UnclosedDelimiter(()	theory T begin rule R [x-demo=(abc
+proof_goal_heads_preserve_consumed_comment_errors_1	theory	err	UnclosedBlockComment	theory T begin\nlemma l: "T"\nby solve(!G(x)[no_precomp] /* unfinished)\nend\n
+proof_goal_heads_preserve_consumed_comment_errors_2	theory	err	UnclosedBlockComment	theory T begin\nlemma l: "T"\nby solve(G(x) ▶ /* unfinished)\nend\n
+proof_goal_heads_preserve_consumed_comment_errors_3	theory	err	UnclosedBlockComment	theory T begin\nlemma l: "T"\nby solve(G(x) @ /* unfinished)\nend\n
+proof_goal_heads_preserve_consumed_comment_errors_4	theory	err	UnclosedBlockComment	theory T begin\nlemma l: "T"\nby solve((#i, 0) ~~> /* unfinished)\nend\n
+trailing_input_has_structured_boundary_expectations	theory	err	Expected(Lemma)	theory T begin\nlemma l: "T ?"\nend\n
+export_errors_keep_the_lexers_failure_position_1	theory	err	Expected(Export)	theory T begin export e: "bad\\q" end
+export_errors_keep_the_lexers_failure_position_2	theory	err	Expected(Export)	theory T begin export e: ?
+export_errors_keep_the_lexers_failure_position_3	theory	err	UnclosedDelimiter(")	theory T begin export e: "unfinished
+export_errors_keep_the_lexers_failure_position_4	theory	err	UnclosedDelimiter(")	theory T begin export e: "escaped\\"
+single_quoted_syntax_errors_are_structured_1	theory	err	Expected(Term)	theory T begin builtins: natural-numbers rule R: [] --> [Out(''
+single_quoted_syntax_errors_are_structured_2	theory	err	Expected(Term)	theory T begin builtins: natural-numbers rule R: [] --> [Out('é\n
+single_quoted_syntax_errors_are_structured_3	theory	err	Expected(Term)	theory T begin builtins: natural-numbers rule R: [] --> [Out('é
+single_quoted_syntax_errors_are_structured_4	theory	err	Expected(Term)	theory T begin builtins: natural-numbers rule R: [] --> [Out(~''
+single_quoted_syntax_errors_are_structured_5	theory	err	Expected(Term)	theory T begin builtins: natural-numbers rule R: [] --> [Out(~'é\n
+single_quoted_syntax_errors_are_structured_6	theory	err	Expected(Term)	theory T begin builtins: natural-numbers rule R: [] --> [Out(~'é
+single_quoted_syntax_errors_are_structured_7	theory	err	Expected(Term)	theory T begin builtins: natural-numbers rule R: [] --> [Out(%''
+single_quoted_syntax_errors_are_structured_8	theory	err	Expected(Term)	theory T begin builtins: natural-numbers rule R: [] --> [Out(%'é\n
+single_quoted_syntax_errors_are_structured_9	theory	err	Expected(Term)	theory T begin builtins: natural-numbers rule R: [] --> [Out(%'é
+single_quoted_syntax_errors_are_structured_10	theory	err	UnclosedBlockComment	theory T begin rule R: [] --> [Out(' /* unfinished
+include_missing_file	theory	err	IncludeIo	theory T begin\n#include "does-not-exist.spthy"\nend\n
+include_missing_file_with_escapes	theory	err	IncludeIo	theory T begin\n#include "no\\x2dsuch-\\&é.spthy"\nend\n
+include_error_wins_over_a_root_comment	theory	err	UnknownItem(bogus,TheoryItem)	theory T begin\n#include "bad.inc" /* unfinished\n@@@ bad.inc\nbogus
+include_unterminated_comment_in_predicate	theory	err	UnclosedBlockComment	theory T begin\n#include "bad.inc"\nend\n@@@ bad.inc\npredicates: P(x) <=> G(x) /* unfinished
+# ~ HS stops reading an included file at the first item it cannot start and drops the rest; the port parses the whole file.
+include_unterminated_comment_in_lemma	theory	ok	~UnclosedBlockComment	theory T begin\n#include "bad.inc"\nend\n@@@ bad.inc\nlemma L: "x = /* unfinished
+include_unterminated_comment_in_process	theory	err	UnclosedBlockComment	theory T begin\n#include "bad.inc"\nend\n@@@ bad.inc\nprocess: in(=x /* unfinished
+# ~ HS stops reading an included file at the first item it cannot start and drops the rest; the port parses the whole file.
+include_fragment_cannot_end_the_theory	theory	ok	~Expected(Include)	theory T begin #include "fragment.spthy" end\n@@@ fragment.spthy\nend
+
+# --- Signature, declaration, pattern, fact, color, macro, preprocessor and rule-header checks.
+builtin_operators_require_their_signature_flags_1	theory	err	Expected(Rule)	theory T begin\nrule R: [ In(x), In(y) ] --[ ]-> [ Out(x ++ y) ]\nend\n
+builtin_operators_require_their_signature_flags_2	theory	ok	ok	theory T begin\nbuiltins: multiset\nrule R: [ In(x), In(y) ] --[ ]-> [ Out(x ++ y) ]\nend\n
+builtin_operators_require_their_signature_flags_3	theory	err	Expected(Rule)	theory T begin\nrule R: [ In(x), In(y) ] --[ ]-> [ Out(x + y) ]\nend\n
+builtin_operators_require_their_signature_flags_4	theory	ok	ok	theory T begin\nbuiltins: multiset\nrule R: [ In(x), In(y) ] --[ ]-> [ Out(x + y) ]\nend\n
+builtin_operators_require_their_signature_flags_5	theory	err	Expected(Rule)	theory T begin\nrule R: [ In(x), In(y) ] --[ ]-> [ Out(x %+ y) ]\nend\n
+builtin_operators_require_their_signature_flags_6	theory	ok	ok	theory T begin\nbuiltins: natural-numbers\nrule R: [ In(x), In(y) ] --[ ]-> [ Out(x %+ y) ]\nend\n
+builtin_operators_require_their_signature_flags_7	theory	err	Expected(Rule)	theory T begin\nrule R: [ In(x), In(y) ] --[ ]-> [ Out(x XOR y) ]\nend\n
+builtin_operators_require_their_signature_flags_8	theory	ok	ok	theory T begin\nbuiltins: xor\nrule R: [ In(x), In(y) ] --[ ]-> [ Out(x XOR y) ]\nend\n
+builtin_operators_require_their_signature_flags_9	theory	err	Expected(Rule)	theory T begin\nrule R: [ In(x), In(y) ] --[ ]-> [ Out(x ⊕ y) ]\nend\n
+builtin_operators_require_their_signature_flags_10	theory	ok	ok	theory T begin\nbuiltins: xor\nrule R: [ In(x), In(y) ] --[ ]-> [ Out(x ⊕ y) ]\nend\n
+builtin_operators_require_their_signature_flags_11	theory	err	Expected(Rule)	theory T begin\nrule R: [ In(x), In(y) ] --[ ]-> [ Out(x * y) ]\nend\n
+builtin_operators_require_their_signature_flags_12	theory	ok	ok	theory T begin\nbuiltins: diffie-hellman\nrule R: [ In(x), In(y) ] --[ ]-> [ Out(x * y) ]\nend\n
+builtin_operators_require_their_signature_flags_13	theory	err	Expected(Rule)	theory T begin\nrule R: [ In(x), In(y) ] --[ ]-> [ Out(x ^ y) ]\nend\n
+builtin_operators_require_their_signature_flags_14	theory	ok	ok	theory T begin\nbuiltins: diffie-hellman\nrule R: [ In(x), In(y) ] --[ ]-> [ Out(x ^ y) ]\nend\n
+builtin_operators_require_their_signature_flags_15	theory	ok	ok	theory T begin\nbuiltins: bilinear-pairing\nrule R: [ In(x), In(y) ] --[ ]-> [ Out(x * y) ]\nend\n
+builtin_operators_require_their_signature_flags_16	theory	ok	ok	theory T begin\nbuiltins: bilinear-pairing\nrule R: [ In(x), In(y) ] --[ ]-> [ Out(x ^ y) ]\nend\n
+builtin_operators_require_their_signature_flags_17	theory	err	Expected(Rule)	theory T begin\nbuiltins: multiset\nrule R: [ In(x), In(y) ] --[ ]-> [ Out(x ^ y) ]\nend\n
+nat_literals_and_variables_need_their_builtin_1	theory	err	Custom	theory T begin\nrule R: [ ] --> [ Out(1:nat) ]\nend
+nat_literals_and_variables_need_their_builtin_2	theory	ok	ok	theory T begin\nbuiltins: natural-numbers\nrule R: [ ] --> [ Out(1:nat) ]\nend
+nat_literals_and_variables_need_their_builtin_3	theory	err	Custom	theory T begin\nrule R: [ ] --> [ Out(%1) ]\nend
+nat_literals_and_variables_need_their_builtin_4	theory	ok	ok	theory T begin\nbuiltins: natural-numbers\nrule R: [ ] --> [ Out(%1) ]\nend
+nat_literals_and_variables_need_their_builtin_5	theory	err	Custom	theory T begin\nrule R: [ ] --> [ Out(%n) ]\nend
+nat_literals_and_variables_need_their_builtin_6	theory	ok	ok	theory T begin\nbuiltins: natural-numbers\nrule R: [ ] --> [ Out(%n) ]\nend
+nat_literals_and_variables_need_their_builtin_7	theory	err	Custom	theory T begin\nrule R: [ ] --> [ Out(%12) ]\nend
+nat_literals_and_variables_need_their_builtin_8	theory	ok	ok	theory T begin\nbuiltins: natural-numbers\nrule R: [ ] --> [ Out(%12) ]\nend
+nat_literals_and_variables_need_their_builtin_9	theory	err	Custom	theory T begin\nrule R: [ ] --> [ Out(n:nat) ]\nend
+nat_literals_and_variables_need_their_builtin_10	theory	ok	ok	theory T begin\nbuiltins: natural-numbers\nrule R: [ ] --> [ Out(n:nat) ]\nend
+nat_literals_and_variables_need_their_builtin_11	theory	err	Custom	theory T begin\nrule R: [ ] --> [ Out(%'n') ]\nend
+nat_literals_and_variables_need_their_builtin_12	theory	ok	ok	theory T begin\nbuiltins: natural-numbers\nrule R: [ ] --> [ Out(%'n') ]\nend
+disabled_nat_diagnostics_identify_the_construct_1	theory	err	Custom	theory T begin rule R: [] --> [Out(%n)] end
+disabled_nat_diagnostics_identify_the_construct_2	theory	ok	ok	theory T begin builtins: natural-numbers rule R: [] --> [Out(%n)] end
+disabled_nat_diagnostics_identify_the_construct_3	theory	err	Custom	theory T begin lemma L: "All %n. T" end
+disabled_nat_diagnostics_identify_the_construct_4	theory	ok	ok	theory T begin builtins: natural-numbers lemma L: "All %n. T" end
+disabled_nat_diagnostics_identify_the_construct_5	theory	err	Custom	theory T begin process: in('c', =%n) end
+disabled_nat_diagnostics_identify_the_construct_6	theory	ok	ok	theory T begin builtins: natural-numbers process: in('c', =%n) end
+multiset_comparison_needs_its_builtin_1	theory	err	Custom	theory T begin\nrestriction R: "All x y. x (<) y"\nend
+multiset_comparison_needs_its_builtin_2	theory	ok	ok	theory T begin\nbuiltins: multiset\nrestriction R: "All x y. x (<) y"\nend
+both_declaration_orders_are_accepted_1	theory	ok	ok	theory T begin\n\nfunctions: f/2 [AC], f/2\n\nend\n
+both_declaration_orders_are_accepted_2	theory	ok	ok	theory T begin\n\nfunctions: f/2, f/2 [AC]\n\nend\n
+both_declaration_orders_are_accepted_3	theory	ok	ok	theory T begin\n\nfunctions: f/2 [AC], f/3\n\nend\n
+a_noeq_first_arity_mismatch_conflicts	theory	err	ConflictingDeclaration(f,FunctionDeclaration)	theory T begin functions: f/3, f/2 [AC] end
+duplicate_fires_before_a_later_parse_error	theory	err	ConflictingDeclaration(R1,Rule)	theory T begin\n\nrule R1: [ ] --> [ Out('a') ]\nrule R1: [ ] --> [ Out('b') ]\n\nrule Broken: [ ] --> [\nend\n
+identical_restrict_duplicate_dies_at_the_restriction	theory	err	DuplicateDeclaration(Restr_R1_1,Restriction)	theory T begin\n\nrule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\nrule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\n\nend\n
+user_restriction_blocks_restrict_expansion	theory	err	DuplicateDeclaration(Restr_R1_1,Restriction)	theory T begin\n\nrestriction Restr_R1_1:\n  "All x #i #j. B(x) @ #i & B(x) @ #j ==> #i = #j"\n\nrule R1: [ ] --[ _restrict( All x #i #j. A(x) @ #i & A(x) @ #j ==> #i = #j ) ]-> [ Out('a') ]\n\nend\n
+duplicate_lemma_with_proof_is_rejected	theory	err	DuplicateDeclaration(l,Lemma)	theory T begin\nrule r: [ Fr(~k) ] --> [ Out(~k) ]\nlemma l: exists-trace "Ex #i x. K(x)@i"\nlemma l: exists-trace "Ex #i x. K(x)@i"\nsimplify\nby sorry\nend\n
+sided_lemmas_still_share_the_regular_lemma_namespace	theory	err	DuplicateDeclaration(l,Lemma)	theory T begin\nlemma l [left]: exists-trace "Ex #i. A() @ #i"\nlemma l [left]: exists-trace "Ex #i. A() @ #i"\nend\n
+lemma_and_restriction_names_do_not_collide	theory	ok	ok	theory T begin\nrule r: [ Fr(~k) ] --> [ Out(~k) ]\nrestriction Smaller: "All #i #j x. A(x)@i & A(x)@j ==> #i = #j"\nlemma l: exists-trace "Ex #i x. K(x)@i"\nlemma Smaller: exists-trace "Ex #i x. K(x)@i"\nend\n
+duplicate_predicate_across_blocks_is_rejected	theory	err	DuplicateDeclaration(P,Predicate)	theory T begin\npredicates: P(x) <=> Ex #i. A(x)@i\npredicates: P(x) <=> Ex #i. A(x)@i\nrule r: [ In(x) ] --> [ Out(x) ]\nend\n
+duplicate_predicate_after_paren_is_rejected	theory	err	DuplicateDeclaration(P,Predicate)	theory T begin\npredicates: P(x) <=> (Ex #i. A(x)@i)\npredicates: P(x) <=> (Ex #i. A(x)@i)\nrule r: [ In(x) ] --> [ Out(x) ]\nend\n
+predicate_annotations_do_not_distinguish_declarations	theory	err	DuplicateDeclaration(P,Predicate)	theory T begin\npredicates: P(x)[-] <=> x = x\npredicates: P(y)[+] <=> y = y\nend\n
+predicate_collides_with_builtin_smaller	theory	err	DuplicateDeclaration(Smaller,Predicate)	theory T begin\nbuiltins: multiset\npredicates: Smaller(x,y) <=> Ex z. y = x ++ z\nrule r: [ In(x) ] --> [ Out(x) ]\nend\n
+duplicate_persistent_predicate_is_rejected	theory	err	DuplicateDeclaration(P,Predicate)	theory T begin\npredicates: !P(x) <=> Ex #i. A(x)@i\npredicates: !P(x) <=> Ex #i. A(x)@i\nrule r: [ In(x) ] --> [ Out(x) ]\nend\n
+predicate_collision_keys_preserve_arity_and_multiplicity_1	theory	ok	ok	theory T begin predicates: P(x) <=> T, P(x,y) <=> T, !P(x) <=> T end
+predicate_collision_keys_preserve_arity_and_multiplicity_2	theory	err	DuplicateDeclaration(P,Predicate)	theory T begin predicates: ! /* first */ P(x) <=> T, ! /* second */ P(y) <=> T end
+predicate_block_finishes_parsing_before_duplicate_validation	theory	err	Expected(Term)	theory T begin predicates: P(x) <=> T, P(y) <=> T, Q(z) <=> 
+explicit_family_names_include_the_parent_and_each_member_1	theory	err	DuplicateDeclaration(R,Rule)	theory T begin\nrule R: [] --> [] variants rule (modulo AC) R: [] --> []\nend
+explicit_family_names_include_the_parent_and_each_member_2	theory	err	DuplicateDeclaration(R,Rule)	theory T begin\nrule R: [] --> [] variants rule (modulo AC) V: [] --> [], rule (modulo AC) V: [] --> []\nend
+explicit_member_names_may_overlap_unrelated_families	theory	ok	ok	theory T begin\nrule R: [] --> [] variants rule (modulo AC) V: [] --> []\nrule V: [] --> [] variants rule (modulo AC) W: [] --> []\nrule S: [] --> [] variants rule (modulo AC) V: [] --> []\nend
+pattern_markers_require_a_variable_1	theory	err	Expected(Term)	theory T begin\nprocess:\n  in('c', =<x, y>); out('c', 'k')\nend\n
+pattern_markers_require_a_variable_2	theory	err	Expected(Term)	theory T begin\nprocess:\n  in('c', ='d'); out('c', 'k')\nend\n
+eq_on_an_application_is_rejected_at_the_open_paren_1	theory	err	Expected(Process)	theory T begin\nfunctions: h/1\nprocess:\n  in('c', =h(x)); out('c', 'ok')\nend\n
+eq_on_an_application_is_rejected_at_the_open_paren_2	theory	err	Expected(Process)	theory T begin\nfunctions: h/1\nprocess:\n  in('c', y); let =h(x) = y in out('c', 'ok')\nend\n
+eq_starts_no_term_outside_pattern_positions_1	theory	err	Expected(Term)	theory T begin\nprocess:\n  in('c', x); out('c', =x)\nend\n
+eq_starts_no_term_outside_pattern_positions_2	theory	err	Expected(Term)	theory T begin\nrule R: [ In(=x) ] --> [ Out(x) ]\nend\n
+lowercase_fact_names_point_at_the_name_1	theory	err	InvalidFactName(foo)	theory T begin\nrule R: [ foo(x) ] --> []\nend
+lowercase_fact_names_point_at_the_name_2	theory	err	InvalidFactName(foo)	theory T begin\nrule R: [] --> [ foo('a') ]\nend
+lowercase_fact_names_point_at_the_name_3	theory	err	InvalidFactName(foo)	theory T begin\nrule R: [] --[ foo('a') ]-> []\nend
+lowercase_fact_names_point_at_the_name_4	theory	err	InvalidFactName(foo)	theory T begin\nrule R: [ !foo(x) ] --> []\nend
+lowercase_fact_names_point_at_the_name_5	theory	err	InvalidFactName(foo)	theory T begin\nrule R: [ ! /* comment */ foo(x) ] --> []\nend
+lowercase_fact_names_point_at_the_name_6	theory	err	InvalidFactName(foo)	theory T begin\nrule R: [ foo (x) ] --> []\nend
+lowercase_fact_names_point_at_the_name_7	theory	err	InvalidFactName(foo)	theory T begin\nrule R: [ foo ] --> []\nend
+lowercase_fact_names_point_at_the_name_8	theory	err	InvalidFactName(macros)	theory T begin\nrule R: [] --> [\nmacros:\nm() = 'a'\nend
+missing_relations_point_after_the_complete_term_1	theory	err	Expected(Formula)	theory T begin  lemma L: "#i " end
+missing_relations_point_after_the_complete_term_2	theory	err	Expected(Formula)	theory T begin  lemma L: "#i & T" end
+missing_relations_point_after_the_complete_term_3	theory	err	Expected(Formula)	theory T begin  lemma L: "~x " end
+missing_relations_point_after_the_complete_term_4	theory	err	Expected(Formula)	theory T begin  lemma L: "~x & T" end
+missing_relations_point_after_the_complete_term_5	theory	err	Expected(Formula)	theory T begin  lemma L: "$x " end
+missing_relations_point_after_the_complete_term_6	theory	err	Expected(Formula)	theory T begin  lemma L: "$x & T" end
+missing_relations_point_after_the_complete_term_7	theory	err	Expected(Formula)	theory T begin  lemma L: "'c' " end
+missing_relations_point_after_the_complete_term_8	theory	err	Expected(Formula)	theory T begin  lemma L: "'c' & T" end
+missing_relations_point_after_the_complete_term_9	theory	err	Expected(Formula)	theory T begin  lemma L: "<x,x> " end
+missing_relations_point_after_the_complete_term_10	theory	err	Expected(Formula)	theory T begin  lemma L: "<x,x> & T" end
+missing_relations_point_after_the_complete_term_11	theory	err	Expected(Formula)	theory T begin functions: g/1 lemma L: "g(x) " end
+missing_relations_point_after_the_complete_term_12	theory	err	Expected(Formula)	theory T begin functions: g/1 lemma L: "g(x) & T" end
+missing_relations_point_after_the_complete_term_13	theory	err	Expected(Formula)	theory T begin functions: g/1 lemma L: "(g(x)) " end
+missing_relations_point_after_the_complete_term_14	theory	err	Expected(Formula)	theory T begin functions: g/1 lemma L: "(g(x)) & T" end
+missing_relations_point_after_the_complete_term_15	theory	err	Expected(Formula)	theory T begin builtins: diffie-hellman lemma L: "x^y " end
+missing_relations_point_after_the_complete_term_16	theory	err	Expected(Formula)	theory T begin builtins: diffie-hellman lemma L: "x^y & T" end
+missing_relations_point_after_the_complete_term_17	theory	err	Expected(Formula)	theory T begin builtins: natural-numbers lemma L: "%x " end
+missing_relations_point_after_the_complete_term_18	theory	err	Expected(Formula)	theory T begin builtins: natural-numbers lemma L: "%x & T" end
+missing_relations_point_after_the_complete_term_19	theory	err	Expected(Formula)	theory T begin builtins: multiset lemma L: "~x " end
+missing_relations_point_after_the_complete_term_20	theory	err	Expected(Formula)	theory T begin builtins: multiset lemma L: "~x & T" end
+redeclaration_conflict_outranks_the_ac_arity_check_1	theory	err	ConflictingDeclaration(f,FunctionDeclaration)	theory T begin functions: f/1, f/3 [AC] end
+redeclaration_conflict_outranks_the_ac_arity_check_2	theory	err	ConflictingDeclaration(f,FunctionDeclaration)	theory T begin functions: f/1 [private], f/3 [AC] end
+redeclaration_conflict_outranks_the_ac_arity_check_3	theory	err	ConflictingDeclaration(f,FunctionDeclaration)	theory T begin functions: f/1 [destructor], f/3 [AC] end
+redeclaration_conflict_outranks_the_ac_arity_check_4	theory	err	ConflictingDeclaration(f,FunctionDeclaration)	theory T begin functions: f/1 [NDC], f/3 [AC] end
+redeclaration_conflict_outranks_the_ac_arity_check_5	theory	err	ConflictingDeclaration(f,FunctionDeclaration)	theory T begin functions: f/1 functions: f/3 [AC] end
+redeclaration_conflict_outranks_the_ac_arity_check_6	theory	err	ConflictingDeclaration(pair,FunctionDeclaration)	theory T begin functions: pair/3 [AC] end
+redeclaration_conflict_outranks_the_ac_arity_check_7	theory	err	ConflictingDeclaration(fst,FunctionDeclaration)	theory T begin functions: fst/3 [AC], f/2 [AC] end
+redeclaration_conflict_outranks_the_ac_arity_check_8	theory	err	ConflictingDeclaration(m,FunctionDeclaration)	theory T begin builtins: hashing macros: m(x) = h(x) functions: m/3 [AC] end
+redeclaration_conflict_outranks_the_ac_arity_check_9	theory	err	NonBinaryAcFunction(f,3)	theory T begin\n\nfunctions: f/3 [AC], f/1\n\nend\n
+pair_projection_redeclaration_short_circuits_the_ac_check_1	theory	ok	ok	theory D1 begin\n\nfunctions: fst/1 [AC]\n\nend\n
+pair_projection_redeclaration_short_circuits_the_ac_check_2	theory	ok	ok	theory D2 begin\n\nfunctions: snd/1 [AC]\n\nend\n
+pair_projection_redeclaration_short_circuits_the_ac_check_3	theory	ok	ok	theory D1 begin\n\nfunctions: fst/1 [destructor, NDC, NDC-diff]\n\nend\n
+pair_projection_redeclaration_short_circuits_the_ac_check_4	theory	ok	ok	theory D2 begin\n\nfunctions: snd/1 [destructor, NDC, NDC-diff]\n\nend\n
+pair_projection_redeclaration_short_circuits_the_ac_check_5	theory	err	ConflictingDeclaration(fst,FunctionDeclaration)	theory T begin\n\nfunctions: fst/1 [private, AC]\n\nend\n
+pair_projection_redeclaration_short_circuits_the_ac_check_6	theory	err	ConflictingDeclaration(fst,FunctionDeclaration)	theory T begin\n\nfunctions: fst/2 [AC]\n\nend\n
+malformed_function_types_point_at_the_invalid_token_1	theory	err	Expected(FunctionDeclaration)	theory T begin\n\nfunctions: f(a:Any, b:Any, c:Any):Any [AC]\n\nend\n
+malformed_function_types_point_at_the_invalid_token_2	theory	err	Expected(FunctionDeclaration)	theory T begin\n\nfunctions: f(a_1:Any\n\nend\n
+malformed_function_types_point_at_the_invalid_token_3	theory	err	Expected(FunctionDeclaration)	theory T begin\n\nfunctions: f(a :Any):Any\n\nend\n
+malformed_function_types_point_at_the_invalid_token_4	theory	err	Expected(FunctionDeclaration)	theory T begin\n\nfunctions: f(a b):Any\n\nend\n
+malformed_function_types_point_at_the_invalid_token_5	theory	err	Expected(FunctionDeclaration)	theory T begin\n\nfunctions: f(Any:Any):Any\n\nend\n
+malformed_function_types_point_at_the_invalid_token_6	theory	err	Expected(FunctionDeclaration)	theory T begin\n\nfunctions: f(Any, Any:Any\n\nend\n
+malformed_function_types_point_at_the_invalid_token_7	theory	err	Expected(FunctionDeclaration)	theory T begin\n\nfunctions: f(*):Any\n\nend\n
+malformed_function_types_point_at_the_invalid_token_8	theory	err	Expected(FunctionDeclaration)	theory T begin\n\nfunctions: f(Any,*):Any\n\nend\n
+malformed_function_types_point_at_the_invalid_token_9	theory	err	Expected(FunctionDeclaration)	theory T begin\n\nfunctions: f:Any\n\nend\n
+malformed_function_types_point_at_the_invalid_token_10	theory	err	Expected(FunctionDeclaration)	theory T begin\n\nfunctions: f/x\n\nend\n
+malformed_function_types_point_at_the_invalid_token_11	theory	err	Expected(FunctionDeclaration)	theory T begin\n\nfunctions: f\n\nend\n
+malformed_function_types_point_at_the_invalid_token_12	theory	ok	ok	theory T begin\n\nfunctions: f():Any\n\nend\n
+malformed_function_types_point_at_the_invalid_token_13	theory	ok	ok	theory T begin\n\nfunctions: f(Any,):Any\n\nend\n
+malformed_function_types_point_at_the_invalid_token_14	theory	ok	ok	theory T begin\n\nfunctions: f(Any, b):Any\n\nend\n
+malformed_function_types_point_at_the_invalid_token_15	theory	ok	ok	theory T begin\n\nfunctions: f(Any) :Any\n\nend\n
+theory_end_ignores_trailing_content_but_needs_a_word_boundary_1	theory	ok	ok	theory PE begin\n\nfunctions: f/2, g/1\n\nrule R: [ ] --[ ]-> [ ]\n\nend\nthis is trailing prose that is not spthy at all !!! ###\n
+theory_end_ignores_trailing_content_but_needs_a_word_boundary_2	theory	ok	ok	theory PE begin\n\nfunctions: f/2, g/1\n\nrule R: [ ] --[ ]-> [ ]\n\nend\ntheory OTHER begin end\n
+theory_end_ignores_trailing_content_but_needs_a_word_boundary_3	theory	ok	ok	theory PE begin\n\nfunctions: f/2, g/1\n\nrule R: [ ] --[ ]-> [ ]\n\nend /* trailing comment */\n
+theory_end_ignores_trailing_content_but_needs_a_word_boundary_4	theory	ok	ok	theory PE begin\n\nfunctions: f/2, g/1\n\nrule R: [ ] --[ ]-> [ ]\n\nend!\n
+theory_end_ignores_trailing_content_but_needs_a_word_boundary_5	theory	err	UnknownItem(endd,TheoryItem)	theory PE begin\n\nfunctions: f/2, g/1\n\nrule R: [ ] --[ ]-> [ ]\n\nendd\n
+theory_end_ignores_trailing_content_but_needs_a_word_boundary_6	theory	err	UnknownItem(endrule,TheoryItem)	theory PE begin\n\nfunctions: f/2, g/1\n\nrule R: [ ] --[ ]-> [ ]\n\nendrule R2: [ ] --[ ]-> [ ]\n
+theory_end_ignores_trailing_content_but_needs_a_word_boundary_7	theory	err	UnknownItem(en,TheoryItem)	theory PE begin\n\nfunctions: f/2, g/1\n\nrule R: [ ] --[ ]-> [ ]\n\nen\n
+huge_numeric_arities_report_errors_without_panicking_1	theory	err	NonBinaryAcFunction(f,18446744073709551615)	theory T begin  functions: f/18446744073709551615 [AC] end
+huge_numeric_arities_report_errors_without_panicking_2	theory	err	ConflictingDeclaration(f,FunctionDeclaration)	theory T begin functions: f/1 functions: f/18446744073709551615 [AC] end
+huge_numeric_arities_report_errors_without_panicking_3	theory	err	ConflictingDeclaration(h,FunctionDeclaration)	theory T begin builtins: hashing functions: h/18446744073709551615 [AC] end
+# ~ HS reads an arity past Int's range and wraps it; the port rejects it.
+huge_numeric_arities_report_errors_without_panicking_4	theory	ok	~Custom	theory T begin functions: f/0018446744073709551615 /* comment */ end
+six_digit_codes_are_accepted_1	theory	ok	ok	theory T begin\n\nrule R1[color=ff00ff]: [ ] --> [ ]\n\nend\n
+six_digit_codes_are_accepted_2	theory	ok	ok	theory T begin\n\nrule R1[color=#ff00ff]: [ ] --> [ ]\n\nend\n
+six_digit_codes_are_accepted_3	theory	ok	ok	theory T begin\n\nrule R1[color='ff00ff']: [ ] --> [ ]\n\nend\n
+six_digit_codes_are_accepted_4	theory	ok	ok	theory T begin\n\nrule R1[color='#ff00ff']: [ ] --> [ ]\n\nend\n
+six_digit_codes_are_accepted_5	theory	ok	ok	theory T begin\n\nrule R1[color=FF00FF]: [ ] --> [ ]\n\nend\n
+wrong_length_colors_point_at_the_code_1	theory	err	MalformedHexColor	theory T begin\n\nrule R1[color=f0f]: [ ] --> [ ]\n\nend\n
+wrong_length_colors_point_at_the_code_2	theory	err	MalformedHexColor	theory T begin\n\nrule R1[color=ff00ff0]: [ ] --> [ ]\n\nend\n
+wrong_length_colors_point_at_the_code_3	theory	err	MalformedHexColor	theory T begin\n\nrule R1[color=f0f ]: [ ] --> [ ]\n\nend\n
+wrong_length_colors_point_at_the_code_4	theory	err	MalformedHexColor	theory T begin\n\nrule R1[color='ff00']: [ ] --> [ ]\n\nend\n
+wrong_length_colors_point_at_the_code_5	theory	err	MalformedHexColor	theory T begin\n\nrule R1[color=ff00zz]: [ ] --> [ ]\n\nend\n
+missing_digits_and_unclosed_quotes_point_at_the_failure_1	theory	err	Expected(Rule)	theory T begin\n\nrule R1[color=]: [ ] --> [ ]\n\nend\n
+missing_digits_and_unclosed_quotes_point_at_the_failure_2	theory	err	Expected(Rule)	theory T begin\n\nrule R1[color=gg0011]: [ ] --> [ ]\n\nend\n
+missing_digits_and_unclosed_quotes_point_at_the_failure_3	theory	err	Expected(Rule)	theory T begin\n\nrule R1[color=#]: [ ] --> [ ]\n\nend\n
+missing_digits_and_unclosed_quotes_point_at_the_failure_4	theory	err	Expected(Rule)	theory T begin\n\nrule R1[color='']: [ ] --> [ ]\n\nend\n
+missing_digits_and_unclosed_quotes_point_at_the_failure_5	theory	err	Expected(Rule)	theory T begin\n\nrule R1[color='#']: [ ] --> [ ]\n\nend\n
+missing_digits_and_unclosed_quotes_point_at_the_failure_6	theory	err	Expected(Rule)	theory T begin\n\nrule R1[color='ff00zz']: [ ] --> [ ]\n\nend\n
+undeclared_application_reports_its_name	theory	err	UndeclaredFunction(g)	theory T\nbegin\nrule R: [ ] --> [ Out(g('a')) ]\nend\n
+bilinear_map_requires_its_builtin_or_an_explicit_declaration_1	theory	err	UndeclaredFunction(em)	theory T\nbegin\nrule R: [ ] --> [ Out(em('a','b')) ]\nend\n
+bilinear_map_requires_its_builtin_or_an_explicit_declaration_2	theory	ok	ok	theory T begin builtins: bilinear-pairing\nrule R: [] --> [Out(em('a','b'))]\nend
+bilinear_map_requires_its_builtin_or_an_explicit_declaration_3	theory	ok	ok	theory T begin functions: em/2\nrule R: [] --> [Out(em('a','b'))]\nend
+use_before_declaration_is_still_undeclared	theory	err	UndeclaredFunction(g)	theory T\nbegin\nrule R: [ ] --> [ Out(g('a')) ]\nfunctions: g/1\nend\n
+nested_failure_reports_the_inner_application	theory	err	UndeclaredFunction(k)	theory T\nbegin\nfunctions: g/2\nrule R: [ ] --> [ Out(g(k('x'),'b')) ]\nend\n
+nested_wrong_arity_keeps_the_inner_application_span	theory	err	WrongFunctionArity(g,2,1)	theory T begin\nfunctions: f/1, g/2\nrule R: [ ] --> [ Out(f(g('a'))) ]\nend\n
+nested_reserved_builtin_keeps_the_inner_application_span	theory	err	ReservedBuiltin(exp,Term)	theory T begin\nfunctions: g/2\nequations: g{x}exp = x\nend\n
+wrong_arity_reports_the_declaration_and_use_counts	theory	err	WrongFunctionArity(g,3,2)	theory T\nbegin\nfunctions: g/3\nrule R: [ ] --> [ Out(g('a','b')) ]\nend\n
+nullary_and_builtin_arity_errors_use_the_same_variant_1	theory	err	WrongFunctionArity(f,0,1)	theory T\nbegin\nfunctions: f/0\nrule R: [ ] --> [ Out(f('a')) ]\nend\n
+nullary_and_builtin_arity_errors_use_the_same_variant_2	theory	err	WrongFunctionArity(em,2,3)	theory T\nbegin\nbuiltins: bilinear-pairing\nrule R: [ ] --> [ Out(em('a','b','c')) ]\nend\n
+algebraic_application_requires_a_binary_function	theory	err	WrongFunctionArity(g,3,2)	theory T\nbegin\nfunctions: g/3\nrule R: [ ] --> [ Out(g{'a'}'b') ]\nend\n
+malformed_unary_arguments_remain_syntax_errors_1	theory	err	Expected(Term)	theory T begin\nbuiltins: hashing\nrule R: [ ] --> [ Out(h()) ]\nend\n
+malformed_unary_arguments_remain_syntax_errors_2	theory	err	Expected(Term)	theory T begin\nbuiltins: hashing\nrule R: [ ] --> [ Out(h('a',)) ]\nend\n
+equation_reserved_builtin_has_a_semantic_error	theory	err	ReservedBuiltin(exp,Term)	theory T begin\nbuiltins: diffie-hellman\nequations: exp(x,y) = x\nend\n
+equation_reserved_builtin_without_its_builtin	theory	err	ReservedBuiltin(exp,Term)	theory T\nbegin\n\nequations: exp(x, y) = x\n\nend\n
+equation_bare_reserved_builtin	theory	err	ReservedBuiltin(mun,Term)	theory T\nbegin\n\nfunctions: f/1\n\nequations: f(x) = mun\n\nend\n
+reserved_macro_names_fail_before_arguments_or_body_1	theory	err	ReservedBuiltin(mun,Macro)	theory T begin macros: mun( end
+reserved_macro_names_fail_before_arguments_or_body_2	theory	err	ReservedBuiltin(mun,Macro)	theory T begin macros: mun(x, x) = x end
+reserved_macro_names_fail_before_arguments_or_body_3	theory	err	ReservedBuiltin(mun,Macro)	theory T begin macros: mun(x) end
+reserved_macro_names_fail_before_arguments_or_body_4	theory	err	ReservedBuiltin(mun,Macro)	theory T begin macros: mun(x) = x end
+reserved_macro_names_fail_before_arguments_or_body_5	theory	err	ReservedBuiltin(one,Macro)	theory T begin macros: one( end
+reserved_macro_names_fail_before_arguments_or_body_6	theory	err	ReservedBuiltin(one,Macro)	theory T begin macros: one(x, x) = x end
+reserved_macro_names_fail_before_arguments_or_body_7	theory	err	ReservedBuiltin(one,Macro)	theory T begin macros: one(x) end
+reserved_macro_names_fail_before_arguments_or_body_8	theory	err	ReservedBuiltin(one,Macro)	theory T begin macros: one(x) = x end
+reserved_macro_names_fail_before_arguments_or_body_9	theory	err	ReservedBuiltin(exp,Macro)	theory T begin macros: exp( end
+reserved_macro_names_fail_before_arguments_or_body_10	theory	err	ReservedBuiltin(exp,Macro)	theory T begin macros: exp(x, x) = x end
+reserved_macro_names_fail_before_arguments_or_body_11	theory	err	ReservedBuiltin(exp,Macro)	theory T begin macros: exp(x) end
+reserved_macro_names_fail_before_arguments_or_body_12	theory	err	ReservedBuiltin(exp,Macro)	theory T begin macros: exp(x) = x end
+reserved_macro_names_fail_before_arguments_or_body_13	theory	err	ReservedBuiltin(mult,Macro)	theory T begin macros: mult( end
+reserved_macro_names_fail_before_arguments_or_body_14	theory	err	ReservedBuiltin(mult,Macro)	theory T begin macros: mult(x, x) = x end
+reserved_macro_names_fail_before_arguments_or_body_15	theory	err	ReservedBuiltin(mult,Macro)	theory T begin macros: mult(x) end
+reserved_macro_names_fail_before_arguments_or_body_16	theory	err	ReservedBuiltin(mult,Macro)	theory T begin macros: mult(x) = x end
+reserved_macro_names_fail_before_arguments_or_body_17	theory	err	ReservedBuiltin(inv,Macro)	theory T begin macros: inv( end
+reserved_macro_names_fail_before_arguments_or_body_18	theory	err	ReservedBuiltin(inv,Macro)	theory T begin macros: inv(x, x) = x end
+reserved_macro_names_fail_before_arguments_or_body_19	theory	err	ReservedBuiltin(inv,Macro)	theory T begin macros: inv(x) end
+reserved_macro_names_fail_before_arguments_or_body_20	theory	err	ReservedBuiltin(inv,Macro)	theory T begin macros: inv(x) = x end
+reserved_macro_names_fail_before_arguments_or_body_21	theory	err	ReservedBuiltin(pmult,Macro)	theory T begin macros: pmult( end
+reserved_macro_names_fail_before_arguments_or_body_22	theory	err	ReservedBuiltin(pmult,Macro)	theory T begin macros: pmult(x, x) = x end
+reserved_macro_names_fail_before_arguments_or_body_23	theory	err	ReservedBuiltin(pmult,Macro)	theory T begin macros: pmult(x) end
+reserved_macro_names_fail_before_arguments_or_body_24	theory	err	ReservedBuiltin(pmult,Macro)	theory T begin macros: pmult(x) = x end
+reserved_macro_names_fail_before_arguments_or_body_25	theory	err	ReservedBuiltin(em,Macro)	theory T begin macros: em( end
+reserved_macro_names_fail_before_arguments_or_body_26	theory	err	ReservedBuiltin(em,Macro)	theory T begin macros: em(x, x) = x end
+reserved_macro_names_fail_before_arguments_or_body_27	theory	err	ReservedBuiltin(em,Macro)	theory T begin macros: em(x) end
+reserved_macro_names_fail_before_arguments_or_body_28	theory	err	ReservedBuiltin(em,Macro)	theory T begin macros: em(x) = x end
+reserved_macro_names_fail_before_arguments_or_body_29	theory	err	ReservedBuiltin(zero,Macro)	theory T begin macros: zero( end
+reserved_macro_names_fail_before_arguments_or_body_30	theory	err	ReservedBuiltin(zero,Macro)	theory T begin macros: zero(x, x) = x end
+reserved_macro_names_fail_before_arguments_or_body_31	theory	err	ReservedBuiltin(zero,Macro)	theory T begin macros: zero(x) end
+reserved_macro_names_fail_before_arguments_or_body_32	theory	err	ReservedBuiltin(zero,Macro)	theory T begin macros: zero(x) = x end
+reserved_macro_names_fail_before_arguments_or_body_33	theory	err	ReservedBuiltin(xor,Macro)	theory T begin macros: xor( end
+reserved_macro_names_fail_before_arguments_or_body_34	theory	err	ReservedBuiltin(xor,Macro)	theory T begin macros: xor(x, x) = x end
+reserved_macro_names_fail_before_arguments_or_body_35	theory	err	ReservedBuiltin(xor,Macro)	theory T begin macros: xor(x) end
+reserved_macro_names_fail_before_arguments_or_body_36	theory	err	ReservedBuiltin(xor,Macro)	theory T begin macros: xor(x) = x end
+duplicate_macro_arguments_compare_name_sort_and_index_1	theory	err	DuplicateMacroArgument(x)	theory T begin macros: m(x, x) = x end
+duplicate_macro_arguments_compare_name_sort_and_index_2	theory	err	DuplicateMacroArgument(x)	theory T begin macros: m(x, x:msg) = x end
+duplicate_macro_arguments_compare_name_sort_and_index_3	theory	err	DuplicateMacroArgument(x)	theory T begin macros: m(x:msg, x) = x end
+duplicate_macro_arguments_compare_name_sort_and_index_4	theory	err	DuplicateMacroArgument(x)	theory T begin macros: m(x:pub, x:pub) = x end
+duplicate_macro_arguments_compare_name_sort_and_index_5	theory	err	DuplicateMacroArgument(x)	theory T begin macros: m(x.1, y, x.1) = x end
+duplicate_macro_arguments_compare_name_sort_and_index_6	theory	err	DuplicateMacroArgument(x)	theory T begin macros: m(x, x,) = x end
+duplicate_macro_arguments_compare_name_sort_and_index_7	theory	ok	ok	theory T begin macros: m(x, x.1) = x end
+duplicate_macro_arguments_compare_name_sort_and_index_8	theory	ok	ok	theory T begin macros: m(x:fresh, x:msg) = x end
+duplicate_macro_arguments_compare_name_sort_and_index_9	theory	ok	ok	theory T begin macros: m($x, ~x, #x) = x end
+duplicate_macro_arguments_compare_name_sort_and_index_10	theory	err	DuplicateMacroArgument(x)	theory T begin macros: m(x,x)
+macro_conflicts_cover_signature_sources_and_body_shapes_1	theory	err	ConflictingDeclaration(f,Macro)	theory T begin functions: f/1 macros: f(x) = x end
+macro_conflicts_cover_signature_sources_and_body_shapes_2	theory	err	ConflictingDeclaration(m,Macro)	theory T begin macros: m(x) = x macros: m(x) = x end
+macro_conflicts_cover_signature_sources_and_body_shapes_3	theory	err	ConflictingDeclaration(h,Macro)	theory T begin builtins: hashing macros: h(x) = x end
+macro_conflicts_cover_signature_sources_and_body_shapes_4	theory	err	ConflictingDeclaration(fst,Macro)	theory T begin  macros: fst(x) = x end
+macro_conflicts_cover_signature_sources_and_body_shapes_5	theory	err	ConflictingDeclaration(DH_neutral,Macro)	theory T begin builtins: diffie-hellman macros: DH_neutral(x) = x end
+macro_conflicts_cover_signature_sources_and_body_shapes_6	theory	err	ConflictingDeclaration(DH_neutral,Macro)	theory T begin builtins: bilinear-pairing macros: DH_neutral(x) = x end
+macro_conflicts_cover_signature_sources_and_body_shapes_7	theory	err	ConflictingDeclaration(tone,Macro)	theory T begin builtins: natural-numbers macros: tone(x) = x end
+macro_conflicts_cover_signature_sources_and_body_shapes_8	theory	err	ConflictingDeclaration(f,Macro)	theory T begin functions: f/2 [AC] macros: f(x) = x end
+macro_conflicts_cover_signature_sources_and_body_shapes_9	theory	err	ConflictingDeclaration(f,Macro)	theory T begin builtins: diffie-hellman,xor,multiset,natural-numbers functions: f/1 macros: f(x) = x end
+macro_conflicts_cover_signature_sources_and_body_shapes_10	theory	err	ConflictingDeclaration(f,Macro)	theory T begin functions: f/1 macros: f(x) = $y end
+macro_conflicts_cover_signature_sources_and_body_shapes_11	theory	err	ConflictingDeclaration(f,Macro)	theory T begin functions: f/1 macros: f(x) = (x) end
+macro_conflicts_cover_signature_sources_and_body_shapes_12	theory	err	ConflictingDeclaration(f,Macro)	theory T begin functions: f/1 macros: f(x) = x:pub end
+macro_conflicts_cover_signature_sources_and_body_shapes_13	theory	err	ConflictingDeclaration(f,Macro)	theory T begin functions: f/1 macros: f(x) = x.1 end
+macro_conflicts_cover_signature_sources_and_body_shapes_14	theory	err	ConflictingDeclaration(f,Macro)	theory T begin functions: f/1 macros: f(x) = 'a' end
+macro_conflicts_cover_signature_sources_and_body_shapes_15	theory	err	ConflictingDeclaration(f,Macro)	theory T begin functions: f/1 macros: f(x) = pair(x,x) end
+macro_conflicts_cover_signature_sources_and_body_shapes_16	theory	err	ConflictingDeclaration(f,Macro)	theory T begin functions: f/1 macros: f(x) = pair{x}x end
+macro_conflicts_cover_signature_sources_and_body_shapes_17	theory	ok	ok	theory T begin macros: DH_neutral(x) = x end
+macro_conflicts_cover_signature_sources_and_body_shapes_18	theory	ok	ok	theory T begin macros: tone(x) = x end
+missing_macro_body_is_rejected_at_end_of_input	theory	err	Expected(Theory)	theory T begin macros: m(x) = end
+ordinary_names_and_inline_directive_text_are_not_reserved_1	theory	ok	ok	theory T begin lemma L: "All ifdef:node. Seen() @ #ifdef" end
+ordinary_names_and_inline_directive_text_are_not_reserved_2	theory	ok	ok	theory T begin lemma L: "T" by solve(Seen() @ #ifdef) end
+ordinary_names_and_inline_directive_text_are_not_reserved_3	theory	ok	ok	theory T begin lemma L: "All else:node. Seen() @ #else" end
+ordinary_names_and_inline_directive_text_are_not_reserved_4	theory	ok	ok	theory T begin lemma L: "T" by solve(Seen() @ #else) end
+ordinary_names_and_inline_directive_text_are_not_reserved_5	theory	ok	ok	theory T begin lemma L: "All endif:node. Seen() @ #endif" end
+ordinary_names_and_inline_directive_text_are_not_reserved_6	theory	ok	ok	theory T begin lemma L: "T" by solve(Seen() @ #endif) end
+ordinary_names_and_inline_directive_text_are_not_reserved_7	theory	ok	ok	theory T begin export e: "#ifdef #else #endif" end
+ordinary_names_and_inline_directive_text_are_not_reserved_8	diff	ok	ok	theory T begin lemma L: "All ifdef:node. Seen() @ #ifdef" end
+ordinary_names_and_inline_directive_text_are_not_reserved_9	diff	ok	ok	theory T begin lemma L: "T" by solve(Seen() @ #ifdef) end
+ordinary_names_and_inline_directive_text_are_not_reserved_10	diff	ok	ok	theory T begin lemma L: "All else:node. Seen() @ #else" end
+ordinary_names_and_inline_directive_text_are_not_reserved_11	diff	ok	ok	theory T begin lemma L: "T" by solve(Seen() @ #else) end
+ordinary_names_and_inline_directive_text_are_not_reserved_12	diff	ok	ok	theory T begin lemma L: "All endif:node. Seen() @ #endif" end
+ordinary_names_and_inline_directive_text_are_not_reserved_13	diff	ok	ok	theory T begin lemma L: "T" by solve(Seen() @ #endif) end
+ordinary_names_and_inline_directive_text_are_not_reserved_14	diff	err	UnknownItem(export,TheoryItem)	theory T begin export e: "#ifdef #else #endif" end
+# ~ The port's preprocessor wants each #ifdef, #else and #endif on a line of its own (lib.rs); HS's token-level one reads them anywhere.
+conditionals_must_occupy_physical_lines_1	theory	ok	~Expected(Theory)	theory T begin\n#ifdef X #endif\nend
+conditionals_must_occupy_physical_lines_2	theory	ok	~Expected(Theory)	theory T begin\n/* comment */ #ifdef X\n#endif\nend
+conditionals_must_occupy_physical_lines_3	theory	ok	~Expected(Theory)	theory T begin\n#ifdef X\n#else #define BAD\n#endif\nend
+conditionals_must_occupy_physical_lines_4	theory	ok	~Expected(Theory)	theory T begin\n#ifdef X\n#endif end\nend
+conditionals_must_occupy_physical_lines_5	theory	ok	~Expected(Theory)	theory T begin\n#ifdef (X\n| Y)\n#endif\nend
+conditionals_must_occupy_physical_lines_6	theory	ok	~UnclosedBlockComment	theory T begin\n#ifdef X /* multiline\ncomment */\n#endif\nend
+conditionals_must_occupy_physical_lines_7	theory	ok	~Expected(Theory)	theory T begin #ifdef X\n#endif\nend
+conditionals_must_occupy_physical_lines_8	theory	ok	~Expected(Theory)	theory T begin\n#define X\n#ifdef X\nrule R: [] --> [] #else\n#endif\nend
+conditionals_must_occupy_physical_lines_9	diff	ok	~Expected(Theory)	theory T begin\n#ifdef X #endif\nend
+conditionals_must_occupy_physical_lines_10	diff	ok	~Expected(Theory)	theory T begin\n/* comment */ #ifdef X\n#endif\nend
+conditionals_must_occupy_physical_lines_11	diff	ok	~Expected(Theory)	theory T begin\n#ifdef X\n#else #define BAD\n#endif\nend
+conditionals_must_occupy_physical_lines_12	diff	ok	~Expected(Theory)	theory T begin\n#ifdef X\n#endif end\nend
+conditionals_must_occupy_physical_lines_13	diff	ok	~Expected(Theory)	theory T begin\n#ifdef (X\n| Y)\n#endif\nend
+conditionals_must_occupy_physical_lines_14	diff	ok	~UnclosedBlockComment	theory T begin\n#ifdef X /* multiline\ncomment */\n#endif\nend
+conditionals_must_occupy_physical_lines_15	diff	ok	~Expected(Theory)	theory T begin #ifdef X\n#endif\nend
+conditionals_must_occupy_physical_lines_16	diff	ok	~Expected(Theory)	theory T begin\n#define X\n#ifdef X\nrule R: [] --> [] #else\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_1	theory	err	Expected(Theory)	theory T begin\n\n#ifdef X\n\nend
+malformed_conditional_structure_is_rejected_in_both_arms_2	theory	err	Expected(Theory)	theory T begin\n\n#ifdef X\n#else\n\nend
+malformed_conditional_structure_is_rejected_in_both_arms_3	theory	err	Expected(Theory)	theory T begin\n\n#ifdef X\n#else\n#else\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_4	theory	err	Expected(Theory)	theory T begin\n\n#ifdef X\n#ifdef Y\n#else\n#else\n#endif\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_5	theory	err	Expected(Theory)	theory T begin\n\n#ifdef X\n#else\n#ifdef Y\n#else\n#else\n#endif\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_6	theory	err	Expected(Theory)	theory T begin\n\n#ifdef X\n#else\n#ifdef Y\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_7	theory	err	Expected(Theory)	theory T begin\n\n#ifdef X\n#ifdef\n#endif\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_8	theory	err	Expected(Theory)	theory T begin\n#define X\n#ifdef X\n\nend
+malformed_conditional_structure_is_rejected_in_both_arms_9	theory	err	Expected(Theory)	theory T begin\n#define X\n#ifdef X\n#else\n\nend
+# ~ The port rejects a conditional whose structure is malformed in either arm; HS's preprocessor skips an inactive arm unread.
+malformed_conditional_structure_is_rejected_in_both_arms_10	theory	ok	~Expected(Theory)	theory T begin\n#define X\n#ifdef X\n#else\n#else\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_11	theory	err	Expected(Theory)	theory T begin\n#define X\n#ifdef X\n#ifdef Y\n#else\n#else\n#endif\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_12	theory	err	Expected(Theory)	theory T begin\n#define X\n#ifdef X\n#else\n#ifdef Y\n#else\n#else\n#endif\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_13	theory	ok	~Expected(Theory)	theory T begin\n#define X\n#ifdef X\n#else\n#ifdef Y\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_14	theory	err	Expected(Theory)	theory T begin\n#define X\n#ifdef X\n#ifdef\n#endif\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_15	theory	err	Expected(Theory)	theory T begin\n#ifdef OFF\nunfinished
+malformed_conditional_structure_is_rejected_in_both_arms_16	theory	err	Expected(Theory)	theory T begin\n\t#ifdef X |\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_17	diff	err	Expected(Theory)	theory T begin\n\n#ifdef X\n\nend
+malformed_conditional_structure_is_rejected_in_both_arms_18	diff	err	Expected(Theory)	theory T begin\n\n#ifdef X\n#else\n\nend
+malformed_conditional_structure_is_rejected_in_both_arms_19	diff	err	Expected(Theory)	theory T begin\n\n#ifdef X\n#else\n#else\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_20	diff	err	Expected(Theory)	theory T begin\n\n#ifdef X\n#ifdef Y\n#else\n#else\n#endif\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_21	diff	err	Expected(Theory)	theory T begin\n\n#ifdef X\n#else\n#ifdef Y\n#else\n#else\n#endif\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_22	diff	err	Expected(Theory)	theory T begin\n\n#ifdef X\n#else\n#ifdef Y\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_23	diff	err	Expected(Theory)	theory T begin\n\n#ifdef X\n#ifdef\n#endif\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_24	diff	err	Expected(Theory)	theory T begin\n#define X\n#ifdef X\n\nend
+malformed_conditional_structure_is_rejected_in_both_arms_25	diff	err	Expected(Theory)	theory T begin\n#define X\n#ifdef X\n#else\n\nend
+malformed_conditional_structure_is_rejected_in_both_arms_26	diff	ok	~Expected(Theory)	theory T begin\n#define X\n#ifdef X\n#else\n#else\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_27	diff	err	Expected(Theory)	theory T begin\n#define X\n#ifdef X\n#ifdef Y\n#else\n#else\n#endif\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_28	diff	err	Expected(Theory)	theory T begin\n#define X\n#ifdef X\n#else\n#ifdef Y\n#else\n#else\n#endif\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_29	diff	ok	~Expected(Theory)	theory T begin\n#define X\n#ifdef X\n#else\n#ifdef Y\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_30	diff	err	Expected(Theory)	theory T begin\n#define X\n#ifdef X\n#ifdef\n#endif\n#endif\nend
+malformed_conditional_structure_is_rejected_in_both_arms_31	diff	err	Expected(Theory)	theory T begin\n#ifdef OFF\nunfinished
+malformed_conditional_structure_is_rejected_in_both_arms_32	diff	err	Expected(Theory)	theory T begin\n\t#ifdef X |\n#endif\nend
+flag_evaluation_still_validates_both_operands_1	theory	err	Expected(Theory)	theory T begin\n#define ON\n#ifdef ON\n#ifdef ON | (OFF &)\n#endif\n#endif\nend
+flag_evaluation_still_validates_both_operands_2	theory	err	Expected(Theory)	theory T begin\n#define ON\n#ifdef OFF\n#ifdef ON | (OFF &)\n#endif\n#endif\nend
+flag_evaluation_still_validates_both_operands_3	theory	err	Expected(Theory)	theory T begin\n#define ON\n#ifdef ON\n#ifdef OFF & (ON |)\n#endif\n#endif\nend
+flag_evaluation_still_validates_both_operands_4	theory	err	Expected(Theory)	theory T begin\n#define ON\n#ifdef OFF\n#ifdef OFF & (ON |)\n#endif\n#endif\nend
+incomplete_rule_headers_report_the_missing_construct_1	theory	err	Expected(Rule)	theory T begin\nrule X\nend
+incomplete_rule_headers_report_the_missing_construct_2	theory	err	Expected(Rule)	theory T begin\nrule X\n
+incomplete_rule_headers_report_the_missing_construct_3	theory	err	Expected(Rule)	theory T begin\nrule X []\nend
+incomplete_rule_headers_report_the_missing_construct_4	theory	err	Expected(Rule)	theory T begin\nrule X [color=#ffffff]\nend
+incomplete_rule_headers_report_the_missing_construct_5	theory	err	Expected(Rule)	theory T begin\nrule X: garbage here\nend
+incomplete_rule_headers_report_the_missing_construct_6	theory	err	Expected(Rule)	theory T begin\nrule !x: [] --> []\nend
+incomplete_rule_headers_report_the_missing_construct_7	theory	err	Expected(Rule)	theory T begin\nrule
+incomplete_rule_headers_report_the_missing_construct_8	theory	err	Expected(Rule)	theory T begin\nrule!x: [] --> []\nend
+left_right_rule_bodies_belong_to_diff_theories_1	theory	err	UnknownItem(left,TheoryItem)	theory T begin\nrule R: [ ] --> [ ]\nleft rule R: [ ] --> [ Out('a') ]\nright rule R: [ ] --> [ Out('b') ]\nend
+left_right_rule_bodies_belong_to_diff_theories_2	diff	ok	ok	theory T begin\nrule R: [ ] --> [ ]\nleft rule R: [ ] --> [ Out('a') ]\nright rule R: [ ] --> [ Out('b') ]\nend
+# ~ A diff rule's left and right rules must carry its name in HS; the port does not check that (diff theories are not ported past parsing).
+diff_rule_sides_with_other_names	diff	err	~ok	theory T begin\nrule R: [ ] --> [ ]\nleft rule A: [ ] --> [ Out('a') ]\nright rule B: [ ] --> [ Out('b') ]\nend
+include_lemma_namespace_crosses_the_boundary	diff	err	DuplicateDeclaration(l,Lemma)	theory T begin\n#include "frag.spthy"\nlemma l [right]: exists-trace "Ex #i. A() @ #i"\nend\n\n@@@ frag.spthy\nlemma l [right]: exists-trace "Ex #i. A() @ #i"\n
+
+# --- Namespaces, function declarations, stored proofs, tactics, diff terms and theory boundaries.
+diff_theory_checks_each_lemma_namespace_1	diff	err	DuplicateDeclaration(L,Lemma)	theory D begin lemma L [left]: "All #i. A() @ i ==> A() @ i" lemma L [left]: "All #i. A() @ i ==> A() @ i" end
+diff_theory_checks_each_lemma_namespace_2	diff	err	DuplicateDeclaration(L,Lemma)	theory D begin lemma L [right]: "All #i. A() @ i ==> A() @ i" lemma L: "All #i. A() @ i ==> A() @ i" end
+diff_theory_checks_each_lemma_namespace_3	diff	err	DuplicateDeclaration(D,Lemma)	theory D begin diffLemma D: by sorry diffLemma D: by sorry end
+diff_theory_checks_each_lemma_namespace_4	diff	ok	ok	theory D begin lemma L [left]: "All #i. A() @ i ==> A() @ i" lemma L [right]: "All #i. A() @ i ==> A() @ i" end
+accountability_items_check_their_own_namespaces_1	theory	err	DuplicateDeclaration(C,CaseTest)	theory T begin test C: "T" test C: "F" end
+accountability_items_check_their_own_namespaces_2	theory	err	DuplicateDeclaration(a,Lemma)	theory T begin test C: "T" lemma a: C accounts for "T" lemma a: C accounts for "F" end
+accountability_items_check_their_own_namespaces_3	theory	ok	ok	theory T begin test a: "T" lemma a: a accounts for "T" lemma a: "T" end
+accountability_lemma_reads_identifiers_then_the_accounts_for_symbol_1	theory	ok	ok	theory A begin test accounts: "T" lemma a: accounts accounts for "T" end
+accountability_lemma_reads_identifiers_then_the_accounts_for_symbol_2	theory	ok	ok	theory A begin test account: "T" lemma a: account account for "T" end
+accountability_lemma_reads_identifiers_then_the_accounts_for_symbol_3	theory	ok	ok	theory A begin test C: "T" lemma a: C, D accounts for "T" end
+accountability_lemma_reads_identifiers_then_the_accounts_for_symbol_4	theory	err	Expected(Lemma)	theory A begin test C: "T" lemma a: C, accounts for "T" end
+accountability_lemma_reads_identifiers_then_the_accounts_for_symbol_5	theory	err	Expected(Lemma)	theory A begin test C: "T" lemma a: C accounts /*hi*/ for "T" end
+accountability_lemma_reads_identifiers_then_the_accounts_for_symbol_6	theory	err	Expected(Lemma)	theory A begin test C: "T" lemma a: C accounts  for "T" end
+incomplete_goals_do_not_blame_speculative_fact_names_1	theory	err	Expected(Proof)	theory T begin lemma L: "T" by solve( splitEqs ) end
+incomplete_goals_do_not_blame_speculative_fact_names_2	theory	err	Expected(Proof)	theory T begin lemma L: "T" by solve( x ) end
+incomplete_goals_do_not_blame_speculative_fact_names_3	theory	err	Expected(Proof)	theory T begin lemma L: "T" by solve( x @ #i ) end
+incomplete_goals_do_not_blame_speculative_fact_names_4	theory	ok	ok	theory T begin lemma L: "T" by solve( splitEqs(1) ) end
+incomplete_goals_do_not_blame_speculative_fact_names_5	theory	ok	ok	theory T begin lemma L: "T" by solve( x ⊏ y ) end
+tied_input_failures_keep_one_alternatives_expectation_1	theory	err	Expected(Process)	theory T begin process: in(x @) end
+tied_input_failures_keep_one_alternatives_expectation_2	theory	ok	ok	theory T begin process: in(x) end
+tied_input_failures_keep_one_alternatives_expectation_3	theory	ok	ok	theory T begin process: in(x, y) end
+non_binary_ac_declaration_is_a_parse_error_1	theory	err	NonBinaryAcFunction(f,3)	theory T begin functions: f/3 [AC]rule R: [] --> [] end
+non_binary_ac_declaration_is_a_parse_error_2	theory	err	NonBinaryAcFunction(f,3)	theory T begin functions: f/3 [AC], g/1 end
+non_binary_ac_declaration_is_a_parse_error_3	theory	err	NonBinaryAcFunction(f,3)	theory T begin functions: f/3 [AC] end
+non_binary_ac_declaration_is_a_parse_error_4	theory	ok	ok	theory T begin functions: f/2 [AC] end
+builtin_reserved_name_check_precedes_the_arity_and_ac_checks_1	theory	err	ConflictingDeclaration(h,FunctionDeclaration)	theory T begin builtins: hashing functions: h/3 [AC] end
+builtin_reserved_name_check_precedes_the_arity_and_ac_checks_2	theory	err	ConflictingDeclaration(h,FunctionDeclaration)	theory T begin builtins: hashing functions: h/1, h/3 [AC] end
+builtin_reserved_name_check_precedes_the_arity_and_ac_checks_3	theory	err	ConflictingDeclaration(fst,FunctionDeclaration)	theory T begin builtins: dest-pairing functions: fst/1 [AC] end
+builtin_reserved_name_check_precedes_the_arity_and_ac_checks_4	theory	err	ConflictingDeclaration(pk,FunctionDeclaration)	theory T begin builtins: asymmetric-encryption functions: pk/2 end
+builtin_reserved_name_check_precedes_the_arity_and_ac_checks_5	theory	err	ConflictingDeclaration(sdec,FunctionDeclaration)	theory T begin builtins: dest-symmetric-encryption functions: sdec/2 end
+builtin_reserved_name_check_precedes_the_arity_and_ac_checks_6	theory	err	ConflictingDeclaration(rep,FunctionDeclaration)	theory T begin builtins: locations-report functions: rep/2 end
+builtin_reserved_name_check_precedes_the_arity_and_ac_checks_7	theory	err	ConflictingDeclaration(h,FunctionDeclaration)	theory T begin builtins: hashing functions: h/1 [private] end
+builtin_reserved_name_check_precedes_the_arity_and_ac_checks_8	theory	err	ConflictingDeclaration(h,FunctionDeclaration)	theory T begin builtins: hashing functions: h/1 [destructor] end
+builtin_reserved_name_check_precedes_the_arity_and_ac_checks_9	theory	err	ConflictingDeclaration(h,FunctionDeclaration)	theory T begin builtins: hashing functions: h/1 [NDC] end
+builtin_reserved_name_check_precedes_the_arity_and_ac_checks_10	theory	err	ConflictingDeclaration(h,FunctionDeclaration)	theory T begin builtins: hashing functions: h/1 [NDC-diff] end
+conflicting_declarations_fail_with_or_without_attributes_1	theory	err	ConflictingDeclaration(h,FunctionDeclaration)	theory T begin builtins: hashing functions: h/1, h/2 end
+conflicting_declarations_fail_with_or_without_attributes_2	theory	err	ConflictingDeclaration(h,FunctionDeclaration)	theory T begin builtins: hashing functions: h/3 [] end
+conflicting_arities_is_a_parse_error_1	theory	err	ConflictingDeclaration(f,FunctionDeclaration)	theory T begin functions: f/1, f/3 end
+conflicting_arities_is_a_parse_error_2	theory	err	ConflictingDeclaration(h,FunctionDeclaration)	theory T begin builtins: reliable-channel functions: h/1, h/2 end
+conflicting_arities_is_a_parse_error_3	theory	err	ConflictingDeclaration(mh,FunctionDeclaration)	theory T begin macros: mh(x, y) = x functions: mh/2 end
+builtins_item_rejects_conflicting_functions_and_macros_1	theory	err	ConflictingDeclaration(hashing,Builtin)	theory T begin functions: h/2 builtins: hashing end
+builtins_item_rejects_conflicting_functions_and_macros_2	theory	err	ConflictingDeclaration(hashing,Builtin)	theory T begin macros: h(x) = x builtins: hashing end
+builtins_item_rejects_conflicting_functions_and_macros_3	theory	err	ConflictingDeclaration(dest-symmetric-encryption,Builtin)	theory T begin builtins: symmetric-encryption, dest-symmetric-encryption functions: sdec/2 end
+builtins_item_rejects_conflicting_functions_and_macros_4	theory	err	ConflictingDeclaration(dest-symmetric-encryption,Builtin)	theory T begin builtins: symmetric-encryption, dest-symmetric-encryption end
+builtins_item_rejects_conflicting_functions_and_macros_5	theory	err	ConflictingDeclaration(dest-signing,Builtin)	theory T begin builtins: signing, dest-signing end
+builtins_item_rejects_conflicting_functions_and_macros_6	theory	ok	ok	theory T begin builtins: dest-pairing end
+matching_and_exempt_function_declarations_are_accepted_1	theory	ok	ok	theory P begin\n\nbuiltins: hashing\nfunctions: h/1\n\nend\n
+matching_and_exempt_function_declarations_are_accepted_2	theory	ok	ok	theory P begin\n\nbuiltins: hashing\nfunctions: h/1, h/1\n\nend\n
+matching_and_exempt_function_declarations_are_accepted_3	theory	ok	ok	theory P begin\n\nfunctions: fst/1 [destructor]\n\nend\n
+matching_and_exempt_function_declarations_are_accepted_4	theory	ok	ok	theory P begin\n\nbuiltins: dest-pairing\nfunctions: fst/1 [destructor]\n\nend\n
+matching_and_exempt_function_declarations_are_accepted_5	theory	ok	ok	theory P begin\n\nbuiltins: diffie-hellman\nfunctions: exp/3\n\nend\n
+matching_and_exempt_function_declarations_are_accepted_6	theory	ok	ok	theory P begin\n\nbuiltins: multiset\nfunctions: union/3\n\nend\n
+matching_and_exempt_function_declarations_are_accepted_7	theory	ok	ok	theory P begin\n\nbuiltins: natural-numbers\nfunctions: tplus/3\n\nend\n
+matching_and_exempt_function_declarations_are_accepted_8	theory	ok	ok	theory P begin\n\nbuiltins: signing, revealing-signing\nfunctions: pk/1\n\nend\n
+misspelled_theory_keyword_reports_the_expected_construct	theory	err	Expected(Theory)	theary Foo\nbegin\nend\n
+unknown_item_points_at_its_name	theory	err	UnknownItem(rul,TheoryItem)	theory T begin rul R: [] --> [] end
+fact_names_start_with_a_unicode_uppercase_letter_1	theory	ok	ok	theory T begin rule A: [] --[ Événement() ]-> [] end
+fact_names_start_with_a_unicode_uppercase_letter_2	theory	ok	ok	theory T begin rule A: [] --[ Σ() ]-> [] end
+fact_names_start_with_a_unicode_uppercase_letter_4	theory	ok	ok	theory T begin rule A: [] --[ 𝐀() ]-> [] end
+fact_names_start_with_a_unicode_uppercase_letter_5	theory	err	InvalidFactName(é)	theory T begin rule A: [] --[ é() ]-> [] end
+malformed_stored_proof_fails_theory_parse_1	theory	err	Expected(Proof)	theory T begin\nlemma L: "T"\nsimplify\nend
+malformed_stored_proof_fails_theory_parse_2	theory	err	UnknownItem(trailing,TheoryItem)	theory T begin\nlemma L: "T"\nby sorry trailing\nend
+stored_proof_starts_without_word_boundary_1	theory	ok	ok	theory T begin\nlemma L: "T"\nbysorry\nend
+stored_proof_starts_without_word_boundary_2	diff	ok	ok	theory D begin diffLemma E: rule-equivalencecase R bysorry qed end
+stored_proof_cannot_start_with_solved_1	theory	err	Custom	theory T begin\nlemma L: "T"\nSOLVED\nend
+stored_proof_cannot_start_with_solved_2	theory	err	Custom	theory T begin\nlemma L: "T"\nSOLVEDx\nend
+stored_proof_cannot_start_with_solved_3	theory	ok	ok	theory T begin\nlemma L: "T"\ninduction case base SOLVED qed\nend
+incomplete_proofs_do_not_finish_at_following_theory_items_1	theory -D=LIVE	err	Expected(Proof)	theory T begin\nlemma L: "T"\nsimplify\ntext{* documentation *}\nend
+incomplete_proofs_do_not_finish_at_following_theory_items_2	theory -D=LIVE	err	Expected(Proof)	theory T begin\nlemma L: "T"\nsimplify\nlemma Next: "T" by sorry\nend
+incomplete_proofs_do_not_finish_at_following_theory_items_3	theory -D=LIVE	err	Expected(Proof)	theory T begin\nlemma L: "T"\nsimplify\nrule Next: [] --> []\nend
+incomplete_proofs_do_not_finish_at_following_theory_items_4	theory -D=LIVE	err	Expected(Proof)	theory T begin\nlemma L: "T"\nsimplify\n#ifdef LIVE\nrule Next: [] --> []\n#endif\nend
+incomplete_proofs_do_not_finish_at_following_theory_items_5	diff -D=LIVE	err	Expected(Proof)	theory T begin\ndiffLemma L:\nrule-equivalence\ntext{* documentation *}\nend
+incomplete_proofs_do_not_finish_at_following_theory_items_6	diff -D=LIVE	err	Expected(Proof)	theory T begin\ndiffLemma L:\nrule-equivalence\nlemma Next: "T" by sorry\nend
+incomplete_proofs_do_not_finish_at_following_theory_items_7	diff -D=LIVE	err	Expected(Proof)	theory T begin\ndiffLemma L:\nrule-equivalence\nrule Next: [] --> []\nend
+incomplete_proofs_do_not_finish_at_following_theory_items_8	diff -D=LIVE	err	Expected(Proof)	theory T begin\ndiffLemma L:\nrule-equivalence\n#ifdef LIVE\nrule Next: [] --> []\n#endif\nend
+stored_proof_stops_before_top_level_process_definition	theory	ok	ok	theory T begin\nlemma L: "T"\nby sorry\nlet P = 0\nprocess: P\nend
+proof_skeleton_captures_mixed_sorted_indexed_and_keyword_args	theory	ok	ok	theory T begin\n  lemma L:\n    "All x #i. Start(x) @ #i ==> F"\n  simplify\n  solve( Foo( ~k, $A, k.1, test, sid ) @ #i1 )\n    case c\n    by sorry\n  qed\nend
+real_casetest_after_proof_still_recognized	theory	ok	ok	theory T begin\n  lemma L:\n    "All x #i. Start(x) @ #i ==> F"\n  simplify\n  solve( Foo( test, sid ) @ #i1 )\n    case c\n    by sorry\n  qed\n  test Reachable:\n    "Ex #i. Bar() @ #i"\nend
+proof_case_label_named_after_keyword_does_not_truncate	theory	ok	ok	theory T begin\n  lemma l:\n    exists-trace "Ex x #i. Done(x) @ #i"\n  simplify\n  solve( A( x ) ▶₀ #i )\n    case test\n    SOLVED // trace found\n  qed\nend
+multiple_case_labels_named_after_keywords_do_not_truncate_1	theory	ok	ok	theory T begin\n  lemma l:\n    all-traces "All x #i. Done(x) @ #i ==> F"\n  simplify\n  solve( A( x ) ▶₀ #i )\n    case restriction\n      by sorry\n    next\n    case lemma\n      by sorry\n    next\n    case function\n      by sorry\n  qed\nend
+multiple_case_labels_named_after_keywords_do_not_truncate_2	theory	err	Expected(Proof)	theory T begin\n  lemma l:\n    all-traces "All x #i. Done(x) @ #i ==> F"\n  simplify\n  solve( A( x ) ▶₀ #i )\n    case rule\n      by sorry\n    next\n    case lemma\n      by sorry\n    next\n    case function\n      by sorry\n  qed\nend
+keyword_after_proof_still_terminates_capture	theory	ok	ok	theory T begin\n  lemma l:\n    exists-trace "Ex x #i. Done(x) @ #i"\n  simplify\n  solve( A( x ) ▶₀ #i )\n    case test\n    SOLVED\n  qed\n  rule two:\n    [ A(x) ] --[ Done(x) ]-> [ ]\nend
+tactic_blocks_require_a_selector_without_consuming_the_next_token_1	theory	err	Expected(Tactic)	theory T begin\ntactic: rank\nprio:\nrule R: [] --> [] end
+tactic_blocks_require_a_selector_without_consuming_the_next_token_2	theory	err	Expected(Tactic)	theory T begin\ntactic: rank\ndeprio: {id}\nrule R: [] --> [] end
+tactic_blocks_require_a_selector_without_consuming_the_next_token_3	theory	err	Expected(Tactic)	theory T begin\ntactic: rank\nprio:\nfoo
+tactic_blocks_require_a_selector_without_consuming_the_next_token_4	theory	err	Expected(Tactic)	theory T begin\ntactic: rank\nprio:\ndeprio:
+tactic_blocks_require_a_selector_without_consuming_the_next_token_5	theory	err	Expected(Tactic)	theory T begin\ntactic: rank\nprio:\n
+tactic_presort_requires_one_known_non_oracle_ranking_1	theory	err	Custom	theory T begin\ntactic: rank\npresort: sx\nend
+tactic_presort_requires_one_known_non_oracle_ranking_2	theory	err	Custom	theory T begin\ntactic: rank\npresort: z\nend
+tactic_presort_requires_one_known_non_oracle_ranking_3	theory	err	Custom	theory T begin\ntactic: rank\npresort: o\nend
+tactic_presort_requires_one_known_non_oracle_ranking_4	theory	ok	ok	theory T begin\ntactic: rank\npresort: s\nend
+tactic_presort_requires_one_known_non_oracle_ranking_5	theory	ok	ok	theory T begin\ntactic: rank\npresort: S\nend
+tactic_presort_requires_one_known_non_oracle_ranking_6	theory	ok	ok	theory T begin\ntactic: rank\npresort: p\nend
+tactic_presort_requires_one_known_non_oracle_ranking_7	theory	ok	ok	theory T begin\ntactic: rank\npresort: P\nend
+tactic_presort_requires_one_known_non_oracle_ranking_8	theory	ok	ok	theory T begin\ntactic: rank\npresort: c\nend
+tactic_presort_requires_one_known_non_oracle_ranking_9	theory	ok	ok	theory T begin\ntactic: rank\npresort: C\nend
+tactic_presort_requires_one_known_non_oracle_ranking_10	theory	ok	ok	theory T begin\ntactic: rank\npresort: i\nend
+tactic_presort_requires_one_known_non_oracle_ranking_11	theory	ok	ok	theory T begin\ntactic: rank\npresort: I\nend
+ac_infix_requires_a_preceding_declaration	theory	err	Expected(Equation)	theory T begin equations: x add y = z end
+rule_let_requires_a_binding_and_in_terminator_1	theory	err	Expected(Rule)	theory T begin rule R: let in [] --[]-> [] end
+rule_let_requires_a_binding_and_in_terminator_2	theory	err	Expected(Rule)	theory T begin rule R: let x = y [] --[]-> [] end
+invalid_term_reports_its_expectation_and_token	theory	err	Expected(Term)	theory T begin rule R: [A(☃)] --> [] end
+missing_theory_end_is_independent_of_previous_item_1	theory	err	Expected(Theory)	theory T begin rule R: [] --> []
+missing_theory_end_is_independent_of_previous_item_2	theory	err	Expected(Theory)	theory T begin builtins: hashing
+missing_theory_end_is_independent_of_previous_item_3	theory	err	Expected(Theory)	theory T begin functions: f/2,g/1
+missing_theory_end_is_independent_of_previous_item_4	theory	err	Expected(Theory)	theory T begin functions: f/2,g/2 [AC]
+diff_validation_preserves_priority_and_source_spans_1	theory	err	IllegalDiffOperator(DiffModeDisabled)	theory D\nbegin\n\nbuiltins: diffie-hellman\n\nrule RA:\n  [ Fr(~a), Fr(~b) ] --[ Go( 'a' ) ]-> [ Out( diff((~a*~b), ~a) ) ]\n\nend\n
+diff_validation_preserves_priority_and_source_spans_2	theory	err	IllegalDiffOperator(DiffModeDisabled)	theory D\nbegin\n\nbuiltins: diffie-hellman\n\nrule RA:\n  [ Fr(~a), Fr(~b) ] --[ Go( 'a' ) ]-> [ Out( diff(diff(~a, ~b), ~b) ) ]\n\nend\n
+diff_validation_preserves_priority_and_source_spans_3	theory	err	WrongFunctionArity(diff,2,1)	theory D\nbegin\n\nbuiltins: diffie-hellman\n\nrule RA:\n  [ Fr(~a), Fr(~b) ] --[ Go( 'a' ) ]-> [ Out( diff(~a) ) ]\n\nend\n
+diff_validation_preserves_priority_and_source_spans_4	theory -D=diff	err	WrongFunctionArity(diff,2,1)	theory D\nbegin\n\nbuiltins: diffie-hellman\n\nrule RA:\n  [ Fr(~a), Fr(~b) ] --[ Go( 'a' ) ]-> [ Out( diff(~a) ) ]\n\nend\n
+diff_validation_preserves_priority_and_source_spans_5	theory	err	WrongFunctionArity(diff,2,3)	theory D\nbegin\n\nbuiltins: diffie-hellman\n\nrule RA:\n  [ Fr(~a), Fr(~b) ] --[ Go( 'a' ) ]-> [ Out( diff(~a, ~b, ~a) ) ]\n\nend\n
+diff_validation_preserves_priority_and_source_spans_6	theory -D=diff	err	WrongFunctionArity(diff,2,3)	theory D\nbegin\n\nbuiltins: diffie-hellman\n\nrule RA:\n  [ Fr(~a), Fr(~b) ] --[ Go( 'a' ) ]-> [ Out( diff(~a, ~b, ~a) ) ]\n\nend\n
+diff_validation_preserves_priority_and_source_spans_7	theory	err	WrongFunctionArity(diff,2,0)	theory D\nbegin\n\nbuiltins: diffie-hellman\n\nrule RA:\n  [ Fr(~a), Fr(~b) ] --[ Go( 'a' ) ]-> [ Out( diff() ) ]\n\nend\n
+diff_validation_preserves_priority_and_source_spans_8	theory -D=diff	err	WrongFunctionArity(diff,2,0)	theory D\nbegin\n\nbuiltins: diffie-hellman\n\nrule RA:\n  [ Fr(~a), Fr(~b) ] --[ Go( 'a' ) ]-> [ Out( diff() ) ]\n\nend\n
+diff_validation_preserves_priority_and_source_spans_9	theory	err	WrongFunctionArity(diff,2,1)	theory D\nbegin\n\nbuiltins: diffie-hellman\n\nrule RA:\n  [ Fr(~a), Fr(~b) ] --[ Go( 'a' ) ]-> [ Out( diff(~a,) ) ]\n\nend\n
+diff_validation_preserves_priority_and_source_spans_10	theory -D=diff	err	WrongFunctionArity(diff,2,1)	theory D\nbegin\n\nbuiltins: diffie-hellman\n\nrule RA:\n  [ Fr(~a), Fr(~b) ] --[ Go( 'a' ) ]-> [ Out( diff(~a,) ) ]\n\nend\n
+diff_validation_preserves_priority_and_source_spans_11	theory	err	IllegalDiffOperator(InEquation)	theory D begin equations: diff(x, x) = x end
+diff_validation_preserves_priority_and_source_spans_12	theory	err	WrongFunctionArity(diff,2,1)	theory D begin equations: diff(x) = x end
+diff_validation_preserves_priority_and_source_spans_13	theory -D=diff	err	IllegalDiffOperator(InEquation)	theory D begin equations: diff(x, x) = x end
+diff_validation_preserves_priority_and_source_spans_14	theory -D=diff	err	WrongFunctionArity(diff,2,1)	theory D begin equations: diff(x) = x end
+diff_validation_preserves_priority_and_source_spans_15	theory -D=diff	ok	ok	theory D\nbegin\n\nbuiltins: diffie-hellman\n\nrule RA:\n  [ Fr(~a), Fr(~b) ] --[ Go( 'a' ) ]-> [ Out( diff(~a, ~b,) ) ]\n\nend\n
+bare_diff_token_requires_an_argument_list_1	theory	err	Expected(Term)	theory D begin rule R: [] --> [Out(diff)] end
+bare_diff_token_requires_an_argument_list_2	theory	err	Expected(Term)	theory D begin rule R: [] --> [Out(diff{~a}~b)] end
+bare_diff_token_requires_an_argument_list_3	theory	err	Expected(Term)	theory D begin rule R: [] --> [Out(diff /* comment */)] end
+diff_operator_is_accepted_with_the_diff_flag_1	theory -D=diff	ok	ok	theory D\nbegin\n\nbuiltins: diffie-hellman\n\nrule RA:\n  [ Fr(~a), Fr(~b) ] --[ Go( 'a' ) ]-> [ Out( diff((~a*~b), ~a) ) ]\n\nend\n
+diff_operator_is_accepted_with_the_diff_flag_2	theory	ok	ok	theory D\nbegin\n\nfunctions: diffuse/2\n\nrule RA:\n  [ Fr(~a), Fr(~b) ] --> [ Out( diffuse(~a, ~b) ) ]\n\nend\n
+conflict_progress_includes_trailing_comments_1	theory	err	ConflictingDeclaration(f,FunctionDeclaration)	theory T begin functions: f/1, f/2 /* trailing */ end
+conflict_progress_includes_trailing_comments_2	theory	err	UnclosedBlockComment	theory T begin functions: f/1, f/2 /* unclosed
+conflict_progress_includes_trailing_comments_3	theory	err	ConflictingDeclaration(f,FunctionDeclaration)	theory T begin functions: f/1, f/1 [private] /* trailing */ end
+conflict_progress_includes_trailing_comments_4	theory	err	UnclosedBlockComment	theory T begin functions: f/1, f/1 [private] /* unclosed
+conflict_progress_includes_trailing_comments_5	theory	err	ConflictingDeclaration(hashing,Builtin)	theory T begin functions: h/2 builtins: hashing /* trailing */ end
+conflict_progress_includes_trailing_comments_6	theory	err	UnclosedBlockComment	theory T begin functions: h/2 builtins: hashing /* unclosed
+conflict_progress_includes_trailing_comments_7	theory	err	ConflictingDeclaration(hashing,Builtin)	theory T begin macros: h(x) = x builtins: hashing /* trailing */ end
+conflict_progress_includes_trailing_comments_8	theory	err	UnclosedBlockComment	theory T begin macros: h(x) = x builtins: hashing /* unclosed
+conflict_progress_includes_trailing_comments_9	theory	err	ConflictingDeclaration(m,Macro)	theory T begin macros: m(x) = x, m(y) = y /* trailing */ end
+conflict_progress_includes_trailing_comments_10	theory	err	UnclosedBlockComment	theory T begin macros: m(x) = x, m(y) = y /* unclosed
+
+# --- Proof skeletons and goals inside a lemma (Parser/Proof.hs).
+malformed_diff_proof_is_rejected_1	diff	err	Expected(Proof)	theory T begin\ndiffLemma d:\nrule-equivalence\nend\n
+malformed_diff_proof_is_rejected_2	diff	err	Expected(Proof)	theory T begin\ndiffLemma d:\nby step( SOLVED )\nend\n
+zero_case_blocks_are_accepted_1	theory	ok	ok	theory T begin\nlemma l: "T"\nsimplify qed\nend\n
+zero_case_blocks_are_accepted_2	diff	ok	ok	theory T begin\ndiffLemma d:\nrule-equivalence qed\nend\n
+proof_keywords_need_no_word_boundary_1	theory	ok	ok	theory T begin\nlemma l: "T"\ninduction caseBase by sorry qed\nend\n
+proof_keywords_need_no_word_boundary_2	theory	ok	ok	theory T begin\nlemma l: "T"\ninduction case Base bysorry qed\nend\n
+proof_keywords_need_no_word_boundary_3	theory	ok	ok	theory T begin\nlemma l: "T"\ninductioncase Base by sorryqed\nend\n
+proof_keywords_need_no_word_boundary_4	theory	ok	ok	theory T begin\nlemma l: "T"\ninduction case A by sorry nextcase B by sorry qed\nend\n
+proof_keywords_need_no_word_boundary_5	theory	err	Expected(Proof)	theory T begin\nlemma l: "T"\nsorryfoo\nend\n
+proof_keywords_need_no_word_boundary_6	theory	err	UnknownItem(foo,TheoryItem)	theory T begin\nlemma l: "T"\nby contradictionfoo\nend\n
+proof_keywords_need_no_word_boundary_7	theory	err	Expected(Proof)	theory T begin\nlemma l: "T"\ninduction case A bysorryx qed\nend\n
+proof_keywords_need_no_word_boundary_8	theory	err	UnknownItem(x,TheoryItem)	theory T begin\nlemma l: "T"\ninduction case A by sorry qedx\nend\n
+proof_keywords_need_no_word_boundary_9	diff	ok	ok	theory T begin\ndiffLemma d:\nrule-equivalencecase R bysorry qed\nend\n
+identifier_stops_at_hyphen_1	theory	err	Expected(Proof)	theory T begin\nlemma l: "T"\ninduction case foo-bar by sorry qed\nend\n
+identifier_stops_at_hyphen_2	theory	ok	ok	theory T begin\nlemma l: "T"\ninduction case foo_bar by sorry qed\nend\n
+case_names_follow_hs_identifier_1	theory	err	Expected(Proof)	theory T begin\nlemma l: "T"\ninduction case rule by sorry qed\nend\n
+case_names_follow_hs_identifier_2	diff	err	Expected(Proof)	theory T begin\ndiffLemma d:\nrule-equivalence case rule MIRRORED qed\nend\n
+case_names_follow_hs_identifier_3	theory	err	Expected(Proof)	theory T begin\nlemma l: "T"\ninduction case in by sorry qed\nend\n
+case_names_follow_hs_identifier_4	diff	err	Expected(Proof)	theory T begin\ndiffLemma d:\nrule-equivalence case in MIRRORED qed\nend\n
+case_names_follow_hs_identifier_5	theory	err	Expected(Proof)	theory T begin\nlemma l: "T"\ninduction case let by sorry qed\nend\n
+case_names_follow_hs_identifier_6	diff	err	Expected(Proof)	theory T begin\ndiffLemma d:\nrule-equivalence case let MIRRORED qed\nend\n
+case_names_follow_hs_identifier_7	theory	err	Expected(Proof)	theory T begin\nlemma l: "T"\ninduction case diff by sorry qed\nend\n
+case_names_follow_hs_identifier_8	diff	err	Expected(Proof)	theory T begin\ndiffLemma d:\nrule-equivalence case diff MIRRORED qed\nend\n
+case_names_follow_hs_identifier_9	theory	err	Expected(Proof)	theory T begin\nlemma l: "T"\ninduction case _x by sorry qed\nend\n
+case_names_follow_hs_identifier_10	diff	err	Expected(Proof)	theory T begin\ndiffLemma d:\nrule-equivalence case _x MIRRORED qed\nend\n
+case_names_follow_hs_identifier_11	theory	ok	ok	theory T begin\nlemma l: "T"\ninduction case rule_1 by sorry qed\nend\n
+case_names_follow_hs_identifier_12	theory	ok	ok	theory T begin\nlemma l: "T"\ninduction case 1 by sorry qed\nend\n
+case_names_follow_hs_identifier_13	theory	ok	ok	theory T begin\nlemma l: "T"\ninduction case Rule by sorry qed\nend\n
+case_names_follow_hs_identifier_14	theory	ok	ok	theory T begin\nlemma l: "T"\ninduction case x_ by sorry qed\nend\n
+bare_inter_method_without_child_is_err_1	theory	err	Expected(Proof)	theory T begin\nlemma l: "T"\nsimplify\nend\n
+bare_inter_method_without_child_is_err_2	theory	err	Expected(Proof)	theory T begin\nlemma l: "T"\ninduction\nend\n
+bare_inter_method_without_child_is_err_3	theory	ok	ok	theory T begin\nlemma l: "T"\nsimplify by sorry\nend\n
+bare_inter_method_without_child_is_err_4	theory	ok	ok	theory T begin\nlemma l: "T"\nby simplify\nend\n
+goal_rejects_trailing_text_1	theory	err	Expected(Proof)	theory T begin\nlemma l: "T"\nsolve(Foo( x ) @ #i and then some) by sorry\nend\n
+goal_rejects_trailing_text_2	theory	err	Expected(Proof)	theory T begin\nlemma l: "T"\nsolve(splitEqs(3) splitEqs(4)) by sorry\nend\n
+unparseable_goal_fails_the_tree_parse	theory	err	Expected(Proof)	theory T begin\nlemma l: "T"\nsolve( garbage_no_marker ) by sorry\nend\n
+unknown_method_token_fails_the_tree_parse_1	theory	err	UnknownItem(rule-equivalence,TheoryItem)	theory T begin\nlemma l: "T"\nrule-equivalence by sorry\nend\n
+unknown_method_token_fails_the_tree_parse_2	theory	err	Expected(Proof)	theory T begin\nlemma l: "T"\nby ATTACK\nend\n

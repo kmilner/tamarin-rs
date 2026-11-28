@@ -1,0 +1,20 @@
+// Category: proof corners no corpus proof reaches — stored-proof replay
+// under `--stop-on-trace=bfs`.
+//
+// The stored proof has a case `stale` that does not replay, nested two
+// `simplify` steps deep above a `sorry`.  BFS search keeps the stale branch,
+// unannotated, beside the found trace.  No corpus or regression theory has a
+// stale nested saved branch.
+
+theory StaleBfs begin
+rule Emit1: [Fr(~x)] --[A(~x)]-> []
+rule Emit2: [Fr(~x)] --[A(~x)]-> []
+lemma witness: exists-trace
+  "Ex x #i. A(x) @ i"
+simplify
+case stale
+  simplify
+  simplify
+  by sorry
+qed
+end

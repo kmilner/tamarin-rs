@@ -1,0 +1,8 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// A SAPIC condition over unbound variables: `Process not well-formed`.
+// No corpus theory fails this way.
+
+theory SapicCondEqUnbound begin
+process: if a = b then 0
+end

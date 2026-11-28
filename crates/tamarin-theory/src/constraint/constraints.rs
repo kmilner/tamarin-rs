@@ -7,10 +7,8 @@
 //!
 //! `Edge`, `LessAtom`, `Disj` and `Goal` carry the `HasFrees` instances
 //! Haskell declares for them; the trait itself lives in
-//! `tamarin_term::lterm`.  None of them carries a generic `Apply LNSubst`
-//! instance: the solver applies substitutions to these constraints directly
-//! in `constraint::solver::reduction` (`subst_system` / `subst_system_once`,
-//! mirroring Haskell's `substSystem`).
+//! `tamarin_term::lterm`.  Their `Apply` instances take the whole-system
+//! pass [`SystemSubst`] (`crate::apply`) that `substSystem` applies.
 
 use tamarin_term::apply::Apply;
 use tamarin_term::lterm::{HasFrees, LNTerm, LVar};
@@ -142,9 +140,6 @@ impl PartialOrd for LessAtom {
     }
 }
 
-/// `instance HasFrees LessAtom` (Constraints.hs): the smaller node id
-/// then the larger one.  The reason tag holds no variable and is carried over
-/// by `pure`.
 /// HS `Apply LNSubst LessAtom` (Constraints.hs): both endpoints,
 /// with the reason tag carried over.
 impl Apply<SystemSubst<'_>> for LessAtom {
@@ -163,6 +158,9 @@ impl Apply<SystemSubst<'_>> for LessAtom {
     }
 }
 
+/// `instance HasFrees LessAtom` (Constraints.hs): the smaller node id
+/// then the larger one.  The reason tag holds no variable and is carried over
+/// by `pure`.
 impl HasFrees for LessAtom {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
         self.smaller.for_each_free(f);
@@ -271,14 +269,6 @@ impl Goal {
     }
 }
 
-/// `instance HasFrees Goal` (Constraints.hs): every variant folds and
-/// maps its payloads left to right — the timepoint before the fact of an
-/// `Action`, the node id of a `Premise`'s premise before its fact, the
-/// conclusion's node id before the premise's for a `Chain`, and both sides of
-/// a `Subterm` pair (LTerm.hs).  A `Premise`/`Chain` index is an
-/// `Int`, so only the node id of such a pair is a variable
-/// (LTerm.hs).  `Split` carries a `SplitId`, whose instance is `const
-/// mempty` / `pure` (EquationStore.hs).
 /// HS `Apply LNSubst Goal` (Constraints.hs).  A `SplitG` carries a
 /// split id, which is not a variable
 /// (Theory/Tools/EquationStore.hs).  The `DisjG` arm is the pass's
@@ -302,6 +292,14 @@ impl Apply<SystemSubst<'_>> for Goal {
     }
 }
 
+/// `instance HasFrees Goal` (Constraints.hs): every variant folds and
+/// maps its payloads left to right — the timepoint before the fact of an
+/// `Action`, the node id of a `Premise`'s premise before its fact, the
+/// conclusion's node id before the premise's for a `Chain`, and both sides of
+/// a `Subterm` pair (LTerm.hs).  A `Premise`/`Chain` index is an
+/// `Int`, so only the node id of such a pair is a variable
+/// (LTerm.hs).  `Split` carries a `SplitId`, whose instance is `const
+/// mempty` / `pure` (EquationStore.hs).
 impl HasFrees for Goal {
     fn for_each_free(&self, f: &mut dyn FnMut(&LVar)) {
         match self {
@@ -418,6 +416,21 @@ mod tests {
         let u = lit(Lit::Var(LVar::new("y", LSort::Msg, 0)));
         assert_eq!(
             Goal::Subterm((t.clone(), t.clone())).cmp(&Goal::Subterm((t.clone(), u))),
+            Ordering::Less
+        );
+        // `DisjG` compares its formulas structurally, so a leaf variable that
+        // differs only in sort follows `Ord LSort` (Pub < Fresh), not the
+        // sort's name.
+        let last_of = |sort| {
+            let leaf = tamarin_term::vterm::var_term(tamarin_term::lterm::BVar::Free(LVar::new(
+                "x", sort, 0,
+            )));
+            Goal::Disj(Disj::new(vec![crate::guarded::Guarded::Atom(
+                crate::atom::ProtoAtom::Last(leaf),
+            )]))
+        };
+        assert_eq!(
+            last_of(LSort::Pub).cmp(&last_of(LSort::Fresh)),
             Ordering::Less
         );
     }

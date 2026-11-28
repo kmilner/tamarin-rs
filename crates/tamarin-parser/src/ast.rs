@@ -9,6 +9,8 @@
 //! syntax-level staging form that a later elaboration pass lowers. [`Theory`] is
 //! the root; every other type hangs off its [`TheoryItem`] stream.
 
+use std::collections::BTreeMap;
+
 use tamarin_term::lterm::LSort;
 pub use tamarin_term::tags::{FactAnnotation, LemmaAttr, TraceQuantifier};
 
@@ -169,6 +171,10 @@ pub struct Rule {
     pub name: String,
     pub modulo: Option<String>, // E or AC
     pub attributes: Vec<RuleAttr>,
+    /// HS `letBlock`'s bindings, in source order.  The body below is as
+    /// written; elaboration applies the bindings (HS `apply subst`,
+    /// Theory/Text/Parser/Rule.hs).
+    pub lets: Vec<(VarSpec, Term)>,
     pub premises: Vec<Fact>,
     pub actions: Vec<Fact>,
     pub conclusions: Vec<Fact>,
@@ -282,13 +288,12 @@ pub struct ProofSkeleton {
 ///     oneCase = (,) <$> (symbol "case" *> identifier) <*> proofSkeleton
 /// ```
 ///
-/// `cases` retains the source ordering (HS uses `M.fromList` which is
-/// alphabetical, but at replay time the order doesn't matter — we look
-/// each case up by name).
+/// `cases` is the `M.fromList` map: ordered by name, and the last of several
+/// cases with one name wins.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParsedProofTree {
     pub method: ParsedMethod,
-    pub cases: Vec<(String, ParsedProofTree)>,
+    pub cases: BTreeMap<String, ParsedProofTree>,
 }
 
 /// Parsed proof method.  Mirrors the `ProofMethod` values HS's
@@ -347,11 +352,77 @@ pub enum GoalSpec {
 // Tactics
 // =============================================================================
 
-/// A single selector function as written in a tactic, e.g. `regex "In_S"`.
+/// A tactic function call carries both its printable spelling and its predicate.
+/// The spelling includes every argument, including any ignored by the predicate.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SelectorLeaf {
-    pub name: String,
-    pub params: Vec<String>,
+    source: String,
+    predicate: SelectorPredicate,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SelectorPredicate {
+    Regex {
+        pattern: String,
+    },
+    IsFactName {
+        name: String,
+    },
+    IsInFactTerms {
+        pattern: String,
+    },
+    DhreNoise {
+        oracle_type: String,
+    },
+    DefaultNoise {
+        goal_pattern: String,
+        oracle_type: Option<String>,
+    },
+    ReasonableNoncesNoise {
+        oracle_type: String,
+    },
+    NonAbsurdConstraint {
+        oracle_type: String,
+    },
+    Unknown {
+        name: String,
+    },
+}
+
+impl SelectorLeaf {
+    pub fn new(name: &str, first: String, rest: Vec<String>) -> Self {
+        let mut source = format!("{name} \"{first}\"");
+        for param in &rest {
+            source.push_str(" \"");
+            source.push_str(param);
+            source.push('"');
+        }
+
+        let predicate = match name {
+            "regex" => SelectorPredicate::Regex { pattern: first },
+            "isFactName" => SelectorPredicate::IsFactName { name: first },
+            "isInFactTerms" => SelectorPredicate::IsInFactTerms { pattern: first },
+            "dhreNoise" => SelectorPredicate::DhreNoise { oracle_type: first },
+            "defaultNoise" => SelectorPredicate::DefaultNoise {
+                goal_pattern: first,
+                oracle_type: rest.into_iter().next(),
+            },
+            "reasonableNoncesNoise" => {
+                SelectorPredicate::ReasonableNoncesNoise { oracle_type: first }
+            }
+            "nonAbsurdConstraint" => SelectorPredicate::NonAbsurdConstraint { oracle_type: first },
+            _ => SelectorPredicate::Unknown { name: name.into() },
+        };
+        Self { source, predicate }
+    }
+
+    pub fn source(&self) -> &str {
+        &self.source
+    }
+
+    pub fn predicate(&self) -> &SelectorPredicate {
+        &self.predicate
+    }
 }
 
 /// A boolean selector expression from one line of a priority block.
@@ -519,7 +590,6 @@ pub enum Term {
     PubLit(String),   // 'foo'
     FreshLit(String), // ~'n'
     NatLit(String),   // %'n'
-    Number(u64),      // bare integer literal (e.g. for %+)
     NumberOne,        // 1
     NatOne,           // 1:nat / %1
     DhNeutral,
@@ -584,33 +654,4 @@ pub struct VarSpec {
     pub idx: u64,
     pub sort: LSort,
     pub typ: Option<String>, // SAPIC type annotation
-}
-
-#[cfg(test)]
-mod tests {
-    use super::BinOp;
-
-    /// The separator strings HS `prettyTerm` puts between operands
-    /// (Term/Term.hs).  Every printer of a `BinOp` reads them from
-    /// here, so a typo would move in lockstep across all of them — pin the
-    /// table itself.
-    #[test]
-    fn separator_table_matches_prettyterm() {
-        assert_eq!(BinOp::Exp.separator(), "^");
-        assert_eq!(BinOp::Mult.separator(), "*");
-        assert_eq!(BinOp::Union.separator(), "++");
-        assert_eq!(BinOp::Xor.separator(), "\u{2295}");
-        assert_eq!(BinOp::NatPlus.separator(), "%+");
-        // A user-declared `[AC]` symbol keeps the surrounding spaces.
-        assert_eq!(BinOp::AcFct("add").separator(), " add ");
-        // Only that arm needs to own its string.
-        assert!(matches!(
-            BinOp::Exp.separator(),
-            std::borrow::Cow::Borrowed(_)
-        ));
-        assert!(matches!(
-            BinOp::AcFct("add").separator(),
-            std::borrow::Cow::Owned(_)
-        ));
-    }
 }

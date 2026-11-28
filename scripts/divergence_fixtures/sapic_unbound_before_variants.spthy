@@ -1,0 +1,19 @@
+// Category: the unbound-variable report over SAPIC-generated rules.
+//
+// The generated rules' unbound group sorts ahead of "Rule has no variants"
+// (check index 6), and the rule without variants is dropped from the echo
+// (see sapic_restrict_unbound).  No corpus process carries an embedded
+// restriction with a free variable.
+
+theory SapicUnboundBeforeVariants
+begin
+
+rule NoVar:
+  [ In(~x), Fr(~x) ] --[ N(~x) ]-> [ ]
+
+process:
+  in(m);
+  [ ] --[ Ev(m), _restrict(k.5 = 'b') ]-> [ ];
+  in(k); out(k)
+
+end

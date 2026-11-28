@@ -1,0 +1,31 @@
+// Category: the --parse-only open-theory printer (`prettyOpenTheory`),
+// which no corpus gate runs: the gates load and close every theory.
+//
+// A rule written with a manual `variants (modulo AC)` block, which the parser
+// stores as the rule item's `_oprRuleAC` list (`protoRule`,
+// Theory/Text/Parser/Rule.hs).  `prettyOpenProtoRule`
+// (OpenTheory.hs) prints several variants under `kwVariants` — the
+// bare `variants` keyword (Theory/Text/Pretty.hs) — below the E rule, and
+// retains a lone variant under its original E-rule when their names differ.
+
+theory ManualVariants
+begin
+
+functions: f/1
+
+rule R:
+  [ In( x ) ] --[ R( f(x) ) ]-> [ Out( f(x) ) ]
+ variants
+  rule (modulo AC) R___VARIANT_1:
+     [ In( f(y) ) ] --[ R( f(f(y)) ) ]-> [ Out( f(f(y)) ) ]
+  ,
+  rule (modulo AC) R___VARIANT_2:
+     [ In( 'c' ) ] --[ R( f('c') ) ]-> [ Out( f('c') ) ]
+
+rule S:
+  [ In( z ) ] --[ S( z ) ]-> [ ]
+ variants
+  rule (modulo AC) S___VARIANT_1:
+     [ In( 'd' ) ] --[ S( 'd' ) ]-> [ ]
+
+end

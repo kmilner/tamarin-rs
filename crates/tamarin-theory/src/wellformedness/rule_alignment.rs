@@ -93,8 +93,8 @@ impl Alignment<'_> {
         let mut env = env.clone();
         for (a, b) in actual
             .iter()
-            .flat_map(|f| f.terms.iter())
-            .zip(expected.iter().flat_map(|f| f.terms.iter()))
+            .flat_map(|f| f.terms().iter())
+            .zip(expected.iter().flat_map(|f| f.terms().iter()))
         {
             force_pairs(&mut env, a, b)?;
         }
@@ -200,8 +200,8 @@ impl Alignment<'_> {
                 .collect();
             let equations = actual
                 .iter()
-                .flat_map(|f| f.terms.iter())
-                .zip(self.expected.iter().flat_map(|f| f.terms.iter()))
+                .flat_map(|f| f.terms().iter())
+                .zip(self.expected.iter().flat_map(|f| f.terms().iter()))
                 .map(|(a, b)| Equal::new(a.clone(), b.clone()))
                 .collect::<Vec<_>>();
             let actual_vars = frees(&actual);

@@ -95,17 +95,7 @@ pub fn apply_abbreviations_term(lookup: &dyn Fn(&LNTerm) -> Option<LNTerm>, t: &
 /// Apply abbreviation substitution to all terms of a fact.
 /// Mirror of `applyAbbreviationsFact`.
 pub fn apply_abbreviations_fact(lookup: &dyn Fn(&LNTerm) -> Option<LNTerm>, fa: &LNFact) -> LNFact {
-    let mut new_fa = fa.clone();
-    new_fa.terms = fa
-        .terms
-        .iter()
-        .map(|t| apply_abbreviations_term(lookup, t))
-        .collect();
-    // The `.terms` assignment changes frees (abbreviation vars replace
-    // subterms); refresh the cached bloom so no stale fingerprint escapes
-    // (display-only path, but keep the invariant honest).
-    new_fa.recompute_bloom();
-    new_fa
+    fa.map_ref(|term| apply_abbreviations_term(lookup, term))
 }
 
 // ---------------------------------------------------------------------
@@ -122,9 +112,11 @@ fn get_term_prefix(opts: &AbbreviationOptions, t: &LNTerm) -> String {
         Term::App(FunSym::List, _) => "LST".to_string(),
         Term::App(FunSym::Ac(op), _) => format!("{:?}", op),
     };
-    let mut out: String = raw.chars().filter(|c| c.is_ascii_alphabetic()).collect();
-    out.truncate(opts.prefix_length);
-    out.to_ascii_uppercase()
+    raw.chars()
+        .filter(|c| c.is_alphabetic())
+        .take(opts.prefix_length)
+        .flat_map(char::to_uppercase)
+        .collect()
 }
 
 // ---------------------------------------------------------------------
@@ -277,7 +269,7 @@ fn dump_rule_info(buf: &mut String, info: &RuleInfo<ProtoRuleACInstInfo, IntrRul
 fn dump_fact(buf: &mut String, fa: &LNFact) {
     use std::fmt::Write as _;
     let _ = write!(buf, "{}", crate::fact::fact_tag_name(&fa.tag));
-    for t in fa.terms.iter() {
+    for t in fa.terms().iter() {
         let _ = write!(buf, "{} ", pretty_lnterm(t));
     }
 }
@@ -329,7 +321,7 @@ fn fact_terms(fa: &LNFact, out: &mut Vec<LNTerm>) {
     // Mirror `getFactTerms fact = filter (not . isPair) $ concatMap getSubTerms
     // $ factTerms fact`, where `getSubTerms t = t : ts` collects the term and
     // its IMMEDIATE arguments only (one level deep, not recursive).
-    for t in fa.terms.iter() {
+    for t in fa.terms().iter() {
         sub_terms_no_pair(t, out);
     }
 }
@@ -631,15 +623,6 @@ mod tests {
             out,
             f_app_no_eq(senc_sym(), vec![abbrev, var("k", LSort::Msg)])
         );
-    }
-
-    #[test]
-    fn lookup_returns_first_field() {
-        let mut abbrevs = Abbreviations::new();
-        let t = f_app_no_eq(senc_sym(), vec![var("a", LSort::Msg), var("b", LSort::Msg)]);
-        let name = var("SE1", LSort::Msg);
-        abbrevs.insert(t.clone(), (name.clone(), t.clone()));
-        assert_eq!(lookup_abbreviation(&abbrevs, &t), Some(&name));
     }
 
     // `orderAbbreviationsForJSON` sorts DESCENDING by rendered abbreviation

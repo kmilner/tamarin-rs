@@ -87,6 +87,10 @@ fn diagnostic_lexeme(text: &str) -> String {
 /// Anything after the closing `end` is ignored: Tamarin theories are commonly
 /// followed by analysis banners and other free text that the official parser
 /// also tolerates.
+///
+/// A protocol rule that reuses an earlier rule's name with a different body
+/// parses here; elaboration rejects it. Use [`parse_theory_with_rule_check`]
+/// to reject it while parsing, positioned as HS reports it.
 pub fn parse_theory(input: &str, flags: &[&str]) -> Result<Theory, ParseError> {
     let mut p = Parser::new(input, flags, false);
     p.theory()
@@ -109,6 +113,10 @@ pub fn parse_diff_theory(input: &str, flags: &[&str]) -> Result<Theory, ParseErr
 /// signature, known functions, flags thread through), and nested includes
 /// resolve relative to the included file's own directory.  `base_dir` is the
 /// directory of the file `input` was read from (`takeDirectory inFile0`).
+///
+/// A protocol rule that reuses an earlier rule's name with a different body
+/// parses here; elaboration rejects it. Use [`parse_theory_with_rule_check`]
+/// to reject it while parsing, positioned as HS reports it.
 pub fn parse_theory_with_base(
     input: &str,
     flags: &[&str],
@@ -116,6 +124,37 @@ pub fn parse_theory_with_base(
 ) -> Result<Theory, ParseError> {
     let mut p = Parser::new(input, flags, false);
     p.base_dir = base_dir;
+    p.theory()
+}
+
+/// HS `addOpenProtoRule`'s comparison of a protocol rule with an earlier one
+/// of the same name (OpenTheory.hs). HS compares the open rules after the
+/// `let` substitution and term construction, which belong to elaboration, so
+/// the caller supplies the comparison and keeps the theory state it needs.
+pub trait RuleConflictCheck {
+    /// Called in source order, includes included, for every item that shapes
+    /// the signature or the predicates (`builtins`, `functions`, `equations`,
+    /// `macros`, `predicates`) and every protocol rule.
+    fn declare(&mut self, item: &TheoryItem);
+    /// Whether `new` differs from the earlier declared rule of its name,
+    /// which is a `duplicate rule`. Called before `new` is declared.
+    fn conflicts(&mut self, new: &Rule) -> bool;
+}
+
+/// Like [`parse_theory_with_base`], but runs `check` on each protocol rule
+/// whose name an earlier one already took, and fails with the positioned
+/// conflict at the second rule's name when it reports a difference — during
+/// parsing, as HS's `liftedAddProtoRule` does (Theory/Text/Parser.hs).  The
+/// other entry points leave that comparison to elaboration.
+pub fn parse_theory_with_rule_check(
+    input: &str,
+    flags: &[&str],
+    base_dir: Option<PathBuf>,
+    check: Box<dyn RuleConflictCheck>,
+) -> Result<Theory, ParseError> {
+    let mut p = Parser::new(input, flags, false);
+    p.base_dir = base_dir;
+    p.state.rule_conflict = Some(check);
     p.theory()
 }
 
@@ -141,12 +180,15 @@ pub struct InputAlias {
 /// Parse a theory while recording the root and every active include. This is
 /// the dependency authority for cache keys and web staging: inactive branches,
 /// comments and text after `end` are interpreted by the real grammar rather
-/// than a second scanner.
+/// than a second scanner.  `rule_check` is as in
+/// [`parse_theory_with_rule_check`], so the manifest rejects the theories the
+/// load rejects.
 pub fn parse_theory_with_manifest(
     input: &str,
     flags: &[&str],
     root: PathBuf,
     is_diff: bool,
+    rule_check: Option<Box<dyn RuleConflictCheck>>,
 ) -> Result<(Theory, Vec<InputAlias>), ParseError> {
     let staged = root.file_name().map(PathBuf::from);
     let inputs = vec![InputAlias {
@@ -159,32 +201,16 @@ pub fn parse_theory_with_manifest(
     parser.staged_file = staged;
     parser.state.input_aliases = inputs;
     parser.state.emit_warnings = false;
+    parser.state.rule_conflict = rule_check;
     let theory = parser.theory()?;
     Ok((theory, parser.state.input_aliases))
 }
 
-/// Parse a stream of intruder-rule declarations of the form
-///     `rule (modulo AC) <name>[<limit>]: [..] --[..]-> [..]`
-/// (with no surrounding `theory ... begin ... end` wrapper).
-///
-/// Direct port of HS `parseIntruderRules` (Theory/Text/Parser/Rule.hs):
-/// ```haskell
-/// parseIntruderRules
-///     :: MaudeSig -> String -> B.ByteString -> Either ParseError [IntrRuleAC]
-/// parseIntruderRules msig ctxtDesc =
-///     parseString [] ctxtDesc (setState (mkStateSig msig) >> many intrRule)
-///   . T.unpack . TE.decodeUtf8
-/// ```
-/// `msig` is the signature HS installs with `setState (mkStateSig msig)`
-/// (Theory/Text/Parser/Rule.hs, called from TheoryLoader.hs);
-/// [`Parser::seed_signature`] does the same here, so `nullaryApp` resolves
-/// the constants these machine-generated files use — `one` and `DH_neutral`
-/// in the cached DH file — instead of reading them as variables.
-///
-/// The bodies are parsed using the existing `parse_rule_ac` path.
-/// The caller is responsible for translating the parser-AST rules into
-/// `IntrRuleAC` (incl. the `c_`/`d_` name dispatch HS `intrInfo` does
-/// at Theory/Text/Parser/Rule.hs).
+/// HS `parseIntruderRules` (Theory/Text/Parser/Rule.hs): a stream of
+/// `rule (modulo AC) <name>: ...` declarations with no theory wrapper, parsed
+/// under `msig` (`setState (mkStateSig msig)`) so `nullaryApp` resolves
+/// constants such as `one` and `DH_neutral`.  The caller converts the rules
+/// to `IntrRuleAC`, including `intrInfo`'s `c`/`d` name dispatch.
 pub fn parse_intruder_rules(msig: &MaudeSig, input: &str) -> Result<Vec<Rule>, ParseError> {
     let mut p = Parser::new(input, &[], false);
     p.seed_signature(msig);
@@ -351,37 +377,31 @@ fn function_option_difference(previous: FunOptions, requested: FunOptions) -> St
 /// `reliable-channel` is absent on purpose: it maps to `Nothing`
 /// (Theory/Text/Parser/Signature.hs), so it neither merges a signature nor
 /// reserves anything.
-macro_rules! builtin_maude_sigs {
-    ($($name:literal => $sig:path),+ $(,)?) => {
-        /// Names whose parser builtin contributes a Maude signature.
-        ///
-        /// Exposed so elaboration can test that its independently maintained
-        /// name-to-signature dispatch remains complete.
-        #[doc(hidden)]
-        pub const BUILTIN_MAUDE_SIG_NAMES: &[&str] = &[$($name),+];
+const BUILTIN_MAUDE_SIGS: &[(&str, fn() -> MaudeSig)] = &[
+    ("locations-report", location_report_maude_sig),
+    ("diffie-hellman", dh_maude_sig),
+    ("bilinear-pairing", bp_maude_sig),
+    ("multiset", mset_maude_sig),
+    ("xor", xor_maude_sig),
+    ("symmetric-encryption", sym_enc_maude_sig),
+    ("asymmetric-encryption", asym_enc_maude_sig),
+    ("signing", signature_maude_sig),
+    ("dest-pairing", pair_dest_maude_sig),
+    ("dest-symmetric-encryption", sym_enc_dest_maude_sig),
+    ("dest-asymmetric-encryption", asym_enc_dest_maude_sig),
+    ("dest-signing", signature_dest_maude_sig),
+    ("revealing-signing", reveal_signature_maude_sig),
+    ("hashing", hash_maude_sig),
+    ("natural-numbers", nat_maude_sig),
+];
 
-        const BUILTIN_MAUDE_SIGS: &[(&str, fn() -> MaudeSig)] = &[
-            $(($name, $sig)),+
-        ];
-    };
-}
-
-builtin_maude_sigs! {
-    "locations-report" => location_report_maude_sig,
-    "diffie-hellman" => dh_maude_sig,
-    "bilinear-pairing" => bp_maude_sig,
-    "multiset" => mset_maude_sig,
-    "xor" => xor_maude_sig,
-    "symmetric-encryption" => sym_enc_maude_sig,
-    "asymmetric-encryption" => asym_enc_maude_sig,
-    "signing" => signature_maude_sig,
-    "dest-pairing" => pair_dest_maude_sig,
-    "dest-symmetric-encryption" => sym_enc_dest_maude_sig,
-    "dest-asymmetric-encryption" => asym_enc_dest_maude_sig,
-    "dest-signing" => signature_dest_maude_sig,
-    "revealing-signing" => reveal_signature_maude_sig,
-    "hashing" => hash_maude_sig,
-    "natural-numbers" => nat_maude_sig,
+/// The `MaudeSig` a `builtins:` name enables (HS `builtinsNames`'
+/// `Maybe MaudeSig`), or `None` for `reliable-channel` and unknown names.
+pub fn builtin_maude_sig(name: &str) -> Option<MaudeSig> {
+    BUILTIN_MAUDE_SIGS
+        .iter()
+        .find(|(n, _)| *n == name)
+        .map(|(_, sig)| sig())
 }
 
 /// The `stFunSyms` of every [`BUILTIN_MAUDE_SIGS`] row, i.e. the free function
@@ -413,7 +433,7 @@ fn builtin_st_fun_syms(name: &str) -> Option<&'static [NoEqSym]> {
 }
 
 fn is_builtin_name(name: &str) -> bool {
-    name == "reliable-channel" || BUILTIN_MAUDE_SIG_NAMES.contains(&name)
+    name == "reliable-channel" || BUILTIN_MAUDE_SIGS.iter().any(|(n, _)| *n == name)
 }
 
 /// A builtin symbol's name as text.  Every name the builtin `MaudeSig`s carry
@@ -577,13 +597,16 @@ struct ParserState {
     sig_enable_xor: bool,
     sig_enable_mset: bool,
     sig_enable_nat: bool,
-    seen_rules: Vec<Rule>,
     seen_restriction_names: Vec<String>,
     seen_lemma_names: Vec<String>,
     seen_diff_left_lemma_names: Vec<String>,
     seen_diff_right_lemma_names: Vec<String>,
     seen_diff_lemma_names: Vec<String>,
+    seen_case_test_names: Vec<String>,
+    seen_acc_lemma_names: Vec<String>,
     seen_predicates: Vec<(bool, String, usize)>,
+    /// The comparison [`parse_theory_with_rule_check`] installs.
+    rule_conflict: Option<Box<dyn RuleConflictCheck>>,
 }
 
 struct FunctionSite {
@@ -612,9 +635,6 @@ pub struct Parser<'a> {
     source_file: Option<PathBuf>,
     /// Staged spelling of [`Self::source_file`] relative to the root input.
     staged_file: Option<PathBuf>,
-    /// Set by every successful variable parse; only consulted for variable operands.
-    /// Formula alternatives need not restore it: the next variable overwrites it.
-    sort_suffix_consumed: bool,
     /// Whether prefix applications resolve through [`Self::lookup_arity`]
     /// (HS `naryOpApp`/`binaryAlgApp`, Theory/Text/Parser/Term.hs).  True
     /// for theory parsing and for [`parse_parens_goal`], which runs inside the
@@ -625,23 +645,9 @@ pub struct Parser<'a> {
     resolve_prefix_apps: bool,
     /// Grammar-owned list closers; never scan ahead to guess delimiter ownership.
     list_closers: Vec<char>,
-    /// Whether a `:` after a variable names a SAPIC TYPE rather than a sort
-    /// suffix.  Set while parsing a SAPIC process (and a process definition's
-    /// parameter list), where HS uses `sapicvar` — `lvarNoSuffix` plus an
-    /// optional type (defaulting node-sorted variables to `node`) — instead of the
-    /// suffix-accepting `msgvar`/`lvar` used everywhere else.  So `x:nat`
-    /// inside a process is `x` typed `"nat"`, while the same text in a rule is
-    /// the nat-sorted `x`.
-    sapic_var_types: bool,
-    /// Whether a `=`-pattern (`Term::PatMatch`) may start a term.  On only in
-    /// the three positions where HS threads a PATTERN literal parser: an `in`
-    /// message (`ltypedpatternlit`, Theory/Text/Parser/Sapic.hs), the
-    /// pattern side of a process `let` binding (`sapicpatternterm`,
-    /// Parser/Sapic.hs), and an embedded MSR rule — all fact rows plus its
-    /// `_restrict` formulas (`genericRule sapicpatternvar`, Parser/Sapic.hs).
-    /// Everywhere else HS's literal parser has no `=` alternative, so a `=`
-    /// starts no term and falls through to the no-alternative error.
-    allow_pat: bool,
+    /// The variable parser HS threads through the term and formula parsers
+    /// of the current context — see [`VarGrammar`].
+    vars: VarGrammar,
 }
 
 impl<'a> Parser<'a> {
@@ -676,23 +682,23 @@ impl<'a> Parser<'a> {
                 sig_enable_xor: false,
                 sig_enable_mset: false,
                 sig_enable_nat: false,
-                seen_rules: Vec::new(),
                 seen_restriction_names: Vec::new(),
                 seen_lemma_names: Vec::new(),
                 seen_diff_left_lemma_names: Vec::new(),
                 seen_diff_right_lemma_names: Vec::new(),
                 seen_diff_lemma_names: Vec::new(),
+                seen_case_test_names: Vec::new(),
+                seen_acc_lemma_names: Vec::new(),
                 seen_predicates: vec![(false, "Smaller".to_string(), 2)],
+                rule_conflict: None,
             },
             is_diff,
             base_dir: None,
             source_file: None,
             staged_file: None,
-            sort_suffix_consumed: false,
             resolve_prefix_apps: true,
             list_closers: Vec::new(),
-            sapic_var_types: false,
-            allow_pat: false,
+            vars: VarGrammar::Msg,
         }
     }
 
@@ -1059,6 +1065,19 @@ impl<'a> Parser<'a> {
                 continue;
             }
             let item = self.theory_item()?;
+            if let Some(check) = self.state.rule_conflict.as_mut()
+                && matches!(
+                    item,
+                    TheoryItem::Builtins(_)
+                        | TheoryItem::Functions(_)
+                        | TheoryItem::Equations { .. }
+                        | TheoryItem::Macros(_)
+                        | TheoryItem::Predicates(_)
+                        | TheoryItem::Rule(_)
+                )
+            {
+                check.declare(&item);
+            }
             items.push(item);
         }
         if !branches.is_empty() {
@@ -1069,13 +1088,31 @@ impl<'a> Parser<'a> {
 
     fn theory_item(&mut self) -> Result<TheoryItem, ParseError> {
         self.skip_ws();
-
-        // Try formal comment first (header `{* body *}`)
-        let save = self.save();
-        if let Some((h, b)) = self.lx.formal_comment() {
-            return Ok(TheoryItem::FormalComment { header: h, body: b });
+        if let Some((header, body)) = self.lx.formal_comment() {
+            return Ok(TheoryItem::FormalComment { header, body });
         }
-        self.restore(save);
+
+        // HS reads a plain and a diff theory with two item lists
+        // (`theory` / `diffTheory`, Theory/Text/Parser.hs); an item the
+        // other list alone has is no item here.
+        let other_mode_only: &[&str] = if self.is_diff {
+            &[
+                "options",
+                "test",
+                "equivLemma",
+                "diffEquivLemma",
+                "export",
+                "process",
+                "let",
+                "predicates",
+                "predicate",
+            ]
+        } else {
+            &["diffLemma"]
+        };
+        if other_mode_only.iter().any(|kw| self.at_keyword(kw)) {
+            return Err(self.item_position_error());
+        }
 
         // Try keyword-led items in priority order.
         if self.at_keyword("builtins") {
@@ -1147,27 +1184,11 @@ impl<'a> Parser<'a> {
 
     // -------------------- Preprocessor --------------------
 
-    /// Expand an already-consumed `#include` keyword and its following path into the
-    /// sequence of theory items declared in the referenced file.
-    ///
-    /// HS `include` (Theory/Text/Parser.hs):
-    /// ```haskell
-    /// include inFile0 thy = do
-    ///    filepath <- try (symbol "#include") *> filePathParser
-    ///    st <- getState
-    ///    let (thy', st') = unsafePerformIO (parseFileWState st ... filepath)
-    ///    _ <- putState st'
-    ///    addItems inFile0 $ set (sigpMaudeSig . thySignature) (sig st') thy'
-    ///  where
-    ///    filePathParser = case takeDirectory <$> inFile0 of
-    ///        Nothing -> doubleQuoted filePath
-    ///        Just s  -> (s </>) <$> doubleQuoted filePath
-    /// ```
-    /// The double-quoted path is consumed here; the path is
-    /// resolved against `self.base_dir` (HS `takeDirectory inFile0`); the file
-    /// is read and its header-less fragment parsed by [`parse_include_fragment`]
-    /// — which threads parser state both ways (signature / known funcs / flags),
-    /// matching HS's `getState`/`putState` round-trip and `sig st'` merge.
+    /// HS `include` (Theory/Text/Parser.hs), after the `#include` keyword:
+    /// read the double-quoted path relative to `self.base_dir` (`takeDirectory
+    /// inFile0`) and parse the header-less fragment with
+    /// [`parse_include_fragment`], threading parser state both ways as HS's
+    /// `getState`/`putState` does.
     fn expand_include(&mut self) -> Result<Vec<TheoryItem>, ParseError> {
         self.in_context(ParseContext::Include, Self::expand_include_inner)
     }
@@ -1673,7 +1694,7 @@ impl<'a> Parser<'a> {
         let mut presort = 's';
         if self.try_kw("presort") {
             self.require_punct(":")?;
-            let word = self.lx.ascii_alpha_run();
+            let word = self.lx.letter_run();
             if word.is_empty() {
                 return Err(self.err_expect("letter"));
             }
@@ -1771,19 +1792,21 @@ impl<'a> Parser<'a> {
             self.restore(start);
             return Ok(None);
         };
-        let mut params = Vec::new();
-        while let Some(param) = self.tactic_function_param() {
-            params.push(param);
-        }
-        if params.is_empty() {
+        let Some(first) = self.tactic_function_param() else {
             self.restore(start);
             return Ok(None);
-        }
-        Ok(Some(SelectorExpr::Leaf(SelectorLeaf { name, params })))
+        };
+        let rest = std::iter::from_fn(|| self.tactic_function_param()).collect();
+        Ok(Some(SelectorExpr::Leaf(SelectorLeaf::new(
+            &name, first, rest,
+        ))))
     }
 
     /// Tactic function values are deliberately not Haskell string literals:
     /// every character except the closing quote is literal, including `\\`.
+    /// The opening quote is HS's `symbol "\""` (`doubleQuoted`,
+    /// Theory/Text/Parser/Token.hs), a lexeme, so whitespace right after it
+    /// is not part of the value.
     fn tactic_function_param(&mut self) -> Option<String> {
         self.skip_ws();
         let start = self.save();
@@ -1791,6 +1814,7 @@ impl<'a> Parser<'a> {
             self.restore(start);
             return None;
         }
+        self.skip_ws();
         let mut param = String::new();
         loop {
             match self.lx.peek() {
@@ -2223,22 +2247,12 @@ impl<'a> Parser<'a> {
         let mut eqs = Vec::new();
         loop {
             // HS `equation` (Theory/Text/Parser/Signature.hs) parses both
-            // operands with
-            // `acterm True llitNoPub`. The `True` (eqn flag) gates multiset/
-            // nat/xor/mult/exp operators (but NOT the user-defined AC operators
-            // of `acterm`) — matched here by `acterm(true)`, which is what
-            // `term(true)` reduces to anyway once those gates are closed.
-            // `llitNoPub` (Theory/Text/Parser/Term.hs = `asum [freshTerm
-            // <$> freshName,
-            // varTerm <$> msgvar]`) additionally forbids public-name literals
-            // `'foo'` and nat literals `%'n'` in operands, while still allowing
-            // fresh literals `~'n'` and all msgvar-sort variables (including `$x`
-            // pub-sort vars, since `msgvar = sortedLVar [Fresh,Pub,Nat,Msg]`).
-            // We deliberately use the public-name-allowing `acterm(true)` here:
-            // accepting `'foo'`/`%'n'` is benign parser-level leniency — such
-            // public/nat names are invalid in (convergent) equations and are
-            // rejected during elaboration, so end-to-end `--prove` output is
-            // unchanged on all valid theories.
+            // operands with `acterm True llitNoPub`. The `True` (eqn flag)
+            // gates multiset/nat/xor/mult/exp operators (but NOT the
+            // user-defined AC operators of `acterm`), and `llitNoPub`
+            // (Theory/Text/Parser/Term.hs, `asum [freshTerm <$> freshName,
+            // varTerm <$> msgvar]`) admits no public or nat name, so
+            // [`Self::atom_term_inner`] reads `eqn` as that literal parser too.
             let lhs = self.acterm(true)?;
             if !self.try_punct("=") {
                 return Err(self.err_expect("\"=\""));
@@ -2288,7 +2302,7 @@ impl<'a> Parser<'a> {
             // HS `parens $ commaSep lvar` (Theory/Text/Parser/Macro.hs): trailing comma OK.
             let mut arg_positions = Vec::new();
             let args = self.sep_end_by(opening, ")", |parser| {
-                let (argument, position) = parser.var_spec_spanned()?;
+                let (argument, position) = parser.var_spec_in(VarGrammar::Any)?;
                 arg_positions.push(position);
                 Ok(argument)
             })?;
@@ -2404,7 +2418,12 @@ impl<'a> Parser<'a> {
         self.require_punct(":")?;
         let mut ps = Vec::new();
         loop {
-            let (f, name_start) = self.in_context(ParseContext::Predicate, Self::fact_located)?;
+            // HS `fact' lvar` (Theory/Text/Parser/Signature.hs): the
+            // parameters are variables of any sort, never terms — a name
+            // that is also a nullary symbol is still a parameter.
+            let (f, name_start) = self.in_context(ParseContext::Predicate, |p| {
+                p.fact_located_with(|p| Ok(Term::Var(p.var_spec_in(VarGrammar::Any)?.0)))
+            })?;
             self.require_punct("<=>")?;
             let phi = self.formula()?;
             ps.push((
@@ -2477,7 +2496,11 @@ impl<'a> Parser<'a> {
         let name = self.ident()?;
         let name_len = name.len();
         let mut attributes = Vec::new();
-        if self.try_punct("[") {
+        // HS's plain `restriction` and `legacyAxiom` read no attribute list;
+        // only the diff ones (`diffRestriction`, `legacyDiffAxiom`,
+        // Theory/Text/Parser/Restriction.hs) take `left`, `right` and
+        // `both`, the last of which marks no side.
+        if self.is_diff && self.try_punct("[") {
             loop {
                 self.skip_ws();
                 let attribute_start = self.save();
@@ -2485,6 +2508,8 @@ impl<'a> Parser<'a> {
                     attributes.push(RestrictionAttr::LeftRestriction);
                 } else if self.try_kw("right") {
                     attributes.push(RestrictionAttr::RightRestriction);
+                } else if self.try_kw("both") {
+                    // Both sides, as no attribute does.
                 } else {
                     if !self.peek_punct("]") {
                         let (item, item_len) = self.diagnostic_item();
@@ -2509,17 +2534,10 @@ impl<'a> Parser<'a> {
         let phi = self.double_quoted_formula()?;
         // HS `liftedAddRestriction` (Theory/Text/Parser.hs) runs
         // `addRestriction`'s name guard (TheoryObject.hs) on each
-        // parsed `restriction`/`axiom` item. A left/right attribute marks the
-        // diff-theory shape, which
-        // HS's plain `restriction` production cannot even read
-        // (Theory/Text/Parser/Restriction.hs) and its diff parse routes
-        // through `liftedAddRestriction'` (Theory/Text/Parser.hs),
-        // splitting the sides instead of comparing names; the guard leaves
-        // those items, and every item of a diff parse, alone.
-        if !self.is_diff
-            && attributes.is_empty()
-            && self.state.seen_restriction_names.contains(&name)
-        {
+        // parsed `restriction`/`axiom` item. A diff parse routes through
+        // `liftedAddRestriction'` instead, splitting the sides rather than
+        // comparing names.
+        if !self.is_diff && self.state.seen_restriction_names.contains(&name) {
             return Err(self.duplicate_declaration(
                 "restriction",
                 name,
@@ -2585,35 +2603,15 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// The name guards HS `liftedAddProtoRule` (Theory/Text/Parser.hs)
-    /// runs after each protocol rule parses, in HS's order:
-    ///
-    ///   1. each `_restrict` formula's minted `Restr_<rule>_<i>` restriction is
-    ///      added first — `addRestriction` fails if a restriction with that
-    ///      NAME already exists (TheoryObject.hs), so a second
-    ///      `_restrict`-carrying rule with a reused name dies here
-    ///      (`duplicate restriction: Restr_<rule>_1`) even when it is
-    ///      byte-identical to the first;
-    ///   2. then the rule itself — `addOpenProtoRule` (OpenTheory.hs)
-    ///      fails only when the name is already bound to a DIFFERENT rule
-    ///      (`maybe True (ru ==) $ lookupOpenProtoRule …`); an identical
-    ///      duplicate passes the guard and is appended AGAIN (both copies
-    ///      render), which the corpus relies on (e.g.
-    ///      examples/asiaccs20-POIDC/OIDC_CodeFlow_with_ClientSecret.spthy).
-    ///
-    /// Diff mode is exempt: diff theories route rules through
-    /// `liftedAddDiffRule`/`addDiffRule` with a different message
-    /// (`"duplicate rule or inconsistent names: …"`,
-    /// Theory/Text/Parser.hs), which
-    /// this port does not implement.
-    ///
-    /// Equality is on the parsed AST minus the `(modulo E)` head, which HS
-    /// discards at parse time (`optional moduloE`, Parser/Rule.hs).
-    /// HS compares rules after `liftedAddProtoRule` has appended the minted
-    /// `Restr_*` actions; two same-name rules that both carry an embedded
-    /// restriction die at the restriction guard above before this comparison
-    /// runs, and a rule with none has no action to append, so the two
-    /// comparisons agree.
+    /// The name guards HS `liftedAddProtoRule` (Theory/Text/Parser.hs) runs
+    /// per protocol rule, in order: each minted `Restr_<rule>_<i>` must be a
+    /// new restriction name (`addRestriction`, TheoryObject.hs), then
+    /// `addOpenProtoRule` (OpenTheory.hs) requires distinct names within the
+    /// rule's family and rejects a name bound to a DIFFERENT rule; an
+    /// identical duplicate is appended again, which the corpus relies on.
+    /// That comparison is the installed [`RuleConflictCheck`]; without one,
+    /// elaboration runs it.  Diff mode is exempt (`liftedAddDiffRule` is not
+    /// ported).
     fn guard_duplicate_rule(&mut self, r: &Rule, name_start: Pos) -> Result<(), ParseError> {
         if self.is_diff {
             return Ok(());
@@ -2648,27 +2646,20 @@ impl<'a> Parser<'a> {
                 r.name.len(),
             ));
         }
-        if let Some(first) = self.state.seen_rules.iter().find(|p| p.name == r.name) {
-            let differs = first.attributes != r.attributes
-                || first.premises != r.premises
-                || first.actions != r.actions
-                || first.conclusions != r.conclusions
-                || first.embedded_restrictions != r.embedded_restrictions
-                || first.variants != r.variants
-                || first.left_right != r.left_right;
-            if differs {
-                let diagnostic_name = diagnostic_lexeme(&r.name);
-                return Err(self.semantic_error(
-                    ParseErrorKind::ConflictingDeclaration {
-                        name: diagnostic_name,
-                        context: ParseContext::Rule,
-                    },
-                    name_start,
-                    r.name.len(),
-                ));
-            }
-        } else {
-            self.state.seen_rules.push(r.clone());
+        if self
+            .state
+            .rule_conflict
+            .as_mut()
+            .is_some_and(|check| check.conflicts(r))
+        {
+            return Err(self.semantic_error(
+                ParseErrorKind::ConflictingDeclaration {
+                    name: diagnostic_lexeme(&r.name),
+                    context: ParseContext::Rule,
+                },
+                name_start,
+                r.name.len(),
+            ));
         }
         for i in 1..=r.embedded_restrictions.len() {
             self.state
@@ -2859,8 +2850,10 @@ impl<'a> Parser<'a> {
             }
             vec![]
         };
-        // Optional `left ... right ...` for diff rules
-        if self.try_kw("left") {
+        // Optional `left ... right ...`: HS `diffRule` (Theory/Text/Parser/
+        // Rule.hs) reads it in diff theories only, so elsewhere `left` is
+        // not a rule's continuation and fails as the next item.
+        if self.is_diff && self.try_kw("left") {
             let l = self.parse_rule()?;
             self.require_kw("right")?;
             let r = self.parse_rule()?;
@@ -2892,7 +2885,7 @@ impl<'a> Parser<'a> {
     /// the name, the attribute list and the closing colon of `protoRuleInfo` /
     /// `protoRuleACInfo` (Theory/Text/Parser/Rule.hs), then
     /// `option emptySubst letBlock`, the premises, the actions and embedded
-    /// restrictions, the conclusions and the `apply subst` of the bindings.
+    /// restrictions, and the conclusions.  Elaboration does the `apply subst`.
     /// `variants` and `left_right` are empty; only `protoRule` has them, and
     /// [`Self::parse_rule`] fills them in.
     fn rule_after_kw(&mut self) -> Result<(Rule, Pos), ParseError> {
@@ -2908,22 +2901,16 @@ impl<'a> Parser<'a> {
         } else {
             vec![]
         };
-        let mut premises = self.fact_list()?;
+        let premises = self.fact_list()?;
         // Actions / restrictions either `--[..]->` or `-->`
-        let (mut actions, mut embedded_restrictions) = self.parse_actions_and_restrictions()?;
-        let mut conclusions = self.fact_list()?;
-        apply_let_bindings(
-            &lets,
-            &mut premises,
-            &mut actions,
-            &mut conclusions,
-            &mut embedded_restrictions,
-        );
+        let (actions, embedded_restrictions) = self.parse_actions_and_restrictions()?;
+        let conclusions = self.fact_list()?;
         Ok((
             Rule {
                 name,
                 modulo,
                 attributes,
+                lets,
                 premises,
                 actions,
                 conclusions,
@@ -2983,7 +2970,7 @@ impl<'a> Parser<'a> {
                 attrs.push(RuleAttr::NoDerivCheck);
             } else if self.try_kw("role") {
                 self.require_punct("=")?;
-                let s = self.string_literal_or_squoted()?;
+                let s = self.role_attr_value()?;
                 attrs.push(RuleAttr::Role(s));
             } else if self.try_kw("issapicrule") {
                 attrs.push(RuleAttr::IsSapicRule);
@@ -3080,13 +3067,35 @@ impl<'a> Parser<'a> {
         self.lx.finish(result)
     }
 
-    fn string_literal_or_squoted(&mut self) -> Result<String, ParseError> {
+    /// HS `parseRole` (Theory/Text/Parser/Rule.hs): after an opening `'`
+    /// or `"` (a `symbol`, so whitespace and comments after it are skipped),
+    /// the raw characters up to the first `'` or `"` of either kind, with no
+    /// escapes.
+    fn role_attr_value(&mut self) -> Result<String, ParseError> {
         self.skip_ws();
-        if self.lx.peek() == Some('"') {
-            self.string_literal()
-        } else {
-            self.single_quoted("a valid single-quoted string")
+        let opening = self.save();
+        let Some(quote) = self.lx.peek().filter(|c| matches!(c, '\'' | '"')) else {
+            return Err(self.err_expect_here("\"'\" or '\"'"));
+        };
+        self.lx.bump();
+        self.skip_ws();
+        let start = self.save().offset;
+        while self.lx.peek().is_some_and(|c| !matches!(c, '\'' | '"')) {
+            self.lx.bump();
         }
+        let end = self.save().offset;
+        if self.lx.is_eof() {
+            return Err(self.err_expect_here("a closing quote").with_kind(
+                ParseErrorKind::UnclosedDelimiter {
+                    opening: quote,
+                    opening_span: opening.offset..opening.offset + 1,
+                    closing: quote,
+                },
+            ));
+        }
+        self.lx.bump();
+        self.skip_ws();
+        Ok(self.lx.src()[start..end].to_owned())
     }
 
     /// Read an identifier or a single-level delimited attribute value.
@@ -3147,10 +3156,9 @@ impl<'a> Parser<'a> {
     /// definition list.
     fn let_binder(&mut self) -> Result<Option<VarSpec>, ParseError> {
         let start = self.save();
-        let Some(v) = self.try_var_spec()? else {
+        let Some((v, _)) = self.var_in(VarGrammar::Msg)? else {
             return Ok(None);
         };
-        let v = self.attach_sort_suffix(v)?;
         if !matches!(v.sort, LSort::Msg | LSort::Nat) {
             self.restore(start);
             return Err(self.err_expect("identifier, \"%\""));
@@ -3227,9 +3235,19 @@ impl<'a> Parser<'a> {
         let attrs = self.lemma_attributes()?;
         self.require_punct(":")?;
 
-        // Detect accountability: `<test_idents> accounts for "phi"`
+        // Detect accountability: `<test_idents> accounts for "phi"`.  A diff
+        // theory reads only HS `plainLemma` (Theory/Text/Parser.hs).
         let snap = self.save();
-        if let Some(acc) = self.try_acc_lemma_body(&name, &attrs)? {
+        if !self.is_diff
+            && let Some(acc) = self.try_acc_lemma_body(&name, &attrs)?
+        {
+            self.declare_name(
+                |state| &mut state.seen_acc_lemma_names,
+                "accountability lemma",
+                &name,
+                ParseContext::Lemma,
+                name_start,
+            )?;
             return Ok(TheoryItem::AccLemma(acc));
         }
         self.restore(snap);
@@ -3312,19 +3330,13 @@ impl<'a> Parser<'a> {
                 }
             }
         } else {
-            if self.state.seen_lemma_names.iter().any(|n| n == &name) {
-                return Err(self.duplicate_declaration(
-                    "lemma",
-                    name,
-                    ParseContext::Lemma,
-                    name_start,
-                    name_len,
-                ));
-            }
-            self.state.seen_lemma_names.push(name.clone());
-            self.named_sites
-                .entry(("lemma", name.clone()))
-                .or_insert(name_start.offset..name_start.offset + name_len);
+            self.declare_name(
+                |state| &mut state.seen_lemma_names,
+                "lemma",
+                &name,
+                ParseContext::Lemma,
+                name_start,
+            )?;
         }
         Ok(TheoryItem::Lemma(Lemma {
             name,
@@ -3345,40 +3357,22 @@ impl<'a> Parser<'a> {
         name: &str,
         attrs: &[LemmaAttr],
     ) -> Result<Option<AccLemma>, ParseError> {
-        // Pattern: `<id1, id2, ...> (accounts|account) for "phi"`
+        // HS `lemmaAcc` (Theory/Text/Parser/Accountability.hs):
+        // `commaSep1 identifier`, then the literal symbol `accounts for` or
+        // `account for`. The whole parser is a `try`, so on a mismatch the
+        // caller reparses an ordinary lemma.
         let save = self.save();
         let mut idents = Vec::new();
-        loop {
-            self.skip_ws();
-            let probe = self.save();
-            if let Some(id) = self.lx.peek_identifier() {
-                if id == "accounts" || id == "account" {
-                    break;
-                }
-                let _ = self.ident();
-                idents.push(id);
-                if !self.try_punct(",") {
-                    break;
-                }
-            } else {
-                self.restore(probe);
+        while let Some(id) = self.lx.identifier() {
+            idents.push(id);
+            if !self.try_punct(",") {
                 break;
             }
         }
-        // HS `lemmaAcc` (Theory/Text/Parser/Accountability.hs)
-        // uses `commaSep1 $ identifier`,
-        // requiring at least one case-test identifier before `accounts for`.
-        // Since the whole `lemmaAcc` is `try`-wrapped, an empty list backtracks
-        // and the caller reparses as a normal lemma — so fall back here too.
-        if idents.is_empty() {
+        if idents.is_empty() || !(self.try_punct("accounts for") || self.try_punct("account for")) {
             self.restore(save);
             return Ok(None);
         }
-        if !(self.try_kw("accounts") || self.try_kw("account")) {
-            self.restore(save);
-            return Ok(None);
-        }
-        self.require_kw("for")?;
         let formula = self.double_quoted_formula()?;
         Ok(Some(AccLemma {
             name: name.to_string(),
@@ -3397,23 +3391,16 @@ impl<'a> Parser<'a> {
         self.skip_ws();
         let name_start = self.save();
         let name = self.ident()?;
-        let name_len = name.len();
         let attributes = self.lemma_attributes()?;
         self.require_punct(":")?;
         let proof = self.try_diff_proof_skeleton()?;
-        if self.state.seen_diff_lemma_names.contains(&name) {
-            return Err(self.duplicate_declaration(
-                "Diff Lemma",
-                name,
-                ParseContext::Lemma,
-                name_start,
-                name_len,
-            ));
-        }
-        self.state.seen_diff_lemma_names.push(name.clone());
-        self.named_sites
-            .entry(("Diff Lemma", name.clone()))
-            .or_insert(name_start.offset..name_start.offset + name_len);
+        self.declare_name(
+            |state| &mut state.seen_diff_lemma_names,
+            "Diff Lemma",
+            &name,
+            ParseContext::Lemma,
+            name_start,
+        )?;
         Ok(TheoryItem::DiffLemma(DiffLemma {
             name,
             source_file: self
@@ -3427,10 +3414,46 @@ impl<'a> Parser<'a> {
 
     fn case_test_item(&mut self) -> Result<TheoryItem, ParseError> {
         self.require_kw("test")?;
+        self.skip_ws();
+        let name_start = self.save();
         let name = self.ident()?;
         self.require_punct(":")?;
         let formula = self.double_quoted_formula()?;
+        self.declare_name(
+            |state| &mut state.seen_case_test_names,
+            "case test",
+            &name,
+            ParseContext::CaseTest,
+            name_start,
+        )?;
         Ok(TheoryItem::CaseTest(CaseTest { name, formula }))
+    }
+
+    /// HS's per-kind name guards (`addLemma`, `addCaseTest`, `addAccLemma`,
+    /// TheoryObject.hs; `addDiffLemma`, DiffTheoryObject.hs): reject a name
+    /// already in `seen`, otherwise record it there.
+    fn declare_name(
+        &mut self,
+        seen: fn(&mut ParserState) -> &mut Vec<String>,
+        label: &'static str,
+        name: &str,
+        context: ParseContext,
+        name_start: Pos,
+    ) -> Result<(), ParseError> {
+        if seen(&mut self.state).iter().any(|seen| seen == name) {
+            return Err(self.duplicate_declaration(
+                label,
+                name.to_owned(),
+                context,
+                name_start,
+                name.len(),
+            ));
+        }
+        seen(&mut self.state).push(name.to_owned());
+        self.named_sites
+            .entry((label, name.to_owned()))
+            .or_insert(name_start.offset..name_start.offset + name.len());
+        Ok(())
     }
 
     fn lemma_attributes(&mut self) -> Result<Vec<LemmaAttr>, ParseError> {
@@ -3535,25 +3558,21 @@ impl<'a> Parser<'a> {
     }
 
     fn try_proof_skeleton(&mut self) -> Result<Option<ProofSkeleton>, ParseError> {
-        // Proofs in `.spthy` files start with one of a known set of proof
-        // method tokens. The proof grammar determines its endpoint; if no
-        // proof tokens appear, return None.
+        // HS `startProofSkeleton <|> pure (unproven ())` (Lemma.hs): every
+        // alternative starts with a `symbol`, which matches its text with no
+        // word boundary and fails without consuming input. So a proof starts
+        // exactly when the input starts with one of these, and once it does a
+        // parse failure is a failure of the lemma.
+        //   - regular `proofMethod` (Theory/Text/Parser/Proof.hs)
+        //   - `by` (finalProof)
+        // `case`/`next`/`qed` only appear inside an interProof block, and a
+        // bare `SOLVED` is a leaf only below a method: `startProofSkeleton`
+        // (Theory/Text/Parser/Proof.hs) rejects it as the whole proof.
         self.skip_ws();
-        let save = self.save();
-        // First-token set that can START a stored proof skeleton, matching HS.
-        // This gate is for `lemma_item`'s regular proof grammar:
-        //   - regular `proofMethod` (Theory/Text/Parser/Proof.hs): sorry,
-        //     simplify, solve,
-        //     contradiction, induction, INVALIDATED, UNFINISHABLE
-        //   - regular skeleton extras (Theory/Text/Parser/Proof.hs):
-        //     `by` (finalProof),
-        //     `SOLVED` (solvedProof)
-        // `case`/`next`/`qed` are intentionally absent: they only appear INSIDE
-        // an interProof block, never as a proof body's first token. `rule` is
-        // excluded (a bare `rule:` is a rule declaration; only the hyphenated
-        // `rule-equivalence` is a proof method).
+        if self.lx.rest().starts_with("SOLVED") {
+            return Err(self.err("SOLVED without a proof was found."));
+        }
         let proof_starters = [
-            // regular proofMethod
             "sorry",
             "simplify",
             "solve",
@@ -3561,18 +3580,12 @@ impl<'a> Parser<'a> {
             "induction",
             "INVALIDATED",
             "UNFINISHABLE",
-            // regular skeleton extras
             "by",
-            "SOLVED",
         ];
-        // Check for hyphenated proof identifiers.
-        let probe = self.peek_hyphen_identifier();
-        let starts = match probe {
-            Some(id) => proof_starters.contains(&id),
-            None => false,
-        };
-        if !starts {
-            self.restore(save);
+        if !proof_starters
+            .iter()
+            .any(|kw| self.lx.rest().starts_with(kw))
+        {
             return Ok(None);
         }
         let start = self.lx.pos().offset;
@@ -3589,8 +3602,9 @@ impl<'a> Parser<'a> {
     /// replay AST has no diff methods, so a valid diff proof intentionally
     /// retains only its raw text.
     fn try_diff_proof_skeleton(&mut self) -> Result<Option<ProofSkeleton>, ParseError> {
+        // HS `diffProofSkeleton <|> pure (diffUnproven ())` (Lemma.hs), gated
+        // as in `try_proof_skeleton`.
         self.skip_ws();
-        let save = self.save();
         let starters = [
             "sorry",
             "rule-equivalence",
@@ -3601,11 +3615,7 @@ impl<'a> Parser<'a> {
             "by",
             "MIRRORED",
         ];
-        let starts = self
-            .peek_hyphen_identifier()
-            .is_some_and(|id| starters.contains(&id));
-        if !starts {
-            self.restore(save);
+        if !starters.iter().any(|kw| self.lx.rest().starts_with(kw)) {
             return Ok(None);
         }
         let start = self.lx.pos().offset;
@@ -3675,9 +3685,10 @@ impl<'a> Parser<'a> {
         let opening = self.save();
         let vars = if self.try_punct("(") {
             // HS `parens $ commaSep sapicvar` (Theory/Text/Parser/Sapic.hs): trailing comma OK.
-            // `sapicvar`, so a `:` here types the parameter (see
-            // [`Parser::sapic_var_types`]).
-            let r = self.with_sapic_var_types(|p| p.sep_end_by(opening, ")", |p| p.var_spec()));
+            // `sapicvar`, so a `:` here types the parameter.
+            let r = self.with_vars(VarGrammar::Sapic, |p| {
+                p.sep_end_by(opening, ")", |p| p.var_spec())
+            });
             Some(r?)
         } else {
             None
@@ -3727,24 +3738,18 @@ impl<'a> Parser<'a> {
     // Process parser (SAPIC)
     // =========================================================================
 
-    /// Run `f` with [`Parser::sapic_var_types`] on, restoring the previous
-    /// value afterwards — the HS `sapicvar` regions.
-    fn with_sapic_var_types<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        let saved = self.sapic_var_types;
-        self.sapic_var_types = true;
+    /// Run `f` reading variables with `vars`, restoring the enclosing
+    /// grammar afterwards — HS passing a different literal parser down.
+    fn with_vars<T>(&mut self, vars: VarGrammar, f: impl FnOnce(&mut Self) -> T) -> T {
+        let saved = std::mem::replace(&mut self.vars, vars);
         let r = f(self);
-        self.sapic_var_types = saved;
+        self.vars = saved;
         r
     }
 
-    /// Run `f` with [`Parser::allow_pat`] on, restoring the previous value
-    /// afterwards — the HS pattern-literal regions.
+    /// Run `f` with `sapicpatternvar`, the HS pattern-literal regions.
     fn with_patterns<T>(&mut self, f: impl FnOnce(&mut Self) -> T) -> T {
-        let saved = self.allow_pat;
-        self.allow_pat = true;
-        let r = f(self);
-        self.allow_pat = saved;
-        r
+        self.with_vars(VarGrammar::SapicPattern, f)
     }
 
     /// One process-`let` binding — HS `definition = sapicpatternterm <*
@@ -3758,10 +3763,10 @@ impl<'a> Parser<'a> {
     }
 
     /// A SAPIC process.  Every variable inside is HS `sapicvar`, so a trailing
-    /// `:` names a type rather than a sort — see [`Parser::sapic_var_types`].
+    /// `:` names a type rather than a sort — see [`VarGrammar::Sapic`].
     fn process(&mut self) -> Result<Process, ParseError> {
         self.in_context(ParseContext::Process, |parser| {
-            parser.with_sapic_var_types(|parser| parser.process_body())
+            parser.with_vars(VarGrammar::Sapic, |parser| parser.process_body())
         })
     }
 
@@ -4000,11 +4005,19 @@ impl<'a> Parser<'a> {
     }
 
     fn fact_located(&mut self) -> Result<(Fact, Pos), ParseError> {
+        self.fact_located_with(|p| p.term(false))
+    }
+
+    /// HS `fact' pterm` (Theory/Text/Parser/Fact.hs) with `arg` as `pterm`.
+    fn fact_located_with(
+        &mut self,
+        mut arg: impl FnMut(&mut Self) -> Result<Term, ParseError>,
+    ) -> Result<(Fact, Pos), ParseError> {
         self.skip_ws();
         let persistent = self.try_punct("!");
         let name_start = self.save();
         let name = self.ident()?;
-        if !name.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+        if !name.chars().next().is_some_and(char::is_uppercase) {
             self.skip_ws();
             let len = name.len();
             return Err(self.semantic_error(
@@ -4017,7 +4030,7 @@ impl<'a> Parser<'a> {
         let opening = self.save();
         self.require_punct("(")?;
         // HS `parens (commaSep pterm)` (Theory/Text/Parser/Fact.hs): trailing comma OK.
-        let args = self.sep_end_by(opening, ")", |p| p.term(false))?;
+        let args = self.sep_end_by(opening, ")", &mut arg)?;
         let mut annotations = Vec::new();
         self.skip_ws();
         if self.try_punct("[") && !self.try_punct("]") {
@@ -4061,6 +4074,8 @@ impl<'a> Parser<'a> {
         // backtracks; in rule context this surfaces as a hard load error,
         // and in formula context the alternative (term atom) is tried.  We
         // mirror that by returning `Err` from `fact()`.
+        // HS compares `map toUpper` of the name with the special names.
+        let upper_name = name.to_uppercase();
         // (canonical name, persistent, keep-annotations)
         let canonical = [
             ("Out", false, false),
@@ -4071,7 +4086,7 @@ impl<'a> Parser<'a> {
             ("Fr", false, false),
         ]
         .into_iter()
-        .find(|(canonical, _, _)| name.eq_ignore_ascii_case(canonical));
+        .find(|(canonical, _, _)| upper_name == canonical.to_ascii_uppercase());
         if let Some((cname, cpersistent, keep_ann)) = canonical {
             // `!Fr(...)` is a parse error (Theory/Text/Parser/Fact.hs).
             if cname == "Fr" && persistent {
@@ -4169,44 +4184,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// `nodevarTerm = lit . Var <$> nodep` (Theory/Text/Parser/Formula.hs):
-    /// a variable in a timepoint position takes `LSortNode` from its
-    /// position, since `nodevar` is the only parser that reads there
-    /// (Token.hs).  `nodevar` accepts `#name`, a bare name and
-    /// `name:node`, and fails on any other spelling.  It reads the bare name
-    /// with `indexedIdentifier` (Token.hs), which never consults the
-    /// signature, so a name that is also an arity-0 symbol is a timepoint
-    /// variable here rather than the constant `nullaryApp` builds for it
-    /// elsewhere (Theory/Text/Parser/Term.hs) — the zero-argument
-    /// application arm below. Callers that must enforce `nodevarTerm` syntax
-    /// validate the parsed shape with [`Self::node_operand`] first.
-    fn node_sorted(t: Term) -> Term {
-        match t {
-            Term::Var(mut v) => {
-                v.sort = LSort::Node;
-                Term::Var(v)
-            }
-            Term::App(name, args) if args.is_empty() => Term::Var(VarSpec {
-                name,
-                idx: 0,
-                sort: LSort::Node,
-                typ: None,
-            }),
-            other => other,
-        }
-    }
-
-    /// Accept a node/bare variable or a bare identifier resolved as a nullary symbol.
-    fn node_operand(t: Term, explicit_sort: bool) -> Option<Term> {
-        match t {
-            Term::Var(v) if v.sort == LSort::Node || (v.sort == LSort::Msg && !explicit_sort) => {
-                Some(Self::node_sorted(Term::Var(v)))
-            }
-            Term::App(_, ref args) if args.is_empty() => Some(Self::node_sorted(t)),
-            _ => None,
-        }
-    }
-
     /// A successful predicate/group cannot be used as a term operand. Only
     /// an actual term or relation operator makes the failed relational parse
     /// relevant; a closer, comment or unrelated token keeps its own error.
@@ -4290,32 +4267,49 @@ impl<'a> Parser<'a> {
         Err(atom_error)
     }
 
+    /// HS `blatom varp nodep` (Theory/Text/Parser/Formula.hs), whose
+    /// `varp` is the enclosing [`Parser::vars`]: `msgvar` outside a process,
+    /// `sapicvar` (or `sapicpatternvar` in an embedded MSR rule) inside one.
+    /// The alternatives run in HS order — `last`, action, the relational
+    /// atoms, then a predicate — each reading its operands with the variable
+    /// parser HS gives it, so a timepoint is a message operand only where
+    /// `varp` reads one.
     fn formula_atom(&mut self) -> Result<Formula, ParseError> {
-        // Atom: try last(t), action f@t, equality, less, subterm, smaller, predicate
-        if self.try_kw("last") {
-            self.require_punct("(")?;
-            let t = self.term(false)?;
-            self.require_punct(")")?;
-            return Ok(Formula::Atom(Atom::Last(Self::node_sorted(t))));
-        }
-        // An action commits after @. A bare fact remains a candidate until
-        // the complete relational-term alternative has been tried.
+        // HS `try (symbol "last" *> parens nodevarTerm)` (Formula.hs) backtracks
+        // as a whole, so `last('a')` can still be a user function application.
         let start = self.lx.clone();
-        let fact = match self.fact() {
-            Ok(fact) if self.try_punct("@") => {
-                let node = self.term(false)?;
-                return Ok(Formula::Atom(Atom::Action(fact, Self::node_sorted(node))));
-            }
-            result => result,
+        let last = if self.try_kw("last")
+            && self.try_punct("(")
+            && let Ok(node) = self.nodevar()
+            && self.try_punct(")")
+        {
+            Some(node)
+        } else {
+            None
         };
-        let fact_end = self.lx.clone();
-        self.lx = start;
+        // A comment left open inside the attempt must not be lost by the backtrack.
+        if let Some(node) = self.lx.finish(Ok(last))? {
+            return Ok(Formula::Atom(Atom::Last(Term::Var(node))));
+        }
+        self.lx = start.clone();
+        // `try (fact (vlit varp) <* opAt) <*> nodevarTerm`: an action commits
+        // after `@`.
+        if let Ok(fact) = self.fact()
+            && self.try_punct("@")
+        {
+            let node = self.nodevar()?;
+            return Ok(Formula::Atom(Atom::Action(fact, Term::Var(node))));
+        }
+        self.lx = start.clone();
         let relation = self.relational_atom();
         let term_error = match self.lx.finish(relation) {
             Ok(formula) => return Ok(formula),
             Err(error) => error,
         };
-        self.lx = fact_end;
+        // `try (fact (vlit (try varp <|> nodep)))`: a predicate's arguments
+        // also take timepoints.
+        self.lx = start;
+        let fact = self.with_vars(self.vars.or_node(), Self::fact);
         match fact {
             Ok(_) if self.at_term_continuation() => Err(term_error),
             Ok(fact) => Ok(Formula::Atom(Atom::Pred(fact))),
@@ -4325,71 +4319,100 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// The relational alternatives of HS `blatom` (Formula.hs), in order:
+    ///
+    /// ```haskell
+    /// Subterm <$> try (termp <* opSubterm) <*> termp
+    /// Less    <$> try (nodevarTerm <* opLess) <*> nodevarTerm
+    /// smallerp varp                -- try (termp <* opLessTerm) <*> termp
+    /// EqE     <$> try (termp <* opEqual) <*> termp           -- term equality
+    /// EqE     <$> (nodevarTerm <* opEqual) <*> nodevarTerm   -- node equality
+    /// ```
+    ///
+    /// with `termp = msetterm False (vlit varp)`.  The operators after the
+    /// first operand are disjoint, so one `termp` parse serves the three
+    /// term-led alternatives; the timepoint-led ones re-read the operand
+    /// with `nodevar`.  The predicate alternative HS tries between the two
+    /// equalities is [`Self::formula_atom`]'s fallback: no input matches both
+    /// it and a node equality.
     fn relational_atom(&mut self) -> Result<Formula, ParseError> {
-        let lhs = self.term(false)?;
-        let lhs_explicit_sort = self.sort_suffix_consumed;
-        if self.try_punct("=") {
-            let rhs = self.term(false)?;
-            let rhs_explicit_sort = self.sort_suffix_consumed;
-            // `blatom`'s "term equality" alternative reads both operands with
-            // `msgvar`, which rejects a node variable, so an equality whose
-            // left operand is one is the LAST alternative, "node equality"
-            // (Theory/Text/Parser/Formula.hs): `nodevarTerm` on both
-            // sides, which reads a bare right operand as a timepoint.
-            if matches!(&lhs, Term::Var(v) if v.sort == LSort::Node) {
-                let rhs = Self::node_operand(rhs, rhs_explicit_sort)
-                    .ok_or_else(|| self.err("expected node variable after `=`"))?;
-                return Ok(Formula::Atom(Atom::Eq(lhs, rhs)));
+        let start = self.lx.clone();
+        let term_error = match self.term(false) {
+            Ok(lhs) => {
+                if self.try_punct("<<") || self.try_punct("⊏") {
+                    let rhs = self.term(false)?;
+                    return Ok(Formula::Atom(Atom::Subterm(lhs, rhs)));
+                }
+                if self.try_punct("(<)") {
+                    if !self.state.sig_enable_mset {
+                        return Err(self
+                            .err("Need builtins: multiset to use multiset comparison operator."));
+                    }
+                    let rhs = self.term(false)?;
+                    // HS `smallerp` (Theory/Text/Parser/Formula.hs): the
+                    // multiset comparison `a (<) b` desugars at PARSE time
+                    // into the built-in `Smaller` predicate fact —
+                    //   `(Syntactic . Pred) $ protoFact Linear "Smaller" [a,b]`.
+                    // There is no dedicated `(<)` atom downstream in HS; the
+                    // whole pipeline (condition rendering, the
+                    // `if Smaller(..)_<idx>` rule name, the restriction
+                    // expansion via the built-in predicate, and the AC-sorted
+                    // union rendering) flows from this being a `Smaller`
+                    // predicate atom.  We mirror that exactly.
+                    let fact = Fact {
+                        persistent: false,
+                        name: "Smaller".to_string(),
+                        args: vec![lhs, rhs],
+                        annotations: Vec::new(),
+                    };
+                    return Ok(Formula::Atom(Atom::Pred(fact)));
+                }
+                if self.try_punct("=") {
+                    // The right operand is outside the `try`: a failure there
+                    // is the atom's.
+                    let rhs = self.term(false)?;
+                    return Ok(Formula::Atom(Atom::Eq(lhs, rhs)));
+                }
+                self.err_expect("term relation")
             }
-            if matches!(&rhs, Term::Var(v) if v.sort == LSort::Node) {
-                return Err(self.err("expected message term after `=`"));
+            Err(error) => error,
+        };
+        // Keep a comment the attempt left open before rewinding.
+        let term_error = match self.lx.finish(Err::<(), _>(term_error)) {
+            Ok(()) => unreachable!("finish keeps an error"),
+            Err(error) => error,
+        };
+        self.lx = start.clone();
+        // Less: `try (nodevarTerm <* opLess) <*> nodevarTerm`.
+        if let Ok(lhs) = self.nodevar()
+            && self.try_punct("<")
+        {
+            let rhs = self.nodevar()?;
+            return Ok(Formula::Atom(Atom::Less(Term::Var(lhs), Term::Var(rhs))));
+        }
+        self.lx = start;
+        // Node equality, the last alternative and not under `try`.
+        let node_equality = (|| {
+            let lhs = self.sapic_nodevar()?;
+            if !self.try_punct("=") {
+                return Err(self.err_expect("term relation"));
             }
-            return Ok(Formula::Atom(Atom::Eq(lhs, rhs)));
+            let rhs = self.sapic_nodevar()?;
+            Ok(Formula::Atom(Atom::Eq(Term::Var(lhs), Term::Var(rhs))))
+        })();
+        node_equality.map_err(|error| Self::select_alt_error(term_error, error))
+    }
+
+    /// `nodep` as a formula instantiates it: `nodevar` outside a process,
+    /// and `sapicnodevar` (Token.hs) inside one, which stamps the timepoint
+    /// with `defaultSapicNodeType`.  Only the node equality keeps the type;
+    /// the other `nodevarTerm` positions re-type their variable downstream.
+    fn sapic_nodevar(&mut self) -> Result<VarSpec, ParseError> {
+        let mut v = self.nodevar()?;
+        if self.vars.is_sapic() {
+            v.typ = Some("node".to_string());
         }
-        if self.try_punct("<<") || self.try_punct("⊏") {
-            let rhs = self.term(false)?;
-            return Ok(Formula::Atom(Atom::Subterm(lhs, rhs)));
-        }
-        if self.try_punct("(<)") {
-            if !self.state.sig_enable_mset {
-                return Err(
-                    self.err("Need builtins: multiset to use multiset comparison operator.")
-                );
-            }
-            let rhs = self.term(false)?;
-            // HS `smallerp` (Theory/Text/Parser/Formula.hs): the multiset
-            // comparison operator `a (<) b` desugars DIRECTLY into the built-in
-            // `Smaller` predicate fact at PARSE time —
-            //   `(Syntactic . Pred) $ protoFact Linear "Smaller" [a,b]`.
-            // There is no dedicated `(<)` atom downstream in HS; the whole
-            // pipeline (condition rendering, the `if Smaller(..)_<idx>` rule
-            // name, the restriction expansion via the built-in predicate, and
-            // the AC-sorted union rendering) flows from this being a `Smaller`
-            // predicate atom.  We mirror that exactly.
-            let fact = Fact {
-                persistent: false,
-                name: "Smaller".to_string(),
-                args: vec![lhs, rhs],
-                annotations: Vec::new(),
-            };
-            return Ok(Formula::Atom(Atom::Pred(fact)));
-        }
-        if self.try_punct("<") {
-            // HS `blatom` (Theory/Text/Parser/Formula.hs)
-            // restricts both operands of `<` to
-            // node/timepoint variables: `Less <$> try (nodevarTerm <* opLess)
-            // <*> nodevarTerm`. We parse terms first so the earlier atom
-            // alternatives can share this prefix, then validate the two
-            // operands against exactly the shapes `nodevarTerm` accepts.
-            let rhs = self.term(false)?;
-            let rhs_explicit_sort = self.sort_suffix_consumed;
-            let lhs = Self::node_operand(lhs, lhs_explicit_sort)
-                .ok_or_else(|| self.err("expected node variable before `<`"))?;
-            let rhs = Self::node_operand(rhs, rhs_explicit_sort)
-                .ok_or_else(|| self.err("expected node variable after `<`"))?;
-            return Ok(Formula::Atom(Atom::Less(lhs, rhs)));
-        }
-        Err(self.err_expect("term relation"))
+        Ok(v)
     }
 
     // =========================================================================
@@ -4675,11 +4698,12 @@ impl<'a> Parser<'a> {
     /// One atomic term.
     fn atom_term_inner(&mut self, eqn: bool) -> Result<Term, ParseError> {
         self.skip_ws();
-        // SAPIC pattern-match prefix `=v` — legal only in pattern positions
-        // ([`Parser::allow_pat`]).  Elsewhere no term alternative starts with
-        // `=`, so the character falls through to the no-alternative error,
-        // matching HS where the literal parser there has no `=` branch.
-        if self.allow_pat && self.lx.peek() == Some('=') {
+        // SAPIC pattern-match prefix `=v` — legal only under
+        // `sapicpatternvar` ([`VarGrammar::SapicPattern`]).  Elsewhere no term
+        // alternative starts with `=`, so the character falls through to the
+        // no-alternative error, matching HS where the literal parser there
+        // has no `=` branch.
+        if self.vars == VarGrammar::SapicPattern && self.lx.peek() == Some('=') {
             // Avoid consuming `=` if it's the start of an operator like `==>`,
             // `=>`, or `==`.
             let r = self.lx.rest();
@@ -4750,23 +4774,23 @@ impl<'a> Parser<'a> {
         if self.lx.try_symbol("1") {
             return Ok(Term::NumberOne);
         }
-        // Sigil-prefixed variables: ~x, $x, #x, %x.
-        if let Some(c @ ('~' | '$' | '#')) = self.lx.peek() {
-            // Could be a fresh-name literal `~'n'` or `%'n'` — handled below.
-            let mut probe = self.lx.clone();
-            probe.bump();
-            if c == '~' && probe.peek() == Some('\'') {
-                self.lx.bump();
-                let s = self.single_quoted("a valid fresh literal")?;
-                return Ok(Term::FreshLit(s));
-            }
-            // Otherwise: variable.
-            if let Some(v) = self.try_var_spec()? {
-                let v = self.attach_sort_suffix(v)?;
-                return Ok(Term::Var(v));
-            }
+        // HS `vlit varp` (Theory/Text/Parser/Term.hs): a fresh, public or
+        // nat name, else a variable of the context's grammar.  Equations
+        // read `llitNoPub` instead, which has only the fresh name and
+        // `msgvar`; `eqn` holds exactly there.
+        if self.lx.rest().starts_with("~'") {
+            self.lx.bump();
+            let s = self.single_quoted("a valid fresh literal")?;
+            return Ok(Term::FreshLit(s));
         }
-        if self.lx.peek() == Some('%') {
+        // Sigil-prefixed variables: ~x, $x, #x (where the grammar has
+        // timepoints).
+        if matches!(self.lx.peek(), Some('~' | '$' | '#'))
+            && let Some((v, _)) = self.var_in(self.vars)?
+        {
+            return Ok(Term::Var(v));
+        }
+        if self.lx.peek() == Some('%') && !(eqn && self.lx.rest().starts_with("%'")) {
             // Exact `%1` was handled above; quoted names are literals and all
             // other forms use the shared variable parser (including `%12`).
             if self.lx.rest().starts_with("%'") {
@@ -4779,13 +4803,12 @@ impl<'a> Parser<'a> {
                 let s = self.single_quoted("a valid natural-number literal")?;
                 return Ok(Term::NatLit(s));
             }
-            if let Some(v) = self.try_var_spec()? {
-                let v = self.attach_sort_suffix(v)?;
+            if let Some((v, _)) = self.var_in(self.vars)? {
                 return Ok(Term::Var(v));
             }
         }
         // Literal `'foo'` is a public name term.
-        if self.lx.peek() == Some('\'') {
+        if !eqn && self.lx.peek() == Some('\'') {
             let s = self.single_quoted("a valid public literal")?;
             return Ok(Term::PubLit(s));
         }
@@ -4918,14 +4941,14 @@ impl<'a> Parser<'a> {
         if self.is_nullary_sym(&id) {
             return Ok(Term::App(id, Vec::new()));
         }
-        let idx = self.try_dot_index();
+        let idx = self.try_dot_index()?;
         let v = VarSpec {
             name: id,
             idx,
             sort: LSort::Msg,
             typ: None,
         };
-        let v = self.attach_sort_suffix(v)?;
+        let v = self.var_tail(self.vars, v, true)?;
         Ok(Term::Var(v))
     }
 
@@ -4933,8 +4956,7 @@ impl<'a> Parser<'a> {
     /// (Token.hs): a sorted variable with an optional `.idx` index and
     /// `:type` annotation, never an application, literal, or compound term.
     fn pattern_var_atom(&mut self) -> Result<Term, ParseError> {
-        if let Some(v) = self.try_var_spec()? {
-            let v = self.attach_sort_suffix(v)?;
+        if let Some((v, _)) = self.var_in(VarGrammar::Sapic)? {
             return Ok(Term::Var(v));
         }
         Err(self.err_expect("pattern variable"))
@@ -5081,84 +5103,22 @@ impl<'a> Parser<'a> {
         }
     }
 
-    /// HS `sortedLVar`'s suffix arm: `indexedIdentifier <* colon` followed by
-    /// one `sortSuffix`, returning `LVar n s i` with `s` the suffix's sort —
-    /// the same plain `LVar` the sigil arms build (Token.hs).
-    fn attach_sort_suffix(&mut self, mut v: VarSpec) -> Result<VarSpec, ParseError> {
-        // Suffix syntax: `<id>:msg`, `:pub`, `:fresh`, `:node`, `:nat`.
-        self.sort_suffix_consumed = false;
-        let save = self.save();
-        if self.try_punct(":") {
-            // Inside a SAPIC process every variable comes from HS `sapicvar =
-            // lvarNoSuffix` plus an optional type (Token.hs).
-            // `lvarNoSuffix` (Token.hs) is `sortedLVarNoSuffix
-            // [minBound..]` (Token.hs), which offers PREFIX sorts only, so a
-            // colon there always introduces a SAPIC TYPE — `x:nat` is the
-            // msg-sorted `x` typed `"nat"`, not a nat-sorted variable — and
-            // `typep`'s `Any` is the untyped placeholder (Token.hs).
-            if self.sapic_var_types {
-                match self.type_p_element() {
-                    Some(t) => v.typ = t,
-                    None => self.restore(save),
-                }
-                return Ok(v);
-            }
-            // Distinguish suffix sort vs SAPIC type annotation.
-            let snap = self.save();
-            for (kw, sort) in [
-                ("msg", LSort::Msg),
-                ("pub", LSort::Pub),
-                ("fresh", LSort::Fresh),
-                ("node", LSort::Node),
-                ("nat", LSort::Nat),
-            ] {
-                if self.try_kw(kw) {
-                    if sort == LSort::Nat && !self.state.sig_enable_nat {
-                        return Err(self
-                            .err("nat-sorted variables requires the natural-numbers builtin")
-                            .with_location(snap, kw.len()));
-                    }
-                    v.sort = sort;
-                    self.sort_suffix_consumed = true;
-                    return Ok(v);
-                }
-            }
-            // Else SAPIC type annotation.
-            self.restore(snap);
-            if let Some(t) = self.lx.identifier() {
-                v.typ = Some(t);
-                return Ok(v);
-            }
-            self.restore(save);
-        }
-        if self.sapic_var_types && v.sort == LSort::Node {
-            v.typ = Some("node".to_string());
-        }
-        Ok(v)
-    }
-
-    /// Parse a variable specification. Returns None if no var sigil/identifier
-    /// is present.
-    fn try_var_spec(&mut self) -> Result<Option<VarSpec>, ParseError> {
-        Ok(self.try_var_spec_spanned()?.map(|(variable, _)| variable))
-    }
-
-    fn try_var_spec_spanned(&mut self) -> Result<Option<(VarSpec, Pos)>, ParseError> {
+    /// A variable as `grammar` reads it (Token.hs), with the position of its
+    /// name.  `Ok(None)` means no variable of that grammar starts here and
+    /// nothing was consumed; an error is a failure after HS's parser consumed
+    /// input, e.g. a bare name and colon with no admissible sort after them.
+    ///
+    /// The `sortedLVar` grammars take a sort from a prefix (`~x`, `$x`,
+    /// `#x`, `%x`, or none for a message) or from a `:sort` suffix on a bare
+    /// name, never both, so `$x:pub` leaves its `:pub` unread.  The SAPIC
+    /// grammars take only a prefix, then an optional `:type`.
+    fn var_in(&mut self, grammar: VarGrammar) -> Result<Option<(VarSpec, Pos)>, ParseError> {
         self.skip_ws();
         let save = self.save();
         let sort = match self.lx.peek() {
-            Some('~') => {
-                self.lx.bump();
-                LSort::Fresh
-            }
-            Some('$') => {
-                self.lx.bump();
-                LSort::Pub
-            }
-            Some('#') => {
-                self.lx.bump();
-                LSort::Node
-            }
+            Some('~') => LSort::Fresh,
+            Some('$') => LSort::Pub,
+            Some('#') if grammar.admits_node_prefix() => LSort::Node,
             Some('%') => {
                 // An exact `%1` has already been consumed as nat one. A leading
                 // quote is a nat literal; every alphanumeric start, including
@@ -5166,7 +5126,6 @@ impl<'a> Parser<'a> {
                 let mut probe = self.lx.clone();
                 probe.bump();
                 match probe.peek() {
-                    Some('\'') => return Ok(None), // handled by the literal/atom path
                     Some(c) if c.is_alphanumeric() => {
                         if !self.state.sig_enable_nat {
                             self.lx.bump();
@@ -5174,12 +5133,9 @@ impl<'a> Parser<'a> {
                                 .err("nat-sorted variables requires the natural-numbers builtin")
                                 .with_location(save, 1));
                         }
-                        self.lx.bump();
                         LSort::Nat
                     }
-                    _ => {
-                        return Ok(None);
-                    }
+                    _ => return Ok(None),
                 }
             }
             // HS `sortedLVar`'s `mkPrefixParser LSortMsg` arm is the bare
@@ -5189,38 +5145,73 @@ impl<'a> Parser<'a> {
             Some(c) if c.is_alphanumeric() => LSort::Msg,
             _ => return Ok(None),
         };
-        let (id, name_start) = match self.lx.identifier_spanned() {
-            Some(result) => result,
-            None => {
-                self.restore(save);
-                return Ok(None);
-            }
+        let bare = sort == LSort::Msg;
+        if !bare {
+            self.lx.bump();
+        }
+        let Some((name, name_start)) = self.lx.identifier_spanned() else {
+            self.restore(save);
+            return Ok(None);
         };
-
-        let idx = self.try_dot_index();
-        Ok(Some((
-            VarSpec {
-                name: id,
-                idx,
-                sort,
-                typ: None,
-            },
-            name_start,
-        )))
+        let idx = self.try_dot_index()?;
+        let v = VarSpec {
+            name,
+            idx,
+            sort,
+            typ: None,
+        };
+        let v = self.var_tail(grammar, v, bare)?;
+        Ok(Some((v, name_start)))
     }
 
+    /// What `grammar` reads after a variable's name and index: `sortedLVar`'s
+    /// suffix arm `try (indexedIdentifier <* colon)` then one of the
+    /// grammar's sort suffixes (only after a `bare` name), or `sapicvar`'s
+    /// `option defaultType (colon *> typep)` (Token.hs).
+    fn var_tail(
+        &mut self,
+        grammar: VarGrammar,
+        mut v: VarSpec,
+        bare: bool,
+    ) -> Result<VarSpec, ParseError> {
+        if grammar.is_sapic() {
+            // `typep`'s `Any` is the untyped placeholder; a timepoint
+            // otherwise defaults to `defaultSapicNodeType`, so that a
+            // quantified `#j` matches its `sapicnodevar` occurrences.
+            if self.try_punct(":") {
+                v.typ = self.type_p()?;
+            } else if v.sort == LSort::Node {
+                v.typ = Some("node".to_string());
+            }
+            return Ok(v);
+        }
+        if bare && self.try_punct(":") {
+            let suffix_start = self.save();
+            for &sort in grammar.suffix_sorts() {
+                let suffix = tamarin_term::lterm::sort_suffix(sort);
+                if self.try_kw(suffix) {
+                    if sort == LSort::Nat && !self.state.sig_enable_nat {
+                        return Err(self
+                            .err("nat-sorted variables requires the natural-numbers builtin")
+                            .with_location(suffix_start, suffix.len()));
+                    }
+                    v.sort = sort;
+                    return Ok(v);
+                }
+            }
+            return Err(self.err_expect_here("a variable sort suffix"));
+        }
+        Ok(v)
+    }
+
+    /// A variable of the context's grammar, which must start here.
     fn var_spec(&mut self) -> Result<VarSpec, ParseError> {
-        self.var_spec_spanned().map(|(variable, _)| variable)
+        self.var_spec_in(self.vars).map(|(variable, _)| variable)
     }
 
-    fn var_spec_spanned(&mut self) -> Result<(VarSpec, Pos), ParseError> {
-        let (variable, position) = self
-            .try_var_spec_spanned()?
-            .ok_or_else(|| self.err_expect_here("variable"))?;
-        // Allow `: msg | pub | fresh | node | nat` sort suffix or a SAPIC
-        // type annotation after the variable.
-        self.attach_sort_suffix(variable)
-            .map(|variable| (variable, position))
+    fn var_spec_in(&mut self, grammar: VarGrammar) -> Result<(VarSpec, Pos), ParseError> {
+        self.var_in(grammar)?
+            .ok_or_else(|| self.err_expect_here("variable"))
     }
 
     /// Parse a quantifier's binder list (`All`/`Ex` share this): a sequence of
@@ -5238,7 +5229,7 @@ impl<'a> Parser<'a> {
             if self.lx.peek() == Some('.') {
                 break;
             }
-            let v = self.var_spec()?;
+            let (v, _) = self.var_spec_in(self.vars.or_node())?;
             vs.push(v);
         }
         self.require_punct(".")?;
@@ -5248,30 +5239,20 @@ impl<'a> Parser<'a> {
     /// Consume `.<digit>+` as a variable index, otherwise leave input
     /// alone. Used so that `x.` (in quantifier lists, function arity slashes,
     /// etc.) doesn't accidentally swallow the trailing dot.
-    fn try_dot_index(&mut self) -> u64 {
-        let save = self.save();
-        // Don't skip whitespace — `.` must be immediately after the identifier
-        // for it to be an index. (Tamarin's `indexedIdentifier` matches
-        // `dot *> natural`, but the dot follows the lexeme without an
-        // intervening token break.)
-        if self.lx.peek() != Some('.') {
-            return 0;
+    fn try_dot_index(&mut self) -> Result<u64, ParseError> {
+        if self.lx.peek() != Some('.') || !self.lx.peek2().is_some_and(|c| c.is_ascii_digit()) {
+            return Ok(0);
         }
         self.lx.bump();
-        // After the dot we accept digits with no intervening whitespace.
-        match self.lx.peek() {
-            Some(c) if c.is_ascii_digit() => match self.lx.natural() {
-                Some(n) => n,
-                None => {
-                    self.restore(save);
-                    0
-                }
-            },
-            _ => {
-                self.restore(save);
-                0
-            }
-        }
+        let start = self.lx.pos();
+        // Keep headroom for fresh variables and substitution shifts in the u64 supply.
+        self.lx
+            .natural()
+            .filter(|&n| n <= u64::from(u32::MAX))
+            .ok_or_else(|| {
+                self.err(format!("variable index exceeds {}", u32::MAX))
+                    .with_location(start, 1)
+            })
     }
 
     // =========================================================================
@@ -5533,314 +5514,105 @@ impl<'a> Parser<'a> {
     }
 
     /// Parse a timepoint variable.  HS `nodevar` (Token.hs) is
-    /// `sortedLVar [LSortNode]` — the `#x` prefix or the `x:node` suffix —
-    /// or a bare `indexedIdentifier` stamped `LSortNode`.  A `$`/`~`/`%`
-    /// sigil, a different sort suffix and a SAPIC type annotation are all
-    /// outside that language.
+    /// `sortedLVar [LSortNode]` — the `x:node` suffix or the `#x` prefix —
+    /// or a bare `indexedIdentifier` stamped `LSortNode`.  A bare name and
+    /// colon commit to the suffix, so `x:msg` fails rather than falling back
+    /// to the bare name, and a prefixed name takes no suffix.  The bare
+    /// name never consults the signature, so a name that is also an arity-0
+    /// symbol is a timepoint variable here.
     fn nodevar(&mut self) -> Result<VarSpec, ParseError> {
+        self.skip_ws();
         let save = self.save();
-        let v = self.var_spec()?;
-        // `sortedLVar [LSortNode]` is the `#x` sigil and the `x:node` suffix;
-        // the second alternative reads a bare `indexedIdentifier`, which
-        // [`Parser::try_var_spec`] stamps `LSort::Msg` with no suffix consumed.
-        let is_node = v.sort == LSort::Node
-            || (v.sort == LSort::Msg && !self.sort_suffix_consumed && v.typ.is_none());
-        if !is_node {
+        let prefixed = self.lx.peek() == Some('#');
+        if prefixed {
+            self.lx.bump();
+        }
+        let name = self.lx.identifier();
+        let idx = self.try_dot_index()?;
+        let Some(name) = name.filter(|_| prefixed || !self.try_punct(":") || self.try_kw("node"))
+        else {
             self.restore(save);
             return Err(self.err("expected a timepoint variable"));
-        }
+        };
         Ok(VarSpec {
-            name: v.name,
-            idx: v.idx,
+            name,
+            idx,
             sort: LSort::Node,
             typ: None,
         })
     }
 }
 
-// =============================================================================
-// `let` inlining
-// =============================================================================
-
-/// Substitute a rule's `let` bindings into its body — HS
-/// `apply subst (ps0,as0,cs0,rs0)` (Theory/Text/Parser/Rule.hs).
-///
-/// `letBlock` folds the bindings with `foldr1 compose` over singleton
-/// substitutions (Theory/Text/Parser/Let.hs) and `compose s1 s2` has the
-/// effect of `s1(s2(t))` (Term/Substitution/SubstVFree.hs), so the
-/// bindings apply in REVERSE source order.  A binding's right-hand side is
-/// therefore rewritten by the bindings that precede it (`let a = ~k  b = h(a)`
-/// puts `h(~k)` in the body), while a reference to a LATER binding survives as
-/// a free variable (`let a = h(b)  b = ~k` puts `h(b)` in the body).
-fn apply_let_bindings(
-    bindings: &[(VarSpec, Term)],
-    premises: &mut [Fact],
-    actions: &mut [Fact],
-    conclusions: &mut [Fact],
-    restrictions: &mut [Formula],
-) {
-    for (var, value) in bindings.iter().rev() {
-        for f in premises
-            .iter_mut()
-            .chain(actions.iter_mut())
-            .chain(conclusions.iter_mut())
-        {
-            subst_let_fact(f, var, value);
-        }
-        for phi in restrictions.iter_mut() {
-            subst_let_formula(phi, var, value);
-        }
-    }
+/// The variable parser HS threads through its term parsers (`vlit varp`,
+/// Theory/Text/Parser/Term.hs) and formula parsers (`standardFormula varp
+/// nodep`, Theory/Text/Parser/Formula.hs).  Every context instantiates it:
+/// rules, lemmas, restrictions, macro bodies, equations and proof goals read
+/// `msgvar`; a SAPIC process reads `sapicvar`, and its `in` messages,
+/// `let` patterns and embedded MSR rules `sapicpatternvar`
+/// (Theory/Text/Parser/Sapic.hs).  A timepoint is therefore a term only
+/// inside a process; elsewhere it stands only where a formula reads
+/// `nodevar` ([`Parser::nodevar`]) or in a predicate's arguments.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum VarGrammar {
+    /// `msgvar = sortedLVar [LSortFresh, LSortPub, LSortNat, LSortMsg]`
+    /// (Token.hs).
+    Msg,
+    /// `try msgvar <|> nodevar`: a formula's predicate arguments and
+    /// quantifier binders (`blatom`, `quantification`,
+    /// Theory/Text/Parser/Formula.hs) outside a process.
+    MsgOrNode,
+    /// `lvar = sortedLVar [minBound..]` (Token.hs): macro parameters.
+    Any,
+    /// `sapicvar` (Token.hs): `lvarNoSuffix` — a sort prefix only — then an
+    /// optional `:type`, defaulting a timepoint's type to `node`.
+    Sapic,
+    /// `sapicpatternvar` (Token.hs): an optional `=` match marker before a
+    /// `sapicvar`.
+    SapicPattern,
 }
 
-/// Rule elaboration identifies variables by name, sort and index. Type
-/// annotations are retained in the AST but do not affect rule-let substitution.
-fn same_rule_var(a: &VarSpec, b: &VarSpec) -> bool {
-    a.name == b.name && a.sort == b.sort && a.idx == b.idx
-}
-
-fn subst_let_fact(f: &mut Fact, key: &VarSpec, val: &Term) {
-    for a in f.args.iter_mut() {
-        *a = subst_let_term(a, key, val);
+impl VarGrammar {
+    fn is_sapic(self) -> bool {
+        matches!(self, Self::Sapic | Self::SapicPattern)
     }
-}
 
-fn subst_let_term(t: &Term, key: &VarSpec, val: &Term) -> Term {
-    if matches!(t, Term::Var(v) if same_rule_var(v, key)) {
-        return val.clone();
-    }
-    match t {
-        Term::App(name, args) => Term::App(
-            name.clone(),
-            args.iter().map(|a| subst_let_term(a, key, val)).collect(),
-        ),
-        Term::AlgApp(name, a, b) => Term::AlgApp(
-            name.clone(),
-            Box::new(subst_let_term(a, key, val)),
-            Box::new(subst_let_term(b, key, val)),
-        ),
-        Term::Pair(args) => Term::Pair(args.iter().map(|a| subst_let_term(a, key, val)).collect()),
-        Term::Diff(a, b) => Term::Diff(
-            Box::new(subst_let_term(a, key, val)),
-            Box::new(subst_let_term(b, key, val)),
-        ),
-        Term::BinOp(op, a, b) => Term::BinOp(
-            *op,
-            Box::new(subst_let_term(a, key, val)),
-            Box::new(subst_let_term(b, key, val)),
-        ),
-        Term::PatMatch(a) => Term::PatMatch(Box::new(subst_let_term(a, key, val))),
-        Term::Var(_)
-        | Term::PubLit(_)
-        | Term::FreshLit(_)
-        | Term::NatLit(_)
-        | Term::Number(_)
-        | Term::NumberOne
-        | Term::NatOne
-        | Term::DhNeutral => t.clone(),
-    }
-}
-
-fn subst_let_formula(phi: &mut Formula, key: &VarSpec, val: &Term) {
-    match phi {
-        Formula::False | Formula::True => {}
-        Formula::Atom(a) => subst_let_atom(a, key, val),
-        Formula::Not(p) => subst_let_formula(p, key, val),
-        Formula::And(a, b) | Formula::Or(a, b) | Formula::Implies(a, b) | Formula::Iff(a, b) => {
-            subst_let_formula(a, key, val);
-            subst_let_formula(b, key, val);
-        }
-        Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
-            // A rule-let substitution is a free-variable substitution. A
-            // quantifier for its domain shadows every occurrence below it.
-            if vars.iter().any(|v| same_rule_var(v, key)) {
-                return;
-            }
-
-            // Parser formulas still carry named variables. Alpha-rename any
-            // binder that occurs free in the replacement before descending,
-            // otherwise `let x = y in Ex y. ...x...` captures the inserted y.
-            let mut replacement_vars = Vec::new();
-            collect_term_vars(val, &mut replacement_vars);
-            let mut used_vars = replacement_vars.clone();
-            collect_formula_vars(body, &mut used_vars);
-            for var in vars.iter() {
-                if !used_vars.iter().any(|v| same_rule_var(v, var)) {
-                    used_vars.push(var.clone());
-                }
-            }
-            if !used_vars.iter().any(|v| same_rule_var(v, key)) {
-                used_vars.push(key.clone());
-            }
-            for var in vars.iter_mut() {
-                if replacement_vars.iter().any(|v| same_rule_var(v, var)) {
-                    let old = var.clone();
-                    let fresh = fresh_formula_var(&used_vars, &old);
-                    rename_bound_formula(body, &old, &fresh);
-                    used_vars.push(fresh.clone());
-                    *var = fresh;
-                }
-            }
-            subst_let_formula(body, key, val);
+    /// `try varp <|> nodep` for a formula whose `varp` is `self`.  A
+    /// process's `sapicvar` already reads every `nodevar` spelling except
+    /// `x:node`, which it reads as the message `x` of type `node`, so the
+    /// alternative only widens `msgvar`.
+    fn or_node(self) -> Self {
+        match self {
+            Self::Msg => Self::MsgOrNode,
+            other => other,
         }
     }
-}
 
-fn collect_term_vars(term: &Term, out: &mut Vec<VarSpec>) {
-    match term {
-        Term::Var(v) => {
-            if !out.iter().any(|used| same_rule_var(used, v)) {
-                out.push(v.clone());
-            }
-        }
-        Term::App(_, args) | Term::Pair(args) => {
-            for arg in args {
-                collect_term_vars(arg, out);
-            }
-        }
-        Term::AlgApp(_, a, b) | Term::Diff(a, b) | Term::BinOp(_, a, b) => {
-            collect_term_vars(a, out);
-            collect_term_vars(b, out);
-        }
-        Term::PatMatch(t) => collect_term_vars(t, out),
-        Term::PubLit(_)
-        | Term::FreshLit(_)
-        | Term::NatLit(_)
-        | Term::Number(_)
-        | Term::NumberOne
-        | Term::NatOne
-        | Term::DhNeutral => {}
-    }
-}
-
-fn collect_formula_vars(formula: &Formula, out: &mut Vec<VarSpec>) {
-    match formula {
-        Formula::False | Formula::True => {}
-        Formula::Atom(atom) => collect_atom_vars(atom, out),
-        Formula::Not(body) => collect_formula_vars(body, out),
-        Formula::And(a, b) | Formula::Or(a, b) | Formula::Implies(a, b) | Formula::Iff(a, b) => {
-            collect_formula_vars(a, out);
-            collect_formula_vars(b, out);
-        }
-        Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
-            for var in vars {
-                if !out.iter().any(|used| same_rule_var(used, var)) {
-                    out.push(var.clone());
-                }
-            }
-            collect_formula_vars(body, out);
+    /// The sorts whose `:sort` suffix `sortedLVar` offers (Token.hs);
+    /// `lvarNoSuffix` offers none.
+    fn suffix_sorts(self) -> &'static [LSort] {
+        match self {
+            Self::Msg => &[LSort::Fresh, LSort::Pub, LSort::Nat, LSort::Msg],
+            Self::MsgOrNode => &[
+                LSort::Fresh,
+                LSort::Pub,
+                LSort::Nat,
+                LSort::Msg,
+                LSort::Node,
+            ],
+            Self::Any => &[
+                LSort::Pub,
+                LSort::Fresh,
+                LSort::Msg,
+                LSort::Node,
+                LSort::Nat,
+            ],
+            Self::Sapic | Self::SapicPattern => &[],
         }
     }
-}
 
-fn collect_atom_vars(atom: &Atom, out: &mut Vec<VarSpec>) {
-    match atom {
-        Atom::Eq(a, b) | Atom::Less(a, b) | Atom::LessMset(a, b) | Atom::Subterm(a, b) => {
-            collect_term_vars(a, out);
-            collect_term_vars(b, out);
-        }
-        Atom::Action(fact, node) => {
-            for arg in &fact.args {
-                collect_term_vars(arg, out);
-            }
-            collect_term_vars(node, out);
-        }
-        Atom::Last(node) => collect_term_vars(node, out),
-        Atom::Pred(fact) => {
-            for arg in &fact.args {
-                collect_term_vars(arg, out);
-            }
-        }
-    }
-}
-
-fn fresh_formula_var(used: &[VarSpec], old: &VarSpec) -> VarSpec {
-    let mut fresh = old.clone();
-    // Search from zero so an existing u64::MAX index cannot pin the search.
-    // A finite in-memory list cannot occupy every u64 index.
-    fresh.idx = 0;
-    while used.iter().any(|v| same_rule_var(v, &fresh)) {
-        fresh.idx += 1;
-    }
-    fresh
-}
-
-/// Rename occurrences bound by the current quantifier. A nested quantifier
-/// for the same variable starts a new scope and stops the traversal there.
-fn rename_bound_formula(formula: &mut Formula, old: &VarSpec, new: &VarSpec) {
-    match formula {
-        Formula::False | Formula::True => {}
-        Formula::Atom(atom) => rename_atom_var(atom, old, new),
-        Formula::Not(body) => rename_bound_formula(body, old, new),
-        Formula::And(a, b) | Formula::Or(a, b) | Formula::Implies(a, b) | Formula::Iff(a, b) => {
-            rename_bound_formula(a, old, new);
-            rename_bound_formula(b, old, new);
-        }
-        Formula::Forall(vars, body) | Formula::Exists(vars, body) => {
-            if !vars.iter().any(|v| same_rule_var(v, old)) {
-                rename_bound_formula(body, old, new);
-            }
-        }
-    }
-}
-
-fn rename_atom_var(atom: &mut Atom, old: &VarSpec, new: &VarSpec) {
-    match atom {
-        Atom::Eq(a, b) | Atom::Less(a, b) | Atom::LessMset(a, b) | Atom::Subterm(a, b) => {
-            rename_term_var(a, old, new);
-            rename_term_var(b, old, new);
-        }
-        Atom::Action(fact, node) => {
-            for arg in &mut fact.args {
-                rename_term_var(arg, old, new);
-            }
-            rename_term_var(node, old, new);
-        }
-        Atom::Last(node) => rename_term_var(node, old, new),
-        Atom::Pred(fact) => {
-            for arg in &mut fact.args {
-                rename_term_var(arg, old, new);
-            }
-        }
-    }
-}
-
-fn rename_term_var(term: &mut Term, old: &VarSpec, new: &VarSpec) {
-    match term {
-        Term::Var(v) if same_rule_var(v, old) => v.idx = new.idx,
-        Term::App(_, args) | Term::Pair(args) => {
-            for arg in args {
-                rename_term_var(arg, old, new);
-            }
-        }
-        Term::AlgApp(_, a, b) | Term::Diff(a, b) | Term::BinOp(_, a, b) => {
-            rename_term_var(a, old, new);
-            rename_term_var(b, old, new);
-        }
-        Term::PatMatch(t) => rename_term_var(t, old, new),
-        Term::Var(_)
-        | Term::PubLit(_)
-        | Term::FreshLit(_)
-        | Term::NatLit(_)
-        | Term::Number(_)
-        | Term::NumberOne
-        | Term::NatOne
-        | Term::DhNeutral => {}
-    }
-}
-
-fn subst_let_atom(a: &mut Atom, key: &VarSpec, val: &Term) {
-    match a {
-        Atom::Eq(x, y) | Atom::Less(x, y) | Atom::LessMset(x, y) | Atom::Subterm(x, y) => {
-            *x = subst_let_term(x, key, val);
-            *y = subst_let_term(y, key, val);
-        }
-        Atom::Action(f, t) => {
-            subst_let_fact(f, key, val);
-            *t = subst_let_term(t, key, val);
-        }
-        Atom::Last(t) => *t = subst_let_term(t, key, val),
-        Atom::Pred(f) => subst_let_fact(f, key, val),
+    /// Whether the `#` timepoint prefix starts a variable.
+    fn admits_node_prefix(self) -> bool {
+        self != Self::Msg
     }
 }
 

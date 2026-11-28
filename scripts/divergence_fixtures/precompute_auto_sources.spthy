@@ -1,0 +1,22 @@
+// Category: the `--precompute-only` statistics document under source
+// options.  The `@plain` row counts the closed protocol rules; the `@auto`
+// row counts the variant rules `--auto-sources` unfolds and shows the
+// deconstructions completed.  cli_refs' basic_precompute pins the document
+// on a theory without sources; no gate runs --precompute-only with
+// --auto-sources.
+
+theory AutoSourcesUnfold
+begin
+
+builtins: symmetric-encryption
+
+rule Setup:
+  [ Fr(~k) ] --> [ !Key(~k) ]
+
+rule Dec:
+  [ !Key(~k), In(x) ] --[ Dec(sdec(x, ~k)) ]-> [ Out(sdec(x, ~k)) ]
+
+lemma reach:
+  exists-trace "Ex m #i. Dec(m) @ #i"
+
+end

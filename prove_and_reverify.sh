@@ -15,9 +15,7 @@
 #   2  usage / environment error (bad arguments, missing binary)
 #   3  the HS RE-CHECK rejected the proof: tamarin-prover exited nonzero on the
 #      emitted theory, or its per-lemma verdicts differ from the Rust ones.
-#      Nothing is written to stdout.  Callers that know a theory hits an
-#      upstream replay limitation (scripts/bench.sh) key on this code, so it
-#      must never widen to cover an RS-side failure.
+#      Nothing is written to stdout.
 #
 # tamarin-rs proves the theory and writes the analyzed output (the theory
 # with embedded proof scripts) to a temp file; the Haskell tamarin-prover
@@ -44,19 +42,19 @@ thy="$1"; shift
 
 RS_PATH="${RS_PATH:-$repo_root/target/release/tamarin-rs}"
 [ -x "$RS_PATH" ] || { echo "no Rust binary at $RS_PATH (cargo build --release)" >&2; exit 2; }
-find_hs_bin() {
-    local c
-    for c in "$repo_root"/tamarin-prover-testing/.stack-work/install/*/*/*/bin/tamarin-prover; do
-        [ -x "$c" ] && { echo "$c"; return 0; }
-    done; return 1
-}
-# Prefer the patched ./setup.sh testing build (it carries proof-reload fixes
-# not yet in a release); otherwise any tamarin-prover on PATH works.
-HS_PATH="${HS_PATH:-$(find_hs_bin || command -v tamarin-prover)}" || {
-    echo "no Haskell tamarin-prover found (./setup.sh testing, install one, or set HS_PATH)" >&2; exit 2; }
+. "$repo_root/scripts/gate_common.sh" || exit 2
+HS_PATH="$(resolve_hs_oracle "$repo_root")" || exit 2
 echo "re-verifying with: $HS_PATH" >&2
-MAUDE_PATH="${MAUDE_PATH:-$(command -v maude || echo /home/linuxbrew/.linuxbrew/bin/maude)}"
-export PATH="$(dirname "$MAUDE_PATH"):$PATH"
+
+# An explicit prover flag takes precedence over the environment on both runs.
+explicit_maude=false
+for arg in "$@"; do
+    case "$arg" in --with-maude|--with-maude=*) explicit_maude=true; break ;; esac
+done
+if [ "$explicit_maude" = false ]; then
+    maude="$(resolve_maude)" || exit 2
+    set -- "$@" "--with-maude=$maude"
+fi
 
 rs_threads=(); hs_threads=()
 if [ -n "${THREADS:-}" ]; then
@@ -68,9 +66,7 @@ tmp=$(mktemp -d); trap 'rm -rf "$tmp"' EXIT
 
 # Lemma verdict lines of the "summary of summaries" block, e.g.
 #   secrecy (all-traces): verified (12 steps)
-summary_full() {
-    awk '/^summary of summaries:/ {f=1; next} f' "$1" | grep -E '\((all-traces|exists-trace)\): '
-}
+# with the step count elided.
 summary_lines() {
     awk '/^summary of summaries:/ {f=1; next} f' "$1" \
         | grep -E '\((all-traces|exists-trace)\): ' \

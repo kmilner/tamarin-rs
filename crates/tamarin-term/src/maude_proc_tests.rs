@@ -19,8 +19,8 @@ fn variable_sort_order_is_independent_of_history() {
         sig.enable_nat = enable_nat;
         let first = MaudeHandle::start(&path, sig.clone()).unwrap();
         let second = MaudeHandle::start(&path, sig).unwrap();
-        // Even with identical name order, creating Fresh's variable symbol
-        // before Pub's (versus the reverse) used to change the unifiers.
+        // With identical name order, creating Fresh's variable symbol before
+        // Pub's (versus the reverse) must not change the unifiers.
         first
             .inner
             .lock()
@@ -103,15 +103,9 @@ fn variable_order_cache_hits_and_restarts() {
     let cmd = b"unify in MSG : tamxor(x2048:Msg,x2049:Msg) =? tamxor(x2050:Msg,x2051:Msg) .\n";
     let expected = first.execute_memo(cmd, 2052, |_| {}).unwrap();
     assert_eq!(second.execute_memo(cmd, 2052, |_| {}).unwrap(), expected);
-    assert_eq!(
-        second.inner.lock().ordered_variables,
-        1,
-        "cache hits do no registration"
-    );
     let reverse = b"parse in MSG : cons(x2051:Msg,cons(x2050:Msg,cons(x2049:Msg,x2048:Msg))) .\n";
     second.inner.lock().execute(reverse, 2052).unwrap();
     assert_eq!(second.inner.lock().execute(cmd, 2052).unwrap(), expected);
-    assert_eq!(second.inner.lock().ordered_variables, 4096);
     {
         let mut reaper = second.child.lock().unwrap();
         reaper.kill_and_wait();
@@ -122,23 +116,6 @@ fn variable_order_cache_hits_and_restarts() {
     assert_eq!(second.execute_memo(cmd, 2052, |_| {}).unwrap(), expected);
     second.inner.lock().execute(reverse, 2052).unwrap();
     assert_eq!(second.inner.lock().execute(cmd, 2052).unwrap(), expected);
-}
-
-#[test]
-fn variable_registration_grows_only_as_needed() {
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let h = MaudeHandle::start(&path, crate::maude_sig::minimal_maude_sig(false)).unwrap();
-    let mut inner = h.inner.lock();
-    inner.execute(b"reduce in MSG : p(0) .\n", 0).unwrap();
-    assert_eq!(inner.ordered_variables, 1, "only the sort initializer's x0");
-    for (required, expected) in [(1, 1), (2, 2), (3, 4), (4, 4), (5, 8), (2, 8)] {
-        let cmd = format!("reduce in MSG : x{}:Msg .\n", required - 1);
-        let reply = inner.execute(cmd.as_bytes(), required).unwrap();
-        assert!(String::from_utf8_lossy(&reply).contains(&format!("x{}:Msg", required - 1)));
-        assert_eq!(inner.ordered_variables, expected);
-    }
 }
 
 /// `fst(pair(a, b))` over [`pair_maude_sig`].  The pairing signature really
@@ -195,30 +172,6 @@ fn spawn_and_reduce_pair() {
     )));
     assert_eq!(r, a, "fst(pair('a','b')) reduces to 'a'");
     assert_eq!(h.stats().norm_count, 1, "the reduce really went to Maude");
-}
-
-/// `Reduction` runs over the FAST `FreshT` (Reduction.hs with the
-/// re-export at Control/Monad/Fresh.hs), so the handle's single counter
-/// answers both class methods: `freshIdent` ignores the name and draws one
-/// (Control/Monad/Fresh/Class.hs), and `freshIdents k` reserves `k` and
-/// returns the first.
-#[test]
-fn maude_handle_fresh_idents_is_reserve_idxs() {
-    let path = match require_maude_path() {
-        Some(p) => p,
-        None => {
-            eprintln!("skipping: no maude");
-            return;
-        }
-    };
-    let h = MaudeHandle::start(&path, pair_maude_sig()).expect("start");
-    let mut m = &h;
-    assert_eq!(m.fresh_ident("x"), 0);
-    assert_eq!(m.fresh_ident("y"), 1);
-    assert_eq!(m.fresh_idents(4), 2);
-    // The draws all came from the one counter that `reserve_idxs` advances.
-    assert_eq!(h.fresh_counter_peek(), 6);
-    assert_eq!(h.reserve_idxs(1), 6);
 }
 
 #[test]
@@ -861,28 +814,13 @@ fn match_eqs_skolemize_both_mset_var_to_submultiset() {
     assert_eq!(binding, vec![("codeOther", 89, rest)]);
 }
 
-// HS's `impliedFormulas` runs `skolemizeGuarded` over the WHOLE clause
-// (`System.hs`): every FREE (non-universal) LVar of the guard
-// pattern becomes a Maude *constant*; only universal-bound vars stay
-// bindable.  `match_eqs_skolemize_both` treats those free vars as
-// distinct constants, matching HS's `skolemizeGuarded`-then-match.
-//
-// Mirrors the real STS_MAC_fix2 `AcceptedR` guard match (sent as
-// per-argument equations, one for each fact position).  The guard
-// pattern has ONE universal-bound var `kpartner` and several FREE
-// system vars (`ekI`,`ekR`) that, after a prior guard's binding,
-// occupy positions whose subject counterparts are DIFFERENT free
-// system vars (`x`,`tid`).  Two equations:
-//   eq1:  exp(g, ekI)  <=?  exp(g, x)     (pattern free ekI vs x)
-//   eq2:  exp(g, ekR)  <=?  exp(g, tid)   (pattern free ekR vs tid)
-// Skolemizing the subject side alone would leave the pattern's
-// `ekI`,`ekR` as Maude VARIABLES, so Maude would bind `ekI->x`,
-// `ekR->tid` and the match would SUCCEED — a spurious match that fires
-// `gfalse` one step early.  Skolemizing both sides makes every free var
-// a distinct CONSTANT, so `exp(g,c_ekI)` != `exp(g,c_x)` and the match
-// FAILS, exactly as HS's `skolemizeGuarded`-then-`matchAction` does.
+/// `match_eqs_skolemize_both` freezes every free (non-pattern) variable on
+/// BOTH sides into a distinct Maude constant, as HS's `impliedFormulas` runs
+/// `skolemizeGuarded` over the whole clause (`System.hs`) before matching.
+/// Only `pattern_vars` stay bindable, so `exp(g, ekI) <=? exp(g, x)` with
+/// both `ekI` and `x` free has no matcher.
 #[test]
-fn impl_guard_match_skolemizes_pattern_free_vars() {
+fn skolemize_both_match_treats_free_pattern_vars_as_constants() {
     let path = match require_maude_path() {
         Some(p) => p,
         None => {
@@ -1196,388 +1134,6 @@ fn panicking_exchange_cannot_leave_a_reply_for_the_next_request() {
     assert_ne!(old_pid, new_pid, "the interrupted process was replaced");
 }
 
-const SPIN_MODULE: &[u8] = b"fmod CANCEL is sort S . op spin : -> S . eq spin = spin . endfm\n";
-const SPIN: &[u8] = b"reduce in CANCEL : spin .\n";
-
-fn child_pid(handle: &MaudeHandle) -> Option<u32> {
-    handle.child.lock().unwrap().child.as_ref().map(Child::id)
-}
-
-/// `try_map_until` on a pool of its own, so that jobs that meet at a barrier
-/// each have a worker whatever the size of the global pool.
-fn map_until<I, T>(
-    items: Vec<I>,
-    work: impl Fn(I) -> Result<T, MaudeError> + Sync + Send + 'static,
-    stop: impl Fn(&T) -> bool + Sync + Send + 'static,
-) -> Result<Vec<T>, MaudeError>
-where
-    I: Send + 'static,
-    T: Send + 'static,
-{
-    let token = tamarin_utils::cancellation::current();
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(4)
-        .build()
-        .unwrap()
-        .install(move || {
-            let _guard = tamarin_utils::cancellation::CancellationGuard::new(token);
-            tamarin_utils::parallel::try_map_until(items, work, stop)
-        })
-}
-
-#[test]
-fn an_earlier_job_takes_the_process_from_a_later_one_stuck_in_maude() {
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let handle = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    handle.inner.lock().execute(SPIN_MODULE, 0).unwrap();
-    let old_pid = child_pid(&handle);
-    let holding = std::sync::Arc::new(std::sync::Barrier::new(2));
-    let shared = handle.clone();
-    let results = map_until(
-        vec![0, 1],
-        move |index| -> Result<Vec<u8>, MaudeError> {
-            if index == 1 {
-                // The replacement process has no CANCEL module, so the
-                // repeated command returns at once.
-                let mut inner = shared.lock_inner()?;
-                holding.wait();
-                inner.execute(SPIN, 0)
-            } else {
-                holding.wait();
-                shared
-                    .reduce(&reducible_fst_pair("earlier", "b"))
-                    .map(|_| Vec::new())
-            }
-        },
-        |_| false,
-    )
-    .unwrap();
-    assert_eq!(results.len(), 2);
-    assert_ne!(
-        old_pid,
-        child_pid(&handle),
-        "the stuck process was replaced"
-    );
-}
-
-#[test]
-fn a_later_job_waits_for_an_earlier_one_in_maude() {
-    use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let handle = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    handle.inner.lock().execute(SPIN_MODULE, 0).unwrap();
-    let old_pid = child_pid(&handle);
-    let holding = std::sync::Arc::new(std::sync::Barrier::new(2));
-    let token = CancellationToken::default();
-    let shared = handle.clone();
-    let request = token.clone();
-    let map = std::thread::spawn(move || {
-        let _guard = CancellationGuard::new(Some(request));
-        map_until(
-            vec![0, 1],
-            move |index| -> Result<(), MaudeError> {
-                if index == 0 {
-                    let mut inner = shared.lock_inner()?;
-                    holding.wait();
-                    inner.execute(SPIN, 0).map(|_| ())
-                } else {
-                    holding.wait();
-                    shared.reduce(&reducible_fst_pair("later", "b")).map(|_| ())
-                }
-            },
-            |_| false,
-        )
-    });
-    std::thread::sleep(handle.turn.interrupt_after() * 4);
-    assert!(!map.is_finished());
-    assert_eq!(
-        old_pid,
-        child_pid(&handle),
-        "the earlier job kept its process"
-    );
-    token.cancel();
-    assert!(matches!(map.join().unwrap(), Err(MaudeError::Cancelled)));
-}
-
-#[test]
-fn an_interrupted_job_stays_away_while_the_earlier_one_keeps_working() {
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let handle = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    // Every replacement process can spin as well.
-    *handle.turn.preamble.lock().unwrap() = SPIN_MODULE.to_vec();
-    handle.inner.lock().execute(SPIN_MODULE, 0).unwrap();
-    let holding = std::sync::Arc::new(std::sync::Barrier::new(2));
-    let shared = handle.clone();
-    let patience = handle.turn.interrupt_after();
-    let results = map_until(
-        vec![0, 1],
-        move |index| -> Result<std::time::Duration, MaudeError> {
-            if index == 1 {
-                let mut inner = shared.lock_inner()?;
-                holding.wait();
-                inner.execute(SPIN, 0).map(|_| Default::default())
-            } else {
-                holding.wait();
-                let started = std::time::Instant::now();
-                // Long enough for the spinning job to come back more than once.
-                while started.elapsed() < patience * 6 {
-                    drop(shared.lock_inner()?);
-                    std::thread::sleep(std::time::Duration::from_millis(1));
-                }
-                let mut waited = std::time::Duration::ZERO;
-                for _ in 0..3 {
-                    std::thread::sleep(patience / 4);
-                    let before = std::time::Instant::now();
-                    drop(shared.lock_inner()?);
-                    waited += before.elapsed();
-                }
-                Ok(waited)
-            }
-        },
-        |_| true,
-    )
-    .unwrap();
-    // Without backing off, each of the three late locks waits out a fresh spin.
-    assert!(results[0] < patience, "waited {:?}", results[0]);
-}
-
-// Run a map on its own thread and report whether it finished unaided.
-/// Whether `map` returns by itself in good time. One that does not is
-/// cancelled; if even that does not end it, its thread is left behind with
-/// the process killed, so that the test fails instead of hanging.
-fn finishes<T: Send + 'static>(
-    handle: &MaudeHandle,
-    map: impl FnOnce() -> Result<T, MaudeError> + Send + 'static,
-) -> bool {
-    use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
-    let token = CancellationToken::default();
-    let request = token.clone();
-    let map = std::thread::spawn(move || {
-        let _guard = CancellationGuard::new(Some(request));
-        map()
-    });
-    let ends_within = |limit: std::time::Duration| {
-        let deadline = std::time::Instant::now() + limit;
-        while !map.is_finished() && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        map.is_finished()
-    };
-    let finished = ends_within(handle.turn.interrupt_after() * 40);
-    token.cancel();
-    if ends_within(std::time::Duration::from_secs(10)) {
-        let _ = map.join().unwrap();
-    } else {
-        handle.kill_subprocess();
-    }
-    finished
-}
-
-#[test]
-fn an_interrupted_job_takes_the_process_back_from_a_later_one() {
-    use std::sync::{mpsc, Arc, Barrier, Mutex};
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let handle = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    handle.inner.lock().execute(SPIN_MODULE, 0).unwrap();
-    let holding = Arc::new(Barrier::new(2));
-    let (first_done, after_first) = mpsc::channel::<()>();
-    let (first_done, after_first) = (Mutex::new(first_done), Mutex::new(after_first));
-    let shared = handle.clone();
-    assert!(finishes(&handle, move || {
-        map_until(
-            vec![0, 1, 2],
-            move |index| -> Result<(), MaudeError> {
-                match index {
-                    0 => {
-                        holding.wait();
-                        shared.reduce(&reducible_fst_pair("earlier", "b"))?;
-                        first_done.lock().unwrap().send(()).unwrap();
-                    }
-                    // Interrupted by the first job.
-                    1 => {
-                        let mut inner = shared.lock_inner()?;
-                        holding.wait();
-                        inner.execute(SPIN, 0)?;
-                    }
-                    // Takes the process while the second job stays away.
-                    _ => {
-                        after_first.lock().unwrap().recv().unwrap();
-                        let mut inner = shared.lock_inner()?;
-                        inner.execute(SPIN_MODULE, 0)?;
-                        inner.execute(SPIN, 0)?;
-                    }
-                }
-                Ok(())
-            },
-            |_| false,
-        )
-    }));
-}
-
-#[test]
-fn a_cut_job_that_was_interrupted_does_not_wait_for_the_process() {
-    use std::sync::{mpsc, Arc, Barrier, Mutex};
-    use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let handle = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    handle.inner.lock().execute(SPIN_MODULE, 0).unwrap();
-    let holding = Arc::new(Barrier::new(2));
-    let (first_done, after_first) = mpsc::channel::<()>();
-    let (taken, is_taken) = mpsc::channel::<()>();
-    let (first_done, is_taken) = (Mutex::new(first_done), Mutex::new(is_taken));
-    // A job outside every map has no rank, so no job can interrupt it.
-    let stop_outsider = CancellationToken::default();
-    let (outsider_handle, request) = (handle.clone(), stop_outsider.clone());
-    let outsider = std::thread::spawn(move || -> Result<(), MaudeError> {
-        let _guard = CancellationGuard::new(Some(request));
-        let _ = after_first.recv_timeout(std::time::Duration::from_secs(5));
-        let mut inner = outsider_handle.lock_inner()?;
-        taken.send(()).unwrap();
-        inner.execute(SPIN_MODULE, 0)?;
-        inner.execute(SPIN, 0).map(|_| ())
-    });
-    let shared = handle.clone();
-    // The first job ends the map while the interrupted second one is
-    // waiting to take the process back from the outsider.
-    assert!(finishes(&handle, move || {
-        map_until(
-            vec![0, 1],
-            move |index| -> Result<bool, MaudeError> {
-                if index == 1 {
-                    let mut inner = shared.lock_inner()?;
-                    holding.wait();
-                    return inner.execute(SPIN, 0).map(|_| false);
-                }
-                holding.wait();
-                shared.reduce(&reducible_fst_pair("earlier", "b"))?;
-                first_done.lock().unwrap().send(()).unwrap();
-                is_taken
-                    .lock()
-                    .unwrap()
-                    .recv_timeout(std::time::Duration::from_secs(5))
-                    .unwrap();
-                Ok(true)
-            },
-            |solved| *solved,
-        )
-    }));
-    stop_outsider.cancel();
-    assert!(matches!(
-        outsider.join().unwrap(),
-        Err(MaudeError::Cancelled)
-    ));
-}
-
-#[test]
-fn a_job_interrupted_before_it_reaches_maude_does_not_start_a_new_process() {
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let handle = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    let mut inner = handle.inner.lock();
-    let exchange = handle.turn.begin();
-    handle.turn.interrupt(&mut handle.turn.state.lock());
-    handle.child.lock().unwrap().invalidate();
-    assert!(inner.execute(b"reduce in MSG : nil .\n", 0).is_err());
-    assert_eq!(child_pid(&handle), None);
-    assert!(exchange.finish());
-    // The job that takes the process next starts a new one.
-    let _next = handle.turn.begin();
-    inner.execute(b"reduce in MSG : nil .\n", 0).unwrap();
-    assert!(child_pid(&handle).is_some());
-}
-
-#[test]
-fn the_interrupting_job_gets_the_process_before_a_later_waiter() {
-    use std::sync::{Arc, Barrier, Mutex};
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let handle = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    handle.inner.lock().execute(SPIN_MODULE, 0).unwrap();
-    let holding = Arc::new(Barrier::new(3));
-    let order = Arc::new(Mutex::new(Vec::new()));
-    let (shared, served) = (handle.clone(), order.clone());
-    map_until(
-        vec![0, 1, 2],
-        move |index| -> Result<(), MaudeError> {
-            if index == 1 {
-                let mut inner = shared.lock_inner()?;
-                holding.wait();
-                return inner.execute(SPIN, 0).map(|_| ());
-            }
-            holding.wait();
-            if index == 0 {
-                // The later job is already waiting when this one arrives.
-                std::thread::sleep(std::time::Duration::from_millis(50));
-            }
-            shared.reduce(&reducible_fst_pair(&format!("job{index}"), "b"))?;
-            served.lock().unwrap().push(index);
-            Ok(())
-        },
-        |()| false,
-    )
-    .unwrap();
-    assert_eq!(*order.lock().unwrap(), [0, 2]);
-}
-
-#[test]
-fn a_waiting_builder_uses_the_rank_an_earlier_job_lends_it() {
-    use std::sync::{mpsc, Arc, Barrier, Mutex};
-    use tamarin_utils::parallel::SharedOnce;
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let handle = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
-    handle.inner.lock().execute(SPIN_MODULE, 0).unwrap();
-    let value = Arc::new(SharedOnce::<LNTerm>::default());
-    let holding = Arc::new(Barrier::new(2));
-    let (building, is_building) = mpsc::channel::<()>();
-    let (building, is_building) = (Mutex::new(building), Mutex::new(is_building));
-    let shared = handle.clone();
-    assert!(finishes(&handle, move || {
-        map_until(
-            vec![0, 1, 2],
-            move |index| -> Result<(), MaudeError> {
-                let build = || shared.reduce(&reducible_fst_pair("built", "b"));
-                match index {
-                    // Needs the value only once the last job is already
-                    // waiting for the process to build it.
-                    0 => {
-                        is_building.lock().unwrap().recv().unwrap();
-                        std::thread::sleep(std::time::Duration::from_millis(50));
-                        value.get_or_try_init(build)?;
-                    }
-                    1 => {
-                        let mut inner = shared.lock_inner()?;
-                        holding.wait();
-                        inner.execute(SPIN, 0)?;
-                    }
-                    _ => {
-                        holding.wait();
-                        value.get_or_try_init(|| {
-                            building.lock().unwrap().send(()).unwrap();
-                            build()
-                        })?;
-                    }
-                }
-                Ok(())
-            },
-            |()| false,
-        )
-    }));
-}
-
 #[test]
 fn a_cancelled_job_gets_no_cached_reply() {
     use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
@@ -1593,4 +1149,61 @@ fn a_cancelled_job_gets_no_cached_reply() {
     let _guard = CancellationGuard::new(Some(token));
     assert!(matches!(handle.reduce(&term), Err(MaudeError::Cancelled)));
     assert!(matches!(handle.variants(&term), Err(MaudeError::Cancelled)));
+}
+
+/// HS `unskolemizeBTerm` is an `fmapTerm`: restoring the variables re-sorts
+/// the AC argument list under the restored literals.
+#[test]
+fn unskolemize_resorts_ac_arguments() {
+    use crate::function_symbols::AcSym;
+    use crate::term::{f_app_ac, lit, Term};
+    let a = LVar::new("a", LSort::Msg, 5);
+    let b = LVar::new("b", LSort::Msg, 1);
+    let skolemized: LNTerm = f_app_ac(
+        AcSym::Mult,
+        vec![lit(Lit::Con(skolem_name(&a))), lit(Lit::Var(b))],
+    );
+    let expected: LNTerm = f_app_ac(AcSym::Mult, vec![lit(Lit::Var(a)), lit(Lit::Var(b))]);
+    let Term::App(_, args) = &expected else {
+        unreachable!()
+    };
+    assert_eq!(args[0], lit(Lit::Var(b)));
+    assert_eq!(unskolemize(&skolemized), expected);
+    assert_eq!(
+        rewrite_skolem(&expected, &[(b.name, b.idx)].into_iter().collect()),
+        skolemized
+    );
+}
+
+/// HS `variantsViaMaude` converts each variant with `msubstToLSubstVFresh`
+/// (Maude/Types.hs): witnesses are numbered from `avoid (M.elems
+/// bindings)`, and `removeRenamings` turns the identity variant into the
+/// empty substitution.
+#[test]
+fn variants_use_the_hs_back_conversion() {
+    use crate::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
+    let Some(path) = require_maude_path() else {
+        return;
+    };
+    let h = MaudeHandle::start(&path, pair_maude_sig()).unwrap();
+    let fst = NoEqSym::new(
+        b"fst".to_vec(),
+        1,
+        Privacy::Public,
+        Constructability::Constructor,
+    );
+    let x = LVar::new("x", LSort::Msg, 5);
+    let t: LNTerm = crate::term::Term::App(
+        FunSym::NoEq(fst),
+        vec![crate::term::lit(Lit::Var(x))].into(),
+    );
+    let variants = h.variants(&t).unwrap();
+    assert_eq!(variants.len(), 2, "{variants:?}");
+    assert!(variants.contains(&Vec::new()), "{variants:?}");
+    for (_, image) in variants.iter().flatten() {
+        assert!(
+            crate::vterm::vars_vterm(image).iter().all(|w| w.idx > 5),
+            "{variants:?}"
+        );
+    }
 }

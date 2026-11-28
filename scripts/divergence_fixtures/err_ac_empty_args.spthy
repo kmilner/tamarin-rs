@@ -1,0 +1,15 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// An AC symbol applied to no arguments dies when the term is forced (HS
+// `fAppAC` error), after translation; `@no_ndc` skips the NDC stage
+// before it.
+// No corpus theory fails this way.
+
+theory ACEmpty begin
+
+functions: f/2 [AC]
+
+rule R:
+  [ ] --[ ]-> [ Out(f()) ]
+
+end

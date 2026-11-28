@@ -1,0 +1,55 @@
+theory WfMultRestricted
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: diffie-hellman
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+heuristic: p
+
+rule (modulo E) Both:
+   [ In( fst(x) ), Fr( ~a ), Fr( ~b ) ]
+  --[ Go( x ) ]->
+   [ Out( <x, (~a*~b)> ) ]
+
+rule (modulo E) RFresh:
+   [ In( fst(~x) ) ] --[ Go( 'a' ) ]-> [ Out( ~x ) ]
+
+rule (modulo E) RPub:
+   [ In( fst($p) ) ] --[ Go( 'b' ) ]-> [ Out( $p ) ]
+
+rule (modulo E) RShared:
+   [ In( fst(z) ), In( fst(z) ), In( snd(w) ) ]
+  --[ Go( 'c' ) ]->
+   [ Out( <z, w> ) ]
+
+rule (modulo E) Attrs[color=#ff00aa, no_derivcheck, issapicrule,
+                      role='Alice']:
+   [ In( fst(x) ) ] --[ Go( x ) ]-> [ Out( x ) ]
+
+rule (modulo E) Init[color=#ffffff,
+                     process=" [ In( fst(x.1) ) ] --[ Go( x.1 ) ]-> [ Out( x.1 ) ];",
+                     issapicrule, role='Process']:
+   [ ] --[ Init( ) ]-> [ State_( ) ]
+
+rule (modulo E) InfstxGoxOutx_0_[color=#ffffff,
+                                 process=" [ In( fst(x.1) ) ] --[ Go( x.1 ) ]-> [ Out( x.1 ) ];",
+                                 issapicrule, role='Process']:
+   [ State_( ), In( fst(x.1) ) ]
+  --[ Go( x.1 ) ]->
+   [ State_1( x.1 ), Out( x.1 ) ]
+
+rule (modulo E) p_0_1[color=#ffffff, process="0", issapicrule,
+                      role='Process']:
+   [ State_1( x.1 ) ] --> [ ]
+
+restriction single_session:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+
+
+end

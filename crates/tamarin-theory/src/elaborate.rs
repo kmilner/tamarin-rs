@@ -31,19 +31,15 @@
 //! Returned errors describe the surface offence (e.g. "duplicate process:
 //! P"), with no internal panics.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use tamarin_parser::ast as p;
+use tamarin_term::apply::Apply;
 use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
-use tamarin_term::lterm::LVar;
+use tamarin_term::lterm::{occurs_free, LVar};
 
 use tamarin_term::lterm::{Name, NameTag};
-use tamarin_term::maude_sig::{
-    asym_enc_dest_maude_sig, asym_enc_maude_sig, bp_maude_sig, dh_maude_sig, hash_maude_sig,
-    location_report_maude_sig, minimal_maude_sig, mset_maude_sig, nat_maude_sig,
-    pair_dest_maude_sig, reveal_signature_maude_sig, signature_dest_maude_sig, signature_maude_sig,
-    sym_enc_dest_maude_sig, sym_enc_maude_sig, xor_maude_sig, MaudeSig,
-};
+use tamarin_term::maude_sig::{minimal_maude_sig, MaudeSig};
 use tamarin_term::term::{f_app_no_eq, Term};
 use tamarin_term::vterm::{Lit, VTerm};
 
@@ -58,6 +54,7 @@ use crate::theory::{
     apply_macro_in_lemma, AccLemma, CaseTest, LNMacro, Lemma, OpenProtoRule, ProcessDef, ProofTree,
     SapicFunSym, Theory, TheoryItem, TranslationElement,
 };
+use crate::tools::equation_store::LNSubst;
 
 #[derive(Debug, Clone)]
 pub struct ElabError {
@@ -70,52 +67,6 @@ impl std::fmt::Display for ElabError {
     }
 }
 impl std::error::Error for ElabError {}
-
-/// One diagnostic from `elaborate_with_diagnostics`, mirroring a
-/// wellformedness "Formula guardedness" warning.
-#[derive(Debug, Clone)]
-pub struct GuardDiagnostic {
-    pub topic: String,
-    pub item: String,
-    pub message: String,
-}
-
-/// Run elaboration and additionally check that every lemma /
-/// restriction formula converts to a guarded formula. Returns the
-/// elaborated theory along with any guardedness diagnostics. Mirrors
-/// Haskell's `formulaReports.checkGuarded`.
-///
-/// NOTE: this is an example-only convenience (used by
-/// `examples/elaborate_all.rs`), NOT part of the prove pipeline, which
-/// produces the byte-exact WF report via
-/// [`crate::wellformedness::formulas::formula_reports`].  The two perform the same
-/// guardedness scan but format their output differently; keep them in sync
-/// if the check itself changes.
-pub fn elaborate_with_diagnostics(
-    parser_thy: &p::Theory,
-) -> Result<(Theory, Vec<GuardDiagnostic>), ElabError> {
-    let thy = elaborate(parser_thy)?;
-    let mut diags = Vec::new();
-    for l in thy.lemmas() {
-        if let Err(e) = formula_to_guarded(&l.formula) {
-            diags.push(GuardDiagnostic {
-                topic: "Formula guardedness".into(),
-                item: format!("Lemma `{}'", l.name),
-                message: format!("cannot be converted to a guarded formula: {}", e.message),
-            });
-        }
-    }
-    for r in thy.restrictions() {
-        if let Err(e) = formula_to_guarded(&r.formula) {
-            diags.push(GuardDiagnostic {
-                topic: "Formula guardedness".into(),
-                item: format!("Restriction `{}'", r.name),
-                message: format!("cannot be converted to a guarded formula: {}", e.message),
-            });
-        }
-    }
-    Ok((thy, diags))
-}
 
 /// Collect every `Name` constant of a term in traversal order — HS
 /// `universeBi t` at `[Name]`, which both name reports filter by
@@ -173,7 +124,7 @@ pub(crate) fn collect_process_names(p: &crate::sapic::PlainProcess, out: &mut Ve
                 }
                 SA::Delete(a) | SA::Lock(a) | SA::Unlock(a) => collect_names(a, out),
                 SA::Event(fa) => {
-                    for t in fa.terms.iter() {
+                    for t in fa.terms().iter() {
                         collect_names(t, out);
                     }
                 }
@@ -190,7 +141,7 @@ pub(crate) fn collect_process_names(p: &crate::sapic::PlainProcess, out: &mut Ve
                     ..
                 } => {
                     for fa in prems.iter().chain(acts).chain(concs) {
-                        for t in fa.terms.iter() {
+                        for t in fa.terms().iter() {
                             collect_names(t, out);
                         }
                     }
@@ -316,11 +267,10 @@ fn ndc_state_of(ndc: bool, ndc_diff: bool) -> NdcState {
     a.join(b)
 }
 
-/// The `SapicFunSym` a `functions:` declaration records as its
-/// `FunctionTypingInfo` item (HS `function`,
-/// Theory/Text/Parser/Signature.hs): the declared name, arity and
-/// attribute flags paired with the declared SAPIC argument and result types.
-pub(crate) fn function_decl_typing_info(d: &p::FunctionDecl) -> SapicFunSym {
+/// The symbol a `functions:` declaration adds to the signature (HS
+/// `function`, Theory/Text/Parser/Signature.hs): the declared name, arity
+/// and attribute flags.
+fn function_decl_sym(d: &p::FunctionDecl) -> tamarin_term::function_symbols::UserDefinedSym {
     use tamarin_term::function_symbols::UserDefinedSym;
     let privacy = if d.private {
         Privacy::Private
@@ -333,7 +283,7 @@ pub(crate) fn function_decl_typing_info(d: &p::FunctionDecl) -> SapicFunSym {
         Constructability::Constructor
     };
     let ndc = ndc_state_of(d.ndc, d.ndc_diff);
-    let sym = if d.ac {
+    if d.ac {
         UserDefinedSym::AcFctUser(AcFctSym::new(
             d.name.as_bytes().to_vec(),
             privacy,
@@ -350,9 +300,16 @@ pub(crate) fn function_decl_typing_info(d: &p::FunctionDecl) -> SapicFunSym {
             )
             .with_ndc(ndc),
         )
-    };
+    }
+}
+
+/// The `SapicFunSym` a `functions:` declaration records as its
+/// `FunctionTypingInfo` item (HS `function`,
+/// Theory/Text/Parser/Signature.hs): the declared symbol paired with the
+/// declared SAPIC argument and result types.
+pub(crate) fn function_decl_typing_info(d: &p::FunctionDecl) -> SapicFunSym {
     SapicFunSym {
-        sym,
+        sym: function_decl_sym(d),
         arg_types: d.arg_types.clone(),
         out_type: d.out_type.clone(),
     }
@@ -378,7 +335,7 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
         p::TheoryItem::Builtins(names) => {
             let mut s = std::mem::take(&mut out.signature);
             for name in names {
-                if let Some(sig) = builtin_sig(name) {
+                if let Some(sig) = tamarin_parser::parser::builtin_maude_sig(name) {
                     s = s.merge(sig);
                 }
                 // NOTE: `diffie-hellman` already arrives with `enable_dh`
@@ -392,20 +349,7 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
             out.signature = s;
         }
         p::TheoryItem::Functions(decls) => {
-            use tamarin_term::function_symbols::UserDefinedSym;
             for d in decls {
-                let arity = d.arg_types.len();
-                let priv_ = if d.private {
-                    Privacy::Private
-                } else {
-                    Privacy::Public
-                };
-                let constr = if d.destructor {
-                    Constructability::Destructor
-                } else {
-                    Constructability::Constructor
-                };
-                let ndc = ndc_state_of(d.ndc, d.ndc_diff);
                 // HS `function`'s fst/snd short-circuit (Theory/Text/
                 // Parser/Signature.hs, name-only by design — it tests
                 // neither arity nor privacy): a re-declared fst/snd
@@ -422,25 +366,10 @@ fn maude_sig_step(item: &p::TheoryItem, out: &mut Theory) -> Result<Vec<LNMacro>
                 {
                     continue;
                 }
-                let user_sym = if d.ac {
-                    UserDefinedSym::AcFctUser(AcFctSym::new(
-                        d.name.as_bytes().to_vec(),
-                        priv_,
-                        constr,
-                        ndc,
-                    ))
-                } else {
-                    UserDefinedSym::NoEqUser(
-                        NoEqSym::new(d.name.as_bytes().to_vec(), arity, priv_, constr)
-                            .with_ndc(ndc),
-                    )
-                };
-                // `add_fun_sym` consumes `self` by value; move the
-                // current sig out via `take` to avoid a per-declaration
-                // deep clone of the whole MaudeSig.  Output order and
-                // dedup are unchanged (same `add_fun_sym` path).
+                // `add_fun_sym` consumes `self`; move the signature out
+                // rather than clone it per declaration.
                 let cur = std::mem::take(&mut out.signature);
-                out.signature = cur.add_fun_sym(user_sym);
+                out.signature = cur.add_fun_sym(function_decl_sym(d));
             }
         }
         p::TheoryItem::Equations { eqs, convergent } => {
@@ -612,41 +541,25 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
             // HS routes these into `_thyCache`, outside the printable item
             // stream; the close pass appends generated deduction rules later.
             p::TheoryItem::IntrRule(r) => {
-                let rule = crate::intruder_variants::intr_rule_from_ast(&out.signature, r)
+                let rule = crate::intruder_variants::ast_rule_to_intr_rule_ac(&out.signature, r)
                     .map_err(|message| ElabError { message })?;
                 if !out.intruder_rules.contains(&rule) {
                     out.intruder_rules.push(rule);
                 }
             }
             p::TheoryItem::Rule(r) => {
-                let mut e = rule_to_proto_rule_e(r, &out.signature)?;
-                // HS `liftedAddProtoRule` (Theory/Text/Parser.hs) adds
-                // one restriction per `_restrict` formula BEFORE the rule and
-                // appends the actions that reach them to the rule.
-                for restr in crate::rule_restriction::lift_rule_restrictions(&mut e, &preds)? {
-                    out.items
-                        .push(TheoryItem::Restriction(apply_macro_in_restriction(
-                            &macros, restr,
-                        )));
-                }
-                // `closeProtoRule` narrows `applyMacroInRule macros ruE` into
-                // the AC half and keeps `ruE` itself as the `cprRuleE` half
-                // (lib/theory/src/Rule.hs).  A theory that declares no
-                // macro, or a rule whose body calls none, leaves the two
-                // identical.
-                let mut opr =
-                    OpenProtoRule::new(crate::rule::apply_macro_in_rule(&macros, e.clone()));
-                if opr.rule != e {
-                    opr.rule_e = Some(Box::new(e));
-                }
+                let e = rule_to_proto_rule_e(r, &out.signature)?;
                 // `protoRule`'s `variants` block
                 // (Theory/Text/Parser/Rule.hs).
-                opr.rule_ac = r
+                let rule_ac = r
                     .variants
                     .iter()
                     .map(|v| rule_to_proto_rule_e(v, &out.signature))
                     .collect::<Result<Vec<_>, _>>()?;
-                out.items.push(TheoryItem::Rule(opr));
+                // Diff theories skip the duplicate guard, as the parser's
+                // does: `liftedAddDiffRule` is not ported.
+                let guard = !out.signature.enable_diff;
+                lifted_add_proto_rule(out, e, rule_ac, &preds, &macros, guard)?;
             }
             p::TheoryItem::Lemma(l) => {
                 let msig = &out.signature;
@@ -773,6 +686,208 @@ fn elaborate_items(items: &[p::TheoryItem], out: &mut Theory) -> Result<(), Elab
     Ok(())
 }
 
+/// HS `addRestriction` (TheoryObject.hs) as `liftedAddRestriction`
+/// (Theory/Text/Parser.hs) throws its failure: a restriction whose name the
+/// theory already declares is a `duplicate restriction`.
+pub fn add_restriction(thy: &mut Theory, restr: Restriction) -> Result<(), ElabError> {
+    if thy.lookup_restriction(&restr.name).is_some() {
+        return Err(ElabError {
+            message: format!("duplicate restriction: {}", restr.name),
+        });
+    }
+    thy.items.push(TheoryItem::Restriction(restr));
+    Ok(())
+}
+
+/// HS `liftedAddProtoRule` (Theory/Text/Parser.hs): add one restriction per
+/// `_restrict` formula BEFORE the rule, each through [`add_restriction`],
+/// append the actions that reach them to the rule, then add the rule through
+/// `addOpenProtoRule`'s guard
+/// (OpenTheory.hs): a name already bound to a different open rule is a
+/// `duplicate rule`, while an identical one is appended again.  The SAPIC
+/// translation adds its generated rules through the same function.  A parse
+/// through [`parse_theory_checked`] has already run the guard on the parsed
+/// rules, with a position; `guard_duplicates` runs it again here, for the
+/// generated rules and for theories parsed without the check.
+///
+/// `closeProtoRule` narrows `applyMacroInRule macros ruE` into the AC half and
+/// keeps `ruE` itself as the `cprRuleE` half (lib/theory/src/Rule.hs); a rule
+/// whose body calls no macro leaves the two identical.
+pub fn lifted_add_proto_rule(
+    thy: &mut Theory,
+    mut rule: ProtoRuleE,
+    rule_ac: Vec<ProtoRuleE>,
+    predicates: &[crate::predicate::Predicate],
+    macros: &[LNMacro],
+    guard_duplicates: bool,
+) -> Result<(), ElabError> {
+    for restr in crate::rule_restriction::lift_rule_restrictions(&mut rule, predicates)? {
+        add_restriction(thy, apply_macro_in_restriction(macros, restr))?;
+    }
+    let mut opr = OpenProtoRule::new(crate::rule::apply_macro_in_rule(macros, rule.clone()));
+    let name = opr.name();
+    if guard_duplicates
+        && thy
+            .rules()
+            .find(|prev| prev.name() == name)
+            .is_some_and(|prev| prev.rule_e() != &rule || prev.rule_ac != rule_ac)
+    {
+        return Err(ElabError {
+            message: format!("duplicate rule: {name}"),
+        });
+    }
+    if opr.rule != rule {
+        opr.rule_e = Some(Box::new(rule));
+    }
+    opr.rule_ac = rule_ac;
+    thy.items.push(TheoryItem::Rule(opr));
+    Ok(())
+}
+
+/// [`tamarin_parser::RuleConflictCheck`] as [`lifted_add_proto_rule`]'s guard
+/// compares: each rule built and lifted under the signature and predicates
+/// declared before it, the first rule of each name kept in that form as HS
+/// `liftedAddProtoRule` stores it.
+///
+/// The check costs nothing until a rule name repeats. It logs the
+/// declarations and the first rule of each name; a repeated name drains the
+/// log in order, applying each declaration to one running scope and lifting
+/// each first rule in the scope it was declared in. The check stops for good
+/// at the first declaration or rule that does not elaborate, as the load stops
+/// there with its error.
+///
+/// An `[AC]` symbol applied to nothing raises HS's `fAppAC` error, which HS
+/// raises only where something forces the term. The check builds it as an
+/// inert constant ([`tamarin_term::term::with_empty_ac_as_constant`]) and
+/// compares it like any other term, so it never raises; elaboration raises
+/// the error when the theory loads. A theory with such a term is therefore
+/// rejected, as a duplicate rule or with `fAppAC`, though not always with the
+/// error HS reaches first.
+pub struct RuleConflicts {
+    /// The declarations and first rules the scope below has not taken in,
+    /// in source order.
+    log: Vec<Logged>,
+    thy: Theory,
+    preds: Vec<crate::predicate::Predicate>,
+    /// The names of the rules declared so far.
+    names: BTreeSet<String>,
+    /// The first rule of each name the scope has taken in.
+    rules: BTreeMap<String, LiftedRule>,
+    /// Whether the scope reached an item that does not elaborate.
+    stopped: bool,
+}
+
+enum Logged {
+    Declaration(p::TheoryItem),
+    /// The first rule of its name.
+    Rule(p::Rule),
+}
+
+type LiftedRule = (crate::rule::ProtoRuleE, Vec<crate::rule::ProtoRuleE>);
+
+impl Default for RuleConflicts {
+    fn default() -> Self {
+        Self {
+            log: Vec::new(),
+            // The parser runs the check outside diff mode only.
+            thy: Theory::new(String::new(), minimal_maude_sig(false)),
+            preds: Vec::new(),
+            names: BTreeSet::new(),
+            rules: BTreeMap::new(),
+            stopped: false,
+        }
+    }
+}
+
+impl RuleConflicts {
+    fn lifted(&self, r: &p::Rule) -> Option<LiftedRule> {
+        let mut e = rule_to_proto_rule_e(r, &self.thy.signature).ok()?;
+        let rule_ac = r
+            .variants
+            .iter()
+            .map(|v| rule_to_proto_rule_e(v, &self.thy.signature))
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        crate::rule_restriction::lift_rule_restrictions(&mut e, &self.preds).ok()?;
+        Some((e, rule_ac))
+    }
+
+    /// Take the log into the scope, stopping for good at the first item that
+    /// does not elaborate.
+    fn catch_up(&mut self) {
+        for entry in std::mem::take(&mut self.log) {
+            let elaborated = match entry {
+                Logged::Rule(r) => match self.lifted(&r) {
+                    Some(lifted) => {
+                        self.rules.insert(r.name, lifted);
+                        true
+                    }
+                    None => false,
+                },
+                Logged::Declaration(p::TheoryItem::Predicates(ps)) => ps.iter().all(|pd| {
+                    crate::predicate::from_parser(pd, &self.thy.signature)
+                        .map(|pred| self.preds.push(pred))
+                        .is_ok()
+                }),
+                Logged::Declaration(item) => maude_sig_step(&item, &mut self.thy).is_ok(),
+            };
+            if !elaborated {
+                self.stopped = true;
+                return;
+            }
+        }
+    }
+}
+
+impl tamarin_parser::RuleConflictCheck for RuleConflicts {
+    fn declare(&mut self, item: &p::TheoryItem) {
+        if self.stopped {
+            return;
+        }
+        match item {
+            p::TheoryItem::Rule(r) => {
+                if self.names.insert(r.name.clone()) {
+                    self.log.push(Logged::Rule(r.clone()));
+                }
+            }
+            _ => self.log.push(Logged::Declaration(item.clone())),
+        }
+    }
+
+    fn conflicts(&mut self, new: &p::Rule) -> bool {
+        if !self.names.contains(&new.name) {
+            return false;
+        }
+        tamarin_term::term::with_empty_ac_as_constant(|| {
+            self.catch_up();
+            if self.stopped {
+                return false;
+            }
+            let Some(earlier) = self.rules.get(&new.name) else {
+                return false;
+            };
+            self.lifted(new)
+                .is_some_and(|new| earlier.0 != new.0 || earlier.1 != new.1)
+        })
+    }
+}
+
+/// [`tamarin_parser::parse_theory_with_rule_check`] with
+/// [`RuleConflicts`]: HS's parse-time `duplicate rule` guard, as a
+/// positioned diagnostic at the second rule's name.
+pub fn parse_theory_checked(
+    src: &str,
+    flags: &[&str],
+    base_dir: Option<std::path::PathBuf>,
+) -> Result<p::Theory, tamarin_parser::ParseError> {
+    tamarin_parser::parse_theory_with_rule_check(
+        src,
+        flags,
+        base_dir,
+        Box::new(RuleConflicts::default()),
+    )
+}
+
 /// The formula HS's `liftedAddLemma` / `liftedAddRestriction` store: the
 /// surface formula closed by [`crate::formula::from_parser`] and stripped of
 /// its predicate sugar by `expandLemma` / `expandRestriction`
@@ -848,35 +963,67 @@ fn rule_attributes_from_parser(attrs: &[p::RuleAttr]) -> RuleAttributes {
     out
 }
 
-fn rule_to_proto_rule_e(r: &p::Rule, sig: &MaudeSig) -> Result<ProtoRuleE, ElabError> {
-    // HS `modify preRestriction (++ rs) ri` (Theory/Text/Parser/Rule.hs): the rule carries its `_restrict` formulas as parsed — predicate
-    // atoms unexpanded, since `liftedAddProtoRule` expands only the copies it
-    // lifts (Theory/Text/Parser.hs).
-    let restrictions = r
+pub(crate) fn rule_to_proto_rule_e(r: &p::Rule, sig: &MaudeSig) -> Result<ProtoRuleE, ElabError> {
+    let facts = |fs: &[p::Fact]| {
+        fs.iter()
+            .map(|f| fact_to_lnfact(f, sig))
+            .collect::<Result<Vec<_>, _>>()
+    };
+    let mut prems = facts(&r.premises)?;
+    let mut acts = facts(&r.actions)?;
+    let mut concs = facts(&r.conclusions)?;
+    // HS `modify preRestriction (++ rs) ri` (Theory/Text/Parser/Rule.hs): the
+    // rule carries its `_restrict` formulas as parsed — predicate atoms
+    // unexpanded, since `liftedAddProtoRule` expands only the copies it lifts
+    // (Theory/Text/Parser.hs).
+    let mut restrictions = r
         .embedded_restrictions
         .iter()
         .map(|f| crate::formula::from_parser(f, sig))
         .collect::<Result<Vec<_>, _>>()?;
+    // HS `apply subst (ps0,as0,cs0,rs0)` with `letBlock`'s
+    // `foldr1 compose . map (substFromList . return)`
+    // (Theory/Text/Parser/Rule.hs, Theory/Text/Parser/Let.hs).  Applying
+    // `s1 `compose` ... `compose` sn` is applying sn, then ..., then s1, which
+    // costs the rule's size per binding; building the composite rewrites
+    // every image so far per binding, cubic in a chain of bindings.  The
+    // formulas are locally nameless, so no binder can capture an image.
+    for (v, t) in r.lets.iter().rev() {
+        let var = varspec_to_lvar(v);
+        let used = occurs_free(&var, &prems)
+            || occurs_free(&var, &acts)
+            || occurs_free(&var, &concs)
+            || restrictions
+                .iter()
+                .any(|f| crate::formula::formula_frees_list(f).contains(&var));
+        // HS evaluates an unused binding's image only as far as its outermost
+        // symbol, where `substFromList` compares it with the variable once the
+        // rule's terms are substituted (Term/Substitution/SubstVFree.hs).  So
+        // of an unused image only an `[AC]` symbol applied to nothing raises,
+        // and nothing else in it is checked.
+        if !used && !matches!(t, p::Term::App(_, args) if args.is_empty()) {
+            continue;
+        }
+        let t = term_to_lnterm(t, sig).ok_or_else(|| ElabError {
+            message: format!("could not elaborate the let binding of `{}`", v.name),
+        })?;
+        if !used {
+            continue;
+        }
+        let subst = LNSubst::from_list([(var, t)]);
+        prems = prems.apply(&subst);
+        acts = acts.apply(&subst);
+        concs = concs.apply(&subst);
+        restrictions = restrictions
+            .into_iter()
+            .map(|f| crate::formula::apply_subst(&subst, f))
+            .collect();
+    }
     let info = ProtoRuleEInfo {
         name: ProtoRuleName::Stand(tamarin_term::intern::intern_str(&r.name)),
         attributes: rule_attributes_from_parser(&r.attributes),
         restrictions,
     };
-    let prems = r
-        .premises
-        .iter()
-        .map(|f| fact_to_lnfact(f, sig))
-        .collect::<Result<Vec<_>, _>>()?;
-    let acts = r
-        .actions
-        .iter()
-        .map(|f| fact_to_lnfact(f, sig))
-        .collect::<Result<Vec<_>, _>>()?;
-    let concs = r
-        .conclusions
-        .iter()
-        .map(|f| fact_to_lnfact(f, sig))
-        .collect::<Result<Vec<_>, _>>()?;
     // HS `newVariables ps $ cs ++ as` (Theory/Text/Parser/Rule.hs).
     let new_vars = crate::fact::new_variables(&prems, &[&concs[..], &acts[..]].concat());
 
@@ -1032,14 +1179,13 @@ pub fn proof_tree_from_parsed(
     t: &p::ParsedProofTree,
     sig: &MaudeSig,
 ) -> Result<ProofTree, ElabError> {
-    let cases: Result<Vec<_>, _> = t
-        .cases
-        .iter()
-        .map(|(name, sub)| proof_tree_from_parsed(sub, sig).map(|sub| (name.clone(), sub)))
-        .collect();
     Ok(ProofTree {
         method: proof_method_from_parsed(&t.method, sig)?,
-        cases: cases?,
+        cases: t
+            .cases
+            .iter()
+            .map(|(name, sub)| Ok((name.clone(), proof_tree_from_parsed(sub, sig)?)))
+            .collect::<Result<_, _>>()?,
     })
 }
 
@@ -1254,40 +1400,15 @@ where
                 vec![],
             ))
         }
-        p::Term::Number(_) => {
-            // Defensive: `p::Term::Number` cannot arise from parsed
-            // input. HS has no bare-integer (>=2) term — the parser
-            // recognizes only `1`/`%1`/`DH_neutral` (Term.hs), and the
-            // Rust parser likewise never constructs `Term::Number`, so
-            // this arm is unreachable for real elaboration input.
-            let n = Name::new(NameTag::Pub, "n".to_string());
-            Some(Term::Lit(Lit::Con(n)))
-        }
         p::Term::App(name, args) => {
-            // Multi-arg unary builtins: `h(a, b, c)` is parsed as
-            // `App("h", [a, b, c])` but Haskell Tamarin folds the
-            // surplus args into a right-associative pair so the
-            // function stays arity-1: `h(<a, b, c>)`.  Without this,
-            // KU source-cases (precomputed using the canonical
-            // arity-1 signature) never match the runtime arity-3
-            // term, leaving e.g. `c_h` out of the case list.
-            // Arity-1 symbols whose surplus comma-separated args fold into
-            // a single tuple, mirroring HS's signature-driven `naryOpApp`
-            // (`k == 1`, Theory/Text/Parser/Term.hs).  The listed
-            // names cover the builtin unary symbols the signature query
-            // does not reach here — `h` / `fst` / `snd` / `inv` / `pk`,
-            // plus `getMessage` (revealing-signing) and `get_rep` /
-            // `report` (locations-report), Term/Builtin/Signature.hs.
-            // Widening the list to the whole signature regresses the
-            // corpus, so it stays written out.
-            let unary_builtin = matches!(
-                name.as_str(),
-                "h" | "fst" | "snd" | "inv" | "pk" | "getMessage" | "get_rep" | "report"
-            ) || is_arity1_no_eq(sig, name);
+            // HS `naryOpApp` (Theory/Text/Parser/Term.hs) parses the
+            // arguments of an arity-1 symbol as one tuple, so `h(a, b, c)`
+            // is `h(<a, b, c>)`.
+            let unary = is_arity1_no_eq(sig, name);
             let new_args: Option<Vec<_>> =
                 args.iter().map(|a| term_to_vterm(a, sig, mk_var)).collect();
             let mut new_args = new_args?;
-            if unary_builtin && new_args.len() > 1 {
+            if unary && new_args.len() > 1 {
                 // Wrap the surplus args into one right-associative pair so the
                 // call stays arity-1.
                 new_args = vec![right_nest_pair(new_args)?];
@@ -1297,7 +1418,7 @@ where
             // (Theory/Text/Parser/Term.hs) selects EMap only when the
             // bilinear-pairing symbol is present in the signature.
             // Classifying `em` as NoEq instead would declare the Maude
-            // operator as `op tamem : Msg Msg -> Msg [comm]` (`op_c` in
+            // operator as `op tamem : Msg Msg -> Msg [comm]` (`pp_theory` in
             // maude_print.rs) while rule terms carry the NoEq prefix
             // `tamXCem` (`pp_maude_no_eq_sym_into`); Maude then rejects the
             // unknown operator and `get variants` returns an empty
@@ -1443,31 +1564,6 @@ pub fn fact_to_sapic_fact(
         })
         .collect();
     Ok(Fact::new(tag, terms?).with_annotations(copy_fact_annotations(f)))
-}
-
-// =============================================================================
-// Builtin → MaudeSig
-// =============================================================================
-
-fn builtin_sig(name: &str) -> Option<MaudeSig> {
-    match name {
-        "diffie-hellman" => Some(dh_maude_sig()),
-        "bilinear-pairing" => Some(bp_maude_sig()),
-        "multiset" => Some(mset_maude_sig()),
-        "natural-numbers" => Some(nat_maude_sig()),
-        "xor" => Some(xor_maude_sig()),
-        "symmetric-encryption" => Some(sym_enc_maude_sig()),
-        "asymmetric-encryption" => Some(asym_enc_maude_sig()),
-        "signing" => Some(signature_maude_sig()),
-        "revealing-signing" => Some(reveal_signature_maude_sig()),
-        "hashing" => Some(hash_maude_sig()),
-        "locations-report" => Some(location_report_maude_sig()),
-        "dest-symmetric-encryption" => Some(sym_enc_dest_maude_sig()),
-        "dest-asymmetric-encryption" => Some(asym_enc_dest_maude_sig()),
-        "dest-signing" => Some(signature_dest_maude_sig()),
-        "dest-pairing" => Some(pair_dest_maude_sig()), // pair-with-destructors
-        _ => None,
-    }
 }
 
 #[cfg(test)]

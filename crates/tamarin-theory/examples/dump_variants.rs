@@ -31,8 +31,14 @@ fn main() {
                 println!("  act:  {:?}", f);
             }
             // Compute variants
-            let substs = tamarin_theory::tools::rule_variants::variant_substs_for_rule(&maude, r)
+            let variants = tamarin_theory::tools::rule_variants::variants_proto_rule(&maude, r)
                 .expect("variants");
+            let substs = match &variants {
+                tamarin_theory::theory::RuleVariants::Closed { variants, .. } => {
+                    variants.as_slice()
+                }
+                _ => &[],
+            };
             println!("variants ({}):", substs.len());
             for (i, s) in substs.iter().enumerate() {
                 println!("  [{}] {:?}", i, s);

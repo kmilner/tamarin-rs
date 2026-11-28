@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en"><head><title>Theory: RevealingSignatures</title><link rel="stylesheet" href="/static/css/intdot-style.css"><link rel="stylesheet" href="/static/css/tamarin-prover-ui.css"><link rel="stylesheet" href="/static/css/jquery-contextmenu.css"><link rel="stylesheet" href="/static/css/smoothness/jquery-ui.css"><script src="/static/js/jquery.js"></script><script src="/static/js/jquery-ui.js"></script><script src="/static/js/jquery-layout.js"></script><script src="/static/js/jquery-cookie.js"></script><script src="/static/js/jquery-superfish.js"></script><script src="/static/js/jquery-contextmenu.js"></script><script src="/static/js/tamarin-prover-ui.js"></script><script type="module" src="/static/js/intdot-graph.es.js"></script><script type="module" src="/static/js/intdot-staticgraph.es.js"></script><script type="module" src="/static/js/intdot-dynamicgraph.es.js"></script></head><body><p class="loading">Analyzing, please wait...  <a id=cancel href='#'>Cancel</a></p><div class="ui-layout-north"><div class="layout-pane-north"><div id="header-info">Running <a href=/><span class="tamarin">Tamarin</span></a> 1.13.0</div></div><div id="header-links"><ul id="navigation"><li><a href=/>Index</a></li><li><form class="ajax-form ajax-form-full reload-confirm" method="POST" action="/thy/trace/2/reload"><button class="nav-button" type="submit">Reload file</button></form></li><li><a href="#">Actions</a><ul><li><a target=_blank href=/thy/trace/2/source>Show source</a></li><li><a href=/thy/trace/2/download/RevealingSignatures.spthy>Download source</a></li><li><form class="ajax-form" method="POST" action="/thy/trace/2/get_and_append/RevealingSignatures.spthy"><button class="link-button" type="submit">Append modified lemmas to file</button></form></li></ul></li><li><a href="#">Options</a><ul class="list-with-toggles"><li><a id=abbrv-toggle href="#">Abbreviate terms</a></li><li><a id=agent-toggle href="#">Clustering by role</a></li><li><a id=auto-toggle href="#">Show annotation auto-sources</a></li><li><a id=abstr-toggle href="#">Abstract node content</a></li><li><a id=lvl0-toggle href="#">Graph simplification off</a></li><li><a id=lvl1-toggle href="#">Graph simplification L1</a></li><li><a id=lvl2-toggle href="#">Graph simplification L2</a></li><li><a id=lvl3-toggle href="#">Graph simplification L3</a></li></ul></li></ul></div></div><div class="ui-layout-west"><h1 class="pane-head">Proof scripts</h1><div class="scroll-wrapper" id="proof-wrapper"><div class="monospace" id="proof"><span class="hl_keyword">theory</span> <a class="internal-link help" href="/thy/trace/2/main/help">RevealingSignatures</a> <span class="hl_keyword">begin</span><br/>
+<br/>
+<a class="internal-link" href="/thy/trace/2/main/message"><strong>Message theory</strong> </a><br/>
+<br/>
+<a class="internal-link" href="/thy/trace/2/main/rules"><strong>Multiset rewriting rules and restrictions</strong> (4)</a><br/>
+<br/>
+<a class="internal-link" href="/thy/trace/2/main/tactic"><strong>Tactic(s)</strong> </a><br/>
+<br/>
+<a class="internal-link" href="/thy/trace/2/main/cases/raw/0/0"><strong>Raw sources</strong> (9 cases, deconstructions complete)</a><br/>
+<br/>
+<a class="internal-link" href="/thy/trace/2/main/cases/refined/0/0"><strong>Refined sources </strong> (9 cases, deconstructions complete)</a><br/>
+<br/>
+<a class="internal-link add" href="/thy/trace/2/main/add/%3Cfirst%3E">add lemma</a><br/>
+<br/>
+<span class="hl_good"><span class="hl_keyword">lemma</span> debug:<br/>
+&nbsp;&nbsp;exists-trace &quot;<span class="hl_operator">∃ </span>#i<span class="hl_operator">.</span> A( ) <span class="hl_operator">@</span> #i&quot;<br/>
+<a class="internal-link edit" href="/thy/trace/2/main/edit/debug">edit lemma</a>  or  <a class="internal-link delete" href="/thy/trace/2/main/delete/debug">delete lemma</a></span><br/>
+<a class="internal-link proof-step hl_good" href="/thy/trace/2/main/proof/debug"><span class="hl_keyword">simplify</span></a><a class="internal-link remove-step" href="/thy/trace/2/main/proof/debug"></a><br/>
+<a class="internal-link proof-step hl_good" href="/thy/trace/2/main/proof/debug/_"><span class="hl_keyword">solve(</span> Key( ~sk ) ▶₁ #i <span class="hl_keyword">)</span></a><a class="internal-link remove-step" href="/thy/trace/2/main/proof/debug/_"></a><br/>
+&nbsp;&nbsp;<span class="hl_good"><span class="hl_keyword">case</span> ONE</span><br/>
+&nbsp;&nbsp;<a class="internal-link proof-step hl_good" href="/thy/trace/2/main/proof/debug/_/ONE"><span class="hl_keyword">solve(</span> !KU( revealSign(x, ~sk) ) <span class="hl_operator">@</span> #vk <span class="hl_keyword">)</span></a><a class="internal-link remove-step" href="/thy/trace/2/main/proof/debug/_/ONE"></a><br/>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="hl_good"><span class="hl_keyword">case</span> ONE</span><br/>
+&nbsp;&nbsp;&nbsp;&nbsp;<a class="internal-link proof-step hl_good" href="/thy/trace/2/main/proof/debug/_/ONE/ONE"><span class="hl_keyword">SOLVED</span> <span class="hl_comment">// trace found</span></a><a class="internal-link remove-step" href="/thy/trace/2/main/proof/debug/_/ONE/ONE"></a><br/>
+&nbsp;&nbsp;<span class="hl_good"><span class="hl_keyword">qed</span></span><br/>
+<span class="hl_good"><span class="hl_keyword">qed</span></span><br/>
+<br/>
+<a class="internal-link add" href="/thy/trace/2/main/add/debug">add lemma</a><br/>
+<br/>
+<span class="hl_keyword">end</span><br/>
+ </div></div></div><div class="ui-layout-east"><h1 class="pane-head">&nbsp;Debug information</h1><div class="scroll-wrapper" id="debug-wrapper"><div id="ui-debug-display"></div></div></div><div class="ui-layout-center"><h1 class="pane-head" id="main-title">Visualization display</h1><div class="scroll-wrapper" id="main-wrapper" tabindex="0"><div id="ui-main-display"><h3>Applicable Proof Methods: <span class="hl_comment">Goals sorted according to the &#39;smart&#39; heuristic (loop breakers delayed)</span></h3><br/>
+<div class="preformatted methods">1. <a class="internal-link proof-method" href="/thy/trace/2/main/method/debug/1"><span class="hl_keyword">simplify</span></a><br/>
+<br/>
+2. <a class="internal-link proof-method" href="/thy/trace/2/main/method/debug/2"><span class="hl_keyword">induction</span></a></div><br/>
+a. <a class="internal-link autoprove" href="/thy/trace/2/autoprove/idfs/0/False/proof/debug"><span class="hl_keyword">autoprove</span></a> (A. <a class="internal-link characterization" href="/thy/trace/2/autoprove/characterize/0/False/proof/debug"><span class="hl_keyword">for all solutions</span></a>)<br/>
+b. <a class="internal-link bounded-autoprove" href="/thy/trace/2/autoprove/idfs/5/False/proof/debug"><span class="hl_keyword">autoprove</span></a> (B. <a class="internal-link bounded-characterization" href="/thy/trace/2/autoprove/characterize/5/False/proof/debug"><span class="hl_keyword">for all solutions</span></a>)  with proof-depth bound 5<br/>
+s. <a class="internal-link autoprove-all" href="/thy/trace/2/autoproveAll/idfs/0/proof/debug"><span class="hl_keyword">autoprove</span></a> (S. <a class="internal-link characterization-all" href="/thy/trace/2/autoproveAll/characterize/0/proof/debug"><span class="hl_keyword">for all solutions</span></a>)  for all lemmas <br/>
+<br/>
+<h3>Constraint system</h3><br/>
+<div class="preformatted sequent"><span class="hl_keyword">last</span>: none<br/>
+<br/>
+<span class="hl_keyword">formulas</span>: <span class="hl_operator">∃</span> #i<span class="hl_operator">.</span> <span class="hl_operator">(</span>A( ) <span class="hl_operator">@</span> #i<span class="hl_operator">)</span><br/>
+<br/>
+<span class="hl_keyword">subterms</span>:<br/>
+<br/>
+<span class="hl_keyword">equations</span>:<br/>
+&nbsp;&nbsp;<span class="hl_keyword">subst</span>:<br/>
+&nbsp;&nbsp;<span class="hl_keyword">conj</span>:<br/>
+<br/>
+<span class="hl_keyword">lemmas</span>: <span class="hl_operator">∀</span> x y #i<span class="hl_operator">.</span> <span class="hl_operator">(</span>Equality( x, y ) <span class="hl_operator">@</span> #i<span class="hl_operator">)</span> <span class="hl_operator">⇒</span> x <span class="hl_operator">=</span> y<br/>
+<br/>
+<span class="hl_keyword">allowed cases</span>: refined<br/>
+<br/>
+<span class="hl_keyword">solved formulas</span>:<br/>
+<br/>
+<span class="hl_keyword">unsolved constraints</span>:<br/>
+<br/>
+<span class="hl_keyword">solved constraints</span>:</div><br/>
+<h3>1 sub-case(s)</h3><br/>
+<h4>Case </h4><br/>
+<static-graph graphSrc="/thy/trace/2/intdot/proof/debug/_"></static-graph><br/>
+ </div></div></div><div id="dialog"></div><div id="confirm-dialog"></div><ul id="contextMenu"><li class="autoprove"><a href="#autoprove">Autoprove</a></li></ul></body></html>

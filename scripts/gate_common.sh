@@ -3,7 +3,8 @@
 #   . "$(dirname "${BASH_SOURCE[0]}")/gate_common.sh"
 # Owns the helpers the gate/sweep/triage scripts used to carry as private
 # copies (which drifted): the OOM prologue, the three environment-line
-# strip policies, flags_for, the oracle fingerprint recipe, the `#include`
+# strip policies, the theory-load slices and the slice-gate row, flags_for,
+# the Rust-binary build/locate step, the oracle fingerprint recipe, the `#include`
 # digest + the gate cache key, the gate file list, the maude resolver, the
 # Haskell-oracle and Maude resolvers, stale-RS-binary check and the
 # oracle-rev-vs-pin preflight. Policy DIFFERENCES between the old copies
@@ -64,6 +65,86 @@ norm() {
         -e 's/^[[:space:]]*analyzed:.*/ANALYZED/' -e 's/^[[:space:]]*processing time:.*/PTIME/'
 }
 
+# --- theory-load slices --------------------------------------------------------
+# The blocks of no-prove load stdout that wf_gate.sh, pretty_gate.sh and the
+# divergence fixtures compare.
+#
+# wf_block — the wellformedness report on stdin: either the success line, or
+#   the WARNING block that opens the leading theory comment, up to its `*/`.
+wf_block() {
+    awk '
+        /^\/\* All wellformedness checks were successful\. \*\/$/ { print; next }
+        /^WARNING: the following wellformedness checks failed!$/  { f=1 }
+        f { print }
+        f && /^\*\/$/ { f=0 }
+    '
+}
+# theory_block — the pretty-printed theory echo on stdin: `theory … end`,
+#   minus the trailing wf report and `Generated from:` build stamp, minus
+#   everything after the closing `end` (the summary, which carries processing
+#   time). A formal comment may quote a column-0 `end`, so the theory closes
+#   at the LAST one. Interior comments (AC-variant blocks, guarded-formula
+#   notes) are pretty-printer output and are kept.
+theory_block() {
+    awk '
+        function keep(line) { buf[++n] = line; if (line == "end") last = n }
+        /^theory /              { cap=1 }
+        !cap                    { next }
+        # wf SUCCESS single-line comment -> drop.
+        /^\/\* All wellformedness checks were successful\. \*\/$/ { next }
+        # column-0 `/*` opens a multi-line comment: peek to classify.
+        /^\/\*$/ {
+            if ((getline nxt) > 0) {
+                if (nxt == "WARNING: the following wellformedness checks failed!" || nxt == "Generated from:") {
+                    while ((getline z) > 0) { if (z == "*/") break }   # drop block
+                    next
+                }
+                keep($0); keep(nxt); next                              # keep interior comment
+            }
+            keep($0); next
+        }
+        { keep($0) }
+        END { for (i = 1; i <= last; i++) print buf[i] }
+    '
+}
+
+# Compare the same slice of both load outputs. A gate can cache the oracle
+# slice separately; a full load alone is enough, including under NO_HS_FILL.
+slice_gate_one() {
+    local rel="$1" slicer="$2" cached_slice="${3:-}"
+    local f="$CORPUS_ROOT/$1" key checked_key fl hs rs d rrc tmp
+    [ -f "$f" ] || { printf '%s\tSKIP_NO_HS\t0\n' "$rel"; return 0; }
+    if ! key=$(ckey "$rel" "$f"); then
+        printf '%s\tSKIP_INPUT_MANIFEST\t0\n' "$rel"
+        return 0
+    fi
+    fl=$(flags_for "$rel")
+    case " $fl " in *" --diff "*) printf '%s\tSKIP_UNSUPPORTED_DIFF\t0\n' "$rel"; return 0;; esac
+    if [ -n "$cached_slice" ] && cache_gzip_valid "$HS_CACHE/$key.$cached_slice.gz"; then
+        hs=$(zcat "$HS_CACHE/$key.$cached_slice.gz")
+    elif cache_gzip_valid "$HS_CACHE/$key.load.gz"; then
+        hs=$(zcat "$HS_CACHE/$key.load.gz" | "$slicer")
+    else
+        printf '%s\tSKIP_NO_HS\t0\n' "$rel"; return 0
+    fi
+    # Both slicers match something in every successful load, so an empty
+    # oracle slice is missing evidence, not an empty block to compare.
+    [ -n "$hs" ] || { printf '%s\tSKIP_NO_HS_SLICE\t0\n' "$rel"; return 0; }
+    tmp=$(mktemp)
+    # shellcheck disable=SC2086  # $fl must become distinct CLI arguments.
+    timeout "$FILE_TIMEOUT" "$RS_PATH" --with-maude="$MAUDE" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" "$f" >"$tmp" 2>/dev/null
+    rrc=$?
+    if [ "$rrc" = 124 ]; then rm -f "$tmp"; printf '%s\tSKIP_RS_TIMEOUT\t0\n' "$rel"; return 0; fi
+    if [ "$rrc" -ne 0 ]; then rm -f "$tmp"; printf '%s\tSKIP_RS_ERROR\t0\n' "$rel"; return 0; fi
+    rs=$(strip_env < "$tmp" | "$slicer"); rm -f "$tmp"
+    if ! checked_key=$(ckey "$rel" "$f") || [ "$checked_key" != "$key" ] \
+            || ! comparison_identity_unchanged; then
+        printf '%s\tSKIP_INPUT_CHANGED\t0\n' "$rel"; return 0
+    fi
+    d=$(diff <(printf '%s\n' "$hs") <(printf '%s\n' "$rs") | grep -c '^[<>]')
+    if [ "$d" = 0 ]; then printf '%s\tMATCH\t0\n' "$rel"; else printf '%s\tDIFF\t%s\n' "$rel" "$d"; fi
+}
+
 # Normalize the two known pre-existing stderr divergences (NEITHER is any
 # flag's — both reproduce on a plain `tamarin-prover <file>` run, and both are
 # byte-identical between the current binary and a pre-branch build):
@@ -78,8 +159,7 @@ norm() {
 #                        actually runs — one extra sequence on a theory with a
 #                        [sources] lemma, one where HS emits none on a theory
 #                        whose proofs never consult a source case, and counts
-#                        differing both ways under --auto-sources (run.rs's
-#                        close_translated_theory enumerates all three). 282 of
+#                        differing both ways under --auto-sources. 282 of
 #                        the 372 case-studies-regression theories differ by
 #                        these lines alone.
 #
@@ -877,4 +957,22 @@ rs_stale_check() {
         echo "ERROR: cannot fingerprint Rust binary $bin" >&2
         exit 2
     }
+}
+
+# ensure_rs_binary <label> <rs-bin> [repo-root]  (default repo: this checkout)
+#   Build the release prover (`tamarin-prover` is the package; its only bin
+#   target is `tamarin-rs`) unless TAM_RS_NO_AUTO_BUILD is set, require an
+#   executable <rs-bin>, then rs_stale_check it. Exits 2 on any failure,
+#   naming <label>.
+ensure_rs_binary() {
+    local label=$1 bin=$2 repo=${3:-$GATE_COMMON_DIR/..}
+    if [ -z "${TAM_RS_NO_AUTO_BUILD:-}" ]; then
+        echo "$label: building RS (release)..." >&2
+        ( cd "$repo" && cargo build --release -q -p tamarin-prover ) >&2 || {
+            echo "$label: cargo build -p tamarin-prover failed" >&2
+            exit 2
+        }
+    fi
+    [ -x "$bin" ] || { echo "$label: no RS binary at $bin" >&2; exit 2; }
+    rs_stale_check "$bin" "$repo"
 }

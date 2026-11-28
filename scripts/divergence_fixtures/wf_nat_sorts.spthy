@@ -1,0 +1,42 @@
+// Category: the Nat Sorts check (`natWellSortedReport`, Theory/Tools/
+// Wellformedness.hs) — which operands of `%+` it flags, and how it prints
+// the operand and the whole term.
+//
+//   - NatLit: a `%'a'` literal is not of sort nat;
+//   - lemma NatL / restriction NatR: formula items are checked too;
+//   - Canon1…Canon7: the offending operand and the term print canonically
+//     (AC flattened and sorted, user AC infix, `em` arguments sorted, a unary
+//     `add` collapsed), and every offending operand of one term is listed;
+//   - Operands: a non-nat variable and a pair in one sum;
+//   - Count: a `let`-bound nat variable is inlined before the check, so it
+//     raises nothing.
+// Products outside exponents abort a plain load before the report prints, so
+// the row runs under -m=msr, which only warns.  No corpus theory mixes
+// natural numbers with non-nat operands.
+
+theory WfNatSorts
+begin
+
+builtins: natural-numbers, multiset, xor, bilinear-pairing
+
+functions: add/2 [AC], zz/1
+
+rule NatLit: [ Fr(~x) ] --[ ]-> [ Out(%'a' %+ %y) ]
+
+lemma NatL: "All #i. NA() @ #i ==> (%x %+ 'bad') = %x"
+
+restriction NatR: "All #i. NB() @ #i ==> (%y %+ 'also_bad') = %y"
+
+rule Canon1: [ In(<a,b,c>) ] --> [ Out( (a*b)*c %+ %1 ) ]
+rule Canon2: [ In(<a,b,c>) ] --> [ Out( add(add(b,a),c) %+ %1 ) ]
+rule Canon3: [ In(<a,b,c>) ] --> [ Out( em(b,a) %+ %1 ) ]
+rule Canon4: [ In(<a,b,c>) ] --> [ Out( zz(b*a) %+ %1 ) ]
+rule Canon5: [ In(<a,b,c>) ] --> [ Out( add(a) %+ %1 ) ]
+rule Canon6: [ In(<a,b,c>) ] --> [ Out( (a^b) %+ %1 ) ]
+rule Canon7: [ In(<a,b,c>) ] --> [ Out( (a*b) %+ c %+ %1 ) ]
+
+rule Operands: [ In( x %+ pair(a,b) ) ] --[ ]-> [ ]
+
+rule Count: let c = %i in [ In(<'c', %i>) ] --[ Count(c %+ %1) ]-> [ ]
+
+end

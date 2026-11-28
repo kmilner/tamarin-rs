@@ -35,9 +35,10 @@ use tamarin_term::lterm::{LNTerm, LVar, Name};
 use tamarin_term::term::{show_term, Term};
 use tamarin_term::vterm::Lit;
 
-use crate::constraint::constraints::{NodeConc, NodeId, NodePrem, Reason};
+use crate::constraint::constraints::{NodeId, Reason};
 use crate::fact::{
-    fact_tag_multiplicity, is_proto_fact, show_fact_tag, FactTag, LNFact, Multiplicity,
+    fact_tag_multiplicity, is_proto_fact, show_fact_tag, show_fact_tag_derived, LNFact,
+    Multiplicity,
 };
 use crate::pretty_hpj::{fsep, punctuate, Doc, DEFAULT_LINE_LENGTH, DEFAULT_RIBBON};
 use crate::rule::{
@@ -50,26 +51,11 @@ use crate::constraint::system::graph::color::{
     build_node_color_map, fact_doc_of, reason_color, NodeColorMap,
 };
 use crate::constraint::system::graph::options::GraphOptions;
-use crate::constraint::system::graph::render_system::RenderSystem;
 use crate::constraint::system::graph::repr::{Cluster, GEdge, GNode, MissingHint, NodeType};
-use crate::constraint::system::graph::{system_to_graph, Graph};
-use crate::constraint::system::NodeRuleMap;
-
-/// HS `resolveNodePremFact` (System.hs) via Graph.hs.
-fn resolve_node_prem_fact<'a>(prem: &NodePrem, rules: &NodeRuleMap<'a>) -> Option<&'a LNFact> {
-    rules
-        .get(&prem.0)
-        .copied()
-        .and_then(|ru| ru.premises.get(prem.1 .0))
-}
-
-/// HS `resolveNodeConcFact` (System.hs) via Graph.hs.
-fn resolve_node_conc_fact<'a>(conc: &NodeConc, rules: &NodeRuleMap<'a>) -> Option<&'a LNFact> {
-    rules
-        .get(&conc.0)
-        .copied()
-        .and_then(|ru| ru.conclusions.get(conc.1 .0))
-}
+use crate::constraint::system::graph::{
+    edge_fact_check, resolve_node_conc_fact, resolve_node_prem_fact, system_to_graph, Graph,
+};
+use crate::constraint::system::{NodeRuleMap, System};
 
 // ---------------------------------------------------------------------
 // String helpers
@@ -180,13 +166,6 @@ fn get_rule_type(ru: &RuleACInst) -> &'static str {
     }
 }
 
-/// HS `check p`, shared by `getRelationType` (JSON.hs) and `colorEdge`'s
-/// `SystemEdge` arm (JSON.hs): the TARGET premise's fact is tested
-/// first, then the SOURCE conclusion's.
-fn edge_fact_check(prem: Option<&LNFact>, conc: Option<&LNFact>, p: fn(&LNFact) -> bool) -> bool {
-    prem.is_some_and(p) || conc.is_some_and(p)
-}
-
 /// The single classification `graphEdgeToJSONGraphEdge` (JSON.hs) needs
 /// per edge.
 ///
@@ -294,18 +273,12 @@ fn json_term(t: &LNTerm, outermost: bool) -> Value {
 
 /// Port of `itemToJSONGraphNodeFact` (JSON.hs) at `pretty = True`.
 fn json_fact(id: String, f: &LNFact) -> Value {
-    // `show (factTag f)` is the DERIVED Show of `FactTag`
-    // (Theory/Model/Fact.hs); the `ProtoFact` constructor never reaches it
-    // because `isProtoFact` short-circuits to the literal "ProtoFact".
-    let tag = match f.tag {
-        FactTag::Proto(_, _, _) => "ProtoFact",
-        FactTag::Fresh => "FreshFact",
-        FactTag::Out => "OutFact",
-        FactTag::In => "InFact",
-        FactTag::Ku => "KUFact",
-        FactTag::Kd => "KDFact",
-        FactTag::Ded => "DedFact",
-        FactTag::Term => "TermFact",
+    // `jgnFactTag = if isProtoFact f then "ProtoFact" else show (factTag f)`,
+    // the derived `Show FactTag` (Theory/Model/Fact.hs).
+    let tag = if is_proto_fact(f) {
+        "ProtoFact".to_string()
+    } else {
+        show_fact_tag_derived(&f.tag)
     };
     let mult = match fact_tag_multiplicity(&f.tag) {
         Multiplicity::Linear => "",
@@ -316,10 +289,10 @@ fn json_fact(id: String, f: &LNFact) -> Value {
         ("jgnFactMult", Value::String(mult.to_string())),
         ("jgnFactName", Value::String(show_fact_tag(&f.tag))),
         ("jgnFactShow", Value::String(pps(fact_doc_of(f)))),
-        ("jgnFactTag", Value::String(tag.to_string())),
+        ("jgnFactTag", Value::String(tag)),
         (
             "jgnFactTerms",
-            Value::Array(f.terms.iter().map(|t| json_term(t, true)).collect()),
+            Value::Array(f.terms().iter().map(|t| json_term(t, true)).collect()),
         ),
     ])
 }
@@ -575,13 +548,9 @@ fn json_graph(label: &str, graph: &Graph<'_>, color_map: &NodeColorMap) -> Value
 /// `BL.writeFile` (JSON.hs, `src/Web/Theory.hs`), so the
 /// wire bytes are the document's own UTF-8 — which is what writing this
 /// `String` out as UTF-8 produces.
-///
-/// The inputs are [`RenderSystem`]s: this endpoint is reached with systems
-/// that `web_utils_abbrev::abbrev` may have rewritten into a display-only
-/// shape, so the whole route is typed render-only from that boundary on.
 pub fn sequents_to_json_pretty(
     graph_options: &GraphOptions,
-    systems: &[(String, &RenderSystem)],
+    systems: &[(String, &System)],
 ) -> String {
     let mut out = Vec::new();
     write_sequents_json_pretty(
@@ -612,7 +581,7 @@ pub fn write_sequents_json_pretty<L, R, W>(
 ) -> std::io::Result<()>
 where
     L: AsRef<str>,
-    R: std::borrow::Borrow<RenderSystem>,
+    R: std::borrow::Borrow<System>,
     W: std::io::Write,
 {
     // The frame `write_value` gives `object([("graphs", Value::Array(…))])`:
@@ -780,8 +749,7 @@ fn remove_pseudo_unicode(mut s: String) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::constraint::system::System;
-    use crate::fact::Fact;
+    use crate::fact::{Fact, FactTag};
     use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
     use tamarin_term::lterm::{LSort, NameTag};
     use tamarin_term::term::{f_app_no_eq, lit};
@@ -846,48 +814,6 @@ mod tests {
         assert_eq!(json_term(&t, false).get("jgnShow"), None);
     }
 
-    // `jgnFactShow` is `pps (prettyLNFact f)`: the fact is rendered through
-    // HughesPJ at 100/67, so a wide fact WRAPS, and `cleanString` then folds
-    // the wrapped output back onto one line with single spaces.  Expected
-    // strings captured from the Haskell oracle for a fact whose one-line form
-    // is 341 columns wide.
-    #[test]
-    fn wide_fact_render_is_flattened_back_to_one_line() {
-        // `g(f(~x, f(~x, … f(~x, ~x)…)))` with 20 nested `f` applications.
-        let nest = |x: &LNTerm| -> LNTerm {
-            let mut t = x.clone();
-            for _ in 0..20 {
-                t = f_app_no_eq(sym("f", 2), vec![x.clone(), t]);
-            }
-            f_app_no_eq(sym("g", 1), vec![t])
-        };
-        let x0 = var("x", LSort::Fresh);
-        let x1 = lit(Lit::Var(LVar::new("x", LSort::Fresh, 1)));
-        let (t0, t1) = (nest(&x0), nest(&x1));
-        assert_eq!(
-            show_term(&t0),
-            "g(f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,\
-             f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,f(~x,~x)))))))))))))))))))))"
-        );
-        let fa: LNFact = Fact::new(
-            FactTag::Proto(
-                Multiplicity::Linear,
-                tamarin_term::intern::intern_str("Done"),
-                2,
-            ),
-            vec![t0, t1],
-        );
-        assert_eq!(
-            pps(fact_doc_of(&fa)),
-            "Done( g(f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, \
-             f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, \
-             ~x))))))))))))))))))))), g(f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, \
-             f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, \
-             f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, f(~x.1, \
-             ~x.1))))))))))))))))))))))"
-        );
-    }
-
     // The document reaches the wire as its own UTF-8, so the `⊕` an xor term's
     // pretty form carries is the three bytes `E2 8A 95` — not the `C3 A2 C2 8A
     // C2 95` a `String` round-trip would produce.
@@ -895,10 +821,7 @@ mod tests {
     fn json_body_keeps_non_ascii_label_in_utf8() {
         let out = sequents_to_json_pretty(
             &GraphOptions::default(),
-            &[(
-                "Theory: ⊕".to_string(),
-                &RenderSystem::from_prover(System::default()),
-            )],
+            &[("Theory: ⊕".to_string(), &System::default())],
         );
         assert!(
             out.as_bytes().windows(3).any(|w| w == b"\xe2\x8a\x95"),
@@ -939,7 +862,7 @@ mod tests {
             &GraphOptions::default(),
             &[(
                 "Theory: NSPK3 Lemma: injective_agree".to_string(),
-                &RenderSystem::from_prover(System::default()),
+                &System::default(),
             )],
         );
         assert_eq!(out, include_str!("../../../tests/assets/hsjson_root.json"));
@@ -970,10 +893,7 @@ mod tests {
             .push((Goal::Action(nid, fa), GoalStatus::default()));
         let out = sequents_to_json_pretty(
             &GraphOptions::default(),
-            &[(
-                "Theory: NSPK3 Lemma: injective_agree".to_string(),
-                &RenderSystem::from_prover(sys),
-            )],
+            &[("Theory: NSPK3 Lemma: injective_agree".to_string(), &sys)],
         );
         assert_eq!(
             out,
@@ -981,23 +901,31 @@ mod tests {
         );
     }
 
-    // `Data.Aeson.Text.string` short-forms only `\"`, `\\`, `\n`, `\r`
-    // and `\t`; `<`, `>` and `&` all reach the wire literally.  0x08 and 0x0c
-    // take the generic `\u00xx` form rather than JSON's `\b` / `\f`, and the
-    // hex digits are lowercase.
+    /// The label's bytes on the wire, as rows `(label, jgLabel bytes, the
+    /// document is valid JSON)`.  `Data.Aeson.Text.string` short-forms only
+    /// `\"`, `\\`, `\n`, `\r` and `\t`; `<`, `>` and `&` reach the wire
+    /// literally.  0x08 and 0x0c take the generic `\u00xx` form rather than
+    /// JSON's `\b` / `\f`, and the hex digits are lowercase.
+    /// `removePseudoUnicode` is then a raw byte rewrite over the WHOLE
+    /// document, not a string-aware pass: a label holding the six characters
+    /// `\u003c` is escaped to `\\u003c` and the pass eats the tail of that
+    /// escape, leaving the invalid-JSON `\<`.  HS emits exactly this.
     #[test]
     fn escapes_match_data_aeson_text() {
-        let label = "a&b<c>d\"e\\f\ng\rh\ti\u{0}j\u{8}k\u{c}l\u{1f}m";
-        let out = sequents_to_json_pretty(
-            &GraphOptions::default(),
-            &[(
-                label.to_string(),
-                &RenderSystem::from_prover(System::default()),
-            )],
-        );
-        assert_eq!(
-            out,
-            concat!(
+        let rows = [
+            (
+                "a&b<c>d\"e\\f\ng\rh\ti\u{0}j\u{8}k\u{c}l\u{1f}m",
+                "a&b<c>d\\\"e\\\\f\\ng\\rh\\ti\\u0000j\\u0008k\\u000cl\\u001fm",
+                true,
+            ),
+            ("x\\u003cy\\u003ez", "x\\<y\\>z", false),
+        ];
+        for (label, wire, valid) in rows {
+            let out = sequents_to_json_pretty(
+                &GraphOptions::default(),
+                &[(label.to_string(), &System::default())],
+            );
+            let expected = concat!(
                 "{\n",
                 "    \"graphs\": [\n",
                 "        {\n",
@@ -1005,73 +933,20 @@ mod tests {
                 "            \"jgClusters\": [],\n",
                 "            \"jgDirected\": true,\n",
                 "            \"jgEdges\": [],\n",
-                "            \"jgLabel\": \"a&b<c>d\\\"e\\\\f\\ng\\rh\\ti\\u0000j\\u0008k\\u000cl\\u001fm\",\n",
+                "            \"jgLabel\": \"LABEL\",\n",
                 "            \"jgNodes\": [],\n",
                 "            \"jgType\": \"Tamarin prover constraint system\"\n",
                 "        }\n",
                 "    ]\n",
                 "}",
-            )
-        );
-    }
-
-    // The escaper runs over every string in the document, not just the label.
-    // A pub-name literal carrying `&`, `<` and `>` is the reachable route:
-    // `singleQuotedString` (Token.hs) accepts every character but
-    // `'` and newline, and the name lands in `jgnLabel`, `jgnFactShow` and
-    // `jgnConst` alike — all of them literal on the wire.
-    #[test]
-    fn pub_name_specials_reach_the_wire_literally() {
-        use crate::constraint::constraints::Goal;
-        use crate::constraint::system::GoalStatus;
-        let mut sys = System::default();
-        let nid = LVar::new("i", LSort::Node, 0);
-        let fa: LNFact = Fact::new(
-            FactTag::Proto(
-                Multiplicity::Linear,
-                tamarin_term::intern::intern_str("Ev"),
-                1,
-            ),
-            vec![lit(Lit::Con(Name::new(NameTag::Pub, "a&b<c>d")))],
-        );
-        sys.goals_mut()
-            .push((Goal::Action(nid, fa), GoalStatus::default()));
-        let out = sequents_to_json_pretty(
-            &GraphOptions::default(),
-            &[("L".to_string(), &RenderSystem::from_prover(sys))],
-        );
-        assert!(
-            out.contains("\"jgnConst\": \"'a&b<c>d'\""),
-            "jgnConst: {out}"
-        );
-        assert!(
-            out.contains("\"jgnLabel\": \"Ev( 'a&b<c>d' )\""),
-            "jgnLabel: {out}"
-        );
-        assert!(
-            out.contains("\"jgnFactShow\": \"Ev( 'a&b<c>d' )\""),
-            "jgnFactShow: {out}"
-        );
-        // No `\u0026` anywhere: the writer must not have re-grown the
-        // over-escaping the oracle probe disproved.
-        assert!(!out.contains("\\u0026"), "{out}");
-    }
-
-    // `removePseudoUnicode` is a raw byte rewrite over the WHOLE document, not
-    // a string-aware pass: a label holding the six characters `\u003c` is
-    // escaped to `\\u003c` and the pass then eats the tail of that escape,
-    // leaving the invalid-JSON `\<`.  HS emits exactly this.
-    #[test]
-    fn pseudo_unicode_pass_mangles_a_literal_escape_in_the_payload() {
-        let out = sequents_to_json_pretty(
-            &GraphOptions::default(),
-            &[(
-                "x\\u003cy\\u003ez".to_string(),
-                &RenderSystem::from_prover(System::default()),
-            )],
-        );
-        assert!(out.contains("\"jgLabel\": \"x\\<y\\>z\","), "{out}");
-        assert!(serde_json::from_str::<Value>(&out).is_err());
+            );
+            assert_eq!(out, expected.replace("LABEL", wire), "{label}");
+            assert_eq!(
+                serde_json::from_str::<Value>(&out).is_ok(),
+                valid,
+                "{label}"
+            );
+        }
     }
 
     // `roleCluster` groups a rule's nodes under `<role>_Session_<n>`, and
@@ -1111,10 +986,7 @@ mod tests {
         let mut sys = System::empty();
         sys.add_node(LVar::new("a", LSort::Node, 1), mk("InitA", "P"));
         sys.add_node(LVar::new("b", LSort::Node, 2), mk("InitB", "Q"));
-        let out = sequents_to_json_pretty(
-            &GraphOptions::default(),
-            &[("L".to_string(), &RenderSystem::from_prover(sys))],
-        );
+        let out = sequents_to_json_pretty(&GraphOptions::default(), &[("L".to_string(), &sys)]);
         assert!(
             out.contains("            \"jgNodes\": [],\n"),
             "clustered nodes must leave the top-level list empty:\n{out}"
@@ -1150,15 +1022,5 @@ mod tests {
             p < q,
             "clusters must reach the wire in ascending role order:\n{out}"
         );
-    }
-
-    // There are no traces at all.  The empty array stays inline, because
-    // aeson-pretty does not break an empty list over three lines.  The
-    // document also ends without a trailing newline.  These are the same 20
-    // bytes that `--output-json` writes for a theory with nothing solved.
-    #[test]
-    fn empty_graph_list_is_twenty_bytes() {
-        let out = sequents_to_json_pretty(&GraphOptions::default(), &[]);
-        assert_eq!(out, "{\n    \"graphs\": []\n}");
     }
 }

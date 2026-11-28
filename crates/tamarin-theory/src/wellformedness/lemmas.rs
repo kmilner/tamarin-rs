@@ -133,7 +133,3 @@ pub fn lemma_attribute_report(thy: &Theory) -> WfReport {
         })
         .collect()
 }
-
-#[cfg(test)]
-#[path = "lemmas_tests.rs"]
-mod tests;

@@ -1,0 +1,22 @@
+// Category: the `-m`/`--output-module` documents, one row per module over
+// the same SAPIC theory (replication, a process echo, the translated rules).
+// The corpus gates run the default module only; module_sweep.sh compares
+// every examples/sapic theory under all three modules, but locally.  This is
+// a copy of examples/sapic/fast/basic/replication.spthy.
+/*
+example illustrates replication (!)
+*/
+
+theory Replication
+begin
+
+process:
+! new s; event Secret(s); out(s); 0
+
+// only a single secret can be learned by the attacker
+// lemma falsified by tamarin
+lemma onlyOneSecret:
+    exists-trace
+      "Ex #i #j x y.  Secret(x)@i & Secret(y)@j & not (x = y)"
+
+end

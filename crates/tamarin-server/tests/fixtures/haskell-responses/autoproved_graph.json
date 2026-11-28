@@ -1,0 +1,366 @@
+{
+    "graphs": [
+        {
+            "jgAbbrevs": [
+                {
+                    "jgaAbbrev": {
+                        "jgnConst": "RE1"
+                    },
+                    "jgaExpansion": {
+                        "jgnFunct": "revealSign",
+                        "jgnParams": [
+                            {
+                                "jgnConst": "~random"
+                            },
+                            {
+                                "jgnConst": "~sk"
+                            }
+                        ],
+                        "jgnShow": "revealSign(~random,~sk)"
+                    },
+                    "jgaTerm": {
+                        "jgnFunct": "revealSign",
+                        "jgnParams": [
+                            {
+                                "jgnConst": "~random"
+                            },
+                            {
+                                "jgnConst": "~sk"
+                            }
+                        ],
+                        "jgnShow": "revealSign(~random,~sk)"
+                    }
+                }
+            ],
+            "jgClusters": [],
+            "jgDirected": true,
+            "jgEdges": [
+                {
+                    "jgeColor": "gray30",
+                    "jgeRelation": "default",
+                    "jgeSource": "#vf:c0",
+                    "jgeTarget": "#i:p0"
+                },
+                {
+                    "jgeColor": "orangered2",
+                    "jgeRelation": "KFact",
+                    "jgeSource": "#vr:c0",
+                    "jgeTarget": "#vk:p0"
+                },
+                {
+                    "jgeColor": "black",
+                    "jgeRelation": "ProtoFact",
+                    "jgeSource": "#vr:c1",
+                    "jgeTarget": "#i:p1"
+                },
+                {
+                    "jgeColor": "red",
+                    "jgeRelation": "LessAtoms",
+                    "jgeSource": "#vk",
+                    "jgeTarget": "#vf"
+                }
+            ],
+            "jgLabel": "Theory: RevealingSignatures Lemma: debug",
+            "jgNodes": [
+                {
+                    "jgnColor": "#d5d897",
+                    "jgnId": "#i",
+                    "jgnLabel": "TWO",
+                    "jgnMetadata": {
+                        "jgnActs": [
+                            {
+                                "jgnFactId": "action",
+                                "jgnFactMult": "",
+                                "jgnFactName": "Equality",
+                                "jgnFactShow": "Equality( true, true )",
+                                "jgnFactTag": "ProtoFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnFunct": "true",
+                                        "jgnParams": [],
+                                        "jgnShow": "true"
+                                    },
+                                    {
+                                        "jgnFunct": "true",
+                                        "jgnParams": [],
+                                        "jgnShow": "true"
+                                    }
+                                ]
+                            },
+                            {
+                                "jgnFactId": "action",
+                                "jgnFactMult": "",
+                                "jgnFactName": "A",
+                                "jgnFactShow": "A( )",
+                                "jgnFactTag": "ProtoFact",
+                                "jgnFactTerms": []
+                            }
+                        ],
+                        "jgnConcs": [],
+                        "jgnPrems": [
+                            {
+                                "jgnFactId": "#i:p0",
+                                "jgnFactMult": "",
+                                "jgnFactName": "In",
+                                "jgnFactShow": "In( revealSign(~random, ~sk) )",
+                                "jgnFactTag": "InFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnFunct": "revealSign",
+                                        "jgnParams": [
+                                            {
+                                                "jgnConst": "~random"
+                                            },
+                                            {
+                                                "jgnConst": "~sk"
+                                            }
+                                        ],
+                                        "jgnShow": "revealSign(~random,~sk)"
+                                    }
+                                ]
+                            },
+                            {
+                                "jgnFactId": "#i:p1",
+                                "jgnFactMult": "",
+                                "jgnFactName": "Key",
+                                "jgnFactShow": "Key( ~sk )",
+                                "jgnFactTag": "ProtoFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnConst": "~sk"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    "jgnType": "isProtocolRule"
+                },
+                {
+                    "jgnColor": "#a8a4eb",
+                    "jgnId": "#vf",
+                    "jgnLabel": "Send",
+                    "jgnMetadata": {
+                        "jgnActs": [
+                            {
+                                "jgnFactId": "action",
+                                "jgnFactMult": "",
+                                "jgnFactName": "K",
+                                "jgnFactShow": "K( revealSign(~random, ~sk) )",
+                                "jgnFactTag": "ProtoFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnFunct": "revealSign",
+                                        "jgnParams": [
+                                            {
+                                                "jgnConst": "~random"
+                                            },
+                                            {
+                                                "jgnConst": "~sk"
+                                            }
+                                        ],
+                                        "jgnShow": "revealSign(~random,~sk)"
+                                    }
+                                ]
+                            }
+                        ],
+                        "jgnConcs": [
+                            {
+                                "jgnFactId": "#vf:c0",
+                                "jgnFactMult": "",
+                                "jgnFactName": "In",
+                                "jgnFactShow": "In( revealSign(~random, ~sk) )",
+                                "jgnFactTag": "InFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnFunct": "revealSign",
+                                        "jgnParams": [
+                                            {
+                                                "jgnConst": "~random"
+                                            },
+                                            {
+                                                "jgnConst": "~sk"
+                                            }
+                                        ],
+                                        "jgnShow": "revealSign(~random,~sk)"
+                                    }
+                                ]
+                            }
+                        ],
+                        "jgnPrems": [
+                            {
+                                "jgnFactId": "#vf:p0",
+                                "jgnFactMult": "!",
+                                "jgnFactName": "!KU",
+                                "jgnFactShow": "!KU( revealSign(~random, ~sk) )",
+                                "jgnFactTag": "KUFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnFunct": "revealSign",
+                                        "jgnParams": [
+                                            {
+                                                "jgnConst": "~random"
+                                            },
+                                            {
+                                                "jgnConst": "~sk"
+                                            }
+                                        ],
+                                        "jgnShow": "revealSign(~random,~sk)"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    "jgnType": "isISendRule"
+                },
+                {
+                    "jgnColor": "#9ee1c3",
+                    "jgnId": "#vk",
+                    "jgnLabel": "Coerce",
+                    "jgnMetadata": {
+                        "jgnActs": [
+                            {
+                                "jgnFactId": "action",
+                                "jgnFactMult": "!",
+                                "jgnFactName": "!KU",
+                                "jgnFactShow": "!KU( revealSign(~random, ~sk) )",
+                                "jgnFactTag": "KUFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnFunct": "revealSign",
+                                        "jgnParams": [
+                                            {
+                                                "jgnConst": "~random"
+                                            },
+                                            {
+                                                "jgnConst": "~sk"
+                                            }
+                                        ],
+                                        "jgnShow": "revealSign(~random,~sk)"
+                                    }
+                                ]
+                            }
+                        ],
+                        "jgnConcs": [
+                            {
+                                "jgnFactId": "#vk:c0",
+                                "jgnFactMult": "!",
+                                "jgnFactName": "!KU",
+                                "jgnFactShow": "!KU( revealSign(~random, ~sk) )",
+                                "jgnFactTag": "KUFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnFunct": "revealSign",
+                                        "jgnParams": [
+                                            {
+                                                "jgnConst": "~random"
+                                            },
+                                            {
+                                                "jgnConst": "~sk"
+                                            }
+                                        ],
+                                        "jgnShow": "revealSign(~random,~sk)"
+                                    }
+                                ]
+                            }
+                        ],
+                        "jgnPrems": [
+                            {
+                                "jgnFactId": "#vk:p0",
+                                "jgnFactMult": "!",
+                                "jgnFactName": "!KD",
+                                "jgnFactShow": "!KD( revealSign(~random, ~sk) )",
+                                "jgnFactTag": "KDFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnFunct": "revealSign",
+                                        "jgnParams": [
+                                            {
+                                                "jgnConst": "~random"
+                                            },
+                                            {
+                                                "jgnConst": "~sk"
+                                            }
+                                        ],
+                                        "jgnShow": "revealSign(~random,~sk)"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    "jgnType": "isConstrRule"
+                },
+                {
+                    "jgnColor": "#b1dc9a",
+                    "jgnId": "#vr",
+                    "jgnLabel": "ONE",
+                    "jgnMetadata": {
+                        "jgnActs": [],
+                        "jgnConcs": [
+                            {
+                                "jgnFactId": "#vr:c0",
+                                "jgnFactMult": "",
+                                "jgnFactName": "Out",
+                                "jgnFactShow": "Out( revealSign(~random, ~sk) )",
+                                "jgnFactTag": "OutFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnFunct": "revealSign",
+                                        "jgnParams": [
+                                            {
+                                                "jgnConst": "~random"
+                                            },
+                                            {
+                                                "jgnConst": "~sk"
+                                            }
+                                        ],
+                                        "jgnShow": "revealSign(~random,~sk)"
+                                    }
+                                ]
+                            },
+                            {
+                                "jgnFactId": "#vr:c1",
+                                "jgnFactMult": "",
+                                "jgnFactName": "Key",
+                                "jgnFactShow": "Key( ~sk )",
+                                "jgnFactTag": "ProtoFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnConst": "~sk"
+                                    }
+                                ]
+                            }
+                        ],
+                        "jgnPrems": [
+                            {
+                                "jgnFactId": "#vr:p0",
+                                "jgnFactMult": "",
+                                "jgnFactName": "Fr",
+                                "jgnFactShow": "Fr( ~sk )",
+                                "jgnFactTag": "FreshFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnConst": "~sk"
+                                    }
+                                ]
+                            },
+                            {
+                                "jgnFactId": "#vr:p1",
+                                "jgnFactMult": "",
+                                "jgnFactName": "Fr",
+                                "jgnFactShow": "Fr( ~random )",
+                                "jgnFactTag": "FreshFact",
+                                "jgnFactTerms": [
+                                    {
+                                        "jgnConst": "~random"
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    "jgnType": "isProtocolRule"
+                }
+            ],
+            "jgType": "Tamarin prover constraint system"
+        }
+    ]
+}

@@ -7,21 +7,15 @@
 //! delayed AC equations, then ships the AC equations off to Maude. This
 //! file ports both of those:
 //!
-//! * The HS-faithful factored path (`unify_lterm_factored` /
-//!   `unify_raw_factored`, mirroring `unifyLTermFactored`) solves the
-//!   non-AC fragment and collects the residual AC/C equations into a
-//!   delayed list — `tell [Equal l r]` in the HS writer monad. Callers
-//!   (`maude_proc.rs`, `equation_store.rs`) ship those residuals to Maude,
-//!   exactly as HS does via `unifyViaMaude`. This is the primary path used
-//!   in solving.
-//! * The standalone non-AC helpers (`unify_lterm_no_ac` /
-//!   `solve_match_lterm_no_ac`) bail with `NeedsAC` / `None` on AC input;
-//!   they exist for callers that have no Maude bridge to fall back on.
+//! `unify_lterm_factored` (HS `unifyLTermFactored`) solves the non-AC
+//! fragment and returns the residual AC/C equations, which callers
+//! (`maude_proc.rs`, `equation_store.rs`) send to Maude as HS does via
+//! `unifyViaMaude`.
 //!
-//! Matching follows the same split.
+//! Matching (`solve_match_lterm`) reports `NeedsAc` for the caller to send
+//! to Maude.
 
 use std::collections::BTreeMap;
-use std::sync::atomic::AtomicU64;
 
 use crate::function_symbols::FunSym;
 use crate::lterm::{sort_compare, sort_of_lterm, LSort, LTerm, LVar, Name};
@@ -33,79 +27,12 @@ use crate::vterm::Lit;
 #[derive(Debug)]
 pub enum UnifyError {
     NoUnifier,
-    /// AC equation encountered — unsupported without Maude.
+    /// The native matcher met an AC/C problem (HS `ACProblem`).
     NeedsAC,
 }
 
-/// `unifyLTermNoAC` — non-AC unification. Returns a single most-general
-/// unifier or `Err(UnifyError::NoUnifier)` / `Err(UnifyError::NeedsAC)`.
-///
-/// Two LVars with incomparable sorts yield `Err(UnifyError::NoUnifier)`;
-/// when one sort is broader it becomes the elimination key. No witnesses
-/// are minted (cf. HS `unifyRaw`).
-pub fn unify_lterm_no_ac<C, F>(
-    sort_of_const: &F,
-    eqs: Vec<Equal<LTerm<C>>>,
-) -> Result<Subst<C, LVar>, UnifyError>
-where
-    C: Ord + Clone,
-    F: Fn(&C) -> LSort,
-{
-    let mut acc: BTreeMap<LVar, LTerm<C>> = BTreeMap::new();
-    for Equal { lhs, rhs } in eqs {
-        unify_raw(sort_of_const, &mut acc, lhs, rhs)?;
-    }
-    Ok(Subst::from_map(acc))
-}
-
-/// Convenience: `unifyLNTermNoAC`.
-pub fn unify_lnterm_no_ac(
-    eqs: Vec<Equal<crate::lterm::LNTerm>>,
-) -> Result<Subst<Name, LVar>, UnifyError> {
-    unify_lterm_no_ac(&|n: &Name| crate::lterm::sort_of_name(n), eqs)
-}
-
-/// Variant accepting a shared atomic counter for parity with the
-/// Maude-backed unifier call sites.  The AC-free unification logic mints
-/// no fresh witnesses, so the counter is deliberately ignored; the
-/// parameter exists only so callers can use the same signature whether or
-/// not they route through Maude.  Do NOT assume the counter is threaded.
-pub fn unify_lnterm_no_ac_with_counter(
-    eqs: Vec<Equal<crate::lterm::LNTerm>>,
-    _counter: &AtomicU64,
-) -> Result<Subst<Name, LVar>, UnifyError> {
-    unify_lnterm_no_ac(eqs)
-}
-
-/// AC/C/nat delay decision, the sole point where `unify_raw` and
-/// `unify_raw_factored` diverge.  With a `delayed` sink present (the
-/// factored path) HS does `tell [Equal l r]`, so we push the residual
-/// equation and succeed; without one (the no-AC path) HS's
-/// `unifyLTermFactoredNoAC` (Unification.hs) hits
-/// `error "No AC unification, but AC symbol found."`, surfaced as `NeedsAC`.
-fn delay_or_needs_ac<C: Clone>(
-    delayed: Option<&mut Vec<Equal<LTerm<C>>>>,
-    l: &LTerm<C>,
-    r: &LTerm<C>,
-) -> Result<(), UnifyError> {
-    match delayed {
-        Some(d) => {
-            d.push(Equal {
-                lhs: l.clone(),
-                rhs: r.clone(),
-            });
-            Ok(())
-        }
-        None => Err(UnifyError::NeedsAC),
-    }
-}
-
-/// Shared body of `unify_raw` (no-AC) and `unify_raw_factored` (AC via a
-/// delayed writer).  Mirrors Haskell's `unifyRaw` (Unification.hs).
-/// Every non-AC arm is identical between the two callers; the only
-/// behavioural fork is at the three AC/C/nat delay points, gated on
-/// whether `delayed` is `Some` (push the residual, cf. HS `tell`) or `None`
-/// (return `NeedsAC`).
+/// Haskell's `unifyRaw` (Unification.hs): solve the non-AC fragment into
+/// `acc` and delay each AC/C/nat pair to `delayed` (HS `tell [Equal l r]`).
 ///
 /// Var-var orientation is Haskell-faithful (Unification.hs):
 ///   same-sort   → if vl < vr then elim vr l else elim vl r  (LARGER-idx
@@ -116,10 +43,10 @@ fn delay_or_needs_ac<C: Clone>(
 /// `applySource` (Sources.hs) depend on: stable pattern vars (small
 /// idx) stay on the value side so they never become keys and are dropped by
 /// the post-saturate key-filter.
-fn unify_raw_impl<C, F>(
+fn unify_raw<C, F>(
     sort_of_const: &F,
     acc: &mut BTreeMap<LVar, LTerm<C>>,
-    mut delayed: Option<&mut Vec<Equal<LTerm<C>>>>,
+    delayed: &mut Vec<Equal<LTerm<C>>>,
     lhs: LTerm<C>,
     rhs: LTerm<C>,
 ) -> Result<(), UnifyError>
@@ -172,26 +99,26 @@ where
             if lf == rf && la.len() == ra.len() =>
         {
             for (a, b) in la.iter().cloned().zip(ra.iter().cloned()) {
-                unify_raw_impl(sort_of_const, acc, delayed.as_deref_mut(), a, b)?;
+                unify_raw(sort_of_const, acc, delayed, a, b)?;
             }
             Ok(())
         }
         (Term::App(FunSym::List, la), Term::App(FunSym::List, ra)) if la.len() == ra.len() => {
             for (a, b) in la.iter().cloned().zip(ra.iter().cloned()) {
-                unify_raw_impl(sort_of_const, acc, delayed.as_deref_mut(), a, b)?;
+                unify_raw(sort_of_const, acc, delayed, a, b)?;
             }
             Ok(())
         }
         // Special cases for builtin naturals (Unification.hs):
         // a nullary NoEq vs a NatPlus sum unifies only when the nullary
         // symbol is `natOne`; otherwise no unifier.  When it is natOne,
-        // Haskell `tell`s the equation for Maude (delay-or-NeedsAC).
+        // Haskell `tell`s the equation for Maude.
         (
             Term::App(FunSym::NoEq(lf), la),
             Term::App(FunSym::Ac(crate::function_symbols::AcSym::NatPlus), _),
         ) if la.is_empty() => {
-            if *lf == crate::function_symbols::nat_one_sym() {
-                delay_or_needs_ac(delayed.as_deref_mut(), &l, &r)
+            if lf.is_nat_one_sym() {
+                delay(delayed, l.clone(), r.clone())
             } else {
                 Err(UnifyError::NoUnifier)
             }
@@ -200,8 +127,8 @@ where
             Term::App(FunSym::Ac(crate::function_symbols::AcSym::NatPlus), _),
             Term::App(FunSym::NoEq(rf), ra),
         ) if ra.is_empty() => {
-            if *rf == crate::function_symbols::nat_one_sym() {
-                delay_or_needs_ac(delayed.as_deref_mut(), &l, &r)
+            if rf.is_nat_one_sym() {
+                delay(delayed, l.clone(), r.clone())
             } else {
                 Err(UnifyError::NoUnifier)
             }
@@ -214,7 +141,7 @@ where
         // to HS `_ -> mzero`; both map to `NoUnifier`.
         (Term::App(FunSym::Ac(la), _), Term::App(FunSym::Ac(ra), _)) => {
             if la == ra {
-                delay_or_needs_ac(delayed.as_deref_mut(), &l, &r)
+                delay(delayed, l.clone(), r.clone())
             } else {
                 Err(UnifyError::NoUnifier)
             }
@@ -222,7 +149,7 @@ where
         // C arm (Unification.hs): both sides C, same symbol AND arity.
         (Term::App(FunSym::C(ls), largs), Term::App(FunSym::C(rs), rargs)) => {
             if ls == rs && largs.len() == rargs.len() {
-                delay_or_needs_ac(delayed, &l, &r)
+                delay(delayed, l.clone(), r.clone())
             } else {
                 Err(UnifyError::NoUnifier)
             }
@@ -232,35 +159,13 @@ where
     }
 }
 
-fn unify_raw<C, F>(
-    sort_of_const: &F,
-    acc: &mut BTreeMap<LVar, LTerm<C>>,
-    lhs: LTerm<C>,
-    rhs: LTerm<C>,
-) -> Result<(), UnifyError>
-where
-    C: Ord + Clone,
-    F: Fn(&C) -> LSort,
-{
-    unify_raw_impl(sort_of_const, acc, None, lhs, rhs)
-}
-
-/// Haskell-faithful factored unification: same as `unify_raw` but
-/// **pushes AC/C equations to a delayed list** instead of returning
-/// `NeedsAC`.  Mirrors Haskell's `unifyRaw` (Unification.hs)
-/// which uses `tell [Equal l r]` from a writer monad to delay AC.
-fn unify_raw_factored<C, F>(
-    sort_of_const: &F,
-    acc: &mut BTreeMap<LVar, LTerm<C>>,
+fn delay<C>(
     delayed: &mut Vec<Equal<LTerm<C>>>,
     lhs: LTerm<C>,
     rhs: LTerm<C>,
-) -> Result<(), UnifyError>
-where
-    C: Ord + Clone,
-    F: Fn(&C) -> LSort,
-{
-    unify_raw_impl(sort_of_const, acc, Some(delayed), lhs, rhs)
+) -> Result<(), UnifyError> {
+    delayed.push(Equal { lhs, rhs });
+    Ok(())
 }
 
 /// `unifyLTermFactored` port (Unification.hs).  Returns the
@@ -279,13 +184,7 @@ where
     let mut acc: BTreeMap<LVar, LTerm<C>> = BTreeMap::new();
     let mut delayed: Vec<Equal<LTerm<C>>> = Vec::new();
     for Equal { lhs, rhs } in eqs {
-        match unify_raw_factored(sort_of_const, &mut acc, &mut delayed, lhs, rhs) {
-            Ok(()) => {}
-            Err(UnifyError::NoUnifier) => return None,
-            // unify_raw_factored delays AC/C to `delayed` and never
-            // surfaces NeedsAC; make the invariant explicit.
-            Err(UnifyError::NeedsAC) => unreachable!("unify_raw_factored delays AC"),
-        }
+        unify_raw(sort_of_const, &mut acc, &mut delayed, lhs, rhs).ok()?;
     }
     let subst = Subst::from_map(acc);
     // Apply the freshly-built subst to the delayed residuals so Maude
@@ -355,65 +254,30 @@ fn sort_geq_lterm<C, F: Fn(&C) -> LSort>(sort_of_const: &F, v: &LVar, t: &LTerm<
 // Free matching (no AC).
 // =============================================================================
 
-/// `solveMatchLNTermNoAC`: solve a matching problem in the AC-free
-/// fragment. Returns the resulting substitution or `None` if either no
-/// matcher exists or an AC equation is encountered.
-pub fn solve_match_lterm_no_ac<C, F>(
-    sort_of_const: &F,
-    problem: Match<LTerm<C>>,
-) -> Option<Subst<C, LVar>>
-where
-    C: Ord + Clone,
-    F: Fn(&C) -> LSort,
-{
-    let pairs = problem.flatten()?;
-    let mut mapping: BTreeMap<LVar, LTerm<C>> = BTreeMap::new();
-    for (term, pattern) in pairs {
-        match_raw(sort_of_const, &mut mapping, term, pattern).ok()?;
-    }
-    Some(Subst::from_map(mapping))
-}
-
-/// Outcome of the native matcher, mirroring HS `solveMatchLTerm`'s
-/// 3-way `case runState (runExceptT match)` split
-/// (`Term/Unification.hs`):
-///
-/// * `NoMatcher`   ⇒ `Left NoMatcher`  ⇒ HS returns `[]` *without* any
-///   Maude round-trip.  (The pattern structurally cannot match the
-///   subject — e.g. constant clash, arity mismatch, sort clash, or a
-///   pattern var already bound to a different subject.)
-/// * `Matched(s)`  ⇒ `Right ()`        ⇒ HS returns `[substFromMap …]`
-///   natively, no Maude.
-/// * `NeedsAC`     ⇒ `Left ACProblem`  ⇒ HS calls `matchViaMaude` on the
-///   *whole* original problem.
-///
-/// The crucial distinction over `solve_match_lterm_no_ac` (which folds
-/// `NoMatcher` and `NeedsAC` together into `None`) is that callers must
-/// only fall back to Maude on `NeedsAC` — a `NoMatcher` is a definitive
-/// "no match" answer that HS never sends to Maude.  Conflating the two
-/// makes the Rust port issue a Maude `match` for every structurally
-/// failing match attempt, which is exactly the surplus `match in MSG`
-/// flood observed on LAK06/Scott (`matchToGoal`, `Sources.hs`).
+/// Outcome of the native matcher (HS `solveMatchLTerm`, Unification.hs):
+/// `NoMatcher` and `Matched` are final; only `NeedsAc` (HS `ACProblem`)
+/// warrants a Maude `match` of the whole problem.
 pub enum MatchOutcome<C> {
     NoMatcher,
     Matched(Subst<C, LVar>),
     NeedsAc,
 }
 
-/// HS-faithful `solveMatchLTerm` (`Term/Unification.hs`): run the
-/// native `matchRaw` matcher over all delayed pairs and report the 3-way
-/// outcome so the caller can decide whether a Maude AC fallback is
-/// actually warranted (only on `NeedsAc`).
+/// HS `solveMatchLTerm` (Unification.hs) without the Maude fallback: run
+/// `matchRaw` over all pairs and report the 3-way outcome.
 ///
-/// `matchRaw` raises `ACProblem` (here `NeedsAC`) the *instant* it sees an
-/// AC-/C-headed pair on BOTH sides; a variable pattern facing an
-/// AC-headed subject is bound natively (HS `matchRaw` checks the
-/// `(_, Lit (Var vp))` arm first, `Unification.hs`) — so a `tamxor`
-/// buried under a variable pattern never triggers a Maude call.
-pub fn solve_match_lterm<C, F>(sort_of_const: &F, problem: Match<LTerm<C>>) -> MatchOutcome<C>
+/// `bindable` stands in for HS skolemisation (`skolemizeTerm`, Guarded.hs):
+/// a pattern variable it rejects is a skolem constant and matches only
+/// itself. Pass `&|_| true` when every pattern variable is bindable.
+pub fn solve_match_lterm<C, F, B>(
+    sort_of_const: &F,
+    bindable: &B,
+    problem: Match<LTerm<C>>,
+) -> MatchOutcome<C>
 where
     C: Ord + Clone,
     F: Fn(&C) -> LSort,
+    B: Fn(&LVar) -> bool,
 {
     // HS `flattenMatch matchProblem` ⇒ `Nothing` means a non-flattenable
     // problem (`MatchFailure`), treated as `[]` — i.e. NoMatcher.
@@ -423,7 +287,7 @@ where
     };
     let mut mapping: BTreeMap<LVar, LTerm<C>> = BTreeMap::new();
     for (term, pattern) in pairs {
-        match match_raw(sort_of_const, &mut mapping, term, pattern) {
+        match match_raw(sort_of_const, bindable, &mut mapping, term, pattern) {
             Ok(()) => {}
             Err(UnifyError::NeedsAC) => return MatchOutcome::NeedsAc,
             Err(UnifyError::NoUnifier) => return MatchOutcome::NoMatcher,
@@ -432,8 +296,9 @@ where
     MatchOutcome::Matched(Subst::from_map(mapping))
 }
 
-fn match_raw<C, F>(
+fn match_raw<C, F, B>(
     sort_of_const: &F,
+    bindable: &B,
     mapping: &mut BTreeMap<LVar, LTerm<C>>,
     t: LTerm<C>,
     p: LTerm<C>,
@@ -441,8 +306,14 @@ fn match_raw<C, F>(
 where
     C: Ord + Clone,
     F: Fn(&C) -> LSort,
+    B: Fn(&LVar) -> bool,
 {
     match p {
+        // A skolemised variable is a constant: HS `(Lit (Con ct), Lit (Con cp))`.
+        Term::Lit(Lit::Var(vp)) if !bindable(&vp) => match t {
+            Term::Lit(Lit::Var(vt)) if vt == vp => Ok(()),
+            _ => Err(UnifyError::NoUnifier),
+        },
         Term::Lit(Lit::Var(vp)) => {
             if let Some(existing) = mapping.get(&vp) {
                 if existing == &t {
@@ -463,7 +334,7 @@ where
         Term::App(FunSym::NoEq(pf), pargs) => match t {
             Term::App(FunSym::NoEq(tf), targs) if tf == pf && targs.len() == pargs.len() => {
                 for (a, b) in targs.iter().cloned().zip(pargs.iter().cloned()) {
-                    match_raw(sort_of_const, mapping, a, b)?;
+                    match_raw(sort_of_const, bindable, mapping, a, b)?;
                 }
                 Ok(())
             }
@@ -472,26 +343,14 @@ where
         Term::App(FunSym::List, pargs) => match t {
             Term::App(FunSym::List, targs) if targs.len() == pargs.len() => {
                 for (a, b) in targs.iter().cloned().zip(pargs.iter().cloned()) {
-                    match_raw(sort_of_const, mapping, a, b)?;
+                    match_raw(sort_of_const, bindable, mapping, a, b)?;
                 }
                 Ok(())
             }
             _ => Err(UnifyError::NoUnifier),
         },
-        // HS `(FApp (AC _) _, FApp (AC _) _) -> throwError ACProblem` and
-        // `(FApp (C _) _, FApp (C _) _) -> throwError ACProblem`
-        // (Unification.hs): the AC/C arm fires ONLY when BOTH the
-        // subject `t` AND the pattern `p` are AC-/C-headed.  An AC-/C-headed
-        // PATTERN facing a variable / constant / NoEq / List / differently-
-        // headed subject is NOT an AC problem — HS falls to the final
-        // `_ -> throwError NoMatcher` arm (Unification.hs).  (An
-        // AC-/C-headed PATTERN alone is not enough — the subject must be
-        // AC-/C-headed too, otherwise this would ship non-AC structural
-        // mismatches to Maude.)
-        // NB: HS does NOT require the AC (resp. C) symbols to match here —
-        // `Mult`-vs-`Union` is still `ACProblem` (Maude then resolves it,
-        // typically to no match).  So the guard is purely "both AC" / "both
-        // C", not "same symbol".
+        // HS `ACProblem` needs both sides AC- (or C-) headed, with any
+        // symbols; every other pairing is `NoMatcher`.
         Term::App(FunSym::Ac(_), _) => match t {
             Term::App(FunSym::Ac(_), _) => Err(UnifyError::NeedsAC),
             _ => Err(UnifyError::NoUnifier),
@@ -506,19 +365,3 @@ where
 #[cfg(test)]
 #[path = "unification_tests.rs"]
 mod tests;
-
-// =============================================================================
-// Haskell-faithfulness invariants
-// =============================================================================
-//
-// These tests pin subtle term-layer semantic choices whose violation is
-// easy to miss.  The cost of getting any of these wrong is a silent
-// divergence — the wrong unifier "works" in the logical sense (produces
-// equivalent equality classes) but the SHAPE of the result differs, which
-// downstream code can implicitly depend on.
-//
-// If any of these tests fails, STOP and investigate before chasing a
-// downstream symptom — the root is here at the term layer.
-#[cfg(test)]
-#[path = "unification_haskell_invariants_tests.rs"]
-mod haskell_invariants_tests;

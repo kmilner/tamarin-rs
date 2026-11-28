@@ -1,0 +1,25 @@
+theory FstSndAttrs
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: dec/2 [destructor], fst/1, g/1 [private,constructor], pair/2,
+           snd/1
+equations:
+    dec(g(x.1), x.2) = x.1,
+    fst(<x.1, x.2>) = x.1,
+    snd(<x.1, x.2>) = x.2
+
+rule (modulo E) R:
+   [ In( x ) ] --> [ Out( fst(x) ) ]
+
+/* All wellformedness checks were successful. */
+
+/*
+Generated from:
+Tamarin version 1.13.0
+Maude version 3.5.1
+*/
+
+end

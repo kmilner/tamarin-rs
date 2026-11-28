@@ -88,15 +88,9 @@ csf12/KEA_plus_KCI_hwPFS.spthy	witness-index	DIFF	2 pages at cert_20260805
 csf12/KEA_plus_KI_KCI.spthy	witness-index	DIFF	2 pages at cert_20260805
 csf12/KEA_plus_hwPFS.spthy	witness-index	DIFF	1 page at cert_20260805
 csf12/NAXOS_eCK.spthy	witness-index	DIFF	4 pages at cert_20260805
-csf17/commitment-protocol.spthy	witness-index	DIFF	4 pages at cert_20260805
-csf17/counter-protocol.spthy	witness-index	DIFF	4 pages at cert_20260805
-csf17/iso-iec9798-modified.spthy	witness-index	DIFF	5 pages at cert_20260805
-csf17/keylessssl-modified.spthy	witness-index	DIFF	4 pages at cert_20260805
 csf18-alethea/alethea_selectionphase_malS.spthy	witness-index	DIFF	64 pages at cert_20260805
 csf18-alethea/alethea_votingphase_malS.spthy	watch	none	crawled clean at cert_20260805
 csf18-alethea/alethea_votingphase_malS_abstain.spthy	watch	none	crawled clean at cert_20260805
-csf19-wrapping/gcm.spthy	witness-index	DIFF	4 pages at cert_20260805
-csf19-wrapping/siv.spthy	witness-index	DIFF	7 pages at cert_20260805
 csf20-disputeResolution/mixvote_ShHm.spthy	watch	none	crawled clean at cert_20260805
 csf23-subterms/ParserTests.spthy	watch	none	goal ages and all responses match at parity-goals-http_20261004
 csf26-ac/fast/DHKEA_NAXOS_C_eCK_PFS_keyreg_partially_matching.spthy	witness-index	DIFF	3 pages at full_20260828

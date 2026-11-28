@@ -1,0 +1,28 @@
+// Category: the --parse-only open-theory printer (`prettyOpenTheory`),
+// which no corpus gate runs: the gates load and close every theory.
+//
+// `configuration:` before `begin`, `heuristic:` hoisted to the header,
+// `predicate:` items, `section{* *}` formal comments, explicit `by sorry`.
+
+theory Misc
+configuration: "--auto-sources"
+begin
+
+heuristic: p
+
+predicates: Both(x,y) <=> Ex #i #j. A() @ i & A() @ j
+
+section{* a formal comment *}
+
+restriction rst:
+  "All #i #j. A() @ i & A() @ j ==> #i = #j"
+
+rule A:
+  [ ] --[ A() ]-> [ ]
+
+lemma withproof:
+  exists-trace
+  "Ex #i. A() @ i"
+by sorry
+
+end

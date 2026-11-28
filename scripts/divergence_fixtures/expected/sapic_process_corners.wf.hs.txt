@@ -1,0 +1,10 @@
+WARNING: the following wellformedness checks failed!
+
+Wellformedness-error in Process
+  Variable bound twice: x5.
+
+Facts occur in the left-hand-side but not in any right-hand-side 
+=================================================================
+
+  1. in rule "StxEvxnoprecompOutx_0_21":  factName `St' arity: 1 multiplicity: Linear
+*/

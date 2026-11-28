@@ -1,0 +1,10 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// A user restriction named like a builtin SAPIC one (`single_session`):
+// `duplicate restriction`.
+// No corpus theory fails this way.
+
+theory SapicRestrictionNameSession begin
+restriction single_session: "T"
+process: 0
+end

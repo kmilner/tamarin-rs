@@ -1,0 +1,131 @@
+theory WfGuardedness
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) A:
+   [ In( x ) ] --[ Foo( x ), Bar( x ), AA( x, x ), BB( x ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+lemma L4:
+  all-traces "(Foo( x.3 ) @ #i) ⇒ (∀ x.4 z. (<x.4, z> = x.4) ⇒ (⊥))"
+/*
+conversion to guarded formula failed:
+  unguarded variable(s) 'x.4', 'z' in the subformula
+    "∀ x z. (<x, z> = x) ⇒ (⊥)"
+  in the formula
+    "(Foo( x.3 ) @ #i) ⇒ (∀ x.4 z. (<x.4, z> = x.4) ⇒ (⊥))"
+*/
+by sorry
+
+lemma L5:
+  all-traces "(Foo( y ) @ #x.2) ⇒ (∀ x.3 z. (<x.3, z> = x.3) ⇒ (⊥))"
+/*
+conversion to guarded formula failed:
+  unguarded variable(s) 'x.3', 'z' in the subformula
+    "∀ x z. (<x, z> = x) ⇒ (⊥)"
+  in the formula
+    "(Foo( y ) @ #x.2) ⇒ (∀ x.3 z. (<x.3, z> = x.3) ⇒ (⊥))"
+*/
+by sorry
+
+lemma L6:
+  all-traces
+  "(∀ x.2 #i. (Foo( x.2 ) @ #i) ⇒ (Bar( x.1 ) @ #i)) ∧
+   (∀ x.2 z. (<x.2, z> = x.2) ⇒ (⊥))"
+/*
+conversion to guarded formula failed:
+  unguarded variable(s) 'x.3', 'z' in the subformula
+    "∀ x z. (<x, z> = x) ⇒ (⊥)"
+  in the formula
+    "(∀ x.2 #i. (Foo( x.2 ) @ #i) ⇒ (Bar( x.1 ) @ #i)) ∧
+     (∀ x.2 z. (<x.2, z> = x.2) ⇒ (⊥))"
+*/
+by sorry
+
+lemma L8:
+  all-traces
+  "(∀ x.1. (Foo( x.1 ) @ #x) ⇒ (⊥)) ∧ (∀ x.1 z. (<x.1, z> = x.1) ⇒ (⊥))"
+/*
+conversion to guarded formula failed:
+  unguarded variable(s) 'x.2', 'z' in the subformula
+    "∀ x z. (<x, z> = x) ⇒ (⊥)"
+  in the formula
+    "(∀ x.1. (Foo( x.1 ) @ #x) ⇒ (⊥)) ∧ (∀ x.1 z. (<x.1, z> = x.1) ⇒ (⊥))"
+*/
+by sorry
+
+lemma with_predicate:
+  all-traces
+  "∀ xx yy zz #i.
+    (AA( xx, yy ) @ #i) ⇒
+    ((∃ #ii #jj. ((AA( xx, yy ) @ #ii) ∧ (BB( zz ) @ #jj)) ∧ (#ii < #jj)) ∧
+     (∃ #ii #jj. ((AA( zz, yy ) @ #ii) ∧ (BB( xx ) @ #jj)) ∧ (#ii < #jj)))"
+/*
+conversion to guarded formula failed:
+  unguarded variable(s) 'zz' in the subformula
+    "∀ xx yy zz #i.
+      (AA( xx, yy ) @ #i) ⇒
+      ((∃ #ii #jj. ((AA( xx, yy ) @ #ii) ∧ (BB( zz ) @ #jj)) ∧ (#ii < #jj)) ∧
+       (∃ #ii #jj. ((AA( zz, yy ) @ #ii) ∧ (BB( xx ) @ #jj)) ∧ (#ii < #jj)))"
+  in the formula
+    "∀ xx yy zz #i.
+      (AA( xx, yy ) @ #i) ⇒
+      ((∃ #ii #jj. ((AA( xx, yy ) @ #ii) ∧ (BB( zz ) @ #jj)) ∧ (#ii < #jj)) ∧
+       (∃ #ii #jj. ((AA( zz, yy ) @ #ii) ∧ (BB( xx ) @ #jj)) ∧ (#ii < #jj)))"
+*/
+by sorry
+
+lemma many:
+  all-traces
+  "∀ x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20
+     x21 x22 x23 x24 x25 #i.
+    (AA( x1, x1 ) @ #i) ⇒ (⊥)"
+/*
+conversion to guarded formula failed:
+  unguarded variable(s) 'x2', 'x3', 'x4', 'x5', 'x6', 'x7', 'x8', 'x9',
+  'x10', 'x11', 'x12', 'x13', 'x14', 'x15', 'x16', 'x17', 'x18', 'x19',
+  'x20', 'x21', 'x22', 'x23', 'x24', 'x25' in the subformula
+    "∀ x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20
+       x21 x22 x23 x24 x25 #i.
+      (AA( x1, x1 ) @ #i) ⇒ (⊥)"
+  in the formula
+    "∀ x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18 x19 x20
+       x21 x22 x23 x24 x25 #i.
+      (AA( x1, x1 ) @ #i) ⇒ (⊥)"
+*/
+by sorry
+
+restriction Closed:
+  "∀ x #i. (Foo( x ) @ #i) ⇒ (⊥)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ x #i. (Foo( x ) @ #i) ⇒ (⊥)"
+  */
+
+restriction FreeVar:
+  "∀ #i. (Foo( x ) @ #i) ⇒ (⊥)"
+
+  /*
+  expanded formula:
+  "∀ #i. (Foo( x ) @ #i) ⇒ (⊥)"
+  */
+
+restriction Existential:
+  "∀ x #i. (Foo( x ) @ #i) ⇒ (∃ #j. Bar( x ) @ #j)"
+
+  /*
+  expanded formula:
+  "∀ x #i. (Foo( x ) @ #i) ⇒ (∃ #j. Bar( x ) @ #j)"
+  */
+
+
+
+end

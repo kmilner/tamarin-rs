@@ -43,6 +43,38 @@ use simplify::{compress_system, simplify_system};
 
 use crate::constraint::system::System;
 
+/// HS `resolveNodePremFact` (System.hs), as both renderers reach it
+/// through Graph.hs.
+pub(crate) fn resolve_node_prem_fact<'a>(
+    prem: &crate::constraint::constraints::NodePrem,
+    rules: &crate::constraint::system::NodeRuleMap<'a>,
+) -> Option<&'a crate::fact::LNFact> {
+    rules.get(&prem.0).and_then(|ru| ru.premises.get(prem.1 .0))
+}
+
+/// HS `resolveNodeConcFact` (System.hs), as both renderers reach it
+/// through Graph.hs.
+pub(crate) fn resolve_node_conc_fact<'a>(
+    conc: &crate::constraint::constraints::NodeConc,
+    rules: &crate::constraint::system::NodeRuleMap<'a>,
+) -> Option<&'a crate::fact::LNFact> {
+    rules
+        .get(&conc.0)
+        .and_then(|ru| ru.conclusions.get(conc.1 .0))
+}
+
+/// HS `check p = maybe False p (resolveNodePremFact tgt graph) || maybe
+/// False p (resolveNodeConcFact src graph)`, shared by `dotEdge` (Dot.hs) and
+/// `getRelationType`/`colorEdge` (JSON.hs): the target premise's fact is
+/// tested first, then the source conclusion's.
+pub(crate) fn edge_fact_check(
+    prem: Option<&crate::fact::LNFact>,
+    conc: Option<&crate::fact::LNFact>,
+    p: fn(&crate::fact::LNFact) -> bool,
+) -> bool {
+    prem.is_some_and(p) || conc.is_some_and(p)
+}
+
 /// Mirror of HS `Graph` (Graph.hs) restricted to the fields the two
 /// renderers read.
 pub struct Graph<'a> {

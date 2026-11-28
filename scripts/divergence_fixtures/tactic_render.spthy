@@ -1,0 +1,73 @@
+// Category: how the theory echo renders tactics and the heuristic header.
+//
+// HS `prettyTactic` (Theory/Text/Pretty.hs) prints every prio/deprio block
+// with its ranking, and each selector through `prettyTacticSelector`, which
+// drops the space after a keyword and collapses a regex's internal spaces
+// only outside its quoted text.  One tactic per shape:
+//   - helping: a LAK06-style `|regex` chain with internal spaces;
+//   - boundaries / quoted: `not`, `|` and `&` inside and around quotes;
+//   - priodeprio: a prio and a deprio block;
+//   - presort_C / presort_c / presort_default: each presort character, and
+//     the default `s`;
+//   - unicode: `∧`, `∨` and `¬` read as `&`, `|` and `not`;
+//   - rank: named by the heuristic header, which mixes built-in rankings,
+//     `{tactic}` references, an `O "…"` oracle and a bare `o` (whose default
+//     oracle name the echo prints).
+// Only the noise `unless` tactic is in the corpus.
+
+theory TacticRender
+begin
+
+heuristic: sop {rank} O "./my-oracle" {.}
+
+tactic: helping
+presort: s
+prio:
+  regex ".*!K.\( \(.*~r0\.1.*" |regex ".*!K.\( \(.*~r0.*" | regex ".*!K.\( ~r.*"
+
+tactic: boundaries
+prio:
+  regex "not a | b not c & d"
+
+tactic: quoted
+prio:
+  regex " | " " & " " not "
+
+tactic: priodeprio
+presort: s
+prio:
+  regex ".*!Tag\(.*"
+deprio:
+  regex ".*TagK\(.*"
+
+tactic: presort_C
+presort: C
+prio:
+  regex "a"
+
+tactic: presort_c
+presort: c
+prio:
+  regex "a"
+
+tactic: presort_default
+prio:
+  regex "a"
+
+tactic: unicode
+presort: C
+prio:
+  regex "a" ∧ regex "b"
+prio:
+  regex "c" ∨ regex "d"
+prio:
+  ¬ regex "e"
+
+tactic: rank
+presort: C
+prio:
+    regex "Out"
+
+lemma L: exists-trace "T"
+
+end

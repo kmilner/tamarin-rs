@@ -98,13 +98,7 @@ WEB_WORKERS_PID=
 trap '[ -z "$WEB_WORKERS_PID" ] || { kill -TERM "$WEB_WORKERS_PID" 2>/dev/null; wait "$WEB_WORKERS_PID"; }; exit 130' HUP INT TERM
 
 # Auto-build RS (opt out with TAM_RS_NO_AUTO_BUILD=1).
-if [ -z "${TAM_RS_NO_AUTO_BUILD:-}" ]; then
-    echo "building RS (release)..." >&2
-    ( cd "$repo_root" && cargo build --release -q -p tamarin-prover ) || {
-        echo "RS build failed" >&2; exit 2; }
-fi
-[ -x "$RS_PATH" ] || { echo "no RS binary at $RS_PATH" >&2; exit 2; }
-rs_stale_check "$RS_PATH" "$repo_root"
+ensure_rs_binary web_parity "$RS_PATH" "$repo_root"
 
 # --- file list ---
 # ALLOWLIST is mandatory. It used to fall back to the seed list whenever it was

@@ -92,7 +92,7 @@ fn walk_term(t: &BLNTerm, out: &mut Payload) {
 
 fn walk_fact(f: &Fact<BLNTerm>, out: &mut Payload) {
     out.facts += 1;
-    for a in f.terms.iter() {
+    for a in f.terms().iter() {
         walk_term(a, out);
     }
 }

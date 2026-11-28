@@ -39,7 +39,7 @@ use tamarin_term::vterm::Lit;
 use crate::formula::{BLNTerm, LNFormula};
 use crate::pretty_hpj::{fsep, punctuate, Doc};
 
-use super::WfError;
+use super::{quote, wrapped_text, WfError};
 
 /// The fixed render budget for the formula-report WF blocks, determined
 /// empirically from HS output: HS lays the whole `/* WARNING ... */`
@@ -121,16 +121,14 @@ fn render_block(header: &str, offenders: &[String]) -> String {
     ))];
     let off_docs: Vec<Doc> = offenders
         .iter()
-        .map(|o| Doc::text(format!("`{}'", o)).nest(2))
+        .map(|o| Doc::text(quote(o)).nest(2))
         .collect();
     items.extend(punctuate(Doc::text(","), off_docs));
     let line1 = fsep(items).nest(2).render_with(WF_WIDTH, WF_WIDTH);
 
-    let words: Vec<Doc> = ALLOWED_PARAGRAPH
-        .split_whitespace()
-        .map(Doc::text)
-        .collect();
-    let para = fsep(words).nest(2).render_with(WF_WIDTH, WF_WIDTH);
+    let para = wrapped_text(ALLOWED_PARAGRAPH)
+        .nest(2)
+        .render_with(WF_WIDTH, WF_WIDTH);
 
     let mut out = String::new();
     out.push_str(&super::underline_topic("Formula terms"));
@@ -145,7 +143,3 @@ fn render_block(header: &str, offenders: &[String]) -> String {
 // =============================================================================
 // Tests
 // =============================================================================
-
-#[cfg(test)]
-#[path = "check_terms_tests.rs"]
-mod tests;

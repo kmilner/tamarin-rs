@@ -21,110 +21,20 @@
 //! where each `sigma_ij` is a *fresh-range* substitution (its
 //! variables are existentially quantified).
 //!
-//! This Rust port exposes both the data structure / Maude-free
-//! operations (empty, false-detection, adding a disjunction,
-//! performing a split, listing splits) and the Maude-backed
-//! operations: `add_eqs`, `apply_eq_store`, and the full `simp`
-//! pipeline (`simp_with_fresh_avoiding`,
-//! `simp_disjunction_with_maude`).
+//! The Maude-backed operations are `add_eqs`, `apply_eq_store`, `simp` and
+//! `simp_disjunction`.
 
 use std::collections::BTreeSet;
+use tamarin_utils::fresh::FastFreshState;
 
-use tamarin_term::lterm::{sort_compare, HasFrees, LNTerm, LVar, Name};
+use std::cmp::Ordering;
+
+use tamarin_term::lterm::{sort_compare, HasFrees, LNTerm, LSort, LVar, Name};
+use tamarin_term::maude_proc::{MaudeError, MaudeHandle};
 use tamarin_term::subst::Subst;
 use tamarin_term::subst_vfresh::SubstVFresh;
-
-/// Rename "witness" range variables in a Maude unifier to globally
-/// fresh indices. A witness is a range var that:
-///  1. doesn't appear as a domain variable (otherwise it's a target
-///     binding), and
-///  2. doesn't appear in the original input equations (otherwise it's
-///     a real system variable that Maude is reusing).
-///
-/// Maude introduces witnesses as `x_N` LVars when it needs auxiliary
-/// variables to express a unifier. Without renaming, two separate
-/// `add_eqs` calls can return witnesses with the same `x_N` name +
-/// idx, causing distinct vars in the system to collapse.
-///
-/// **Haskell-faithful counter**: indices come from the MaudeHandle's
-/// global `fresh_counter` (mirrors `MonadFresh`), NOT from
-/// `avoid_max + 1`.  Using the local avoid_max means two calls with
-/// the same surrounding system both rename to idxs `avoid_max + 1`,
-/// `+ 2`, ... causing inter-call collisions (TESLA::authentic_reachable
-/// root cause).  The global counter guarantees every freshened witness
-/// gets a globally unique idx.
-fn freshen_witness_range(
-    raw: Vec<(LVar, LNTerm)>,
-    input_vars: &std::collections::BTreeSet<LVar>,
-    avoid_max: u64,
-    maude: &tamarin_term::maude_proc::MaudeHandle,
-) -> Vec<(LVar, LNTerm)> {
-    use std::collections::BTreeMap;
-    use tamarin_term::lterm::HasFrees;
-    let domain: BTreeSet<LVar> = raw.iter().map(|(v, _)| *v).collect();
-    // Witnesses = range-only vars that are neither a domain key nor an
-    // input var (i.e. auxiliaries the Maude unifier introduced); these are
-    // the ones that need a globally-unique idx.
-    let mut witnesses: BTreeSet<LVar> = BTreeSet::new();
-    for (_, t) in &raw {
-        t.for_each_free(&mut |w| {
-            if domain.contains(w) {
-                return;
-            }
-            if input_vars.contains(w) {
-                return;
-            }
-            witnesses.insert(*w);
-        });
-    }
-    if witnesses.is_empty() {
-        return raw;
-    }
-    // Push the global counter above `avoid_max` first, then draw
-    // unique indices from it for each witness.
-    maude.ensure_above(avoid_max);
-    let mut renames: BTreeMap<LVar, LVar> = BTreeMap::new();
-    for v in witnesses {
-        let next = maude.fresh_idx();
-        renames.insert(v, LVar { idx: next, ..v });
-    }
-    // Apply the rename across each (var, term).  Keys get renamed too.
-    raw.into_iter()
-        .map(|(v, t)| {
-            let new_v = renames.get(&v).copied().unwrap_or(v);
-            let new_t = t.map_free(&mut |w| renames.get(&w).copied().unwrap_or(w));
-            (new_v, new_t)
-        })
-        .collect()
-}
-
-// --- Cached kill-switch / debug env flags for apply_eq_store -----------
-// `apply_eq_store` is one of the hottest solver methods (per proof step,
-// plus recursively from every simp pass).  These env vars are constant
-// for the process, so each accessor caches its presence via `env_gate!`
-// (`.is_ok()`) — the steady-state cost is an atomic load, not an env-lock
-// + `String` alloc per call / per variant.  The lone exception,
-// `aes_dbg_filter_substantive`, matches an exact value (`== "substantive"`)
-// and so keeps its hand-rolled `OnceLock<bool>`.
-#[inline]
-fn aes_dbg() -> bool {
-    tamarin_utils::env_gate!("TAM_RS_DBG_APPLY_EQ_STORE")
-}
-/// `TAM_RS_DBG_APPLY_EQ_STORE_FILTER` selects the "substantive" filter by
-/// exact value, so cache the equality test (not a bare `.is_ok()`).
-#[inline]
-fn aes_dbg_filter_substantive() -> bool {
-    static V: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *V.get_or_init(|| {
-        std::env::var("TAM_RS_DBG_APPLY_EQ_STORE_FILTER")
-            .map(|s| s == "substantive")
-            .unwrap_or(false)
-    })
-}
-#[inline]
-fn aes_dbg_variants() -> bool {
-    tamarin_utils::env_gate!("TAM_DBG_AES_VARIANTS")
-}
+use tamarin_term::term::Term;
+use tamarin_term::vterm::{var_term, Lit};
 
 /// Index of a disjunction in the equation store.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -198,34 +108,9 @@ impl HasFrees for EqDisj {
 
 /// `orderedSubsts = sortOnMemo dropNameHintsLNSubstVFresh . S.toList`
 /// (EquationStore.hs): a disjunction's cases in canonical split
-/// order.  The single source of truth for case ordering — `perform_split`
-/// and `pretty_system::pp_disj` (HS `ppDisj`, EquationStore.hs)
-/// both go through it, so the numbering shown for a disjunction matches
-/// the `split_case_i` labels a split of it emits.
-///
-/// Two stages, in this order:
-///  1. `sort()` is the `Data.Set LNSubstVFresh` `S.toList` raw-`Ord` order
-///     (RS stores the disjunction as an insertion-ordered `Vec`, so the
-///     set's enumeration order has to be materialised here).
-///  2. the stable `sort_by_cached_key(drop_name_hints)` re-sorts by the
-///     α-canonical key (`drop_name_hints` = `dropNameHintsLNSubstVFresh`,
-///     EquationStore.hs), which renumbers each subst's fresh
-///     witness range-vars by first appearance in domain-key order.  This
-///     makes `split_case_i` order independent of the Maude
-///     fresh-allocation counter (Rust's witness indices need not equal
-///     HS's), so case order is α-canonical and does not regress to the
-///     `analysis incomplete` symptom.
-///
-/// Ordering borrows rather than owned substs is order-identical: `Ord for
-/// &T` forwards to `T::cmp` and the key closure auto-derefs, so both
-/// stages see exactly the comparators they would see on owned values.
-///
-/// HS's `dropNameHintsBound` does NOT reach here: it is mapped only over
-/// the throwaway `addNormSys` copy in `removeRedundantCases`
-/// (Sources.hs, `map (fst . snd) ...` keeps the ORIGINAL case and
-/// discards the name-hint-dropped system; gated on `enableBP ||
-/// enableMSet`), so it never mutates the live `sEqStore` that
-/// `performSplit` later splits.
+/// order, shared by `perform_split` and `pretty_system::pp_disj` (HS
+/// `ppDisj`). The plain sort is `S.toList`; the stable re-sort by
+/// `drop_name_hints` makes the order independent of witness indices.
 pub(crate) fn ordered_substs(substs: &[LNSubstVFresh]) -> Vec<&LNSubstVFresh> {
     let mut out: Vec<&LNSubstVFresh> = substs.iter().collect();
     out.sort();
@@ -304,17 +189,7 @@ impl EquationStore {
     /// the resulting store and the new split id.
     pub fn add_disj(&mut self, substs: Vec<LNSubstVFresh>) -> SplitId {
         let id = self.next_split;
-        // HS-faithful Set ordering of variant substs.
-        // HS's `addDisj` (EquationStore.hs) does `addDisj eqStore
-        // (S.fromList substs)` — substs go into a Set, sorted by Ord
-        // LNSubstVFresh.  Without sorting here, RS's `Vec`-based disj
-        // preserves insertion order from `maude.variants()`, putting
-        // the identity-rename variant first.  HS's Set-based disj puts
-        // STRUCTURED variants first (where convertpcs is reduced to
-        // sign via Maude equations).  Downstream `simp_identify`
-        // iterates the FIRST subst's entries — HS finds same-image
-        // pairs in the structured variant, RS sees only the identity
-        // variant's unreduced entries and finds none.
+        // HS stores the disjunction as a `Set`: sort and deduplicate.
         let mut substs = substs;
         substs.sort();
         substs.dedup();
@@ -338,10 +213,7 @@ impl EquationStore {
             .map(|d| (d.split_id, d.substs.len()))
             .collect();
         indexed.sort_by_key(|(_, sz)| *sz);
-        // Mirrors Haskell's `nub`, but split-ids in `conj` are unique by
-        // construction (`add_disj` assigns a fresh incrementing id and never
-        // reuses one; the only other id is the lone `SplitId(-1)` false_conj),
-        // so the dedup is provably a no-op and is elided.
+        // HS's `nub` is a no-op: split ids in `conj` are unique.
         indexed.into_iter().map(|(id, _)| id).collect()
     }
 
@@ -415,35 +287,8 @@ impl EquationStore {
     pub fn perform_split(&self, id: SplitId) -> Option<Vec<EquationStore>> {
         let pos = self.conj.iter().position(|d| d.split_id == id)?;
         let disj = &self.conj[pos];
-
-        // For each substitution in the chosen disjunction, build a new
-        // store that drops `id` and adds a fresh single-case
-        // disjunction containing just that subst.
-        //
-        // Mirrors Haskell `performSplit` (EquationStore.hs):
-        //   mkNewEqStore before after <$> orderedSubsts disj
-        if tamarin_utils::env_gate!("TAM_DBG_PERFORM_SPLIT") {
-            eprintln!(
-                "[perform_split] split_id={:?}, {} substs (pre-sort):",
-                id,
-                disj.substs.len()
-            );
-            for (i, s) in disj.substs.iter().enumerate() {
-                eprintln!("[perform_split]   raw[{}]: {:?}", i, s.to_list());
-            }
-            // Show full eq_store.subst too — system substitution at this point
-            eprintln!("[perform_split] eq_store.subst entries:");
-            for (k, v) in self.subst.to_list() {
-                eprintln!("[perform_split]   {:?} → {:?}", k, v);
-            }
-        }
+        // `mkNewEqStore before after <$> orderedSubsts disj`
         let sorted_substs = ordered_substs(&disj.substs);
-        if tamarin_utils::env_gate!("TAM_DBG_PERFORM_SPLIT") {
-            eprintln!("[perform_split] sorted result:");
-            for (i, s) in sorted_substs.iter().enumerate() {
-                eprintln!("[perform_split]   case_{}: {:?}", i + 1, s.to_list());
-            }
-        }
         let mut out = Vec::with_capacity(sorted_substs.len());
         for subst in sorted_substs {
             let mut new_store = self.clone();
@@ -454,320 +299,73 @@ impl EquationStore {
         Some(out)
     }
 
-    /// Compute a baseline for fresh-witness allocation: max var idx
-    /// across the eq-store's domain and range.
-    fn fresh_baseline(&self) -> u64 {
-        use tamarin_term::lterm::HasFrees;
-        let mut m = 0u64;
-        for v in self.subst.dom() {
-            if v.idx > m {
-                m = v.idx;
-            }
-        }
-        for t in self.subst.range() {
-            t.for_each_free(&mut |w| {
-                if w.idx > m {
-                    m = w.idx;
-                }
-            });
-        }
-        for d in &self.conj {
-            for s in &d.substs {
-                for v in s.dom() {
-                    if v.idx > m {
-                        m = v.idx;
-                    }
-                }
-                for t in s.range() {
-                    t.for_each_free(&mut |w| {
-                        if w.idx > m {
-                            m = w.idx;
-                        }
-                    });
-                }
-            }
-        }
-        m
-    }
-
-    /// Maude-backed `addEqs` with a caller-supplied freshness baseline.
-    /// `extra_avoid` is the max idx seen anywhere in the surrounding
-    /// system (beyond just the eq-store).  Without this, Maude
-    /// witnesses get renamed using only the eq-store's max idx, which
-    /// can collide with vars in nodes/edges/goals/formulas — leading
-    /// to the variable conflation bug.
-    pub fn add_eqs_with_avoid(
-        &mut self,
-        maude: &tamarin_term::maude_proc::MaudeHandle,
-        eqs: &[tamarin_term::rewriting::Equal<LNTerm>],
-        extra_avoid: u64,
-    ) -> Result<Option<SplitId>, AddEqsError> {
-        self.add_eqs_inner(maude, eqs, extra_avoid)
-    }
-
-    /// Maude-backed `addEqs` with a ZERO freshness baseline.  Equivalent to
-    /// `add_eqs_with_avoid(maude, eqs, 0)`.
-    ///
-    /// TEST-ONLY: solver code MUST use `add_eqs_with_avoid` with the
-    /// surrounding system's max var idx.  With a zero baseline, Maude
-    /// witnesses are renamed using only the eq-store's own max idx, which can
-    /// collide with vars in nodes/edges/goals/formulas — the variable
-    /// conflation bug documented on `add_eqs_with_avoid`.  Gated behind
-    /// `#[cfg(test)]` so it cannot be reintroduced on a solve path.
-    ///
-    /// Returns the new split id if the unification produced a non-trivial
-    /// disjunction; `None` if the unifier was either single (already
-    /// composed into `subst`) or empty (store becomes false).
-    #[cfg(test)]
+    /// `addEqs` (EquationStore.hs): unify `eqs` under the free substitution
+    /// and record the result. Returns the split id of the new disjunction
+    /// when the unifier is not unique.
     pub fn add_eqs(
         &mut self,
         maude: &tamarin_term::maude_proc::MaudeHandle,
         eqs: &[tamarin_term::rewriting::Equal<LNTerm>],
     ) -> Result<Option<SplitId>, AddEqsError> {
-        self.add_eqs_inner(maude, eqs, 0)
-    }
-
-    fn add_eqs_inner(
-        &mut self,
-        maude: &tamarin_term::maude_proc::MaudeHandle,
-        eqs: &[tamarin_term::rewriting::Equal<LNTerm>],
-        extra_avoid: u64,
-    ) -> Result<Option<SplitId>, AddEqsError> {
-        // Short-cut: empty input → no change.
-        if eqs.is_empty() {
-            return Ok(None);
-        }
-
-        // Apply the existing free substitution to the input first so the
-        // unifier sees the most-refined version of each side.
-        let applied: Vec<tamarin_term::rewriting::Equal<LNTerm>> = eqs
+        use tamarin_term::rewriting::Equal;
+        use tamarin_term::subst::apply_vterm;
+        let eqs: Vec<Equal<LNTerm>> = eqs
             .iter()
-            .map(|e| tamarin_term::rewriting::Equal {
-                lhs: tamarin_term::subst::apply_vterm(&self.subst, e.lhs.clone()),
-                rhs: tamarin_term::subst::apply_vterm(&self.subst, e.rhs.clone()),
+            .map(|e| Equal {
+                lhs: apply_vterm(&self.subst, e.lhs.clone()),
+                rhs: apply_vterm(&self.subst, e.rhs.clone()),
             })
             .collect();
-
-        // Haskell-faithful factored unification (Unification.hs):
-        // first run the local non-AC unifier; only AC residuals go to
-        // Maude.  When `unifyLTermFactored` returns `Just (m, [])`, the
-        // result is the local subst directly — NO Maude call.  This is
-        // critical for foo_eligibility-style cases: the local unifier
-        // orients same-sort var-var with larger-idx-as-key
-        // (Unification.hs), so stable pattern vars (small idx like
-        // t.1, t.2) stay on the value side and are dropped by
-        // `restrict stableVars` (Sources.hs).
-        let local_result = tamarin_term::unification::unify_lnterm_factored(applied.clone());
-        let local_result = match local_result {
-            Some(r) => r,
-            None => {
-                // Local non-AC failed → no unifier.
-                *self = self.clone().set_false();
-                return Ok(None);
-            }
+        // `unifyLNTermFactored` (Unification.hs): the free part comes from
+        // the local unifier, and only the AC residuals go to Maude.
+        let Some((subst, residuals)) = tamarin_term::unification::unify_lnterm_factored(eqs) else {
+            self.conj = Self::false_conj();
+            return Ok(None);
         };
-        let (local_subst, ac_residuals) = local_result;
-
-        // Fast path: no AC residuals.  Use local subst directly — this
-        // mirrors Haskell's `solve _ (Just (m, [])) = (substFromMap m,
-        // [emptySubstVFresh])` followed by `flattenUnif` which produces
-        // a single SubstVFresh equal to the local subst.
-        //
-        // HS-faithful (EquationStore.hs `addEqs`):
-        //     (subst, [substFresh]) | substFresh == emptySubstVFresh ->
-        //         return (applyEqStoreAt "addEqs.single-unifier" hnd subst eqStore, Nothing)
-        // — applyEqStoreAt is called UNCONDITIONALLY, including when subst
-        // is empty.  With an empty asubst the disj loop is idempotent on
-        // disj substs whose KEYS are disjoint from self.subst.dom (the
-        // addRuleVariants invariant), BUT applyBound's restrict expansion
-        // to include `varsRange(newsubst)` lifts system-var range
-        // references in disj substs into the disj domain via
-        // EXTRACT-SYSTEM-VARS-TO-DOMAIN (see apply_eq_store body).  The
-        // empty-empty case must NOT be short-circuited — skipping this
-        // lift is observable on the LAK06::noninjectiveagreementTAG path.
-        if ac_residuals.is_empty() {
-            if self.conj.is_empty() {
-                if aes_dbg() {
-                    let filter = aes_dbg_filter_substantive();
-                    if !filter {
-                        eprintln!(
-                            "[rs-aes-tick] conj=0 substantive=false (short-circuit:add_eqs-no-ac)"
-                        );
-                    }
-                }
-                if !local_subst.is_empty() {
-                    self.subst = local_subst.compose(&self.subst);
-                }
-            } else {
-                self.apply_eq_store(maude, &local_subst)?;
-            }
-            return Ok(None);
-        }
-
-        // Maude path: log the AC unifier output (if single) — handled below.
-
-        // Mixed case: AC residuals exist.  Send them to Maude after
-        // applying local subst.  Each Maude unifier is composed with
-        // the local subst at the end (mirrors `flattenUnif` =
-        // `map (\`composeVFresh\` subst) substs`).
-        //
-        // HS-faithful (EquationStore.hs `addEqs`): the AC unifier
-        // is `unifyLNTermFactored eqs` with NO avoid — witness idxs are
-        // numbered purely per-call at `avoid (M.elems bindings)`
-        // (Term/Maude/Types.hs) and the resulting `SubstVFresh`
-        // witnesses are α-scoped per subst, so a system-wide floor is
-        // neither passed nor needed.  (The single-unifier arm below still
-        // re-bases its own witnesses via `freshen_witness_range`.)
-        let unifiers = maude
-            .unify(&ac_residuals)
-            .map_err(|e| AddEqsError::Maude(format!("{}", e)))?;
-
-        if unifiers.is_empty() {
-            // No unifiers → contradiction.
-            *self = self.clone().set_false();
-            return Ok(None);
-        }
-        // HS-faithful (EquationStore.hs `addEqs`): the compose-without-disj
-        // arm fires ONLY when the unifier list is exactly
-        // `[emptySubstVFresh]`:
-        //     (subst, [substFresh]) | substFresh == emptySubstVFresh ->
-        //         return (applyEqStoreAt "addEqs.single-unifier" hnd subst
-        //                                eqStore, Nothing)
-        // A SINGLE NON-EMPTY Maude unifier hits HS's THIRD arm
-        // (EquationStore.hs `addEqs`):
-        //     (subst, substs) -> addDisj (applyEqStoreAt ... subst eqStore)
-        //                                (S.fromList substs)  -- Just sid
-        // — it's stored as a SINGLETON VFresh disjunction (with split id),
-        // NOT eagerly composed.  Faithful HS behaviour: (a) the fold
-        // happens via `simp`'s `simpSingleton`
-        // (`freshToFree` witness naming, EquationStore.hs `simpSingleton`)
-        // plus a SECOND `applyEqStoreAt "foreachDisj:simpSingleton"` round
-        // over the remaining disjs (EquationStore.hs `foreachDisj`) — two
-        // applyBound
-        // rounds with the local subst and the Maude unifier SEPARATELY,
-        // not one round with their composition; (b) SplitLater callers get
-        // a SplitG goal + a live singleton disj (HS `solveRuleEqs SplitLater`,
-        // Reduction.hs, reached from Reduction.hs;
-        // addEqs/performSplit in `solveTermEqs` at Reduction.hs);
-        // (c) addDisj bumps the next-split-id counter.
-        // (Paired HS/RS traces on Scott::key_secrecy show applyBound never
-        // SPLITS a disj subst on this corpus — out>1 occurs 0 times on
-        // both sides — so this arm's role is naming/cadence/goal-counter
-        // alignment, not disj expansion.)
-        if unifiers.len() == 1 && unifiers[0].is_empty() {
-            // Single unifier composes directly into the free substitution.
-            // BUT first rename the witness range vars (vars Maude
-            // introduced as auxiliaries that aren't in the input nor
-            // in the unifier's domain) to globally fresh indices.
-            // Without this, two separate unifications can produce
-            // colliding witness names and spuriously equate unrelated
-            // vars.
-            let raw: Vec<(LVar, LNTerm)> = unifiers.into_iter().next().unwrap();
-            // Collect input vars from the AC residuals (Maude's input).
-            use tamarin_term::lterm::HasFrees;
-            let mut input_vars: std::collections::BTreeSet<LVar> =
-                std::collections::BTreeSet::new();
-            for e in &ac_residuals {
-                e.lhs.for_each_free(&mut |v| {
-                    input_vars.insert(*v);
-                });
-                e.rhs.for_each_free(&mut |v| {
-                    input_vars.insert(*v);
-                });
-            }
-            let raw = freshen_witness_range(
-                raw,
-                &input_vars,
-                self.fresh_baseline().max(extra_avoid),
-                maude,
-            );
-            // `raw` is a Maude idempotent (solved-form) unifier: its range
-            // is disjoint from its domain (freshen_witness_range only renames
-            // range-only witnesses, never domain keys), so the one-at-a-time
-            // `compose` accumulation collapses to a single `from_list` build.
-            let maude_subst = LNSubst::from_list(raw);
-            // Haskell-faithful: compose local_subst with Maude's result
-            // (Term/Unification.hs `flattenUnif` =
-            // `map (\`composeVFresh\` subst) substs`).
-            let subst = maude_subst.compose(&local_subst);
-            // Haskell-faithful: call applyEqStore so existing disj substs
-            // get re-unified against the new free subst.  Without it,
-            // SplitG variants whose domain intersects with `subst.dom`
-            // silently get their constraints dropped on later pick
-            // (e.g. `{z → verify(s,m,pkA)}` vs `{z → true}` collapse).
-            // Mirrors EquationStore.hs `addEqs` (single-unifier arm).
-            if self.conj.is_empty() {
-                if aes_dbg() {
-                    let filter = aes_dbg_filter_substantive();
-                    if !filter {
-                        eprintln!("[rs-aes-tick] conj=0 substantive=false (short-circuit:add_eqs-single-maude)");
-                    }
-                }
-                // Fast path: nothing to re-unify, just compose.
-                self.subst = subst.compose(&self.subst);
-            } else {
-                // Slow path: re-unify each disj subst.
-                self.apply_eq_store(maude, &subst)?;
-            }
-            return Ok(None);
-        }
-
-        // Multiple unifiers — or a SINGLE NON-EMPTY unifier (HS's third
-        // arm, EquationStore.hs `addEqs`; see comment above) — record as
-        // a fresh-range disjunction.
-        // Haskell composes each Maude unifier with the local subst
-        // before storing as a disjunction (flattenUnif semantics).
-        // The local subst becomes part of the free subst; the Maude
-        // unifiers represent the disjunction over AC choices.
-        //
-        // HS-faithful (EquationStore.hs `addEqs`):
-        //     let (eqStore', sid) = addDisj (applyEqStoreAt "addEqs.multi-unifier"
-        //                                                   hnd subst eqStore)
-        //                                   (S.fromList substs)
-        // applyEqStoreAt is called unconditionally, even when local_subst
-        // is empty, so existing disjs are re-narrowed via applyBound
-        // against the new free subst — this matters because a later pass
-        // (e.g. simp_singleton / abstraction factoring) can land bindings
-        // in eqsSubst that narrow an untouched multi-subst disj to empty
-        // (LAK06::noninjectiveagreementTAG's accepttag disj), which HS's
-        // unconditional call captures.
-        if self.conj.is_empty() {
-            if aes_dbg() {
-                let filter = aes_dbg_filter_substantive();
-                if !filter {
-                    eprintln!("[rs-aes-tick] conj=0 substantive=false (short-circuit:add_eqs-multi-maude)");
-                }
-            }
-            if !local_subst.is_empty() {
-                self.subst = local_subst.compose(&self.subst);
-            }
+        let unifiers = if residuals.is_empty() {
+            vec![Vec::new()]
         } else {
-            // Unconditional apply_eq_store call (matches HS's
-            // unconditional applyEqStoreAt).  When local_subst is empty,
-            // newsubst = self.subst (unchanged) and each existing disj
-            // subst gets a fresh applyBound pass — idempotent IFF disj
-            // keys are disjoint from self.subst.dom (the addRuleVariants
-            // invariant), but observably equivalent to HS in any case.
-            self.apply_eq_store(maude, &local_subst)?;
+            maude.unify(&residuals).map_err(AddEqsError::from)?
+        };
+        match unifiers.as_slice() {
+            [] => {
+                self.conj = Self::false_conj();
+                Ok(None)
+            }
+            [u] if u.is_empty() => {
+                self.apply_eq_store(maude, &subst)?;
+                Ok(None)
+            }
+            _ => {
+                self.apply_eq_store(maude, &subst)?;
+                let substs = unifiers.into_iter().map(LNSubstVFresh::from_list).collect();
+                Ok(Some(self.add_disj(substs)))
+            }
         }
-        let mut substs: Vec<LNSubstVFresh> = Vec::with_capacity(unifiers.len());
-        for raw in unifiers {
-            let s = LNSubstVFresh::from_list(raw);
-            substs.push(s);
-        }
-        Ok(Some(self.add_disj(substs)))
     }
 }
 
 #[derive(Debug, Clone)]
 pub enum AddEqsError {
     Maude(String),
+    /// A cancelled Maude call stays a cancellation.
+    Cancelled,
+}
+
+impl From<MaudeError> for AddEqsError {
+    fn from(error: MaudeError) -> Self {
+        match error {
+            MaudeError::Cancelled => AddEqsError::Cancelled,
+            error => AddEqsError::Maude(error.to_string()),
+        }
+    }
 }
 
 impl std::fmt::Display for AddEqsError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             AddEqsError::Maude(s) => write!(f, "Maude error: {}", s),
+            AddEqsError::Cancelled => f.write_str("request cancelled"),
         }
     }
 }
@@ -796,84 +394,35 @@ fn subst_domain_range_overlap(asubst: &LNSubst) -> bool {
 // =============================================================================
 
 impl EquationStore {
-    /// `addRuleVariants disj store` — extends the store's conjunction
-    /// with the given precomputed AC variants (a disjunction of
-    /// fresh-range substitutions). Mirrors Haskell's `addRuleVariants`.
-    /// Errors if the variants share variables with the free
-    /// substitution's domain (Haskell `error`'s here).
-    pub fn add_rule_variants(
-        &mut self,
-        variants: Vec<LNSubstVFresh>,
-    ) -> Result<SplitId, &'static str> {
-        // Domain-disjointness check: free-subst domain must not
-        // overlap with any variant's domain.
-        let free_dom: BTreeSet<LVar> = self.subst.dom().copied().collect();
-        for v in &variants {
-            if v.dom().any(|x| free_dom.contains(x)) {
-                return Err("addRuleVariants: nonempty intersection between domain \
-                     of variants and free substitution");
-            }
+    /// `addRuleVariants` (EquationStore.hs): add a rule's precomputed
+    /// variant disjunction. Like Haskell, aborts if a variant's domain meets
+    /// the free substitution's domain, a case that is not implemented.
+    pub fn add_rule_variants(&mut self, variants: Vec<LNSubstVFresh>) -> SplitId {
+        if variants
+            .iter()
+            .any(|v| v.dom().any(|x| self.subst.image_of(x).is_some()))
+        {
+            panic!(
+                "addRuleVariants: Nonempty intersection between domain of variants and free \
+                 substitution. This case has not been implemented, add rule variants earlier."
+            );
         }
-        Ok(self.add_disj(variants))
+        self.add_disj(variants)
     }
 }
 
 // =============================================================================
-// Simplification (Maude-free pieces)
+// Simplification
 // =============================================================================
 
-impl EquationStore {
-    /// Mirrors `simp` from Haskell: a fixed-point loop running each
-    /// simp1 pass until no further changes. Returns the new store.
-    ///
-    /// The Maude-using passes (`simp_singleton`, `simp_abstract_*`
-    /// that need fresh-variable generation) are not run here — use
-    /// `simp_with_fresh_avoiding` for the full pipeline. The passes
-    /// this variant runs, in execution order, are:
-    ///
-    /// - `simp_minimize` (with a caller-supplied contradiction predicate)
-    /// - `simp_remove_renamings`
-    /// - `simp_empty_disj`
-    /// - `simp_identify`
-    /// - `simp_abstract_name`
-    ///
-    /// NOT solve-path faithful and effectively test-only: its only callers
-    /// are the in-file tests, so it is gated behind `#[cfg(test)]`.  Unlike
-    /// `simp_with_fresh_avoiding`, this variant does NOT call
-    /// `sort_disj_substs` between passes, so after `simp_minimize` reorders
-    /// substs in insertion order, `d.substs[0]` (probed by `simp_identify`
-    /// / `simp_abstract_name`) may no longer be the `Ord`-least element that
-    /// HS's `Data.Set`-based `foreachDisj` would see.  Production code must
-    /// use `simp_with_fresh_avoiding`.
-    #[cfg(test)]
-    pub fn simp<F: Fn(&LNSubst, &LNSubstVFresh) -> bool>(mut self, is_contr: F) -> Self {
-        // HS-faithful pass order (EquationStore.hs `simp1`).  This
-        // variant lacks a fresh-idx allocator + Maude handle, so it skips
-        // the passes that need them: simpSingleton, simpAbstractSortedVar,
-        // simpAbstractFun.  Callers that need the full simp pipeline
-        // should use `simp_with_fresh_avoiding`.
-        loop {
-            if self.is_false() {
-                return self;
-            }
-            let mut changed = false;
-            let subst_snapshot = self.subst.clone();
-            changed |= self.simp_minimize(|s| is_contr(&subst_snapshot, s));
-            changed |= self.simp_remove_renamings();
-            changed |= self.simp_empty_disj();
-            changed |= self.simp_identify();
-            changed |= self.simp_abstract_name();
-            if !changed {
-                return self;
-            }
-        }
-    }
+/// The result of one `foreachDisj` pass on a disjunction: the factor to
+/// apply to the store, and the disjunction to put in its place (`None`
+/// drops it).
+type DisjStep = Option<(LNSubst, Option<Vec<LNSubstVFresh>>)>;
 
-    /// HS-faithful Set ordering: sort each disj's substs by Ord and
-    /// dedupe (mirrors `S.fromList` invariant in HS's `Disj`).  Called
-    /// after every simp pass that mutates substs so the FIRST subst
-    /// (used by simp_identify/simp_abstract_fun probing) matches HS's
-    /// Set-first variant.
+impl EquationStore {
+    /// Restore HS's `Set` invariant on every disjunction: sorted, no
+    /// duplicates.
     pub fn sort_disj_substs(&mut self) {
         for d in self.conj.iter_mut() {
             d.substs.sort();
@@ -920,23 +469,25 @@ impl EquationStore {
     /// `simpMinimize`: dedupe substitutions within a disjunction; if a
     /// disjunction contains the empty subst (i.e. a tautology), reduce
     /// it to just that. Also drops substs flagged contradictory by
-    /// `is_contr`.
-    pub fn simp_minimize<F: Fn(&LNSubstVFresh) -> bool>(&mut self, is_contr: F) -> bool {
+    /// `is_contr`, whose failure aborts the pass.
+    pub fn simp_minimize<E, F: Fn(&LNSubstVFresh) -> Result<bool, E>>(
+        &mut self,
+        is_contr: F,
+    ) -> Result<bool, E> {
         let mut changed = false;
         let empty = LNSubstVFresh::empty();
         for d in self.conj.iter_mut() {
-            // Fast path: if no duplicate, no empty, and no contradictory subst
-            // exists, this disj is left untouched (no change, no clone).  This
-            // is the common case.  `simp_with_fresh_avoiding` keeps every disj
-            // sorted and deduplicated (`sort_disj_substs`), so a strictly
-            // ascending disj, checked in n - 1 comparisons, has no duplicate.
-            // Otherwise duplicates are found through an ordered set (`Ord`
-            // agrees with `Eq`, both derived).  A pairwise scan was O(n^2)
-            // whole-substitution comparisons per disj per `simp` round, which
-            // dominated `splitEqs` on large AC-unifier disjunctions
-            // (bilinear-pairing `Joux`: ~90 s for one 160-case split).
+            // Fast path: a strictly ascending disjunction (as `simp` keeps
+            // them) has no duplicate; leave it alone unless it holds the
+            // empty or a contradictory substitution.
             let sorted = d.substs.windows(2).all(|w| w[0] < w[1]);
-            let needs_special = d.substs.iter().any(|s| s == &empty || is_contr(s));
+            let mut needs_special = false;
+            for s in &d.substs {
+                if s == &empty || is_contr(s)? {
+                    needs_special = true;
+                    break;
+                }
+            }
             if sorted && !needs_special {
                 continue;
             }
@@ -949,20 +500,19 @@ impl EquationStore {
                 // `insert` returns `false` if the element was already present.
                 d.substs.iter().filter(|s| distinct.insert(*s)).collect()
             };
-            // Haskell-faithful `simpMinimize` (EquationStore.hs):
-            // if any subst is empty (vacuously true) OR contradictory,
-            // reduce the disj.  If empty present → singleton empty
-            // (next pass simpSingleton folds it into the free subst).
-            // Otherwise filter out contradictory substs.
-            //
-            // The variant-SplitG-preservation case is handled upstream
-            // in `apply_eq_store` via `renameAvoiding`, which prevents
-            // the narrowing variant from collapsing to an empty subst.
+            // `minimize`: the empty substitution subsumes the rest;
+            // otherwise drop the contradictory ones.
             if needs_special {
                 if seen.iter().any(|s| **s == empty) {
                     seen = vec![&empty];
                 } else {
-                    seen.retain(|s| !is_contr(s));
+                    let mut kept = Vec::with_capacity(seen.len());
+                    for s in seen {
+                        if !is_contr(s)? {
+                            kept.push(s);
+                        }
+                    }
+                    seen = kept;
                 }
             }
             // `seen` keeps the order of `d.substs` (and `[empty]` has length
@@ -973,553 +523,38 @@ impl EquationStore {
                 changed = true;
             }
         }
-        changed
+        Ok(changed)
     }
 
-    /// Compose `factor` into the free substitution, re-unifying remaining
-    /// disjs via `apply_eq_store` when its domain/range precondition holds
-    /// and a Maude handle is present. Otherwise compose directly. Transport
-    /// failures propagate; they never select the compose fallback.
-    /// Shared HS-faithful `foreachDisj` tail (EquationStore.hs).
-    fn apply_factor_or_compose(
-        &mut self,
-        factor: &LNSubst,
-        maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
-    ) -> Result<(), AddEqsError> {
-        if let Some(m) = maude
-            && !subst_domain_range_overlap(factor)
-        {
-            self.apply_eq_store(m, factor)?;
-        } else {
-            self.subst = factor.compose(&self.subst);
-        }
-        Ok(())
-    }
-
-    /// Shared tail of the `simp_abstract_*`/`simp_identify` passes: replace
-    /// disjunction `idx` with `new_substs`, then apply `factor` via
-    /// `apply_factor_or_compose`.  Preserves the HS `foreachDisj`
-    /// replace-then-apply order.  Always returns `true`.
-    fn replace_disj_and_apply(
-        &mut self,
-        idx: usize,
-        new_substs: Vec<LNSubstVFresh>,
-        factor: &LNSubst,
-        maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
-    ) -> Result<bool, AddEqsError> {
-        self.conj[idx].substs = new_substs;
-        self.apply_factor_or_compose(factor, maude)?;
-        Ok(true)
-    }
-
-    /// `simpAbstractName`: if every substitution in a disjunction maps
-    /// the same variable `v` to the same constant `c`, factor `{v →
-    /// c}` out into the free substitution and drop those mappings.
-    pub fn simp_abstract_name(&mut self) -> bool {
-        self.simp_abstract_name_with_maude(None)
-            .expect("Maude-free simplification")
-    }
-
-    /// HS-faithful variant of `simp_abstract_name` that takes a Maude
-    /// handle and calls `apply_eq_store` on the factored subst to
-    /// re-unify remaining disjs (mirrors HS's `foreachDisj` at
-    /// EquationStore.hs).
-    pub fn simp_abstract_name_with_maude(
-        &mut self,
-        maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
-    ) -> Result<bool, AddEqsError> {
-        // Walk each disjunction and look for a common (v, const)
-        // mapping.
-        let mut common_mapping: Option<(LVar, LNTerm, usize)> = None;
-        for (idx, d) in self.conj.iter().enumerate() {
-            if d.substs.is_empty() {
-                continue;
-            }
-            let first = &d.substs[0];
-            // For each (v, t) in first where t is a constant, check
-            // every other subst maps v to the same t.  Borrowing scan —
-            // entries are cloned only on the (rare) match.
-            for (v, t) in first.iter() {
-                if !is_constant_term(t) {
-                    continue;
-                }
-                let common = d
-                    .substs
-                    .iter()
-                    .all(|s| s.image_of(v).map(|got| got == t).unwrap_or(false));
-                if common {
-                    common_mapping = Some((*v, t.clone(), idx));
-                    break;
-                }
-            }
-            if common_mapping.is_some() {
-                break;
-            }
-        }
-        let (v, t, idx) = match common_mapping {
-            Some(p) => p,
-            None => return Ok(false),
-        };
-        // Compose `{v → t}` into the free substitution and drop `v`
-        // from every subst in disjunction `idx`.
-        let factor = LNSubst::from_list(vec![(v, t)]);
-        // HS-faithful order (`foreachDisj`, EquationStore.hs):
-        // REPLACE the disj FIRST, THEN applyEqStore.  (For simpAbstractName
-        // the factor's range is a constant; we follow the HS replace-then-
-        // apply order so correctness rests on matching HS, not on any
-        // independent neutrality argument.)
-        let new_substs: Vec<LNSubstVFresh> = self.conj[idx]
-            .substs
-            .iter()
-            .map(|s| {
-                let kept = without_key(s, &v);
-                LNSubstVFresh::from_list(kept)
-            })
-            .collect();
-        self.replace_disj_and_apply(idx, new_substs, &factor, maude)
-    }
-
-    /// `simpIdentify`: if every subst in a disjunction has two
-    /// different variables `x` and `y` (with `x < y` and same sort)
-    /// mapped to the same image, factor `{x → y}` and drop `x` from
-    /// every subst.
-    ///
-    /// HS-faithful: also runs `applyEqStore` on the factor (per HS's
-    /// `foreachDisj` wrapper in EquationStore.hs) so variants get
-    /// re-unified against the new free subst. Without this, variants
-    /// that would conflict with the new free subst stay around.
-    pub fn simp_identify(&mut self) -> bool {
-        self.simp_identify_with_maude(None)
-            .expect("Maude-free simplification")
-    }
-
-    /// Maude-using variant of `simp_identify` (HS-faithful).
-    pub fn simp_identify_with_maude(
-        &mut self,
-        maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
-    ) -> Result<bool, AddEqsError> {
-        let mut to_apply: Option<(LVar, LVar, usize)> = None;
-        for (idx, d) in self.conj.iter().enumerate() {
-            if d.substs.is_empty() {
-                continue;
-            }
-            let first = &d.substs[0];
-            // Find all (v, v') pairs in `first` with same image, v < v'.
-            // Borrowing scan (same entry order as `to_list`); pairs are
-            // cloned only when pushed.
-            let pairs: Vec<(LVar, LVar)> = {
-                let entries: Vec<(&LVar, &LNTerm)> = first.iter().collect();
-                let mut out = Vec::new();
-                for (i, (v, t)) in entries.iter().enumerate() {
-                    for (v2, t2) in entries.iter().skip(i + 1) {
-                        if t == t2 && v < v2 {
-                            out.push((*(*v), *(*v2)));
-                        }
-                    }
-                }
-                out
-            };
-            for (v, v2) in &pairs {
-                let agrees = d.substs.iter().skip(1).all(|s| {
-                    let i1 = s.image_of(v);
-                    let i2 = s.image_of(v2);
-                    i1.is_some() && i1 == i2
-                });
-                if agrees {
-                    to_apply = Some((*v, *v2, idx));
-                    break;
-                }
-            }
-            if to_apply.is_some() {
-                break;
-            }
-        }
-        let (v, v2, idx) = match to_apply {
-            Some(p) => p,
-            None => return Ok(false),
-        };
-        // Decide which to keep: the variable with the larger sort
-        // (Tamarin says "GT means keep first"; we use the same rule).
-        let (keep, remove) = match sort_compare(v.sort, v2.sort) {
-            Some(std::cmp::Ordering::Greater) => (v2, v),
-            Some(_) => (v, v2),
-            None => return Ok(false), // incomparable sorts; bail
-        };
-        let factor = LNSubst::from_list(vec![(
-            remove,
-            tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(keep)),
-        )]);
-        // HS-faithful: apply factor via apply_eq_store (re-unifies
-        // variants against new free subst).  Falls back to compose if
-        // no Maude handle.
-        let _id_guard = crate::constraint::solver::trace::OpLabelGuard::force(&format!(
-            "simpIdentify@{}",
-            crate::constraint::solver::trace::current_op_label()
-        ));
-        // HS-faithful order (`foreachDisj`): REPLACE the disj (remove
-        // `keep` from every subst) FIRST, THEN apply_eq_store the factor.
-        // Same rationale as simpAbstractFun (avoids splitting shared range
-        // witnesses by re-unifying the un-updated disj).
-        // Remove `keep` from every subst in disjunction `idx`.
-        let new_substs: Vec<LNSubstVFresh> = self.conj[idx]
-            .substs
-            .iter()
-            .map(|s| {
-                let kept = without_key(s, &keep);
-                LNSubstVFresh::from_list(kept)
-            })
-            .collect();
-        self.replace_disj_and_apply(idx, new_substs, &factor, maude)
-    }
-
-    /// `simpAbstractSortedVar`: if every substitution `si` in a
-    /// disjunction maps a variable `v` to variables `xi` of the SAME
-    /// sort `s` that is STRICTLY narrower than `lvarSort v`, then they
-    /// all contain the common factor `{v → y}` for a fresh variable
-    /// `y` of sort `s`, and we can replace `{v → xi}` by `{y → xi}` in
-    /// all `si`.
-    ///
-    /// Haskell reference (EquationStore.hs `simpAbstractSortedVar`):
-    /// ```haskell
-    /// simpAbstractSortedVar (subst:others) = case commonSortedVar of
-    ///     (v, s, lvs):_ -> do
-    ///         fv <- freshLVar (lvarName v) s
-    ///         return $ Just (Just $ substFromList [(v, varTerm fv)]
-    ///                       , [S.fromList (zipWith (replaceMapping v fv) lvs (subst:others))])
-    ///   where
-    ///     commonSortedVar = do
-    ///         (v, (viewTerm -> Lit (Var lx))) <- substToListVFresh subst
-    ///         guard (sortCompare (lvarSort v) (lvarSort lx) == Just GT)
-    ///         let images = map (\s -> imageOfVFresh s v) others
-    ///             goodImages = [ ly | Just (viewTerm -> Lit (Var ly)) <- images
-    ///                                , lvarSort lx == lvarSort ly]
-    ///         guard (length images == length goodImages)
-    ///         return (v, lvarSort lx, (lx:goodImages))
-    /// ```
-    ///
-    /// This is the pass that narrows protocol rule body Msg-vars to
-    /// Fresh witnesses when the variant constraints all map them to
-    /// Fresh vars — load-bearing for `hasImpossibleChain` to fire on
-    /// destructor extensions through TLS-style `senc(<...>, h)` payloads
-    /// (otherwise the chain conc keeps Msg-var `sid` and the check
-    /// can't determine root symbols).
-    ///
-    /// Takes a Maude handle and calls `apply_eq_store` on the factored
-    /// subst to re-unify remaining disjs (mirrors HS's `foreachDisj` at
-    /// EquationStore.hs).
-    pub fn simp_abstract_sorted_var_with_maude<F: FnMut(u64) -> u64>(
-        &mut self,
-        alloc: &mut F,
-        maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
-    ) -> Result<bool, AddEqsError> {
-        use tamarin_term::lterm::LVar;
-        use tamarin_term::term::Term;
-        use tamarin_term::vterm::Lit;
-        let mut to_apply: Option<(LVar, tamarin_term::lterm::LSort, Vec<LVar>, usize)> = None;
-        for (idx, d) in self.conj.iter().enumerate() {
-            if d.substs.is_empty() {
-                continue;
-            }
-            let first = &d.substs[0];
-            // Borrowing scan — entries are cloned only on match.
-            for (v, t) in first.iter() {
-                let lx = match t {
-                    Term::Lit(Lit::Var(lx)) => *lx,
-                    _ => continue,
-                };
-                if !matches!(
-                    sort_compare(v.sort, lx.sort),
-                    Some(std::cmp::Ordering::Greater)
-                ) {
-                    continue;
-                }
-                let mut lvs: Vec<LVar> = vec![lx];
-                let mut all_match = true;
-                for other in d.substs.iter().skip(1) {
-                    match other.image_of(v) {
-                        Some(Term::Lit(Lit::Var(ly))) if ly.sort == lx.sort => {
-                            lvs.push(*ly);
-                        }
-                        _ => {
-                            all_match = false;
-                            break;
-                        }
-                    }
-                }
-                if all_match {
-                    to_apply = Some((*v, lx.sort, lvs, idx));
-                    break;
-                }
-            }
-            if to_apply.is_some() {
-                break;
-            }
-        }
-        let (v, s, lvs, idx) = match to_apply {
-            Some(p) => p,
-            None => return Ok(false),
-        };
-        // Allocate a fresh witness fv with the narrower sort `s`.
-        let new_idx = alloc(1);
-        let fv = LVar {
-            name: v.name,
-            sort: s,
-            idx: new_idx,
-        };
-        // Compose {v → Var(fv)} into the free substitution.
-        let factor = LNSubst::from_list(vec![(v, Term::Lit(Lit::Var(fv)))]);
-        // HS-faithful: foreachDisj (EquationStore.hs) REPLACES
-        // the disj with the abstracted substs FIRST, THEN calls
-        // `applyEqStore hnd msubst`.  Apply the abstraction to the disj
-        // before re-unifying (matching the simpAbstractFun fix — see
-        // rationale there: re-unifying the un-abstracted disj can split
-        // shared range witnesses).
-        // For each (subst, lv) pair, remove (v, _) and add (fv, Var(lv)).
-        let new_substs: Vec<LNSubstVFresh> = self.conj[idx]
-            .substs
-            .iter()
-            .zip(lvs.iter())
-            .map(|(s, lv)| {
-                let mut kept = without_key(s, &v);
-                kept.push((fv, Term::Lit(Lit::Var(*lv))));
-                LNSubstVFresh::from_list(kept)
-            })
-            .collect();
-        self.replace_disj_and_apply(idx, new_substs, &factor, maude)
-    }
-
-    /// `simpAbstractFun`: if every substitution in a disjunction maps
-    /// the same variable `v` to terms with the SAME outermost function
-    /// symbol `o`, factor `{v → o(x1,...,xk)}` (with fresh xi vars) into
-    /// the free substitution and replace `v`'s mapping in each subst
-    /// with mappings `{x1 → arg[0], x2 → arg[1], ...}`.
-    ///
-    /// For AC operators (multiset, exp, etc.) only the FIRST TWO
-    /// arguments are factored (since AC args are unordered, only the
-    /// "left/right split" is meaningful): factor `{v → o(x1, x2)}` with
-    /// `x2 → o(rest)` if the original had >2 args.
-    ///
-    /// Mirrors HS `simpAbstractFun` (EquationStore.hs).
-    ///
-    /// Takes a Maude handle and calls `apply_eq_store` on the factored
-    /// subst to re-unify remaining disjs (mirrors HS's `foreachDisj` at
-    /// EquationStore.hs).  This pass always runs, matching HS `simp1`
-    /// where `b7 <- foreachDisj hnd simpAbstractFun` is an unconditional
-    /// member of the simplification fixed point.
-    pub fn simp_abstract_fun_with_maude<F: FnMut(u64) -> u64>(
-        &mut self,
-        alloc: &mut F,
-        maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
-    ) -> Result<bool, AddEqsError> {
-        use tamarin_term::function_symbols::FunSym;
-        use tamarin_term::lterm::{LSort, LVar};
-        use tamarin_term::term::Term;
-        use tamarin_term::vterm::Lit;
-
-        // Find (disj_idx, v, op, argss) where v has the same outermost
-        // function symbol across every subst in the disjunction.
-        // argss[i] = args of subst[i]'s mapping for v.
-        let mut to_apply: Option<(usize, LVar, FunSym, Vec<Vec<LNTerm>>)> = None;
-        'outer: for (idx, d) in self.conj.iter().enumerate() {
-            if d.substs.is_empty() {
-                continue;
-            }
-            let first = &d.substs[0];
-            // Borrowing scan — entries are cloned only on match.
-            for (v, t) in first.iter() {
-                let (op, args0) = match t {
-                    Term::App(o, a) => (*o, a.to_vec()),
-                    _ => continue,
-                };
-                let mut argss: Vec<Vec<LNTerm>> = vec![args0];
-                let mut ok = true;
-                for other in d.substs.iter().skip(1) {
-                    match other.image_of(v) {
-                        Some(Term::App(o2, a2)) if o2 == &op => {
-                            argss.push(a2.to_vec());
-                        }
-                        _ => {
-                            ok = false;
-                            break;
-                        }
-                    }
-                }
-                if ok {
-                    to_apply = Some((idx, *v, op, argss));
-                    break 'outer;
-                }
-            }
-        }
-        let (idx, v, op, argss) = match to_apply {
-            Some(p) => p,
-            None => return Ok(false),
-        };
-
-        // For non-AC operators, all argss MUST have the same length
-        // (since outer symbol is identical). For AC, can have varying
-        // arities.
-        let first_arity = argss[0].len();
-        let same_arity = argss.iter().all(|a| a.len() == first_arity);
-
-        Ok(if !op.is_ac() || same_arity {
-            // Abstract ALL arguments.  Allocate `first_arity` fresh
-            // Msg-sort vars.
-            let mut fvars: Vec<LVar> = Vec::with_capacity(first_arity);
-            for _ in 0..first_arity {
-                let idx_alloc = alloc(1);
-                fvars.push(LVar {
-                    name: "x",
-                    sort: LSort::Msg,
-                    idx: idx_alloc,
-                });
-            }
-            // Build factor `{v → op(x1, ..., xk)}`.
-            let factor = LNSubst::from_list(vec![(
-                v,
-                Term::App(
-                    op,
-                    fvars.iter().map(|fv| Term::Lit(Lit::Var(*fv))).collect(),
-                ),
-            )]);
-            // Apply factor (via apply_eq_store if maude available).
-            // Tag the apply_eq_store with simp_abstract_fun
-            // label so HS↔RS per-label call counts match HS's
-            // `foreachDisj:simpAbstractFun@<outer>` site naming.
-            // `force` because we want to PREPEND a simp pass marker
-            // even though an outer label exists (so the trace shows
-            // both passes).
-            let _abs_fun_guard = crate::constraint::solver::trace::OpLabelGuard::force(&format!(
-                "simpAbstractFun@{}",
-                crate::constraint::solver::trace::current_op_label()
-            ));
-            // HS-faithful order (`foreachDisj`, EquationStore.hs):
-            // REPLACE the disjunction with the abstracted substs FIRST,
-            // THEN run `applyEqStore` with the factored free subst.  Do NOT
-            // run apply_eq_store before replacing the disj: re-unifying the
-            // un-abstracted disj substs (still carrying `v → op(a, b)`)
-            // against the new free subst `{v → op(x1, x2)}` re-allocates
-            // witnesses for OTHER range terms that shared `a, b` (e.g. a
-            // sibling `pcsig2 → pcs(op(a, b), ...)` entry), splitting the
-            // shared `a, b` into distinct fresh vars — the resolved1 linkage
-            // break (Out's `sign(a,b)` vs In's `pcs(sign(a',b'),...)`).
-            // Applying the abstraction to the disj first makes `a, b`
-            // cleanly bound via `{x1 → a, x2 → b}`, and the subsequent
-            // apply_eq_store re-unifies the ALREADY-abstracted disj,
-            // preserving the share.
-            let new_substs: Vec<LNSubstVFresh> = self.conj[idx]
-                .substs
-                .iter()
-                .zip(argss.iter())
-                .map(|(s, args)| {
-                    let mut kept = without_key(s, &v);
-                    for (fv, a) in fvars.iter().zip(args.iter()) {
-                        kept.push((*fv, a.clone()));
-                    }
-                    LNSubstVFresh::from_list(kept)
-                })
-                .collect();
-            self.replace_disj_and_apply(idx, new_substs, &factor, maude)?
-        } else {
-            // AC operator with varying arity: factor first two args.
-            let fv1_idx = alloc(1);
-            let fv2_idx = alloc(1);
-            let fv1 = LVar {
-                name: "x",
-                sort: LSort::Msg,
-                idx: fv1_idx,
-            };
-            let fv2 = LVar {
-                name: "x",
-                sort: LSort::Msg,
-                idx: fv2_idx,
-            };
-            // Factor: `{v → op(fv1, fv2)}`
-            let factor = LNSubst::from_list(vec![(
-                v,
-                Term::App(
-                    op,
-                    vec![Term::Lit(Lit::Var(fv1)), Term::Lit(Lit::Var(fv2))].into(),
-                ),
-            )]);
-            // HS-faithful order (`foreachDisj`): replace the disj FIRST,
-            // then apply_eq_store the factor.  See the non-AC branch above
-            // for the rationale (resolved1 linkage break).
-            // For each subst with args = [a1, a2, ...]:
-            //   if length 2: add (fv1, a1), (fv2, a2)
-            //   else (>2):   add (fv1, a1), (fv2, op(a2, a3, ...))
-            let new_substs: Vec<LNSubstVFresh> = self.conj[idx]
-                .substs
-                .iter()
-                .zip(argss.iter())
-                .map(|(s, args)| {
-                    let mut kept = without_key(s, &v);
-                    // HS-faithful `newMappings` (EquationStore.hs): `newMappings []` ERRORS ("AC symbols must have
-                    // arity >= 2"); silently bailing here would leave a
-                    // malformed store (the factor `{v -> op(fv1,fv2)}` is
-                    // composed into the free subst below regardless, while this
-                    // subst would still bind `v`).  This branch is unreachable
-                    // in practice (AC ops are always arity >= 2), so matching
-                    // HS's hard error is the correct invariant.
-                    let (a1, a_rest) = match args.as_slice() {
-                        [] => panic!("simpAbstract: impossible, AC symbols must have arity >= 2."),
-                        // `newMappings [a1,a2] = [(fv1,a1),(fv2,a2)]`
-                        [a1, a2] => (a1.clone(), a2.clone()),
-                        // `newMappings (a:as) = [(fv1,a),(fv2,fApp o as)]`
-                        [a1, rest @ ..] => (a1.clone(), Term::App(op, rest.to_vec().into())),
-                    };
-                    kept.push((fv1, a1));
-                    kept.push((fv2, a_rest));
-                    LNSubstVFresh::from_list(kept)
-                })
-                .collect();
-            self.replace_disj_and_apply(idx, new_substs, &factor, maude)?
-        })
-    }
-
-    /// Variant of `simp` that also runs `simp_singleton` — converts
-    /// singleton disjunctions (one substitution as the only disjunct)
-    /// into free-substitution composition via `freshToFree`.  Mirrors
-    /// Haskell's `simpSingleton` (EquationStore.hs) wired into
-    /// `simp1` via `foreachDisj`.
-    ///
-    /// Requires a fresh-idx allocator (typically wrapping
-    /// `MaudeHandle::reserve_idxs`) because `freshToFree` renames range
-    /// vars to distinct LVar idxs.
-    ///
-    pub fn simp_with_fresh_avoiding<F, G>(
+    /// `simp` (EquationStore.hs): run the `simp1` passes to a fixpoint.
+    /// `is_contr` is `simpMinimize`'s contradiction predicate, given the free
+    /// substitution as it stood at the start of the round.
+    pub fn simp<F: Fn(&LNSubst, &LNSubstVFresh) -> Result<bool, MaudeError>>(
         mut self,
+        maude: &MaudeHandle,
+        fresh: &mut FastFreshState,
         is_contr: F,
-        mut alloc: G,
-        maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
-    ) -> Result<Self, AddEqsError>
-    where
-        F: Fn(&LNSubst, &LNSubstVFresh) -> bool,
-        G: FnMut(u64) -> u64,
-    {
-        // HS-faithful pass order (EquationStore.hs `simp1`):
-        //   1. simpMinimize
-        //   2. simpRemoveRenamings
-        //   3. simpEmptyDisj
-        //   4. simpSingleton          (via foreachDisj)
-        //   5. simpAbstractSortedVar  (via foreachDisj)
-        //   6. simpIdentify           (via foreachDisj)
-        //   7. simpAbstractFun        (via foreachDisj)
-        //   8. simpAbstractName       (via foreachDisj)
-        //
-        // HS-faithful order matters: simpAbstractSortedVar can introduce
-        // new mappings that simpIdentify then collapses; simpAbstractFun
-        // fires before simpAbstractName so common Fun-headed images get
-        // factored before common name constants.
-        // Ensure substs are sorted on entry (mirrors HS's Set
-        // invariant after addRuleVariants → S.fromList).
+    ) -> Result<Self, AddEqsError> {
+        // `foreachDisj` passes look at the first substitution of a
+        // disjunction in `Set` order, so keep every disjunction sorted.
         self.sort_disj_substs();
+        let passes: [fn(&mut FastFreshState, &LNSubst, &[LNSubstVFresh]) -> DisjStep; 5] = [
+            simp_singleton,
+            simp_abstract_sorted_var,
+            simp_identify,
+            simp_abstract_fun,
+            simp_abstract_name,
+        ];
         loop {
             if self.is_false() {
                 return Ok(self);
             }
             let mut changed = false;
             let subst_snapshot = self.subst.clone();
-            if self.simp_minimize(|s| is_contr(&subst_snapshot, s)) {
+            if self
+                .simp_minimize(|s| is_contr(&subst_snapshot, s))
+                .map_err(AddEqsError::from)?
+            {
                 changed = true;
                 self.sort_disj_substs();
             }
@@ -1528,31 +563,11 @@ impl EquationStore {
                 self.sort_disj_substs();
             }
             changed |= self.simp_empty_disj();
-            // ALWAYS fold singleton variant disjs into the free subst —
-            // this is exactly what HS does.  HS's `simp1` runs
-            // `b4 <- foreachDisj hnd simpSingleton` unconditionally on
-            // every disj (EquationStore.hs `simp1`), with NO precompute guard;
-            // `simpSingleton [subst0]` folds a singleton disj via
-            // `freshToFree` into the free subst (EquationStore.hs `simpSingleton`).
-            if self.simp_singleton_avoiding(&mut alloc, maude)? {
-                changed = true;
-                self.sort_disj_substs();
-            }
-            if self.simp_abstract_sorted_var_with_maude(&mut alloc, maude)? {
-                changed = true;
-                self.sort_disj_substs();
-            }
-            if self.simp_identify_with_maude(maude)? {
-                changed = true;
-                self.sort_disj_substs();
-            }
-            if self.simp_abstract_fun_with_maude(&mut alloc, maude)? {
-                changed = true;
-                self.sort_disj_substs();
-            }
-            if self.simp_abstract_name_with_maude(maude)? {
-                changed = true;
-                self.sort_disj_substs();
+            for pass in passes {
+                if self.foreach_disj(maude, fresh, pass)? {
+                    changed = true;
+                    self.sort_disj_substs();
+                }
             }
             if !changed {
                 return Ok(self);
@@ -1560,696 +575,322 @@ impl EquationStore {
         }
     }
 
-    /// `simpSingleton`: if a disjunction has exactly one substitution,
-    /// fold that subst into the free substitution (via `freshToFree`)
-    /// and drop the disjunction.  This is what propagates picked
-    /// variant subst bindings into the eq-store's free subst, which
-    /// then gets pushed into rule terms by `substSystem` /
-    /// `substNodes` / `normDG`.
-    ///
-    /// Haskell reference:
-    /// ```haskell
-    /// simpSingleton [subst0] = do
-    ///         subst <- freshToFree subst0
-    ///         return (Just (Just subst, []))
-    /// simpSingleton _        = return Nothing
-    /// ```
-    /// Plus `foreachDisj`'s wiring that calls `applyEqStore hnd subst`
-    /// on the resulting `Just subst`.  We compose into `self.subst`
-    /// directly — this is sound when the new subst's domain is
-    /// disjoint from `self.subst`'s range.
-    ///
-    /// If `maude` is `Some`, after composing the folded factor into the
-    /// free subst, also re-unifies any REMAINING disj substs against
-    /// the new free subst via `apply_eq_store`.  HS-faithful:
-    /// `foreachDisj` (EquationStore.hs) does
-    /// `MS.modify (applyEqStore hnd msubst)` after replacing the
-    /// disj.  Without this, remaining variants stay un-refined and
-    /// `perform_split` enumerates stale shapes.  Pass `None` for the
-    /// test-only path that doesn't have a Maude handle.
-    pub fn simp_singleton_avoiding<F: FnMut(u64) -> u64>(
+    /// `foreachDisj` (EquationStore.hs): run `pass` on each disjunction
+    /// in turn until it fires, then replace that disjunction and apply the
+    /// factor to the store.
+    fn foreach_disj(
         &mut self,
-        alloc: &mut F,
-        maude: Option<&tamarin_term::maude_proc::MaudeHandle>,
+        maude: &MaudeHandle,
+        fresh: &mut FastFreshState,
+        pass: fn(&mut FastFreshState, &LNSubst, &[LNSubstVFresh]) -> DisjStep,
     ) -> Result<bool, AddEqsError> {
-        // Find the first singleton disjunction (1 subst).
-        let pos = self.conj.iter().position(|d| d.substs.len() == 1);
-        let Some(pos) = pos else {
-            return Ok(false);
-        };
-        let subst_vf = self.conj[pos].substs[0].clone();
-        // Drop the singleton disjunction.
-        self.conj.remove(pos);
-        if subst_vf.is_empty() {
-            // HS `simpSingleton` fires for the EMPTY singleton too:
-            // `freshToFree emptySubstVFresh` is empty, and `foreachDisj`
-            // UNCONDITIONALLY runs `applyEqStoreAt "foreachDisj:simpSingleton"`
-            // with that empty msubst after replacing the disj
-            // (EquationStore.hs).  An empty asubst is NOT a no-op:
-            // applyEqStore re-runs `applyBound` on every remaining disj
-            // subst, re-deriving (and RENUMBERING) their fresh witnesses
-            // under the current avoid set (renameAvoiding + unify +
-            // restrict).  Short-circuiting here left RS's surviving disj
-            // witnesses stale — JCS12 typing_assertion case_3: HS's
-            // empty-fold rounds renumber ~ltkS.12/m.9 → ~ltkS.6/m.6 before
-            // the next solveFactEqs, RS skipped them and rendered
-            // ~ltkS.9/$C.13 where HS shows ~ltkS.6/$C.10.  Same family as
-            // add_eqs' "empty-empty case must NOT be short-circuited"
-            // (LAK06 lesson).  The floor / fresh_to_free steps below are
-            // semantic no-ops for an empty subst, so skip straight to the
-            // apply_eq_store round.
-            if let Some(m) = maude {
-                self.apply_eq_store(m, &LNSubst::empty())?;
+        for idx in 0..self.conj.len() {
+            let Some((factor, replacement)) = pass(fresh, &self.subst, &self.conj[idx].substs)
+            else {
+                continue;
+            };
+            match replacement {
+                Some(substs) => self.conj[idx].substs = substs,
+                None => {
+                    self.conj.remove(idx);
+                }
             }
+            self.apply_eq_store(maude, &factor)?;
             return Ok(true);
         }
-        // HS-faithful witness-freshening floor for the already-folded free
-        // subst.  `simpSingleton` folds this disj via `freshToFree`, which in
-        // HS draws its fresh range-var renames from the ambient `MonadFresh`
-        // counter (Term/Substitution.hs → importBinding → freshLVar).
-        // That
-        // counter threads monotonically through `runReduction`, so it is
-        // ALWAYS above every idx it has ALREADY DRAWN — i.e. above the range
-        // vars of the free `eqsSubst`, which are all prior-fold outputs
-        // (`applyEqStore`'s `asubst \`compose\` eqsSubst`).  RS re-seeds a
-        // per-pop counter from `avoid sys = bounds_max`, which — HS-faithfully,
-        // matching `foldFrees (SubstVFresh) = foldFrees f . M.keys`
-        // (SubstVFresh.hs) — counts only DOMAIN keys, not range vars; when
-        // under-advanced (the WF message-derivation probe of a let-destructor
-        // rule) `alloc` could draw an idx equal to an already-folded free-subst
-        // range var, fusing two witnesses and forcing the eq-store false
-        // (foo_eligibility C_2 / fm24 C8 verdict flips).  Push the counter
-        // above `self.subst`'s range to restore HS's monotone-counter
-        // invariant.  No-op whenever the counter is already threaded above.
-        //
-        // Crucially we DO NOT floor above the un-folded sibling disjs in
-        // `self.conj`: HS's counter is NOT above those.  Their range vars are
-        // per-call-local unify witnesses (Term/Maude/Types.hs,
-        // `evalFreshAvoiding (M.elems bindings)`), seeded above the *query's*
-        // vars — NOT drawn from the `runReduction` MonadFresh counter — so HS's
-        // counter sits far below them (RYY em source: fold draws ~x.18 while
-        // SplitId(0) siblings already hold ~x.187).  HS avoids fusing the
-        // fold's fresh with a conj witness not by counter-avoidance but by
-        // `applyBound`'s `renameAvoiding (map snd slist) avoidSet` — which, on
-        // the post-fold `applyEqStore` re-unify, renames every conj disj's
-        // range away from `varsRange newsubst` (the fold's fresh vars)
-        // regardless of numeric overlap (EquationStore.hs).  RS mirrors
-        // that in `apply_eq_store`.  Flooring above the conj here instead makes
-        // each fold ratchet the counter to the max sibling witness, and the
-        // subsequent re-unify re-bases those siblings even higher — a positive
-        // feedback that inflated the KU(em(_,_)) bilinear source's witness span
-        // ~7x/pass (peak x.4393 vs HS x.653), diverging the `main/cases`
-        // raw/refined pages (task #18).
-        if let Some(m) = maude {
-            use tamarin_term::lterm::HasFrees;
-            let mut floor = 0u64;
-            for t in self.subst.range() {
-                t.for_each_free(&mut |w: &LVar| {
-                    if w.idx > floor {
-                        floor = w.idx;
-                    }
-                });
-            }
-            if floor > 0 {
-                m.ensure_above(floor);
-            }
-        }
-        let new_subst = subst_vf.fresh_to_free_avoiding(&mut *alloc);
-        // HS-faithful: foreachDisj at EquationStore.hs calls
-        // `MS.modify (applyEqStore hnd msubst)` after replacing the
-        // singleton disj.  applyEqStore composes msubst into eqsSubst
-        // AND re-unifies remaining disj substs against the new
-        // eqsSubst — so SplitG variants whose values reference the
-        // newly-bound vars get refined.  Direct compose (used only as the
-        // Err fallback below) leaves remaining variants stale, surfacing
-        // as perform_split picking different cases than HS — so the
-        // re-unifying apply_eq_store path is the faithful one.
-        // apply_factor_or_compose does: compose new_subst into self.subst +
-        // re-unify all remaining conj disjs when a Maude handle is present.
-        // Factors with overlapping domain/range, and the no-handle
-        // test-only path, use direct compose without re-unification.
-        self.apply_factor_or_compose(&new_subst, maude)?;
-        Ok(true)
+        Ok(false)
     }
 
-    /// HS-faithful `simpDisjunction` (EquationStore.hs).  HS's
-    /// `simp` runs the FULL `simp1` pipeline including `simpSingleton`
-    /// (the b4 pass in EquationStore.hs `simp1`) — that pass folds a
-    /// singleton-variant disj into the free subst via `freshToFree`.
-    ///
-    /// The test-only `simp` variant doesn't have
-    /// a fresh-idx allocator and skips simpSingleton — so a singleton
-    /// disj with non-renaming entries stays in the residual.  Callers
-    /// that have a Maude handle (e.g. `variantsProtoRule` in
-    /// RuleVariants.hs) MUST use this variant; otherwise the rule's
-    /// variant-disj retains abstrTerm entries that HS bakes into the
-    /// rule body via commonSubst (e.g. JKL_TS1_2004 Init_2: HS's rule
-    /// shows `!Sessk(~ekI, h(<~ekI, Y, 'g'^(~lkI*~lkR)>))`; without this
-    /// variant, RS's rule shows `!Sessk(~ekI, h(<~ekI, Y, z.1>))` with
-    /// the abstract `z.1` still in the residual subst → diverges
-    /// downstream source-case numbering).
-    pub fn simp_disjunction_with_maude<F: Fn(&LNSubst, &LNSubstVFresh) -> bool>(
-        substs: Vec<LNSubstVFresh>,
+    /// `simpDisjunction` (EquationStore.hs): simplify a lone disjunction,
+    /// returning the factored free substitution and the residual
+    /// disjunction (`None` when it simplified away).
+    pub fn simp_disjunction<F: Fn(&LNSubst, &LNSubstVFresh) -> Result<bool, MaudeError>>(
+        maude: &MaudeHandle,
+        fresh: &mut FastFreshState,
         is_contr: F,
-        maude: &tamarin_term::maude_proc::MaudeHandle,
+        substs: Vec<LNSubstVFresh>,
     ) -> Result<(LNSubst, Option<Vec<LNSubstVFresh>>), AddEqsError> {
         let mut store = EquationStore::empty();
-        let _ = store.add_disj(substs);
-        let alloc = |n: u64| maude.reserve_idxs(n);
-        let store = store.simp_with_fresh_avoiding(is_contr, alloc, Some(maude))?;
-        let free = store.subst.clone();
-        Ok(match store.conj.as_slice() {
-            [] => (free, None),
-            [d] => (free, Some(d.substs.clone())),
-            _ => (
-                free,
-                Some(store.conj.into_iter().flat_map(|d| d.substs).collect()),
+        store.add_disj(substs);
+        let store = store.simp(maude, fresh, is_contr)?;
+        let EquationStore { subst, conj, .. } = store;
+        Ok(match <[EqDisj; 1]>::try_from(conj) {
+            Ok([d]) => (subst, Some(d.substs)),
+            Err(conj) if conj.is_empty() => (subst, None),
+            Err(conj) => panic!(
+                "simplifyDisjunction: imposible, unexpected conjunction `{:?}'",
+                conj
             ),
         })
     }
 
-    /// `applyEqStore`: apply a free substitution to the store, going
-    /// through Maude to renormalise each disjunction's substitutions
-    /// modulo AC. Mirrors the Haskell semantics
-    /// (EquationStore.hs `applyEqStore`).
-    ///
-    /// CRITICAL semantics: for each disjunction subst `s = {(lv_i, t_i)}`,
-    /// build equations `[Equal (apply newsubst (Var lv_i)) t_i]` and
-    /// AC-unify them via Maude.  Each unifier becomes a new variant
-    /// (a single old variant may explode into several).  Variants
-    /// whose unification fails are dropped (the disjunction shrinks).
-    ///
-    /// This is what propagates rule-variant constraints when the
-    /// free subst is updated by a later `addEqs`. e.g. for
-    /// `B_1_verify`'s variant `{z → verify(s,m,pkA)}` against a
-    /// later `{z → true}`, this re-unifies as `verify(s,m,pkA) = true`
-    /// → Maude narrows to `{s → sign(x1,x2), m → x1, pkA → pk(x2)}`.
-    /// Without it, picking the variant later silently DROPS the
-    /// verify constraint (composition `(picked ∘ {z→true})(z) = true`).
-    ///
-    /// Errors if `asubst`'s domain and range overlap (Haskell errors
-    /// here too, since the resulting composition would be malformed).
-    #[track_caller]
+    /// `applyEqStore` (EquationStore.hs): compose `asubst` into the free
+    /// substitution, then re-unify every disjunction substitution against the
+    /// new free substitution (`applyBound`). A substitution may split into
+    /// several or vanish. Errors if `asubst`'s domain and range overlap, as
+    /// Haskell does.
     pub fn apply_eq_store(
         &mut self,
-        maude: &tamarin_term::maude_proc::MaudeHandle,
+        maude: &MaudeHandle,
         asubst: &LNSubst,
     ) -> Result<(), AddEqsError> {
-        let __aes_caller = std::panic::Location::caller();
-        // Domain/range disjointness check.  Streaming: walk the range terms
-        // in place and probe each free var against the domain map directly
-        // (`image_of` = `BTreeMap::get`) — same boolean as the eager
-        // dom-set ∩ range-var-set intersection, without materialising two
-        // `BTreeSet`s (plus a `vars_vterm` Vec per range term) per call on
-        // the common disjoint path.
+        use tamarin_term::rewriting::Equal;
+        use tamarin_term::subst::apply_vterm;
         if subst_domain_range_overlap(asubst) {
             return Err(AddEqsError::Maude(
                 "applyEqStore: dom and vrange not disjoint".into(),
             ));
         }
-
         let new_subst = asubst.compose(&self.subst);
-
-        // TAM_RS_DBG_APPLY_EQ_STORE=1: dump every call's asubst, IN/OUT
-        // disjs, and per-variant applyBound input/output.
-        // TAM_RS_DBG_APPLY_EQ_STORE_FILTER=substantive limits dump to
-        // calls with non-empty conj.
-        let rs_dbg = aes_dbg();
-        let rs_dbg_filter_substantive = aes_dbg_filter_substantive();
-        let rs_substantive = self.conj.iter().any(|d| !d.substs.is_empty());
-        // Build a HS-comparable site label: `<rust_site>@<op_label>`.
-        // HS emits e.g. `addEqs.single-unifier@solveTermEqs` — the part
-        // before `@` is the apply_eq_store internal call site, after `@`
-        // is the originating Reduction operation.  Match RS's convention
-        // so per-label diffs work.  The `current_op_label()` thread-local
-        // clone + `format!` only feed the `rs_dbg`-gated traces below, so
-        // skip both entirely in the common (untraced) production path.
-        let aes_site = if rs_dbg {
-            format!(
-                "{}:{}@{}",
-                __aes_caller.file(),
-                __aes_caller.line(),
-                crate::constraint::solver::trace::current_op_label()
-            )
-        } else {
-            String::new()
-        };
-        if rs_dbg && (rs_substantive || !rs_dbg_filter_substantive) {
-            eprintln!(
-                "[rs-aes-tick] site={} conj={} substantive={}",
-                aes_site,
-                self.conj.len(),
-                rs_substantive
-            );
-        }
-        let dbg_call = rs_dbg && rs_substantive;
-        if dbg_call {
-            eprintln!("[rs-aes] === call site={} ===", aes_site);
-            eprintln!("[rs-aes] asubst = {:?}", asubst.to_list());
-            eprintln!("[rs-aes] eqsSubst = {:?}", self.subst.to_list());
-            for (i, d) in self.conj.iter().enumerate() {
-                if d.substs.is_empty() {
-                    continue;
-                }
-                eprintln!(
-                    "[rs-aes] IN  disj[{}] sid={:?} ({} substs)",
-                    i,
-                    d.split_id,
-                    d.substs.len()
-                );
-                for (j, s) in d.substs.iter().enumerate() {
-                    eprintln!("  in[{}]: {:?}", j, s.to_list());
-                }
-            }
-        }
-
-        // Re-unify each disj subst against the new free subst via Maude
-        // (Haskell's `applyBound`).  For each `s = {(lv, t)}`, build
-        // equations `[Equal (apply newsubst (Var lv)) renamed_t]` and
-        // let Maude AC-unify the list; multiple unifiers split into
-        // multiple variants.
-        //
-        // The RHS terms are FRESH-RENAMED (Haskell `renameAvoiding`,
-        // EquationStore.hs `applyEqStore`, LTerm.hs) to a uniform-shifted set
-        // of var idxs starting at `succ avoid_max`, where `avoid_max`
-        // is the max idx across `domVFresh s ∪ varsRange newsubst`.
-        // The shift `freshStart - rhs_min` may be negative (when RHS
-        // vars were originally above avoid_max).  Without this rename,
-        // a fresh witness in the variant subst could coincide by idx
-        // with a var in newsubst, causing the unifier to incorrectly
-        // identify them and collapse the variant to empty.
-        use tamarin_term::rewriting::Equal;
-        use tamarin_term::term::Term;
-        use tamarin_term::vterm::Lit;
-        let fresh_base = self.fresh_baseline();
-        // Range vars of the composed subst.  Consumed only by membership
-        // probes (`contains`) and — via `new_subst_range_max` — by the
-        // per-variant `avoid_max` fold, so a hash set built with an in-place
-        // walk replaces the eager BTreeSet (`vars_vterm` allocated a
-        // sorted/deduped Vec per range term).  The max is hoisted here once
-        // instead of re-folding the whole set per variant.
-        let mut new_subst_range_vars: tamarin_utils::FastSet<LVar> = Default::default();
-        let mut new_subst_range_max: u64 = 0;
-        {
-            use tamarin_term::lterm::HasFrees;
-            for t in new_subst.range() {
-                t.for_each_free(&mut |v| {
-                    if v.idx > new_subst_range_max {
-                        new_subst_range_max = v.idx;
-                    }
-                    new_subst_range_vars.insert(*v);
-                });
-            }
+        // `varsRange newsubst`, the shared half of every `restrictVFresh` and
+        // avoidance set below.
+        let mut range_vars: tamarin_utils::FastSet<LVar> = Default::default();
+        let mut range_max: u64 = 0;
+        for t in new_subst.range() {
+            t.for_each_free(&mut |v| {
+                range_max = range_max.max(v.idx);
+                range_vars.insert(*v);
+            });
         }
         let mut new_conj: Vec<EqDisj> = Vec::with_capacity(self.conj.len());
-        // HS-faithful per-variant fresh-state isolation.  In HS, each
-        // `applyBound` call runs `renameAvoiding (range) avoidSet` →
-        // `evalFreshAvoiding (rename ...)` which seeds the supply at
-        // `succ (max idx in avoidSet)` LOCALLY — bounded by the call's
-        // own `avoid_max`, NOT the global session counter
-        // (`avoid` at LTerm.hs, `renameAvoiding` at LTerm.hs;
-        // EquationStore.hs `applyEqStore`/`applyBound`).  Each variant's
-        // witness allocation therefore starts from the same avoid
-        // baseline, and the variants' witnesses can OVERLAP in idx
-        // because each ends up in its own SubstVFresh.
-        //
-        // Each per-variant Maude call uses a LOCAL MaudeHandle (via
-        // `with_fresh_counter_from(avoid_max)`).  The local handle shares
-        // the underlying Maude process state but has its own counter that
-        // starts at `succ avoid_max` PER call.  The global counter is
-        // untouched by these calls, so subsequent non-applyBound
-        // allocations (rule freshening, sources) keep their cross-call
-        // uniqueness guarantee (TESLA Sender0a).
-        //
-        // The witnesses minted here all live inside SubstVFresh range
-        // values (α-equivalent up to witness rename — VFresh-local), so
-        // discarding the local counter on exit cannot cause downstream
-        // collisions: `bounds_max` (reduction.rs, `fn bounds_max`) walks
-        // only the SubstVFresh DOMAIN keys, so it won't reserve witnesses
-        // — but downstream Maude calls compute their own per-call
-        // `avoid_max` and use the global counter (which is the union
-        // of every non-applyBound allocation we've done so far), so
-        // they're guaranteed disjoint from any applyBound witness by
-        // VFresh α-equivalence.
-        for d in self.conj.iter() {
+        for d in &self.conj {
             let mut new_substs: Vec<LNSubstVFresh> = Vec::new();
             for s in &d.substs {
-                let dbg_in = if dbg_call { Some(s.to_list()) } else { None };
-                // Borrowing view of the variant's entries: every consumer
-                // below either reads through the refs or clones exactly the
-                // parts it keeps, so the eager `to_list` pair clone per
-                // variant was pure churn.
-                let bindings: Vec<(&LVar, &LNTerm)> = s.iter().collect();
-                if bindings.is_empty() {
-                    // Empty subst (identity) — preserves.
+                if s.is_empty() {
                     new_substs.push(s.clone());
-                    if dbg_in.is_some() {
-                        eprintln!("[rs-aes-applyBound] IN  : (empty)");
-                        eprintln!("  OUT[0] (empty preserved)");
-                    }
                     continue;
                 }
-                // Compute avoid_max = max idx across (domVFresh s ∪
-                // varsRange newsubst); the newsubst side is the hoisted
-                // per-call `new_subst_range_max`.
-                let avoid_max: u64 = {
-                    let mut m: u64 = new_subst_range_max;
-                    for (k, _) in &bindings {
-                        if k.idx > m {
-                            m = k.idx;
-                        }
-                    }
-                    m
-                };
-                // HS `applyBound` (EquationStore.hs `applyEqStore`):
-                //   ran = renameAvoiding (map snd slist) avoidSet
-                // where `renameAvoiding s t = evalFreshAvoiding (rename s) t`
-                // (LTerm.hs) and `rename` (LTerm.hs) is a
-                // SINGLE uniform monotone shift over the WHOLE range list:
-                //   freshStart <- freshIdents (succ (maxVarIdx - minVarIdx))
-                //   mapFrees (Monotone $ incVar (freshStart - minVarIdx))
-                // seeded by `avoid avoidSet = succ (max idx in avoidSet)`,
-                // which `FastFreshState::seeded` supplies from the
-                // `avoid_max` computed above.  The shift reaches EVERY free
-                // var with NO exclusion — `Monotone incVar` has no special
-                // case for any var.  Do NOT preserve `new_subst_range_vars`
-                // (system vars): excluding them from the shift causes two
-                // distinct variant cases to collapse onto the same witness
-                // idx (the `~k.30` collision in Responder_secrecy), because
-                // the preserved system var keeps its (shared) idx while the
-                // other range vars shift away.
+                let dom: tamarin_utils::FastSet<LVar> = s.dom().copied().collect();
+                // `renameAvoiding (map snd slist) (domVFresh s ++ varsRange
+                // newsubst)`: one uniform shift of the whole range list.
+                let avoid_max = dom.iter().map(|v| v.idx).fold(range_max, u64::max);
                 let mut fresh = tamarin_utils::fresh::FastFreshState::seeded(avoid_max + 1);
-                let renamed_rhs: Vec<LNTerm> = tamarin_term::lterm::rename(
-                    bindings.iter().map(|&(_, t)| t.clone()).collect::<Vec<_>>(),
-                    &mut fresh,
-                );
-                // Build equations.  LHS = `apply new_subst (Var lv)`,
-                // RHS = renamed `t`.
-                let eqs: Vec<Equal<LNTerm>> = bindings
-                    .iter()
-                    .zip(renamed_rhs)
-                    .map(|(&(lv, _), t)| {
-                        let lv_t = Term::Lit(Lit::Var(*lv));
-                        Equal {
-                            lhs: tamarin_term::subst::apply_vterm(&new_subst, lv_t),
-                            rhs: t,
-                        }
+                let ran =
+                    tamarin_term::lterm::rename(s.range().cloned().collect::<Vec<_>>(), &mut fresh);
+                let eqs: Vec<Equal<LNTerm>> = s
+                    .dom()
+                    .zip(ran)
+                    .map(|(lv, t)| Equal {
+                        lhs: apply_vterm(&new_subst, var_term(*lv)),
+                        rhs: t,
                     })
                     .collect();
-                // Unify with Maude — multi-unifier returns a Disj.
-                let mut max_idx = fresh_base;
-                {
-                    use tamarin_term::lterm::HasFrees;
-                    for e in &eqs {
-                        e.lhs.for_each_free(&mut |v| {
-                            if v.idx > max_idx {
-                                max_idx = v.idx;
-                            }
-                        });
-                        e.rhs.for_each_free(&mut |v| {
-                            if v.idx > max_idx {
-                                max_idx = v.idx;
-                            }
-                        });
-                    }
-                }
-                // HS-faithful local Maude handle for this `applyBound`
-                // invocation.  The unification, the witness lift
-                // (`reserve_idxs`), and the post-unify `reduce` calls all
-                // draw witness idxs from a fresh local counter seeded at
-                // `succ avoid_max` (mirroring HS's `evalFreshAvoiding
-                // (range) avoidSet`, LTerm.hs).  The Maude process
-                // state is shared (Arc cloned), only the counter is
-                // per-call — so the global counter advances ONLY for
-                // non-applyBound allocations.
-                //
-                // HS-faithful seed: `avoid avoidSet = succ (max idx in
-                // avoidSet)` where avoidSet = `domVFresh s ∪ varsRange
-                // newsubst` (LTerm.hs `avoid`; EquationStore.hs
-                // `renameAvoiding (range slist) (domVFresh s ∪ varsRange newsubst)`).
-                // HS does NOT include `max_idx` (the post-shift
-                // equation-system vars) in the seed — the shifted RHS
-                // vars are themselves all > avoid_max by construction.
-                // Including `max_idx` would be non-faithful: two alpha-
-                // equivalent input variants whose `rhs_min` (and hence
-                // `max_idx`) differs would seed at distinct values →
-                // witness `reserve_idxs` returns a different base →
-                // outputs are alpha-equivalent but structurally distinct
-                // → the post-loop `sort + dedup` fails to collapse them.
-                let local_maude_owned = maude.with_fresh_counter_from(avoid_max);
-                let aes_maude: &tamarin_term::maude_proc::MaudeHandle = &local_maude_owned;
-                if let Some(input) = &dbg_in {
-                    eprintln!("[rs-aes-applyBound] IN  : {:?}", input);
-                }
-                // HS `applyBound` (EquationStore.hs): `unifiers =
-                // unifyLNTerm eqs` — NO avoid.  The RHS terms were already
-                // rebased above `avoidSet` by the uniform-shift rename above
-                // (HS `ran = renameAvoiding (range) avoidSet`), so the reply
-                // witnesses (numbered per-call at `avoid (M.elems bindings)`)
-                // land above the avoid set without any injected floor.  The
-                // local handle's counter is used only by the downstream
-                // system-var lift (`reserve_idxs`), which mints
-                // differently-named witnesses that cannot collide by
-                // (name,sort,idx) with the "x"-named reply witnesses.
-                let unifiers = match aes_maude.unify(&eqs) {
-                    Ok(u) => u,
-                    Err(e) => return Err(AddEqsError::Maude(format!("{}", e))),
-                };
-                if dbg_in.is_some() {
-                    eprintln!("  {} unifiers from Maude", unifiers.len());
-                }
-                if unifiers.is_empty() {
-                    // No unifier → variant dropped.
-                    continue;
-                }
-                // For each unifier, build the new vfresh subst.  Restrict
-                // its domain to `varsRange(new_subst) ∪ dom(s)` so we
-                // don't leak Maude witnesses.  `varsRange(new_subst)` is
-                // already materialized once per call as
-                // `new_subst_range_vars`; `dom(s)` (this variant's original
-                // domain keys) is loop-invariant across the unifier loop,
-                // so hoist it here as `orig_dom`.  The restrict predicate at
-                // the filter below is then the two-set membership
-                // `new_subst_range_vars ∪ orig_dom` — identical to
-                // `restrict_set.contains`, with no per-subst set build.
-                //
-                // `orig_dom` also serves the system-var lift inside the
-                // unifier loop: when restrict drops a (witness, system_var)
-                // entry due to LARGER-idx orient, the system_var ends up
-                // orphaned in OTHER entries' range values.  Without lifting
-                // it, the next aes call's uniform RHS shift treats it as a
-                // witness and renames it, breaking the binding to the
-                // rule's premise (Client_auth Ltk vs In ltkS desync).
-                let orig_dom: tamarin_utils::FastSet<LVar> =
-                    bindings.iter().map(|&(k, _)| *k).collect();
-                for raw in unifiers {
-                    // EXTRACT-SYSTEM-VARS-TO-DOMAIN: the AC-free local
-                    // unifier path (maude_proc.rs, the AC-free fast path
-                    // in `unify`) doesn't
-                    // introduce narrowing witnesses for cross-sort
-                    // var-var unification.  E.g. for `Var(~k:Fresh) =
-                    // Var(~mw:Msg)`, the local unifier returns
-                    // `~mw:Msg → Var(~k:Fresh)` (Unification.hs
-                    // orientation).  After restrict drops `~mw`, the
-                    // `~k` narrowing info is lost AND `~k` (a system
-                    // var in new_subst's range) ends up referenced
-                    // ONLY in OTHER subst entries' values — never as
-                    // a domain key.
-                    //
-                    // Haskell's full Maude `unify` introduces a fresh
-                    // narrowing witness `~w:Fresh` and produces both
-                    // `~k:Fresh → ~w:Fresh` and `~mw:Msg → ~w:Fresh`.
-                    // After Haskell's restrict (keys in
-                    // `varsRange new_subst ∪ domVFresh s`), `~k → ~w`
-                    // survives — placing the system var `~k` as a
-                    // domain key with a fresh-witness value.
-                    //
-                    // To mirror Haskell's post-Maude shape, after the
-                    // local unifier returns its raw subst, we do a
-                    // post-processing pass:
-                    //   1. Identify system vars S referenced in any
-                    //      RANGE value of the subst that are NOT in
-                    //      the domain of the subst.
-                    //   2. For each such S, allocate a fresh witness
-                    //      W of S's sort, replace S→W in all range
-                    //      values, and ADD `S → Var(W)` to the domain.
-                    //
-                    // System vars S are detected as members of
-                    // `new_subst_range_vars` (the vars in new_subst's
-                    // range — these are by-construction the system
-                    // vars introduced by prior unifications into the
-                    // free subst).  Variant subst's range should refer
-                    // only to fresh witnesses (Haskell's
-                    // SubstVFresh invariant); any system-var reference
-                    // there is a Rust-side artifact that needs to be
-                    // lifted to the domain.
-                    use tamarin_term::lterm::HasFrees;
-                    use tamarin_term::term::Term;
-                    use tamarin_term::vterm::Lit;
-                    // Compute current subst's domain (after restrict).
-                    // Membership-only (like `orig_dom` and `seen` below —
-                    // `to_lift` carries the byte-visible order), so hash
-                    // sets replace the per-unifier BTreeSet builds.
-                    let current_dom: tamarin_utils::FastSet<LVar> =
-                        raw.iter().map(|(k, _)| *k).collect();
-                    // `orig_dom` (this variant's ORIGINAL bindings.keys —
-                    // the variant's system vars from its domain) is hoisted
-                    // above the unifier loop; it participates in the
-                    // system-var detection below.
-                    // Find system vars in any range value that aren't
-                    // in the current domain.  These are the ones to
-                    // lift.
-                    let mut to_lift: Vec<LVar> = Vec::new();
-                    let mut seen: tamarin_utils::FastSet<LVar> = Default::default();
-                    for (_, t) in &raw {
-                        t.for_each_free(&mut |v: &LVar| {
-                            let is_system =
-                                new_subst_range_vars.contains(v) || orig_dom.contains(v);
-                            if is_system && !current_dom.contains(v) && seen.insert(*v) {
-                                to_lift.push(*v);
-                            }
-                        });
-                    }
-                    // For each S in to_lift, allocate a fresh witness W
-                    // of S's sort.  Use the local applyBound handle so
-                    // these witnesses share the per-call counter and
-                    // don't advance the global session counter.
-                    let mut witnesses: Vec<(LVar, LVar)> = Vec::new();
-                    if !to_lift.is_empty() {
-                        let base = aes_maude.reserve_idxs(to_lift.len() as u64);
-                        for (i, s) in to_lift.iter().enumerate() {
-                            let w = LVar {
-                                name: s.name,
-                                sort: s.sort,
-                                idx: base + i as u64,
-                            };
-                            witnesses.push((*s, w));
-                        }
-                    }
-                    let witness_map: std::collections::BTreeMap<LVar, LVar> =
-                        witnesses.iter().copied().collect();
-                    let rename_term = |t: LNTerm| -> LNTerm {
-                        t.map_free(&mut |v: LVar| witness_map.get(&v).copied().unwrap_or(v))
-                    };
-                    // Build lifted subst: rename range values, add
-                    // S → Var(W) entries to domain.
-                    let mut lifted: Vec<(LVar, LNTerm)> = Vec::new();
-                    for (k, t) in raw {
-                        lifted.push((k, rename_term(t)));
-                    }
-                    for (s, w) in witnesses {
-                        lifted.push((s, Term::Lit(Lit::Var(w))));
-                    }
-                    // HS-faithful: NO post-Maude normalisation of variant
-                    // range terms.  HS's `applyEqStore` (EquationStore.hs)
-                    // returns the raw Maude unifier outputs without
-                    // calling `normSubstVFresh'` — that normaliser is only
-                    // used during VARIANT COMPUTATION for rules
-                    // (RuleVariants.hs `normSubstVFresh'`), NOT here.  Normalising here
-                    // hides non-NF range values (e.g. `Xor(~k,~k)` that
-                    // reduces to `zero`) from the post-fan-out
-                    // `simpMinimize`/`substCreatesNonNormalTerms` filter,
-                    // letting variant cases survive that HS drops.
-                    // Observable on LAK06::noninjectiveagreementTAG —
-                    // HS's per-arm simp narrows SId(1) variants to 0
-                    // (eq_store false) for cases 1/3/5/6/9 of SId(0);
-                    // RS's normalised variants stay NF and the simp leaves
-                    // them at conj=1 [1:1], so the cases survive
-                    // perform_split as bonus split_case_N branches.
-                    let pairs: Vec<(LVar, LNTerm)> = lifted
-                        .into_iter()
-                        .filter(|(v, _)| new_subst_range_vars.contains(v) || orig_dom.contains(v))
-                        .collect();
-                    let out_subst = LNSubstVFresh::from_list(pairs);
-                    if dbg_in.is_some() {
-                        eprintln!("  OUT: {:?}", out_subst.to_list());
-                    }
-                    new_substs.push(out_subst);
-                }
+                let unifiers = maude.unify(&eqs).map_err(AddEqsError::from)?;
+                // `restrictVFresh (varsRange newsubst ++ domVFresh s)`. The
+                // range terms are kept as Maude returns them, unnormalised.
+                new_substs.extend(unifiers.into_iter().map(|u| {
+                    LNSubstVFresh::from_list(
+                        u.into_iter()
+                            .filter(|(v, _)| range_vars.contains(v) || dom.contains(v)),
+                    )
+                }));
             }
-            // HS-faithful (`applyEqStore`, EquationStore.hs): wrap
-            // the per-variant `applyBound` results in `S.fromList`, which
-            // sorts and dedups by `Set LNSubstVFresh` Ord.  Without this,
-            // post-Maude variants stay in input × multi-unifier order —
-            // making `perform_split` see a different sequence than HS
-            // and changing `split_case_N` assignments downstream.
-            //
-            // STRUCTURAL-ONLY dedup (NO alpha-dedup).  HS's `S.fromList`
-            // is a STRUCTURAL set: two `applyBound` outputs that are
-            // alpha-equivalent up to witness rename but differ in their
-            // actual fresh-var idxs are DISTINCT `Set` elements and HS
-            // keeps BOTH.  This happens routinely when two different
-            // input variants of the disjunction re-unify (under the
-            // case-split subst) to results that are alpha-equivalent —
-            // HS preserves each as its own member.  Proven on
-            // CH07::noninjectiveagreement_reader: under splitEqs(0) /
-            // split_case_4 the sid=4 disjunction has 6 substs in HS, two
-            // of which (witness idxs ~r2.43… and ~r2.74…) are alpha-
-            // equivalent but kept distinct; an alpha-canonical dedup
-            // here collapses them to 5, dropping one split case and
-            // adding a spurious extra splitEqs goal in that branch
-            // (78 vs HS 77 steps).  HS NEVER alpha-collapses here, so we
-            // must not either — the per-call avoid_max seed already aligns
-            // witness allocation with HS for the cases where HS *does*
-            // structurally coincide (e.g. KEA_plus_AdvKey::keaplus_
-            // {initiator,responder}_key, still byte-identical without the
-            // alpha-dedup).
+            // `S.fromList`: a structural set, never deduplicated modulo
+            // alpha-renaming of the witnesses.
             new_substs.sort();
             new_substs.dedup();
-            if aes_dbg_variants() {
-                eprintln!(
-                    "[aes_variants] disj split_id={:?} before→after: {} → {} substs",
-                    d.split_id,
-                    d.substs.len(),
-                    new_substs.len()
-                );
-                eprintln!("[aes_variants]   BEFORE (input variants):");
-                for (i, s) in d.substs.iter().enumerate() {
-                    eprintln!("[aes_variants]     in[{}]: {:?}", i, s.to_list());
-                }
-                eprintln!("[aes_variants]   AFTER (post-Maude variants, sorted+deduped):");
-                for (i, s) in new_substs.iter().enumerate() {
-                    eprintln!("[aes_variants]     out[{}]: {:?}", i, s.to_list());
-                }
-            }
-            if dbg_call {
-                eprintln!(
-                    "[rs-aes] OUT disj[?] sid={:?} ({} substs)",
-                    d.split_id,
-                    new_substs.len()
-                );
-                for (j, s) in new_substs.iter().enumerate() {
-                    eprintln!("  out[{}]: {:?}", j, s.to_list());
-                }
-            }
             new_conj.push(EqDisj {
                 split_id: d.split_id,
                 substs: new_substs,
             });
         }
-        // No global-counter advance is needed after the per-variant loop:
-        // each per-variant call uses its OWN counter (a local MaudeHandle
-        // clone via `with_fresh_counter_from`), so the global counter
-        // never advanced from those calls in the first place.  The
-        // witnesses minted live only inside SubstVFresh range values,
-        // which are α-equivalent up to witness rename — VFresh-local.
-        // Any subsequent allocation that needs to avoid these witnesses
-        // will see them via `bounds_max`'s walk of `eq_store.conj`
-        // (reduction.rs, `fn bounds_max`), which counts domain keys; the
-        // range/witness idxs don't affect cross-call uniqueness because
-        // they're per-SubstVFresh.
         self.conj = new_conj;
         self.subst = new_subst;
         Ok(())
     }
 }
 
-/// True if `t` is a single constant literal (no variables, no apps).
-fn is_constant_term(t: &LNTerm) -> bool {
-    matches!(
-        t,
-        tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Con(_))
-    )
+/// `simpSingleton` (EquationStore.hs): fold a singleton disjunction into the
+/// free substitution via `freshToFree`.
+fn simp_singleton(
+    fresh: &mut FastFreshState,
+    free: &LNSubst,
+    substs: &[LNSubstVFresh],
+) -> DisjStep {
+    let [s] = substs else {
+        return None;
+    };
+    if s.is_empty() {
+        return Some((LNSubst::empty(), None));
+    }
+    // Rust-only floor: HS draws `freshToFree`'s variables from the
+    // `runReduction` counter, which is always above the free
+    // substitution's range (earlier folds drew those), while this counter is
+    // re-seeded from `avoid sys`, which counts only VFresh domain keys. Raise
+    // it above the free range so a fold cannot reuse an earlier fold's
+    // variable. Do not floor above the sibling disjunctions' witnesses: HS's
+    // counter is not above those either, and `applyEqStore` renames them
+    // apart.
+    let mut floor = 0u64;
+    for t in free.range() {
+        t.for_each_free(&mut |w: &LVar| floor = floor.max(w.idx));
+    }
+    if floor > 0 {
+        fresh.advance_to(floor.saturating_add(1));
+    }
+    Some((s.fresh_to_free_avoiding(|n| fresh.fresh_idents(n)), None))
+}
+
+/// `simpAbstractSortedVar` (EquationStore.hs): if every substitution maps
+/// `v` to a variable of the same sort `s`, strictly below `v`'s sort, factor
+/// out `{v -> y}` for a fresh `y` of sort `s`.
+fn simp_abstract_sorted_var(
+    fresh: &mut FastFreshState,
+    _free: &LNSubst,
+    substs: &[LNSubstVFresh],
+) -> DisjStep {
+    let (first, others) = substs.split_first()?;
+    let (v, lvs) = first.iter().find_map(|(v, t)| {
+        let Term::Lit(Lit::Var(lx)) = t else {
+            return None;
+        };
+        if sort_compare(v.sort, lx.sort) != Some(Ordering::Greater) {
+            return None;
+        }
+        let mut lvs = vec![*lx];
+        for other in others {
+            match other.image_of(v) {
+                Some(Term::Lit(Lit::Var(ly))) if ly.sort == lx.sort => lvs.push(*ly),
+                _ => return None,
+            }
+        }
+        Some((*v, lvs))
+    })?;
+    let fv = LVar {
+        name: v.name,
+        sort: lvs[0].sort,
+        idx: fresh.fresh_idents(1),
+    };
+    let substs = substs
+        .iter()
+        .zip(&lvs)
+        .map(|(s, lv)| {
+            let mut kept = without_key(s, &v);
+            kept.push((fv, var_term(*lv)));
+            LNSubstVFresh::from_list(kept)
+        })
+        .collect();
+    Some((LNSubst::from_list(vec![(v, var_term(fv))]), Some(substs)))
+}
+
+/// `simpIdentify` (EquationStore.hs): if every substitution maps `v` and
+/// `v'` to the same term, factor out `{vremove -> vkeep}`, keeping the
+/// variable of the smaller sort.
+fn simp_identify(
+    _fresh: &mut FastFreshState,
+    _free: &LNSubst,
+    substs: &[LNSubstVFresh],
+) -> DisjStep {
+    let (first, others) = substs.split_first()?;
+    let entries: Vec<(&LVar, &LNTerm)> = first.iter().collect();
+    let (v, v2) = entries
+        .iter()
+        .enumerate()
+        .flat_map(|(i, (v, t))| {
+            entries[i + 1..]
+                .iter()
+                .filter(move |(v2, t2)| t == t2 && v < v2)
+                .map(move |(v2, _)| (**v, **v2))
+        })
+        .find(|(v, v2)| {
+            others.iter().all(|s| {
+                let i1 = s.image_of(v);
+                i1.is_some() && i1 == s.image_of(v2)
+            })
+        })?;
+    let (keep, remove) = match sort_compare(v.sort, v2.sort) {
+        Some(Ordering::Greater) => (v2, v),
+        Some(_) => (v, v2),
+        None => panic!(
+            "EquationStore.simpIdentify: impossible, variables with incomparable sorts: {:?} and {:?}",
+            v, v2
+        ),
+    };
+    let substs = substs
+        .iter()
+        .map(|s| LNSubstVFresh::from_list(without_key(s, &keep)))
+        .collect();
+    Some((
+        LNSubst::from_list(vec![(remove, var_term(keep))]),
+        Some(substs),
+    ))
+}
+
+/// `simpAbstractFun` (EquationStore.hs): if every substitution maps `v` to
+/// an application of the same symbol `o`, factor out `{v -> o(x1, .., xk)}`
+/// for fresh `xi`. An AC symbol applied at differing arities is split into
+/// its first argument and the rest.
+fn simp_abstract_fun(
+    fresh: &mut FastFreshState,
+    _free: &LNSubst,
+    substs: &[LNSubstVFresh],
+) -> DisjStep {
+    let (first, others) = substs.split_first()?;
+    let (v, op, argss) = first.iter().find_map(|(v, t)| {
+        let Term::App(op, args) = t else {
+            return None;
+        };
+        let mut argss = vec![args.to_vec()];
+        for other in others {
+            match other.image_of(v) {
+                Some(Term::App(o2, a2)) if o2 == op => argss.push(a2.to_vec()),
+                _ => return None,
+            }
+        }
+        Some((*v, *op, argss))
+    })?;
+    let mut fresh_x = || LVar {
+        name: "x",
+        sort: LSort::Msg,
+        idx: fresh.fresh_idents(1),
+    };
+    let arity = argss[0].len();
+    let (fvars, mappings): (Vec<LVar>, Vec<Vec<LNTerm>>) = if argss.iter().all(|a| a.len() == arity)
+    {
+        ((0..arity).map(|_| fresh_x()).collect(), argss)
+    } else if !op.is_ac() {
+        panic!("simpAbstract: impossible, invalid arities or List operator encountered.")
+    } else {
+        let fvars = vec![fresh_x(), fresh_x()];
+        let mappings = argss
+            .into_iter()
+            .map(|args| match args.as_slice() {
+                [] => panic!("simpAbstract: impossible, AC symbols must have arity >= 2."),
+                [a1, a2] => vec![a1.clone(), a2.clone()],
+                // HS abstracts left to right, without using AC.
+                [a1, rest @ ..] => vec![a1.clone(), Term::App(op, rest.to_vec().into())],
+            })
+            .collect();
+        (fvars, mappings)
+    };
+    let substs = substs
+        .iter()
+        .zip(&mappings)
+        .map(|(s, args)| {
+            let mut kept = without_key(s, &v);
+            kept.extend(fvars.iter().copied().zip(args.iter().cloned()));
+            LNSubstVFresh::from_list(kept)
+        })
+        .collect();
+    let factor = Term::App(op, fvars.iter().map(|fv| var_term(*fv)).collect());
+    Some((LNSubst::from_list(vec![(v, factor)]), Some(substs)))
+}
+
+/// `simpAbstractName` (EquationStore.hs): if every substitution maps `v` to
+/// the same name, factor out `{v -> n}`.
+fn simp_abstract_name(
+    _fresh: &mut FastFreshState,
+    _free: &LNSubst,
+    substs: &[LNSubstVFresh],
+) -> DisjStep {
+    let (v, n) = substs.first()?.iter().find(|(v, t)| {
+        matches!(t, Term::Lit(Lit::Con(_))) && substs.iter().all(|s| s.image_of(v) == Some(*t))
+    })?;
+    let substs = substs
+        .iter()
+        .map(|s| LNSubstVFresh::from_list(without_key(s, v)))
+        .collect();
+    Some((LNSubst::from_list(vec![(*v, n.clone())]), Some(substs)))
 }
 
 /// `isPerm` (inside `removePermutations`, EquationStore.hs): `s2` is a
@@ -2478,7 +1119,10 @@ fn equal_subst_up_to_renaming(
     maude
         .match_eqs(&eqs)
         .map(|sols| !sols.is_empty())
-        .map_err(|e| AddEqsError::Maude(format!("remove_permutations: {}", e)))
+        .map_err(|e| match e {
+            MaudeError::Cancelled => AddEqsError::Cancelled,
+            e => AddEqsError::Maude(format!("remove_permutations: {e}")),
+        })
 }
 
 #[cfg(test)]

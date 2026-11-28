@@ -17,8 +17,7 @@
 //!    append ⇒ the emitted order is DESCENDING key order.
 //!
 //! The theory's items are rewritten in place, in the order the two `mapM`s
-//! visit them; the environment is returned because its `events` map is what
-//! the export backends consume.
+//! visit them.
 
 use std::collections::BTreeSet;
 
@@ -37,21 +36,16 @@ use crate::typing::{
     TypingEnvironment,
 };
 
-/// `typeTheoryEnv` (Typing.hs) over the elaborated theory, whose
-/// process-bearing items and `FunctionTypingInfo` items it rewrites in place —
-/// HS's first return component.  The second, the environment the whole theory
-/// was typed against, is handed back: no RS caller reads it, but its consumers
-/// are the ProVerif / DeepSec exporters (`loadHeaders` folds over `events`,
-/// Export/Sapic.hs), which are unported.  `typeTheory`
-/// (Typing.hs) is this function with the environment discarded.
+/// `typeTheory` (Typing.hs), i.e. `typeTheoryEnv` with the environment
+/// discarded, over the elaborated theory: its process-bearing items and
+/// `FunctionTypingInfo` items are rewritten in place.
 ///
 /// Runs on EVERY theory — a process-free (non-SAPIC) theory still gets its
 /// `function:` items recomputed from the signature-seeded environment.
-pub fn type_theory_env(thy: &mut Theory) -> Result<TypingEnvironment, ElabError> {
+pub fn type_theory(thy: &mut Theory) -> Result<(), ElabError> {
     let user_fun_typings = collect_user_fun_typings(thy);
-    let mut env = init_te_from_sig(&thy.signature, &user_fun_typings).map_err(|e| ElabError {
-        message: format!("SAPIC typing: {e}"),
-    })?;
+    let mut env = init_te_from_sig(&thy.signature, &user_fun_typings)
+        .map_err(|message| ElabError { message })?;
 
     // Pass 1 — `mapMProcesses typeAndRenameProcess` (TheoryObject.hs):
     // every process-bearing item typed in item order; `EquivLemma` types its
@@ -97,14 +91,12 @@ pub fn type_theory_env(thy: &mut Theory) -> Result<TypingEnvironment, ElabError>
             }),
         ));
     }
-    Ok(env)
+    Ok(())
 }
 
 /// Run `typeAndRenameProcess` on one process against the shared environment.
 fn type_one(env: &mut TypingEnvironment, proc: &PlainProcess) -> Result<PlainProcess, ElabError> {
-    type_and_rename_process_in(env, proc).map_err(|e| ElabError {
-        message: format!("SAPIC typing: {e}"),
-    })
+    type_and_rename_process_in(env, proc).map_err(|message| ElabError { message })
 }
 
 /// `typeAndRenameProcessDef` (Typing.hs):
@@ -158,9 +150,7 @@ fn type_process_def(
         ProcessParsedAnnotation::empty(),
         Box::new(pr.clone()),
     );
-    let renamed = type_and_rename_process_in(env, &aux).map_err(|e| ElabError {
-        message: format!("SAPIC typing: {e}"),
-    })?;
+    let renamed = type_one(env, &aux)?;
     let Process::Action(
         SapicAction::ChIn {
             msg: VTerm::App(FunSym::List, t_vars),
@@ -186,7 +176,3 @@ fn type_process_def(
         .collect::<Result<Vec<_>, _>>()?;
     Ok((Some(vars), *body))
 }
-
-#[cfg(test)]
-#[path = "type_theory_tests.rs"]
-mod tests;

@@ -1,0 +1,2 @@
+rc 1
+tamarin-prover: duplicate predicate: PubLog( $p )

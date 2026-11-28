@@ -1,0 +1,104 @@
+WARNING: the following wellformedness checks failed!
+
+Formula terms
+=============
+
+  Lemma `Destructor' uses terms of the wrong form:
+    `snd(sdec(Bound 3,Bound 2))'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+
+Formula guardedness
+===================
+
+  Lemma `Destructor' cannot be converted to a guarded formula:
+    unguarded variable(s) 'key', '#k' in the subformula
+      "∃ body key #j #k.
+        (((K( body ) @ #j) ∧ (key = snd(sdec(body, key)))) ∧ (#j < #i)) ∧
+        (#k < #i)"
+    in the formula
+      "∀ x #i.
+        (K( x ) @ #i) ⇒
+        (∃ body key #j #k.
+          (((K( body ) @ #j) ∧ (key = snd(sdec(body, key)))) ∧ (#j < #i)) ∧
+          (#k < #i))"
+
+Formula terms
+=============
+
+  Lemma `BareUse' uses terms of the wrong form: `Free x'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+  
+  Lemma `FreeMsg' uses terms of the wrong form: `Free x'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+  
+  Lemma `FreeNode' uses terms of the wrong form: `Free #i'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+
+Formula guardedness
+===================
+
+  Lemma `FreeNode' cannot be converted to a guarded formula:
+    unguarded variable(s) '#j' in the subformula
+      "∀ #j. (K( 'c' ) @ #i) ⇒ (⊥)"
+    in the formula
+      "∀ #j. (K( 'c' ) @ #i) ⇒ (⊥)"
+
+Formula terms
+=============
+
+  Lemma `BuiltinAC' uses terms of the wrong form:
+    `Union('a','b',Xor('c','d'))'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+  
+  Lemma `UserAC1' uses terms of the wrong form:
+    `uac('a',red('b','a'))'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+  
+  Lemma `UserAC2' uses terms of the wrong form:
+    `uac('a','z',red('b','c'))'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+  
+  Lemma `EmAlgApp' uses terms of the wrong form:
+    `Mult(em('g','h'),f('g','h'))'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+*/

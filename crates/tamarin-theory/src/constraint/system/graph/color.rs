@@ -320,116 +320,84 @@ mod tests {
         assert_eq!(group_idx(&named_proto_node(PRN::Stand("R"))), 1); // otherwise
     }
 
+    /// HS `nodeColorMap` (System/Dot.hs) as rows `(label, nodes in
+    /// insertion order, expected hex of node 0, 1, ...)`.  The expected hexes
+    /// are hand-computed from HS in EXACT Rational arithmetic
+    /// (lightColorGroups intruderHue sizes; intruderHue = 18 % 360;
+    /// hsvToRGB; rgbToHex = floor(256*f)), cross-checked against the f64
+    /// port over 4.28M size combinations (0 divergences).  A node's
+    /// `(group, member)` slot follows NodeId order, and `M.fromList` keeps
+    /// the LAST of several equal `rInfo`s.
     #[test]
     fn node_color_map_palette_hex_matches_hs() {
-        // Expected hexes are hand-computed from HS `nodeColorMap` in EXACT
-        // Rational arithmetic (lightColorGroups intruderHue sizes; intruderHue
-        // = 18 % 360; hsvToRGB; rgbToHex = floor(256*f)), cross-checked against
-        // the f64 port over 4.28M size combinations (0 divergences).
-
-        // ---- one rule per group: sizes = [1, 1, 1, 1] ----
-        let n1111: Vec<(NodeId, RuleACInst)> = vec![
-            (nid(0), intr_node(destr(b"d"))),            // g0 (0,0)
-            (nid(1), named_proto_node(PRN::Stand("R"))), // g1 (1,0)
-            (
-                nid(2),
-                intr_node(IntrRuleACInfo::ConstrRule {
-                    name: b"c".to_vec(),
-                    fun: tamarin_term::function_symbols::FunSym::List,
-                }),
-            ), // g2 (2,0)
-            (nid(3), named_proto_node(PRN::Fresh)),      // g3 (3,0)
-        ];
-        let cm = build_node_color_map(&n1111);
-        assert_eq!(hex_of(&cm, nid(0)), "#ce90ac"); // (0,0)
-        assert_eq!(hex_of(&cm, nid(1)), "#d5d897"); // (1,0)
-        assert_eq!(hex_of(&cm, nid(2)), "#9ee1c3"); // (2,0)
-        assert_eq!(hex_of(&cm, nid(3)), "#a8a4eb"); // (3,0)
-
-        // ---- sizes = [2, 1, 3, 1], member index tracks NodeId order ----
-        let n2131: Vec<(NodeId, RuleACInst)> = vec![
-            (nid(0), intr_node(destr(b"d1"))),           // g0 (0,0)
-            (nid(1), intr_node(destr(b"d2"))),           // g0 (0,1)
-            (nid(2), named_proto_node(PRN::Stand("R"))), // g1 (1,0)
-            (
-                nid(3),
-                intr_node(IntrRuleACInfo::ConstrRule {
-                    name: b"c1".to_vec(),
-                    fun: tamarin_term::function_symbols::FunSym::List,
-                }),
-            ), // g2 (2,0)
-            (
-                nid(4),
-                intr_node(IntrRuleACInfo::ConstrRule {
-                    name: b"c2".to_vec(),
-                    fun: tamarin_term::function_symbols::FunSym::List,
-                }),
-            ), // g2 (2,1)
-            (nid(5), intr_node(IntrRuleACInfo::Coerce)), // g2 (2,2)
-            (nid(6), named_proto_node(PRN::Fresh)),      // g3 (3,0)
-        ];
-        let cm = build_node_color_map(&n2131);
-        assert_eq!(hex_of(&cm, nid(0)), "#ce90ac"); // (0,0)
-        assert_eq!(hex_of(&cm, nid(1)), "#d19292"); // (0,1)
-        assert_eq!(hex_of(&cm, nid(2)), "#d5d897"); // (1,0)
-        assert_eq!(hex_of(&cm, nid(3)), "#9ee1c3"); // (2,0)
-        assert_eq!(hex_of(&cm, nid(4)), "#9fe3d9"); // (2,1)
-        assert_eq!(hex_of(&cm, nid(5)), "#a0dbe5"); // (2,2)
-        assert_eq!(hex_of(&cm, nid(6)), "#a8a4eb"); // (3,0)
-    }
-
-    #[test]
-    fn node_color_map_sorts_by_nodeid_not_insertion_order() {
-        // HS keys on `M.elems sNodes` = NodeId order, so member indices must
-        // follow NodeId order even when nodes are inserted out of order. Insert
-        // the second destr first; after the NodeId sort the (0,0)/(0,1) split
-        // must still land by NodeId, matching the in-order [2,1,3,1] map.
-        let shuffled: Vec<(NodeId, RuleACInst)> = vec![
-            (nid(1), intr_node(destr(b"d2"))), // (0,1) after sort
-            (nid(0), intr_node(destr(b"d1"))), // (0,0) after sort
-        ];
-        let cm = build_node_color_map(&shuffled);
-        // d1 (nid 0) is member 0; d2 (nid 1) is member 1 — regardless of the
-        // insertion order above.
-        assert_eq!(hex_of(&cm, nid(0)), "#ce90ac"); // d1 -> (0,0)
-        assert_eq!(hex_of(&cm, nid(1)), "#d19292"); // d2 -> (0,1)
-    }
-
-    #[test]
-    fn node_color_map_last_wins_on_duplicate_rinfo() {
-        // Two nodes sharing an identical rInfo collapse to one key; HS
-        // `M.fromList` keeps the LAST, so both resolve to the (1,1) colour,
-        // not (1,0). sizes = [0, 2, 0, 0]: (1,0)=#d5d897, (1,1)=#badb99.
-        let dup: Vec<(NodeId, RuleACInst)> = vec![
-            (nid(0), named_proto_node(PRN::Stand("R"))), // (1,0)
-            (nid(1), named_proto_node(PRN::Stand("R"))), // (1,1) — same rInfo
-        ];
-        let cm = build_node_color_map(&dup);
-        // Both look up the LAST member's colour.
-        assert_eq!(hex_of(&cm, nid(0)), "#badb99");
-        assert_eq!(hex_of(&cm, nid(1)), "#badb99");
-    }
-
-    #[test]
-    fn node_color_map_separates_same_named_rules_with_distinct_rinfo() {
-        // Same `ProtoRuleName` — hence the same `class_key` bucket — but
-        // unequal `rInfo`s (one carries a `role:` attribute), so `M.fromList`
-        // keeps TWO keys and only the two equal ones collapse.
-        // sizes = [0, 3, 0, 0]: (1,0)=#d5d897, (1,1)=#c3da98, (1,2)=#b1dc9a.
-        let mut roled = named_proto_node(PRN::Stand("R"));
+        let constr = |n: &[u8]| {
+            intr_node(IntrRuleACInfo::ConstrRule {
+                name: n.to_vec(),
+                fun: tamarin_term::function_symbols::FunSym::List,
+            })
+        };
+        let stand = || named_proto_node(PRN::Stand("R"));
+        let mut roled = stand();
         if let TRuleInfo::Proto(p) = &mut roled.info {
             p.attributes.role = Some("A".to_string());
         }
-        let mixed: Vec<(NodeId, RuleACInst)> = vec![
-            (nid(0), named_proto_node(PRN::Stand("R"))), // (1,0)
-            (nid(1), roled),                             // (1,1) — distinct rInfo
-            (nid(2), named_proto_node(PRN::Stand("R"))), // (1,2) — equal to nid 0
+        let rows: Vec<(&str, Vec<(NodeId, RuleACInst)>, &[&str])> = vec![
+            (
+                // sizes = [1, 1, 1, 1]: slots (0,0) (1,0) (2,0) (3,0).
+                "one rule per group",
+                vec![
+                    (nid(0), intr_node(destr(b"d"))),
+                    (nid(1), stand()),
+                    (nid(2), constr(b"c")),
+                    (nid(3), named_proto_node(PRN::Fresh)),
+                ],
+                &["#ce90ac", "#d5d897", "#9ee1c3", "#a8a4eb"],
+            ),
+            (
+                // sizes = [2, 1, 3, 1]: (0,0) (0,1) (1,0) (2,0) (2,1) (2,2) (3,0).
+                "member index tracks NodeId order",
+                vec![
+                    (nid(0), intr_node(destr(b"d1"))),
+                    (nid(1), intr_node(destr(b"d2"))),
+                    (nid(2), stand()),
+                    (nid(3), constr(b"c1")),
+                    (nid(4), constr(b"c2")),
+                    (nid(5), intr_node(IntrRuleACInfo::Coerce)),
+                    (nid(6), named_proto_node(PRN::Fresh)),
+                ],
+                &[
+                    "#ce90ac", "#d19292", "#d5d897", "#9ee1c3", "#9fe3d9", "#a0dbe5", "#a8a4eb",
+                ],
+            ),
+            (
+                // Inserted out of order: d1 (node 0) is still member 0.
+                "NodeId order, not insertion order",
+                vec![
+                    (nid(1), intr_node(destr(b"d2"))),
+                    (nid(0), intr_node(destr(b"d1"))),
+                ],
+                &["#ce90ac", "#d19292"],
+            ),
+            (
+                // sizes = [0, 2, 0, 0]: both take (1,1), not (1,0).
+                "equal rInfos take the last colour",
+                vec![(nid(0), stand()), (nid(1), stand())],
+                &["#badb99", "#badb99"],
+            ),
+            (
+                // Same rule name, but one rInfo carries a role: two keys.
+                // sizes = [0, 3, 0, 0]: (1,0) (1,1) (1,2); node 0 takes node 2's.
+                "same name, distinct rInfos",
+                vec![(nid(0), stand()), (nid(1), roled), (nid(2), stand())],
+                &["#b1dc9a", "#c3da98", "#b1dc9a"],
+            ),
         ];
-        let cm = build_node_color_map(&mixed);
-        // nid 0 collapses onto the LAST attribute-free "R" entry, nid 2.
-        assert_eq!(hex_of(&cm, nid(0)), "#b1dc9a");
-        assert_eq!(hex_of(&cm, nid(1)), "#c3da98");
-        assert_eq!(hex_of(&cm, nid(2)), "#b1dc9a");
+        for (label, nodes, hexes) in rows {
+            let cm = build_node_color_map(&nodes);
+            for (i, hex) in hexes.iter().enumerate() {
+                assert_eq!(hex_of(&cm, nid(i as u64)), *hex, "{label}: node {i}");
+            }
+        }
     }
 
     #[test]

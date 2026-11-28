@@ -1,60 +1,12 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Theory pretty-printer.  Port of Haskell's `prettyClosedTheory`
-//! (ClosedTheory.hs) — top-level renderer for `--prove` output.
+//! Port of HS `prettyClosedTheory` (ClosedTheory.hs) and `prettyOpenTheory`
+//! (OpenTheory.hs): the batch and web theory renderers.
 //!
-//! Goal: byte-identical output to Haskell on the analyzed theory body.
-//! The output layout:
-//!
-//! ```text
-//! theory <name>
-//!
-//! begin
-//!
-//! // Function signature and definition of the equational theory E
-//!
-//! builtins: ...     (if any)
-//! functions: ...
-//! equations: ...
-//!
-//! rule (modulo E) <name>:
-//!    [ <prems> ] --[ <acts> ]-> [ <concs> ]
-//!
-//!   /* has exactly the trivial AC variant */
-//!
-//! restriction <name>:
-//!   "<formula>"
-//!
-//! lemma <name> [attrs]:
-//!   <quant> "<formula>"
-//! /*
-//! guarded formula characterizing ...:
-//! "<gformula>"
-//! */
-//! <proof body>
-//!
-//! /* All wellformedness checks were successful. */ (or warning block)
-//!
-//! /*
-//! Generated from:
-//! Tamarin version ...
-//! Maude version ...
-//! Git revision: ...
-//! Compiled at: ...
-//! */
-//!
-//! end
-//! ```
-//!
-//! Each top-level item is separated by a blank line (HS uses `vsep`).
-//!
-//! HS's `prettyTheory` (TheoryObject.hs) is one function taking five
-//! injected printers; here its ITEM half is [`pretty_theory_items`] and its
-//! header/footer half is spelled out once in [`pretty_closed_theory`] and once
-//! in `open_theory_blocks`.  The two assemblies differ in `ppSig`/`ppCache`
-//! and in the trailing wellformedness / `Generated from:` / `end` handling,
-//! and each is about thirty lines, so they stay apart.
+//! HS's `prettyTheory` (TheoryObject.hs) takes five injected printers; here
+//! its item half is [`pretty_theory_items`] and its header/footer half is
+//! assembled in [`pretty_closed_theory`] and `open_theory_blocks`.
 
 use crate::constraint::solver::goals::GoalRanking;
 use crate::pretty_formula as pf;
@@ -86,27 +38,6 @@ pub struct ProvedLemma {
 // =============================================================================
 // Heuristic / GoalRanking rendering
 // =============================================================================
-
-/// Compute the default oracle name for a theory file.
-///
-/// Mirrors HS `defaultOracleNames` (System.hs): derive the candidate
-/// from `takeBaseName`, probe it beside the theory, and retain only its
-/// relative name in the ranking.
-pub(crate) fn oracle_name_for_theory(in_file: &str) -> String {
-    let path = std::path::Path::new(in_file);
-    let candidate = path.file_stem().map(|stem| {
-        let mut name = stem.to_os_string();
-        name.push(".oracle");
-        path.with_file_name(name)
-    });
-    candidate
-        .as_deref()
-        .filter(|candidate| candidate.is_file())
-        .and_then(std::path::Path::file_name)
-        .and_then(std::ffi::OsStr::to_str)
-        .unwrap_or("oracle")
-        .to_string()
-}
 
 /// Render one `GoalRanking` as the heuristic token that names it, mirroring
 /// HS `prettyGoalRanking` (System.hs): an oracle ranking as its
@@ -188,8 +119,8 @@ pub fn pretty_closed_theory(
     // HS `emptyString` (lib/theory/src/Pretty.hs) as `ppSap`
     // (ClosedTheory.hs).
     let translation = |_: &TranslationElement| String::new();
-    let blocks = if crate::theory::contains_open_rule_variants(&thy.items) {
-        let merged = crate::theory::merge_open_proto_rules(&thy.items);
+    let merged = crate::theory::merge_open_proto_rules(&thy.items);
+    let blocks = if crate::theory::contains_manual_rule_variants(&merged) {
         pretty_theory_items(
             &merged,
             &ItemPrinters {
@@ -365,11 +296,7 @@ fn pretty_formal_comment(fc: &crate::theory::FormalComment) -> String {
 /// (Batch.hs `putStrLn . renderDoc`): the returned string carries NO
 /// trailing newline, the caller's `println!` supplies `putStrLn`'s.
 pub fn pretty_open_theory(thy: &Theory) -> String {
-    let in_file = thy.in_file.as_str();
-    let translation = |el: &TranslationElement| pretty_translation_element(el, in_file);
-    let mut blocks = open_theory_blocks(thy, in_file, true, &translation);
-    blocks.push("end".to_string());
-    blocks.join("\n\n")
+    render_open_theory(thy, true, Vec::new())
 }
 
 /// [`pretty_open_theory`] followed by the two trailing comment `TextItem`s
@@ -378,16 +305,14 @@ pub fn pretty_open_theory(thy: &Theory) -> String {
 /// [`format_wf_block`] string) and the `Generated from:` version block.
 /// `prettyOpenTheoryByModule`'s `spthy` and `spthytyped` arms
 /// (TheoryLoader.hs#prettyOpenTheoryByModule) both land here; they differ only in the theory
-/// VALUE, which `tamarin_sapic::type_theory::type_theory_env` has rewritten
+/// VALUE, which `tamarin_sapic::type_theory::type_theory` has rewritten
 /// for `spthytyped`.
 pub fn pretty_open_theory_by_module(thy: &Theory, wf_block: &str, build: &BuildInfo) -> String {
-    let in_file = thy.in_file.as_str();
-    let translation = |el: &TranslationElement| pretty_translation_element(el, in_file);
-    let mut blocks = open_theory_blocks(thy, in_file, true, &translation);
-    blocks.push(wf_block.to_string());
-    blocks.push(render_generated_from(build));
-    blocks.push("end".to_string());
-    blocks.join("\n\n")
+    render_open_theory(
+        thy,
+        true,
+        vec![wf_block.to_string(), render_generated_from(build)],
+    )
 }
 
 /// HS `prettyOpenTranslatedTheory` (OpenTheory.hs) with the same two
@@ -400,11 +325,26 @@ pub fn pretty_open_translated_theory_by_module(
     wf_block: &str,
     build: &BuildInfo,
 ) -> String {
+    render_open_theory(
+        thy,
+        false,
+        vec![wf_block.to_string(), render_generated_from(build)],
+    )
+}
+
+/// The open print: `open_theory_blocks`, then `trailer`, then `end`.
+/// Without `translation_items` every translation item renders empty.
+fn render_open_theory(thy: &Theory, translation_items: bool, trailer: Vec<String>) -> String {
     let in_file = thy.in_file.as_str();
-    let translation = |_: &TranslationElement| String::new();
-    let mut blocks = open_theory_blocks(thy, in_file, false, &translation);
-    blocks.push(wf_block.to_string());
-    blocks.push(render_generated_from(build));
+    let translation = |el: &TranslationElement| {
+        if translation_items {
+            pretty_translation_element(el, in_file)
+        } else {
+            String::new()
+        }
+    };
+    let mut blocks = open_theory_blocks(thy, in_file, translation_items, &translation);
+    blocks.extend(trailer);
     blocks.push("end".to_string());
     blocks.join("\n\n")
 }
@@ -511,16 +451,16 @@ fn pretty_translation_element(el: &TranslationElement, in_file: &str) -> String 
     match el {
         // `text "process" <> colon $-$ (nest 2 $ prettyProcess p)`.
         TranslationElement::Process(pr) => Doc::text("process:")
-            .above_g(open_process_doc(pr).nest(2))
+            .above_g(crate::pretty_sapic::open_process_doc(pr).nest(2))
             .render(),
         // `text "diffEquivLemma" <> colon $-$ (nest 2 $ prettyProcess p)`.
         TranslationElement::DiffEquivLemma(pr) => Doc::text("diffEquivLemma:")
-            .above_g(open_process_doc(pr).nest(2))
+            .above_g(crate::pretty_sapic::open_process_doc(pr).nest(2))
             .render(),
         // `text "equivLemma" <> colon $-$ (nest 2 p1) $$ (nest 2 p2)`.
         TranslationElement::EquivLemma(p1, p2) => Doc::text("equivLemma:")
-            .above_g(hpj::parens(open_process_doc(p1)).nest(2))
-            .above(hpj::parens(open_process_doc(p2)).nest(2))
+            .above_g(hpj::parens(crate::pretty_sapic::open_process_doc(p1)).nest(2))
+            .above(hpj::parens(crate::pretty_sapic::open_process_doc(p2)).nest(2))
             .render(),
         // `text "let " <-> name <-> vars? <-> text "=" <-> nest 2 (prettyProcess body)`
         // — `text "let "` keeps its own trailing space, so `<->`
@@ -534,7 +474,7 @@ fn pretty_translation_element(el: &TranslationElement, in_file: &str) -> String 
                 d = d.beside_sp(Doc::text(format!("({})", shown.join(","))));
             }
             d.beside_sp(Doc::text("="))
-                .beside_sp(open_process_doc(&pd.body).nest(2))
+                .beside_sp(crate::pretty_sapic::open_process_doc(&pd.body).nest(2))
                 .render()
         }
         // Only builtins not recoverable from the printed signature survive
@@ -565,21 +505,13 @@ fn pretty_translation_element(el: &TranslationElement, in_file: &str) -> String 
         // The `Pred` sugar survives: `liftedAddAccLemma` adds the lemma
         // verbatim (Theory/Text/Parser.hs).
         TranslationElement::AccLemma(al) => {
-            let kw = Doc::text("lemma");
-            let name_doc = Doc::text(al.name.clone());
-            let header = if al.attributes.is_empty() {
-                kw.beside_sp(name_doc).beside(Doc::text(":"))
-            } else {
-                let attr_docs = lemma_attr_docs(
+            let header = lemma_title_doc(
+                &al.name,
+                lemma_attr_docs(
                     &al.attributes,
                     al.heuristic_in_file.as_deref().unwrap_or(in_file),
-                );
-                let attrs_fsep = hpj::fsep(hpj::punctuate(Doc::text(","), attr_docs));
-                let brackets = Doc::text("[").beside(attrs_fsep).beside(Doc::text("]"));
-                kw.beside_sp(name_doc)
-                    .beside_sp(brackets)
-                    .beside(Doc::text(":"))
-            };
+                ),
+            );
             let mut out = header.render();
             out.push_str("\n  ");
             out.push_str(&al.case_test_idents.join(", "));
@@ -600,124 +532,6 @@ fn pretty_translation_element(el: &TranslationElement, in_file: &str) -> String 
             )
         }
     }
-}
-
-/// HS `prettySapic'` (Theory/Sapic/Process.hs) as a Doc. Parentheses encode
-/// the parser's precedence and right extent, branch combinators regain their
-/// `then`/`in` keywords, and an annotated process prints as `(process)@term`.
-///
-/// The action/combinator text shares the byte-faithful top-level action
-/// renderer, without first appending and then stripping a semicolon.
-///
-/// `prettyProcess = prettySapic = prettySapic' rulePrinter`
-/// (TheoryObject.hs, Print.hs), so an embedded MSR renders its
-/// premises through `unextractMatchingVariables mv` — every pattern-match
-/// variable keeps its `=` marker.  This is the printer that
-/// [`crate::pretty_sapic::pretty_sapic_top_level`] selects; the
-/// `process="..."` rule attribute uses the other one.
-fn open_process_doc(pr: &crate::sapic::PlainProcess) -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj::{parens, Doc};
-    use crate::sapic::{Process, ProcessCombinator, SapicAction};
-    fn node_text(p: &crate::sapic::PlainProcess) -> String {
-        crate::pretty_sapic::pretty_sapic_open_node(p)
-    }
-    fn annotation(pr: &crate::sapic::PlainProcess) -> &crate::sapic::ProcessParsedAnnotation {
-        match pr {
-            Process::Null(a) | Process::Comb(_, a, _, _) | Process::Action(_, a, _) => a,
-        }
-    }
-    fn is_chain(pr: &crate::sapic::PlainProcess) -> bool {
-        matches!(
-            pr,
-            Process::Comb(
-                ProcessCombinator::Parallel | ProcessCombinator::Ndc,
-                a,
-                _,
-                _
-            ) if a.location.is_none()
-        )
-    }
-    fn is_delimited(pr: &crate::sapic::PlainProcess) -> bool {
-        match pr {
-            Process::Null(_) | Process::Action(SapicAction::ProcessCall(_, _), _, _) => true,
-            Process::Action(action, _, body) if matches!(body.as_ref(), Process::Null(_)) => {
-                matches!(
-                    action,
-                    SapicAction::New(_)
-                        | SapicAction::ChIn { .. }
-                        | SapicAction::ChOut { .. }
-                        | SapicAction::Event(_)
-                )
-            }
-            _ => false,
-        }
-    }
-    fn located(pr: &crate::sapic::PlainProcess, loc: &crate::sapic::SapicTerm) -> Doc {
-        parens(form(pr))
-            .beside(Doc::text("@"))
-            .beside(Doc::text(crate::pretty_sapic::pretty_sapic_term(loc)))
-    }
-    fn pp(pr: &crate::sapic::PlainProcess) -> Doc {
-        match annotation(pr).location.as_ref() {
-            Some(loc) => located(pr, loc),
-            None => form(pr),
-        }
-    }
-    fn delimited(pr: &crate::sapic::PlainProcess) -> Doc {
-        match annotation(pr).location.as_ref() {
-            Some(loc) => parens(located(pr, loc)),
-            None if is_delimited(pr) => form(pr),
-            None => parens(form(pr)),
-        }
-    }
-    fn left_op(pr: &crate::sapic::PlainProcess) -> Doc {
-        if is_chain(pr) {
-            form(pr)
-        } else {
-            delimited(pr)
-        }
-    }
-    fn form(pr: &crate::sapic::PlainProcess) -> Doc {
-        match pr {
-            Process::Null(_) => Doc::text("0"),
-            Process::Comb(ProcessCombinator::Parallel | ProcessCombinator::Ndc, _, left, right) => {
-                left_op(left)
-                    .beside_sp(Doc::text(node_text(pr)))
-                    .beside_sp(delimited(right))
-            }
-            Process::Comb(comb, _, left, right) => {
-                let keyword = match comb {
-                    ProcessCombinator::Cond(_) | ProcessCombinator::CondEq(_, _) => "then",
-                    ProcessCombinator::Lookup(_, _) | ProcessCombinator::Let { .. } => "in",
-                    ProcessCombinator::Parallel | ProcessCombinator::Ndc => unreachable!(),
-                };
-                let header = Doc::text(node_text(pr)).beside_sp(Doc::text(keyword));
-                if matches!(right.as_ref(), Process::Null(_)) {
-                    header.above_g(pp(left).nest(4))
-                } else {
-                    header
-                        .above_g(delimited(left).nest(4))
-                        .above_g(Doc::text("else"))
-                        .above_g(pp(right).nest(4))
-                }
-            }
-            Process::Action(SapicAction::Rep, _, body) => Doc::text("!").beside(parens(pp(body))),
-            Process::Action(SapicAction::ProcessCall(_, _), _, _) => Doc::text(node_text(pr)),
-            Process::Action(_, _, body) if matches!(body.as_ref(), Process::Null(_)) => {
-                Doc::text(node_text(pr))
-            }
-            Process::Action(_, _, body) => {
-                let next = if is_chain(body) {
-                    parens(form(body)).nest(1)
-                } else {
-                    pp(body)
-                };
-                Doc::text(format!("{};", node_text(pr))).above_g(next)
-            }
-        }
-    }
-
-    pp(pr)
 }
 
 // =============================================================================
@@ -745,11 +559,7 @@ pub fn web_signature_block(sig: &tamarin_term::maude_sig::MaudeSig) -> String {
 /// `nest 2` indents wrapped continuation lines.  Rendered as ONE Doc so a long
 /// source goal wraps exactly as HS `renderHtmlDoc` (the per-case `<p>` prem).
 fn web_source_prem_doc(g: &crate::constraint::constraints::Goal) -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj::Doc;
-    Doc::text("\"")
-        .beside(solve_goal_to_doc(g))
-        .beside(Doc::text("\""))
-        .nest(2)
+    crate::pretty_hpj::double_quotes(solve_goal_to_doc(g)).nest(2)
 }
 
 /// HS per-case `withTag "p" [] ppPrem` premise (Web/Theory.hs): the whole
@@ -830,26 +640,17 @@ pub fn web_macros(thy: &Theory) -> Option<String> {
 ///
 /// Emits the empty string when no fact tags are injective.  Computes
 /// the set on demand from the elaborated rules + reducible function
-/// symbols — the same call `ProofContext::new` makes through `new_impl`
+/// symbols — the same call `ProofContext::try_with_options` makes
 /// (`constraint/solver/context.rs`).
 fn render_injective_fact_insts(elab: &Theory) -> String {
     use crate::fact::{FactTag, Multiplicity};
     use crate::pretty_hpj::{self as hpj, punctuate, Doc};
-    let mut tags = crate::tools::injective_fact_instances::injective_fact_instances_for_rules(
+    let tags = crate::tools::injective_fact_instances::injective_fact_instances_for_rules(
         elab.rules(),
         &elab.macros().cloned().collect::<Vec<_>>(),
         &elab.signature.reducible_fun_syms_fast,
+        &elab.options.forced_injective_facts,
     );
-    // HS `closeRuleCache` (CloseRule.hs): union the FORCED injective facts
-    // (`setforcedInjectiveFacts {L_PureState, L_CellLocked}`,
-    // lib/sapic/src/Sapic.hs) when
-    // the state-channel optimisation is on.
-    if elab.options.state_channel_opt() {
-        tags = crate::tools::injective_fact_instances::union_forced_injective_fact_instances(
-            tags,
-            &crate::tools::injective_fact_instances::pure_state_forced_fact_tags(),
-        );
-    }
     if tags.is_empty() {
         return String::new();
     }
@@ -914,7 +715,7 @@ pub(crate) fn render_signature(sig: &tamarin_term::maude_sig::MaudeSig) -> Strin
     }
 
     // functions: ...
-    let funs = render_fun_syms(sig);
+    let funs = sig.pretty_fun_syms();
     if !funs.is_empty() {
         out.push_str(&wrap_with_lead("functions:", &funs));
         out.push('\n');
@@ -936,14 +737,6 @@ pub(crate) fn render_signature(sig: &tamarin_term::maude_sig::MaudeSig) -> Strin
     }
 
     out
-}
-
-/// Render the function symbol list: HS `prettyMaudeSigExcept` with an empty
-/// exclusion set, i.e. the NoEq symbols in `S.toList` (BTreeSet) order
-/// followed by the user-defined AC symbols, each with its space-prefixed
-/// attribute list (`h/1 [destructor]`) and NDC attributes.
-fn render_fun_syms(sig: &tamarin_term::maude_sig::MaudeSig) -> Vec<String> {
-    sig.pretty_fun_syms_except(&std::collections::BTreeSet::new())
 }
 
 /// HS `prettyTranslationElement` for `FunctionTypingInfo`: explicit SAPIC
@@ -1000,115 +793,6 @@ pub fn pretty_function_typing_info(fti: &crate::theory::SapicFunSym) -> crate::p
 }
 
 #[cfg(test)]
-mod open_item_tests {
-    use super::*;
-    use crate::sapic::{Process, ProcessParsedAnnotation};
-    use crate::theory::{ProcessDef, SapicFunSym, Theory, TheoryItem, TranslationElement};
-    use tamarin_term::function_symbols::{Constructability, NdcState, NoEqSym, Privacy};
-
-    fn null_proc() -> crate::sapic::PlainProcess {
-        Process::Null(ProcessParsedAnnotation::empty())
-    }
-
-    fn typing_info(name: &'static str) -> SapicFunSym {
-        SapicFunSym {
-            sym: tamarin_term::function_symbols::UserDefinedSym::NoEqUser(NoEqSym {
-                name: name.as_bytes(),
-                arity: 1,
-                privacy: Privacy::Public,
-                constructability: Constructability::Constructor,
-                ndc: NdcState::NotNdc,
-            }),
-            arg_types: vec![None],
-            out_type: None,
-        }
-    }
-
-    fn theory_with(items: Vec<TheoryItem>) -> Theory {
-        let mut thy = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
-        thy.items = items;
-        thy
-    }
-
-    /// `msr`: `prettyOpenTranslatedTheory` prints every translation item
-    /// through `emptyString` (OpenTheory.hs); every other item is kept
-    /// and rendered.
-    #[test]
-    fn the_translated_theory_prints_no_translation_item() {
-        let thy = theory_with(vec![
-            TheoryItem::Translation(TranslationElement::SignatureBuiltin("multiset".to_string())),
-            TheoryItem::Translation(TranslationElement::FunctionTypingInfo(typing_info("h"))),
-            TheoryItem::Translation(TranslationElement::Process(null_proc())),
-            TheoryItem::Translation(TranslationElement::ProcessDef(ProcessDef {
-                name: "P".to_string(),
-                vars: None,
-                body: null_proc(),
-            })),
-            TheoryItem::Translation(TranslationElement::EquivLemma(null_proc(), null_proc())),
-            TheoryItem::Translation(TranslationElement::DiffEquivLemma(null_proc())),
-            TheoryItem::Translation(TranslationElement::ExportInfo {
-                tag: "queries".to_string(),
-                body: "q".to_string(),
-            }),
-            TheoryItem::Text((String::new(), "keep".to_string())),
-        ]);
-        let blocks = open_theory_blocks(&thy, "f.spthy", false, &|_: &TranslationElement| {
-            String::new()
-        });
-        assert_eq!(
-            blocks.last().map(String::as_str),
-            Some("/*\nkeep\n*/"),
-            "only the formal comment survives: {blocks:?}"
-        );
-    }
-
-    /// `prettyTranslationElement` (TheoryObject.hs) on the item kinds
-    /// whose text is a plain concatenation.
-    #[test]
-    fn translation_elements_render_their_headers() {
-        assert_eq!(
-            pretty_translation_element(
-                &TranslationElement::SignatureBuiltin("multiset".to_string()),
-                "f.spthy"
-            ),
-            ""
-        );
-        assert_eq!(
-            pretty_translation_element(
-                &TranslationElement::SignatureBuiltin("locations-report".to_string()),
-                "f.spthy"
-            ),
-            "builtins: locations-report"
-        );
-        assert_eq!(
-            pretty_translation_element(
-                &TranslationElement::ExportInfo {
-                    tag: "queries".to_string(),
-                    body: " q".to_string(),
-                },
-                "f.spthy"
-            ),
-            "export queries : \" q\""
-        );
-        assert_eq!(
-            pretty_translation_element(&TranslationElement::Process(null_proc()), "f.spthy"),
-            "process:\n  0"
-        );
-        assert_eq!(
-            pretty_translation_element(
-                &TranslationElement::ProcessDef(ProcessDef {
-                    name: "P".to_string(),
-                    vars: Some(Vec::new()),
-                    body: null_proc(),
-                }),
-                "f.spthy"
-            ),
-            "let  P () = 0"
-        );
-    }
-}
-
-#[cfg(test)]
 mod function_typing_info_tests {
     use crate::theory::SapicFunSym;
     use tamarin_term::function_symbols::{
@@ -1124,52 +808,51 @@ mod function_typing_info_tests {
         .render()
     }
 
-    /// Default-only typing information duplicates the signature and is not
-    /// printed.
+    /// `function:` typing lines: default-only typing information duplicates
+    /// the signature and is not printed; declared argument types print
+    /// verbatim, untyped ones as `Any`; every attribute, the `AC` marker
+    /// included, joins one parser-compatible list.
     #[test]
-    fn free_symbol_absent_attributes_keep_their_spaces() {
-        let sym = NoEqSym::new(
-            b"f".to_vec(),
-            2,
-            Privacy::Public,
-            Constructability::Constructor,
-        );
-        assert_eq!(render(UserDefinedSym::NoEqUser(sym), vec![None, None]), "");
-    }
-
-    /// Declared argument types print verbatim, with all attributes in one
-    /// parser-compatible list.
-    #[test]
-    fn free_symbol_with_types_and_every_attribute() {
-        let sym = NoEqSym::new(
-            b"h".to_vec(),
-            1,
-            Privacy::Private,
-            Constructability::Destructor,
-        )
-        .with_ndc(NdcState::IsNdcBoth);
-        assert_eq!(
-            render(UserDefinedSym::NoEqUser(sym), vec![Some("Key".to_string())]),
-            "function: h (Key) : Any [private,destructor,NDC,NDC-diff]"
-        );
-    }
-
-    /// The `AC` marker joins the same attribute list.
-    #[test]
-    fn user_ac_symbol_carries_the_ac_marker() {
-        let sym = AcFctSym::new(
-            b"g".to_vec(),
-            Privacy::Public,
-            Constructability::Constructor,
-            NdcState::IsNdc,
-        );
-        assert_eq!(
-            render(
-                UserDefinedSym::AcFctUser(sym),
-                vec![Some("Key".to_string()), None]
+    fn function_typing_info_table() {
+        let key = || Some("Key".to_string());
+        let rows: Vec<(UserDefinedSym, Vec<Option<String>>, &str)> = vec![
+            (
+                UserDefinedSym::NoEqUser(NoEqSym::new(
+                    b"f".to_vec(),
+                    2,
+                    Privacy::Public,
+                    Constructability::Constructor,
+                )),
+                vec![None, None],
+                "",
             ),
-            "function: g (Key, Any) : Any [AC,NDC]"
-        );
+            (
+                UserDefinedSym::NoEqUser(
+                    NoEqSym::new(
+                        b"h".to_vec(),
+                        1,
+                        Privacy::Private,
+                        Constructability::Destructor,
+                    )
+                    .with_ndc(NdcState::IsNdcBoth),
+                ),
+                vec![key()],
+                "function: h (Key) : Any [private,destructor,NDC,NDC-diff]",
+            ),
+            (
+                UserDefinedSym::AcFctUser(AcFctSym::new(
+                    b"g".to_vec(),
+                    Privacy::Public,
+                    Constructability::Constructor,
+                    NdcState::IsNdc,
+                )),
+                vec![key(), None],
+                "function: g (Key, Any) : Any [AC,NDC]",
+            ),
+        ];
+        for (sym, arg_types, want) in rows {
+            assert_eq!(render(sym, arg_types), want);
+        }
     }
 }
 
@@ -1197,6 +880,32 @@ fn render_equations(
         items.push((pretty_nterm(&r.lhs), pretty_nterm(&r.rhs.term)));
     }
     items
+}
+
+/// HS `casesInfo` (ClosedTheory.hs): `N cases, deconstructions complete`
+/// or `N cases, K partial deconstructions left`.
+pub fn cases_info(n_cases: usize, n_chains: usize) -> String {
+    if n_chains == 0 {
+        format!("{n_cases} cases, deconstructions complete")
+    } else {
+        format!("{n_cases} cases, {n_chains} partial deconstructions left")
+    }
+}
+
+/// HS `prettyPrecomputation` (ClosedTheory.hs): the protocol-rule count and
+/// the raw and refined source summaries, without a trailing newline.
+pub fn pretty_precomputation(stats: &crate::prove::PrecomputationStats) -> String {
+    let restrictions = if stats.has_restrictions {
+        " and restrictions"
+    } else {
+        ""
+    };
+    format!(
+        "Multiset rewriting rules{restrictions}: {}\nRaw sources: {}\nRefined sources: {}",
+        stats.rules,
+        cases_info(stats.raw_cases, stats.raw_chains),
+        cases_info(stats.refined_cases, stats.refined_chains),
+    )
 }
 
 /// Format the `/* WARNING: ... */` or `/* All wellformedness checks
@@ -1491,13 +1200,23 @@ fn pretty_lemma_formulas(
     proof: &str,
     in_file: &str,
 ) -> String {
-    let mut out = lemma_head(
-        &lem.name,
-        lemma_attr_docs(&lem.attributes, in_file),
+    let mut out = lemma_title_doc(&lem.name, lemma_attr_docs(&lem.attributes, in_file)).render();
+    out.push('\n');
+
+    // Lemma body shape from HS `prettyLemma` (lib/theory/src/Lemma.hs):
+    //   `nest 2 $ sep [ prettyTraceQuantifier, doubleQuotes (prettyLNFormula f) ]`
+    // Routed through the HS-faithful Doc engine so the quant-vs-formula
+    // `sep` wrap, the formula's internal `sep`/`nest` wrapping, and the
+    // continuation indents are byte-identical to HS.  The `nest 2` indent
+    // is included in the rendered output (HS renders it at theory col 0).
+    out.push_str(&pf::lemma_header_line_doc(
         trace_quantifier_keyword(lem.trace_quantifier),
         pf::lnformula_doc(displayed),
-        &render_guarded_block(lem.trace_quantifier, guarded),
-    );
+    ));
+    out.push('\n');
+
+    // /* guarded formula characterizing ... */
+    out.push_str(&guarded_block_comment(lem.trace_quantifier, guarded));
     out.push('\n');
     out.push_str(proof);
     out
@@ -1529,37 +1248,6 @@ pub fn lemma_title_doc(
             .beside_sp(brackets)
             .beside(Doc::text(":"))
     }
-}
-
-/// Everything of HS `prettyLemma` (lib/theory/src/Lemma.hs) BEFORE the
-/// proof body: the `lemma <name> [attrs]:` header, the `<quant> "<formula>"`
-/// line, and the `/* guarded formula ... */` comment block.  `formula_doc` is
-/// the quoted formula of the quantifier line and `guarded_block` the comment,
-/// both built by [`pretty_lemma`] from the lemma it holds.
-fn lemma_head(
-    name: &str,
-    attr_docs: Vec<crate::pretty_hpj::Doc>,
-    quant: &str,
-    formula_doc: crate::pretty_hpj::Doc,
-    guarded_block: &str,
-) -> String {
-    let mut out = String::new();
-    let header_doc = lemma_title_doc(name, attr_docs);
-    out.push_str(&header_doc.render());
-    out.push('\n');
-
-    // Lemma body shape from HS `prettyLemma` (lib/theory/src/Lemma.hs):
-    //   `nest 2 $ sep [ prettyTraceQuantifier, doubleQuotes (prettyLNFormula f) ]`
-    // Routed through the HS-faithful Doc engine so the quant-vs-formula
-    // `sep` wrap, the formula's internal `sep`/`nest` wrapping, and the
-    // continuation indents are byte-identical to HS.  The `nest 2` indent
-    // is included in the rendered output (HS renders it at theory col 0).
-    out.push_str(&pf::lemma_header_line_doc(quant, formula_doc));
-    out.push('\n');
-
-    // /* guarded formula characterizing ... */
-    out.push_str(guarded_block);
-    out
 }
 
 /// HS `prettyLemmaAttribute` (lib/theory/src/Lemma.hs) over the
@@ -1598,37 +1286,23 @@ fn trace_quantifier_keyword(q: crate::theory::TraceQuantifier) -> &'static str {
     }
 }
 
-/// HS `ppLNFormulaGuarded` (lib/theory/src/Lemma.hs) over the
-/// ELABORATED lemma's `_lFormula`.
-fn render_guarded_block(
+/// The `/* guarded formula characterizing ... */` comment of HS
+/// `ppLNFormulaGuarded` (lib/theory/src/Lemma.hs) over the ELABORATED
+/// lemma's `_lFormula`.
+fn guarded_block_comment(
     trace_quantifier: crate::theory::TraceQuantifier,
     formula: &crate::formula::LNFormula,
 ) -> String {
-    guarded_block_comment(
-        matches!(
-            trace_quantifier,
-            crate::theory::TraceQuantifier::ExistsTrace
-        ),
-        crate::guarded::formula_to_guarded(formula),
-        || crate::pretty_formula::lnformula_doc(formula),
-    )
-}
-
-/// The `/* guarded formula characterizing ... */` comment of HS
-/// `ppLNFormulaGuarded` (lib/theory/src/Lemma.hs) around an already
-/// converted formula.  `full_doc` builds the quoted whole formula of the
-/// failure branch, which the success branch never needs.
-fn guarded_block_comment(
-    exists_trace: bool,
-    gf: Result<crate::guarded::Guarded, crate::guarded::GuardError>,
-    full_doc: impl FnOnce() -> crate::pretty_hpj::Doc,
-) -> String {
+    let exists_trace = matches!(
+        trace_quantifier,
+        crate::theory::TraceQuantifier::ExistsTrace
+    );
     let header = if exists_trace {
         "guarded formula characterizing all satisfying traces:"
     } else {
         "guarded formula characterizing all counter-examples:"
     };
-    let gf = match gf {
+    let gf = match crate::guarded::formula_to_guarded(formula) {
         Ok(g) => g,
         Err(e) => {
             // HS lib/theory/src/Lemma.hs: `multiComment (text "conversion to
@@ -1646,7 +1320,7 @@ fn guarded_block_comment(
             // prettyLNFormula` (Guarded.hs) inside `nest 2 err`
             // (lib/theory/src/Lemma.hs), so each is a `Doc` laid out
             // at nesting 4 and wraps at the page width.
-            let full = full_doc();
+            let full = pf::lnformula_doc(formula);
             let sub = e
                 .subject_formula
                 .as_ref()
@@ -1762,15 +1436,21 @@ fn pretty_restriction_view(
 /// rendered INDEPENDENTLY at that style from column 0, then concatenated as
 /// plain text.
 fn pretty_predicate(pr: &crate::predicate::Predicate) -> String {
-    use crate::pretty_hpj::{self as hpj, Doc};
-    // HS `prettyLVar = text . show` over the formal args, so each carries its
-    // sort sigil (`#i` for a temporal arg).
-    let pp_var = |v: &tamarin_term::lterm::LVar| Doc::text(v.to_string());
-    let factstr = crate::fact::pretty_fact(&pp_var, &pr.fact)
-        .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
+    use crate::pretty_hpj as hpj;
+    let factstr = render_predicate_fact(&pr.fact);
     let formulastr =
         pf::lnformula_doc(&pr.formula).render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON);
     format!("predicate: {}<=>{}", factstr, formulastr)
+}
+
+/// HS `render (prettyFact prettyLVar fact)` for a predicate's fact, at
+/// HughesPJ's default style.  `prettyLVar = text . show` (LTerm.hs), so
+/// each formal argument carries its sort sigil (`#i` for a temporal arg).
+pub fn render_predicate_fact(fact: &crate::fact::Fact<tamarin_term::lterm::LVar>) -> String {
+    use crate::pretty_hpj::{self as hpj, Doc};
+    let pp_var = |v: &tamarin_term::lterm::LVar| Doc::text(v.to_string());
+    crate::fact::pretty_fact(&pp_var, fact)
+        .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON)
 }
 
 /// HS `prettyMacros` / `prettyMacro` (TheoryObject.hs).
@@ -1889,7 +1569,7 @@ impl ProofBody for crate::constraint::solver::search::ProofNode {
     }
 
     fn annotated(&self) -> bool {
-        self.annotated
+        self.annotation.is_checked()
     }
 
     fn cases(&self) -> Vec<(&String, &Self)> {
@@ -1909,12 +1589,8 @@ impl ProofBody for crate::theory::ProofTree {
         true
     }
 
-    /// `cases` keeps source order; the parser stored them in an `M.fromList`
-    /// (Theory/Text/Parser/Proof.hs), so they print sorted by name.
     fn cases(&self) -> Vec<(&String, &Self)> {
-        let mut cases: Vec<(&String, &Self)> = self.cases.iter().map(|(n, c)| (n, c)).collect();
-        cases.sort_by_key(|(n, _)| *n);
-        cases
+        self.cases.iter().collect()
     }
 }
 
@@ -2007,19 +1683,6 @@ fn pp_proof<T: ProofBody>(node: &T, out: &mut String, depth: usize) {
             out.push_str("qed");
         }
     }
-}
-
-/// Render a `ProofMethod` to a flat string exactly as HS `prettyProofMethod`
-/// (ProofMethod.hs) — the SAME renderer the `--prove` proof tree
-/// uses, so `solve( <goal> )` carries the faithful fact spacing (`!KU( ~ltk )`),
-/// LVar dots (`#vk.2`), and contradiction reasons.  Used by the interactive
-/// web UI's applicable-methods list + proof snippet (`tamarin-server`), which
-/// must match `--prove`'s method text.  Rendered at the process display width
-/// (100 for the web); the semantic web gate normalises any wrapping away.
-pub fn pretty_proof_method_inline(
-    m: &crate::constraint::solver::proof_method::ProofMethod,
-) -> String {
-    pp_step_doc(m, "").render()
 }
 
 /// HS `prettyProofMethod m` as a Doc (ProofMethod.hs), for
@@ -2119,14 +1782,9 @@ fn pp_step_doc(
     }
 }
 
-/// Render a `Goal` for the oracle/tactic ranking path.  This is HS's
-/// `render $ prettyGoal g` from `ProofMethod.hs`
-/// (oracle stdin)
-/// and `Tactics.hs` `pg = concat . lines . render $ prettyGoal agoal`
-/// (tactic regex string).  All consumers (goals.rs oracle stdin /
-/// `apply_ranking_fn` / `tactic_pg`) immediately apply `concat . lines`
-/// to drop the newlines, so the byte-for-byte requirement is on each
-/// line's internal text (leading indent spaces survive the `concat`).
+/// Render a goal for external oracles and tactic ranking (`prettyGoal` in
+/// ProofMethod.hs and Tactics.hs). Callers discard newlines and preserve
+/// each line's indentation.
 ///
 /// Width: the oracle/tactic path uses plain `render = P.render`
 /// (`Theory.Text.Pretty` re-exports `Text.PrettyPrint.Class.render`,
@@ -2383,213 +2041,111 @@ mod oracle_goal_tests {
         )
     }
 
-    /// The oracle/tactic ranking string is HS's `concat . lines . render`,
-    /// where `render = P.render` uses HughesPJ's default `style`
-    /// (lineLength = 100, ribbon = 67) — NOT the `--prove` DISPLAY width
-    /// (110 / 73, used by `renderStyle (defaultStyle { lineLength = lineWidth })`
-    /// in Console.hs).
-    ///
-    /// Authentic ground truth (captured from the v1.13.0 HS prover with an
-    /// oracle that echoes stdin, on a crafted theory whose premise goal is
-    /// 69 columns wide):
-    ///
-    /// ```text
-    /// 0: !KeyStore0( ~keyaaaaaaaaaaaaaaaaaaaa, ~msgbbbbbbbbbbbbbbbbbbbb) ▶₀ #l
-    /// ```
-    ///
-    /// Note the absence of a space before the closing `)`: at ribbon 67 the
-    /// fact's `nestShort'` (Theory/Model/Fact.hs) wraps,
-    /// pushing `)` onto its own
-    /// line at column 0, and `concat . lines` then joins it directly to the
-    /// preceding `~msgbbbbbbbbbbbbbbbbbbbb`.  At the DISPLAY ribbon 73 the same
-    /// goal stays inline (`... ~msgbbbbbbbbbbbbbbbbbbbb )`, with the space).
-    /// That single byte distinguishes the two widths, so it pins the oracle
-    /// path to 100/67.
+    /// The oracle and tactic ranking string of each goal: HS's `concat .
+    /// lines . render $ prettyGoal g` (ProofMethod.hs).  These strings are
+    /// the external ranking program's stdin, so one byte of drift reorders
+    /// goals and changes which proof the solver finds, not just what it
+    /// prints.  `render` is HughesPJ's default style (100 / ribbon 67), not
+    /// the `--prove` display width (110 / 73).  The expected strings are the
+    /// v1.13.0 prover's, captured with an oracle that echoes its stdin.
     #[test]
-    fn premise_goal_wraps_at_oracle_ribbon_67() {
-        // !KeyStore0( ~keyaaaaaaaaaaaaaaaaaaaa, ~msgbbbbbbbbbbbbbbbbbbbb ) ▶₀ #l
-        let fa: LNFact = Fact::new(
-            FactTag::Proto(Multiplicity::Persistent, "KeyStore0", 2),
-            vec![
-                fresh("keyaaaaaaaaaaaaaaaaaaaa"),
-                fresh("msgbbbbbbbbbbbbbbbbbbbb"),
-            ],
-        );
-        let node = LVar::new("l", LSort::Node, 0);
-        let goal = Goal::Premise((node, PremIdx(0)), fa);
-
-        // HS: `concat . lines . render $ prettyGoal g`.
-        let rendered = render_goal_for_oracle(&goal);
-        let collapsed: String = rendered.lines().collect::<Vec<_>>().concat();
-
-        assert_eq!(
-            collapsed,
-            "!KeyStore0( ~keyaaaaaaaaaaaaaaaaaaaa, ~msgbbbbbbbbbbbbbbbbbbbb) \u{25B6}\u{2080} #l",
-            "oracle goal string must match HS `render` at default ribbon 67 \
-             (wrapped fact: no space before `)`)",
-        );
-
-        // The SAME goal at the DISPLAY width (110 / 73) stays inline, keeping
-        // the space before `)`.  This guards against silently swapping the
-        // oracle width back to the display width.
-        let display: String = solve_goal_to_doc(&goal)
-            .render_at(crate::pretty_hpj::LINE_LENGTH, crate::pretty_hpj::RIBBON, 0)
-            .lines()
-            .collect::<Vec<_>>()
-            .concat();
-        assert_eq!(
-            display,
-            "!KeyStore0( ~keyaaaaaaaaaaaaaaaaaaaa, ~msgbbbbbbbbbbbbbbbbbbbb ) \u{25B6}\u{2080} #l",
-            "display width must keep the fact inline (space before `)`); the two \
-             expectations differ by exactly that byte, which is what makes this \
-             pair discriminating",
-        );
-    }
-
-    /// Regression: a disjunction goal sent to the oracle MUST carry the
-    /// leading space HS produces.  HS `prettyGoal (DisjG (Disj gfs))` =
-    /// `fsep (map (nest 1 . parens . prettyGuarded) gfs)` (Constraints.hs), and HS `render` (HughesPJ `lay`, from column 0) APPLIES the
-    /// top-level `nest 1` to the FIRST line — so the oracle stdin line is
-    /// `" (#a < #b)  ∥ (#b < #a)"` (leading space).  `render_goal_for_oracle`
-    /// must use `render_with`/`lay`, NOT `render_at`/`lay2` (which drops a
-    /// leading `Nest`); the latter fed the oracle a string differing from HS
-    /// by one space, perturbing oracle ranking decisions on oracle-driven
-    /// proofs (e.g. csf19-wrapping gcm).  Ground truth captured from the
-    /// v1.13.0 HS prover with an echoing oracle.
-    #[test]
-    fn disj_goal_for_oracle_has_leading_space() {
+    fn the_goal_arms_render_at_the_oracle_width() {
         use crate::atom::ProtoAtom;
-        use crate::constraint::constraints::{Disj, Goal};
-        use crate::formula::BLNTerm;
         use crate::guarded::Guarded;
-        use tamarin_term::lterm::{BVar, LSort, LVar};
+        use tamarin_term::lterm::BVar;
         use tamarin_term::vterm::var_term;
 
-        let tp = |n: &str| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Node, 0))) };
-        // `#a < #b` ∥ `#b < #a`
-        let d1 = Guarded::Atom(ProtoAtom::Less(tp("a"), tp("b")));
-        let d2 = Guarded::Atom(ProtoAtom::Less(tp("b"), tp("a")));
-        let goal = Goal::Disj(Disj::new(vec![d1, d2]));
-
-        let rendered = render_goal_for_oracle(&goal);
-        let collapsed: String = rendered.lines().collect::<Vec<_>>().concat();
-        // HS `nest 1` leading space + `"  ∥"` separator (two spaces + ∥).
-        assert_eq!(
-            collapsed, " (#a < #b)  \u{2225} (#b < #a)",
-            "oracle disjunction goal must keep HS's leading `nest 1` space; \
-             losing it is the render_at/lay2 regression",
-        );
-    }
-
-    /// The `Action`, `Premise` and `Subterm` arms at the oracle width, once
-    /// per term shape.  These strings are the external ranking program's
-    /// stdin, so one byte of drift here reorders goals and changes which
-    /// proof the solver finds — not just what it prints.
-    #[test]
-    fn the_term_goal_arms_render_each_shape_at_the_oracle_width() {
-        let expected: Vec<(&str, &str, &str, &str)> = vec![
-            (
-                "mult",
-                "Ev( (~a*~b) ) @ #i",
-                "!St( (~a*~b) ) \u{25B6}\u{2082} #i",
-                "(~a*~b) \u{228F} w",
-            ),
-            (
-                "xor",
-                "Ev( (~a\u{2295}~b) ) @ #i",
-                "!St( (~a\u{2295}~b) ) \u{25B6}\u{2082} #i",
-                "(~a\u{2295}~b) \u{228F} w",
-            ),
-            (
-                "pair",
-                "Ev( <x, y, z> ) @ #i",
-                "!St( <x, y, z> ) \u{25B6}\u{2082} #i",
-                "<x, y, z> \u{228F} w",
-            ),
-            (
-                "exp",
-                "Ev( 'g'^~a ) @ #i",
-                "!St( 'g'^~a ) \u{25B6}\u{2082} #i",
-                "'g'^~a \u{228F} w",
-            ),
-            (
-                "diff",
-                "Ev( diff(x, y) ) @ #i",
-                "!St( diff(x, y) ) \u{25B6}\u{2082} #i",
-                "diff(x, y) \u{228F} w",
-            ),
-            (
-                "nullary_user_ac",
-                "Ev( add ) @ #i",
-                "!St( add ) \u{25B6}\u{2082} #i",
-                "add \u{228F} w",
-            ),
-            (
-                "binary_user_ac",
-                "Ev( (x add y) ) @ #i",
-                "!St( (x add y) ) \u{25B6}\u{2082} #i",
-                "(x add y) \u{228F} w",
-            ),
-            (
-                "nat_one",
-                "Ev( %1 ) @ #i",
-                "!St( %1 ) \u{25B6}\u{2082} #i",
-                "%1 \u{228F} w",
-            ),
-        ];
         let node = LVar::new("i", LSort::Node, 0);
-        let shapes = shape_terms();
-        assert_eq!(shapes.len(), expected.len());
-        for ((label, t), (elabel, action, premise, subterm)) in shapes.into_iter().zip(expected) {
-            assert_eq!(label, elabel);
-            let g = Goal::Action(node, ev_fact(t.clone()));
-            assert_eq!(collapse(&render_goal_for_oracle(&g)), action, "{label}");
-            let g = Goal::Premise((node, PremIdx(2)), st_fact(t.clone()));
-            assert_eq!(collapse(&render_goal_for_oracle(&g)), premise, "{label}");
-            let g = Goal::Subterm((t, msg("w")));
-            assert_eq!(collapse(&render_goal_for_oracle(&g)), subterm, "{label}");
+        let mut rows: Vec<(Goal, String)> = Vec::new();
+        // The `Action`, `Premise` and `Subterm` arms, once per term shape.
+        let shapes: [(&str, &str); 8] = [
+            ("mult", "(~a*~b)"),
+            ("xor", "(~a\u{2295}~b)"),
+            ("pair", "<x, y, z>"),
+            ("exp", "'g'^~a"),
+            ("diff", "diff(x, y)"),
+            ("nullary_user_ac", "add"),
+            ("binary_user_ac", "(x add y)"),
+            ("nat_one", "%1"),
+        ];
+        for ((label, t), (shape, shown)) in shape_terms().into_iter().zip(shapes) {
+            assert_eq!(label, shape);
+            rows.push((
+                Goal::Action(node, ev_fact(t.clone())),
+                format!("Ev( {shown} ) @ #i"),
+            ));
+            rows.push((
+                Goal::Premise((node, PremIdx(2)), st_fact(t.clone())),
+                format!("!St( {shown} ) \u{25B6}\u{2082} #i"),
+            ));
+            rows.push((Goal::Subterm((t, msg("w"))), format!("{shown} \u{228F} w")));
         }
-    }
-
-    /// The three arms with no term in them: `prettyNodeConc`/`prettyNodePrem`
-    /// (Constraints.hs), `splitEqs` and the empty disjunction
-    /// (Constraints.hs).
-    #[test]
-    fn the_termless_goal_arms_render_at_the_oracle_width() {
-        let chain = Goal::Chain(
-            (LVar::new("i", LSort::Node, 0), ConcIdx(1)),
-            (LVar::new("j", LSort::Node, 3), PremIdx(0)),
-        );
-        assert_eq!(
-            collapse(&render_goal_for_oracle(&chain)),
-            "(#i, 1) ~~> (#j.3, 0)"
-        );
-        assert_eq!(
-            collapse(&render_goal_for_oracle(&Goal::Split(SplitId(7)))),
-            "splitEqs(7)"
-        );
-        assert_eq!(
-            collapse(&render_goal_for_oracle(&Goal::Disj(Disj::new(vec![])))),
-            "Disj (\u{22A5})"
-        );
-    }
-
-    /// A fact holding all eight shapes runs past the oracle ribbon, so
-    /// `prettyFact`'s `nestShort'` (Theory/Model/Fact.hs) breaks the
-    /// argument list and indents the continuation by the lead's width plus
-    /// one.  `concat . lines` joins the two lines, leaving that indent inside
-    /// the string the oracle reads — six spaces after the comma.
-    #[test]
-    fn a_wide_action_goal_keeps_the_nest_short_indent_in_the_oracle_string() {
+        // A fact holding all eight shapes runs past the ribbon, so
+        // `nestShort'` (Theory/Model/Fact.hs) breaks the argument list and
+        // indents the continuation by the lead's width plus one; `concat .
+        // lines` keeps that indent, six spaces after the comma.
         let wide: LNFact = Fact::new(
             FactTag::Proto(Multiplicity::Linear, intern_str("Wide"), 8),
             shape_terms().into_iter().map(|(_, t)| t).collect(),
         );
-        let g = Goal::Action(LVar::new("i", LSort::Node, 0), wide);
-        assert_eq!(
-            collapse(&render_goal_for_oracle(&g)),
+        rows.push((
+            Goal::Action(node, wide),
             "Wide( (~a*~b), (~a\u{2295}~b), <x, y, z>, 'g'^~a, diff(x, y), add,\
              \u{20}     (x add y), %1) @ #i"
+                .into(),
+        ));
+        // A 69-column premise goal wraps at ribbon 67, which moves `)` to a
+        // line of its own, so the joined string has no space before it.
+        let key_store = Goal::Premise(
+            (LVar::new("l", LSort::Node, 0), PremIdx(0)),
+            Fact::new(
+                FactTag::Proto(Multiplicity::Persistent, "KeyStore0", 2),
+                vec![
+                    fresh("keyaaaaaaaaaaaaaaaaaaaa"),
+                    fresh("msgbbbbbbbbbbbbbbbbbbbb"),
+                ],
+            ),
+        );
+        rows.push((
+            key_store.clone(),
+            "!KeyStore0( ~keyaaaaaaaaaaaaaaaaaaaa, ~msgbbbbbbbbbbbbbbbbbbbb) \u{25B6}\u{2080} #l"
+                .into(),
+        ));
+        // `prettyGoal (DisjG ..)` is `fsep (map (nest 1 . parens .
+        // prettyGuarded) gfs)` (Constraints.hs), and `render` applies the
+        // top-level `nest 1` to the first line: a leading space.
+        let tp = |n: &str| var_term(BVar::Free(LVar::new(n, LSort::Node, 0)));
+        rows.push((
+            Goal::Disj(Disj::new(vec![
+                Guarded::Atom(ProtoAtom::Less(tp("a"), tp("b"))),
+                Guarded::Atom(ProtoAtom::Less(tp("b"), tp("a"))),
+            ])),
+            " (#a < #b)  \u{2225} (#b < #a)".into(),
+        ));
+        // The arms with no term in them: `prettyNodeConc`/`prettyNodePrem`,
+        // `splitEqs` and the empty disjunction (Constraints.hs).
+        rows.push((
+            Goal::Chain(
+                (LVar::new("i", LSort::Node, 0), ConcIdx(1)),
+                (LVar::new("j", LSort::Node, 3), PremIdx(0)),
+            ),
+            "(#i, 1) ~~> (#j.3, 0)".into(),
+        ));
+        rows.push((Goal::Split(SplitId(7)), "splitEqs(7)".into()));
+        rows.push((Goal::Disj(Disj::new(vec![])), "Disj (\u{22A5})".into()));
+
+        for (goal, want) in &rows {
+            assert_eq!(&collapse(&render_goal_for_oracle(goal)), want);
+        }
+        // At the display width the 69-column goal stays inline: the two
+        // widths differ by exactly the space before `)`.
+        assert_eq!(
+            collapse(&solve_goal_to_doc(&key_store).render_at(
+                crate::pretty_hpj::LINE_LENGTH,
+                crate::pretty_hpj::RIBBON,
+                0
+            )),
+            "!KeyStore0( ~keyaaaaaaaaaaaaaaaaaaaa, ~msgbbbbbbbbbbbbbbbbbbbb ) \u{25B6}\u{2080} #l",
         );
     }
 }
@@ -2599,10 +2155,7 @@ mod manual_rule_variants_tests {
     use super::*;
     use crate::fact::{proto_fact, Multiplicity};
     use crate::rule::{ProtoRuleE, ProtoRuleEInfo, Rule};
-    use crate::theory::{
-        contains_manual_rule_variants, contains_open_rule_variants, merge_open_proto_rules,
-        OpenProtoRule,
-    };
+    use crate::theory::{contains_manual_rule_variants, merge_open_proto_rules, OpenProtoRule};
 
     type Item = TheoryItem<OpenProtoRule>;
 
@@ -2623,9 +2176,7 @@ mod manual_rule_variants_tests {
     }
 
     fn gate(items: &[Item]) -> bool {
-        let old = contains_manual_rule_variants(&merge_open_proto_rules(items));
-        assert_eq!(contains_open_rule_variants(items), old);
-        old
+        contains_manual_rule_variants(&merge_open_proto_rules(items))
     }
 
     /// `containsManualRuleVariants` (OpenTheory.hs) is the OR over the
@@ -2662,403 +2213,5 @@ mod manual_rule_variants_tests {
             elab_rule("Send", &[]),
             elab_rule("Recv", &[]),
         ]));
-    }
-}
-
-#[cfg(test)]
-mod ac_variants_block_tests {
-    use crate::fact::{in_fact, out_fact, proto_fact, Multiplicity};
-    use crate::rule::{ProtoRuleEInfo, Rule, RuleAttributes};
-    use crate::theory::OpenProtoRule;
-    use tamarin_term::function_symbols::{zero_sym, AcSym, FunSym};
-    use tamarin_term::lterm::{LNTerm, LSort, LVar};
-    use tamarin_term::subst_vfresh::LNSubstVFresh;
-    use tamarin_term::term::{f_app_ac, f_app_no_eq, Term};
-    use tamarin_term::vterm::var_term;
-
-    /// A message-sort variable at index 0 — how the abstracted AC rule
-    /// spells the variables its variant substitutions bind.
-    fn msg(name: &str) -> LVar {
-        LVar::new(name, LSort::Msg, 0)
-    }
-
-    fn term(v: LVar) -> LNTerm {
-        var_term(v)
-    }
-
-    /// The `nest 2 (multiComment (prettyProtoRuleAC ruAC))` block
-    /// `prettyClosedProtoRule` puts under a rule whose AC form differs from
-    /// its E form (ClosedTheory.hs).
-    fn ac_block(o: &OpenProtoRule) -> String {
-        let acs = crate::theory::closed_rules_ac(o);
-        crate::pretty_hpj::multi_comment(crate::rule::pretty_proto_rule_ac(&acs[0]))
-            .nest(2)
-            .render()
-    }
-
-    /// `features/xor/basicfunctionality/xor0.spthy`'s `receive` rule as the
-    /// closing pipeline leaves it: one abstracted variable in the body, and
-    /// the two substitutions Maude's narrowing returns for it.
-    fn xor0_receive() -> OpenProtoRule {
-        let z = msg("z");
-        let mut info = ProtoRuleEInfo::standard("receive");
-        info.attributes.ignore_deriv_checks = true;
-        let mut open = OpenProtoRule::new(Rule::new(
-            info,
-            vec![in_fact(term(z))],
-            vec![],
-            vec![proto_fact(Multiplicity::Linear, "Response", vec![term(z)])],
-        ));
-        let a = LVar::new("a", LSort::Fresh, 4);
-        let b = LVar::new("b", LSort::Fresh, 4);
-        open.variant_substs = vec![
-            LNSubstVFresh::from_list([(z, f_app_no_eq(zero_sym(), vec![]))]),
-            LNSubstVFresh::from_list([(z, f_app_ac(AcSym::Xor, vec![term(a), term(b)]))]),
-        ];
-        open
-    }
-
-    /// `sapic/fast/basic/typing.spthy`'s `outxloly_0_11121111111` rule: a
-    /// multiset union in a conclusion, and an attribute list long enough
-    /// that the header's `fsep` wraps.
-    fn typing_outxloly() -> OpenProtoRule {
-        let vars: Vec<LVar> = ["a", "n", "x", "y"].into_iter().map(msg).collect();
-        let args: Vec<LNTerm> = vars.iter().map(|v| term(*v)).collect();
-        let union = f_app_ac(AcSym::Union, vec![term(vars[2]), term(vars[3])]);
-        let mut info = ProtoRuleEInfo::standard("outxloly_0_11121111111");
-        info.attributes = RuleAttributes {
-            color: tamarin_utils::color::hex_to_rgb("6c8040"),
-            process: None,
-            ignore_deriv_checks: false,
-            is_sapic_rule: true,
-            role: Some("P".to_string()),
-        };
-        OpenProtoRule::new(Rule::new(
-            info,
-            vec![proto_fact(
-                Multiplicity::Linear,
-                "State_11121111111",
-                args.clone(),
-            )],
-            vec![
-                proto_fact(Multiplicity::Linear, "State_111211111111", args),
-                out_fact(union),
-            ],
-            vec![],
-        ))
-    }
-
-    /// The block prints the internal rule's AC arguments in the order the
-    /// rule holds them.  Both expectations are the bytes the Haskell oracle
-    /// at the submodule pin prints for the named corpus rule.
-    #[test]
-    fn the_ac_block_keeps_the_internal_ac_order() {
-        assert_eq!(
-            ac_block(&xor0_receive()),
-            concat!(
-                "  /*\n",
-                "  rule (modulo AC) receive[no_derivcheck]:\n",
-                "     [ In( z ) ] --[ Response( z ) ]-> [ ]\n",
-                "    variants (modulo AC)\n",
-                "    1. z     = zero\n",
-                "    \n",
-                "    2. z     = (~a.4\u{2295}~b.4)\n",
-                "  */",
-            ),
-        );
-        assert_eq!(
-            ac_block(&typing_outxloly()),
-            concat!(
-                "  /*\n",
-                "  rule (modulo AC) outxloly_0_11121111111[color=#6c8040, issapicrule,\n",
-                "                                          role='P']:\n",
-                "     [ State_11121111111( a, n, x, y ) ]\n",
-                "    -->\n",
-                "     [ State_111211111111( a, n, x, y ), Out( (x++y) ) ]\n",
-                "  */",
-            ),
-        );
-    }
-
-    /// HS sorts an AC argument list at construction (`fAppAC`,
-    /// Term/Term/Raw.hs#fAppAC) and `prettyFact`
-    /// (Theory/Model/Fact.hs#prettyFact) prints what it is handed,
-    /// so a body holding the two operands the other way round prints them
-    /// that way round.
-    #[test]
-    fn the_ac_block_does_not_re_sort_the_ac_arguments() {
-        let mut rule = typing_outxloly();
-        let x = term(msg("x"));
-        let y = term(msg("y"));
-        let reversed = Term::App(FunSym::Ac(AcSym::Union), vec![y, x].into());
-        *rule.rule.conclusions.last_mut().expect("Out conclusion") = out_fact(reversed);
-        let block = ac_block(&rule);
-        assert!(block.contains("Out( (y++x) )"), "{block}");
-    }
-}
-
-#[cfg(test)]
-mod stored_proof_reparse_tests {
-    use super::*;
-
-    /// A stored `solve( ... )` step is echoed from the `Goal` the proof
-    /// parser read, so its layout is the printer's and not the file's, and
-    /// the goal grammar reads a user `[AC]` symbol's INFIX spelling only when
-    /// the theory declares the symbol — HS's `acterm` takes the same set from
-    /// the signature in parser state (Theory/Text/Parser/Term.hs).
-    #[test]
-    fn a_stored_goal_is_echoed_from_its_parsed_value() {
-        let src = |decl: &str| {
-            format!(
-                "theory T begin\n{decl}\nlemma L: exists-trace \"T\"\n\
-                 simplify\nsolve( !KU( (x add\n         y) ) @ #i )\n  by sorry\nend"
-            )
-        };
-        let thy = tamarin_parser::parser::parse_theory(&src("functions: add/2 [AC]"), &[]).unwrap();
-        let echo = pretty_open_theory(&crate::elaborate::elaborate(&thy).unwrap());
-        assert!(
-            echo.contains("solve( !KU( (x add y) ) @ #i )"),
-            "the stored wrapping must not survive the echo: {echo}"
-        );
-
-        // Without the declaration the infix spelling is not a term, so the
-        // goal grammar rejects it, so the stored proof makes the entire
-        // theory invalid just as it does in Haskell.
-        assert!(tamarin_parser::parser::parse_theory(&src("functions: add/2"), &[]).is_err());
-    }
-}
-
-#[cfg(test)]
-mod predicate_echo_tests {
-    use super::*;
-
-    /// HS `prettyPredicate` (TheoryObject.hs) lays the predicate's
-    /// fact and formula out with `render`, HughesPJ's default style, and
-    /// embeds the two as one `text`.  That style is 100 columns with 1.5
-    /// ribbons per line, which `fullRender` rounds to a ribbon of 67
-    /// (HughesPJ.hs), while the theory echo around the predicate
-    /// item is laid out by the console's `renderDoc` at 110/73.  So a
-    /// predicate formula breaks where 67 columns of ribbon run out, not
-    /// where 73 do: `Between`'s inner conjunction is 68 columns wide and
-    /// breaks, and its second operand starts a line of its own.
-    ///
-    /// Expected string: the pinned oracle's bytes for this theory.
-    #[test]
-    fn predicate_formula_wraps_at_the_default_style() {
-        const SRC: &str = "theory P4PredWidth\n\
-begin\n\
-rule R:\n  [ In( x ) ] --[ Ev( x ) ]-> [ ]\n\
-predicate: Between(x, y, z) <=> \
-(Ex #i #j #k. Ev(x) @ #i & Ev(y) @ #j & Ev(z) @ #k & #i < #j & #j < #k)\n\
-end\n";
-        let parsed = tamarin_parser::parse_theory(SRC, &[]).expect("theory parses");
-        let elaborated = crate::elaborate::elaborate(&parsed).expect("theory elaborates");
-        let predicate = elaborated.predicates().next().expect("predicate item");
-        assert_eq!(
-            pretty_predicate(predicate),
-            concat!(
-                "predicate: Between( x, y, z )<=>\u{2203} #i #j #k.\n",
-                " ((((Ev( x ) @ #i) \u{2227} (Ev( y ) @ #j)) \u{2227} (Ev( z ) @ #k)) \u{2227}\n",
-                "  (#i < #j)) \u{2227}\n",
-                " (#j < #k)",
-            )
-        );
-    }
-}
-
-#[cfg(test)]
-mod closed_restriction_tests {
-    use super::*;
-
-    /// The fixture theory of `scripts/divergence_fixtures/s3_macro_lemma_header.spthy`,
-    /// cut to its restrictions: `MacroRestriction` calls a macro and a
-    /// predicate, `PlainRestriction` neither.
-    const SRC: &str = "theory S3MacroLemmaHeader\n\
-begin\n\
-predicates:\n  IsPairOf(m, a, b) <=> m = <a, b>\n\
-macros:\n  tag(x) = <'t', x>, wrap(x, y) = tag(<x, y>)\n\
-rule A:\n  [ In( <x, y> ) ] --[ A( wrap(x, y) ) ]-> [ Out( tag(x) ) ]\n\
-restriction PlainRestriction:\n  \"All m #i. A( m ) @ #i ==> not( m = 'no' )\"\n\
-restriction MacroRestriction:\n  \"All m x y #i. A( m ) @ #i & IsPairOf(m, x, y) ==> m = wrap(x, y)\"\n\
-end\n";
-
-    /// HS `prettyRestriction` quotes `fromMaybe expandedFormula ogFormula`
-    /// above the block and `expandedFormula` inside it
-    /// (TheoryObject.hs), and `applyMacroInRestriction` fills
-    /// `ogFormula` with the pre-macro formula
-    /// (Theory/Model/Restriction.hs).  So the macro call `wrap(x, y)`
-    /// stands on top and its expansion `<'t', x, y>` in the block, while the
-    /// predicate atom `IsPairOf(m, x, y)` is inlined in both — parse-time
-    /// expansion, which `liftedAddRestriction` runs over the stored formula
-    /// and its original alike (Theory/Text/Parser.hs).
-    ///
-    /// Expected strings are the pinned oracle's bytes for the fixture
-    /// (`scripts/divergence_fixtures/expected/s3_macro_lemma_header.theory.hs.txt`).
-    #[test]
-    fn closed_restriction_prints_the_original_on_top_and_the_expanded_in_the_block() {
-        let parsed = tamarin_parser::parse_theory(SRC, &[]).expect("theory parses");
-        let elaborated = crate::elaborate::elaborate(&parsed).expect("theory elaborates");
-        let rendered = web_restrictions(&elaborated);
-        assert_eq!(
-            rendered,
-            vec![
-                "restriction PlainRestriction:\n  \
-                 \"∀ m #i. (A( m ) @ #i) ⇒ (¬(m = 'no'))\"\n  \
-                 // safety formula\n\n  \
-                 /*\n  expanded formula:\n  \
-                 \"∀ m #i. (A( m ) @ #i) ⇒ (¬(m = 'no'))\"\n  */",
-                "restriction MacroRestriction:\n  \
-                 \"∀ m x y #i. ((A( m ) @ #i) ∧ (m = <x, y>)) ⇒ (m = wrap(x, y))\"\n  \
-                 // safety formula\n\n  \
-                 /*\n  expanded formula:\n  \
-                 \"∀ m x y #i. ((A( m ) @ #i) ∧ (m = <x, y>)) ⇒ (m = <'t', x, y>)\"\n  */",
-            ]
-        );
-    }
-}
-
-#[cfg(test)]
-mod restriction_attribute_tests {
-    use super::*;
-
-    /// HS's restriction parser accepts no attribute list at all —
-    /// `restriction varp nodep = Restriction <$> (symbol "restriction" *>
-    /// identifier <* colon) <*> doubleQuoted (standardFormula varp nodep)
-    /// <*> pure Nothing` (Theory/Text/Parser/Restriction.hs) — and only
-    /// `diffRestriction` does, so `prettyRestriction`
-    /// (TheoryObject.hs) has no attribute to print.  RS's parser is
-    /// lenient here and reads `[left]`/`[right]` in a non-diff theory; neither
-    /// print carries it through.
-    #[test]
-    fn restriction_attributes_are_not_printed() {
-        const SRC: &str = "theory RestrictionAttrs\n\
-begin\n\
-rule A:\n  [ In( x ) ] --[ A( x ) ]-> [ ]\n\
-restriction Sided [left]:\n  \"All x #i. A( x ) @ #i ==> not( x = 'no' )\"\n\
-end\n";
-        let parsed = tamarin_parser::parse_theory(SRC, &[]).expect("theory parses");
-        let elaborated = crate::elaborate::elaborate(&parsed).expect("theory elaborates");
-        let closed = web_restrictions(&elaborated);
-        assert_eq!(closed.len(), 1);
-        assert!(
-            closed[0].starts_with("restriction Sided:\n"),
-            "closed print: {}",
-            closed[0]
-        );
-        let open = pretty_open_theory(&elaborated);
-        assert!(open.contains("restriction Sided:\n"), "open print: {open}");
-        assert!(!open.contains("[left]"), "open print: {open}");
-    }
-}
-
-#[cfg(test)]
-mod closed_lemma_tests {
-    use super::*;
-
-    /// The fixture theory of `scripts/divergence_fixtures/s3_macro_lemma_header.spthy`,
-    /// cut to its lemmas: `MacroLemma` calls a macro and a predicate,
-    /// `PlainLemma` neither.
-    const SRC: &str = "theory S3MacroLemmaHeader\n\
-begin\n\
-predicates:\n  IsPairOf(m, a, b) <=> m = <a, b>\n\
-macros:\n  tag(x) = <'t', x>, wrap(x, y) = tag(<x, y>)\n\
-rule A:\n  [ In( <x, y> ) ] --[ A( wrap(x, y) ) ]-> [ Out( tag(x) ) ]\n\
-rule B:\n  [ In( z ) ] --[ B( z ) ]-> [ ]\n\
-lemma PlainLemma:\n  all-traces\n  \"All z #i. B( z ) @ #i ==> Ex #j. A( z ) @ #j\"\n\
-lemma MacroLemma:\n  exists-trace\n  \"Ex x y m #i. A( m ) @ #i & IsPairOf(m, x, y) & m = wrap(x, y)\"\n\
-end\n";
-
-    /// HS `prettyLemma` quotes `fromMaybe expandedFormula ogFormula` on the
-    /// header line and converts `expandedFormula` for the guarded block
-    /// (lib/theory/src/Lemma.hs), and `applyMacroInLemma` fills
-    /// `ogFormula` with the pre-macro formula (lib/theory/src/Lemma.hs).
-    /// So the macro call `wrap(x, y)` stands in the header and its expansion
-    /// `<'t', x, y>` in the block, while the predicate atom `IsPairOf(m, x, y)`
-    /// is inlined in both — parse-time expansion, which `liftedAddLemma` runs
-    /// over the stored formula and its original alike
-    /// (Theory/Text/Parser.hs).
-    ///
-    /// Expected strings are the pinned oracle's bytes for the fixture
-    /// (`scripts/divergence_fixtures/expected/s3_macro_lemma_header.theory.hs.txt`).
-    #[test]
-    fn closed_lemma_header_uses_the_original_and_the_guarded_block_the_expanded() {
-        let parsed = tamarin_parser::parse_theory(SRC, &[]).expect("theory parses");
-        let elaborated = crate::elaborate::elaborate(&parsed).expect("theory elaborates");
-        let rendered: Vec<String> = elaborated
-            .lemmas()
-            .map(|l| pretty_lemma(l, "by sorry", ""))
-            .collect();
-        assert_eq!(
-            rendered,
-            vec![
-                "lemma PlainLemma:\n  \
-                 all-traces \"∀ z #i. (B( z ) @ #i) ⇒ (∃ #j. A( z ) @ #j)\"\n\
-                 /*\nguarded formula characterizing all counter-examples:\n\
-                 \"∃ z #i. (B( z ) @ #i) ∧ ∀ #j. (A( z ) @ #j) ⇒ ⊥\"\n*/\nby sorry",
-                "lemma MacroLemma:\n  exists-trace\n  \
-                 \"∃ x y m #i. ((A( m ) @ #i) ∧ (m = <x, y>)) ∧ (m = wrap(x, y))\"\n\
-                 /*\nguarded formula characterizing all satisfying traces:\n\
-                 \"∃ x y m #i. (A( m ) @ #i) ∧ (m = <x, y>) ∧ (m = <'t', x, y>)\"\n*/\nby sorry",
-            ]
-        );
-    }
-}
-
-#[cfg(test)]
-mod heuristic_header_tests {
-    use super::*;
-
-    #[test]
-    fn default_oracle_name_matches_haskell_path_splitting() {
-        assert_eq!(oracle_name_for_theory("missing.spthy"), "oracle");
-
-        let fixture = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../tamarin-prover/examples/regression/trace/defaultoracle.spthy"
-        );
-        assert_eq!(oracle_name_for_theory(fixture), "defaultoracle.oracle");
-
-        let dir =
-            std::env::temp_dir().join(format!("tamarin_rs_oracle_basename_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        for (theory, oracle) in [
-            (".foo", ".foo.oracle"),
-            ("..foo", "..oracle"),
-            ("...foo", "...oracle"),
-        ] {
-            std::fs::write(dir.join(oracle), "").unwrap();
-            assert_eq!(
-                oracle_name_for_theory(dir.join(theory).to_str().unwrap()),
-                oracle
-            );
-        }
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    /// The `heuristic:` header prints the theory's stored rankings (HS `text
-    /// "heuristic: " <> text (prettyGoalRankings thyH)`,
-    /// TheoryObject.hs): a letter run spells its
-    /// rankings out one per token, an oracle ranking adds its quoted path —
-    /// the theory file's default oracle name when the source names none — and
-    /// a tactic ranking prints the name between its braces, whether or not the
-    /// theory declares a tactic of that name.  The `tactic:` block sits after
-    /// the header, so the header's `{rank}` resolves against a declaration
-    /// the parser has not reached yet.
-    #[test]
-    fn the_header_prints_the_stored_rankings() {
-        let src = "theory T\nbegin\n\n\
-                   heuristic: sop {rank} O \"./my-oracle\" {.}\n\n\
-                   tactic: rank\npresort: C\nprio:\n    regex \"Out\"\n\n\
-                   lemma L: exists-trace \"T\"\n\nend";
-        let parsed = tamarin_parser::parser::parse_theory(src, &[]).expect("theory parses");
-        let thy = crate::elaborate::elaborate_with_in_file(&parsed, "f.spthy")
-            .expect("theory elaborates");
-        assert!(
-            pretty_open_theory(&thy)
-                .contains("heuristic: s o \"oracle\" p {rank} O \"./my-oracle\" {.}"),
-            "{}",
-            pretty_open_theory(&thy)
-        );
     }
 }

@@ -1,0 +1,8 @@
+summary of summaries:
+
+
+  
+  witness (exists-trace): verified (4 steps)
+  AUTO_typing (all-traces): verified (12 steps)
+
+==============================================================================

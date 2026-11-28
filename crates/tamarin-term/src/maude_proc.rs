@@ -13,7 +13,7 @@
 use std::io::{Read, Write};
 use std::ops::Deref;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex};
 
 use crate::lterm::LNTerm;
@@ -23,7 +23,6 @@ use crate::maude_sig::MaudeSig;
 use crate::maude_types::{lterm_to_mterm_global, mterm_to_lnterm, ConvCtx, MSubst, MTerm};
 use crate::rewriting::Equal;
 use tamarin_utils::cancellation;
-use tamarin_utils::fresh::MonadFresh;
 
 const PROMPT: &[u8] = b"Maude> ";
 
@@ -77,15 +76,9 @@ fn term_has_reducible_sym(t: &LNTerm, reducible: &crate::function_symbols::FunSi
     t.any_fun_sym(|f| reducible.contains(f))
 }
 
-/// True if `t` contains NO Ac- or C-headed application anywhere.  Backs
-/// the per-rule LHS flags `maude_sig::StRules` carries — behind
-/// `MaudeProcessInner::st_lhs_ac_free` and `norm::go_nf`'s per-rule
-/// dispatch: `nf_via_haskell`'s pure st-rule arm matches with the no-AC
-/// matcher (`solve_match_lterm_no_ac`), whose `match_raw` raises
-/// `NeedsAC` only at Ac-vs-Ac / C-vs-C positions — so the matcher is
-/// complete (never misses a match Maude would find) exactly when the
-/// PATTERN (the rule LHS) is Ac/C-free.  Rules failing this predicate
-/// need the Maude-backed path (`norm::rule_applies_ac`).
+/// True if `t` contains no Ac- or C-headed application.  The native matcher
+/// never needs Maude for such a pattern, so the `reduce` NF fast path is
+/// complete when every st-rule LHS passes this.
 pub(crate) fn term_ac_c_free(t: &LNTerm) -> bool {
     use crate::function_symbols::FunSym;
     t.all_fun_syms(|f| !matches!(f, FunSym::Ac(_) | FunSym::C(_)))
@@ -100,128 +93,33 @@ pub struct MaudeStats {
     pub var_count: u64,
 }
 
-/// Hit/miss tallies, per Maude subprocess, against the session's shared
-/// memo caches (`SharedMaudeCaches`: `reduce`, `unifiable`, `reply`).  A
-/// hit is counted when the cache `get` succeeds; a miss when this process
-/// computed the value and inserted it.  The `u64` bumps are always
-/// maintained (negligible cost); only the one-line-per-process summary is
-/// gated, printed to STDERR (never stdout) from `MaudeProcessInner`'s
-/// `Drop` when `TAM_MAUDE_CACHE_STATS` is set.  Diagnostic only — reaches
-/// no `--prove` output path.
-#[derive(Default)]
-struct MaudeCacheStats {
-    reduce_hits: AtomicU64,
-    reduce_misses: AtomicU64,
-    unifiable_hits: AtomicU64,
-    unifiable_misses: AtomicU64,
-    reply_hits: AtomicU64,
-    reply_misses: AtomicU64,
-}
-
-/// The three memo caches for one theory session, shared (`Arc`) by the
-/// session's sequential `file_maude` handle AND every `MaudePool` member
-/// (run.rs wires one instance into both).  Under `--processors=N`,
-/// parallel tasks draw different pool members; sharing lets a value
-/// computed by ANY subprocess satisfy the identical query from every
-/// other member of the session.
+/// The memo caches for one theory session, shared by the session's
+/// `file_maude` handle and every `MaudePool` member.
 ///
-/// BYTE-PARITY: each cache relies on the memo invariant "identical
-/// term/command bytes ⇒ identical result", which a single process already
-/// depends on across an entire session.  Every sharing subprocess is
-/// initialised with the IDENTICAL signature module (`MaudePool` clones
-/// one `MaudeSig` per spawn; run.rs passes the same value to
-/// `file_maude`), the module is immutable after `start_with_caches()`
-/// and variable sorts and names are registered in a consistent order (see
-/// `initialize` and `ensure_variable_names`). Maude's name interning
-/// is history-dependent even for pure queries, so the identical module
-/// alone would NOT suffice. With both invariants the value any member computes is
-/// byte-identical to what the querying member would have computed itself
-/// — sharing changes only which process performed the first computation,
-/// exactly the member-interchangeability the pool already guarantees.
+/// Each cache relies on "identical command bytes give an identical reply".
+/// That holds across members because every member loads the same immutable
+/// module and registers variable sorts and names in the same order
+/// (`initialize`, `ensure_variable_names`); Maude's name interning is
+/// history-dependent, so the module alone would not suffice.
 ///
-/// LOCK ORDER: each cache mutex here is held only for one `get` or one
-/// `insert`, never across a Maude IPC wait, and acquires nothing itself.
-/// No cycle is possible.  A hit needs no subprocess, so it does not wait
-/// for one that another job is using.
-///
-/// CONCURRENT MISSES: two members that miss the same key simultaneously
-/// both perform the IPC and both insert — last write wins with an
-/// identical value (see BYTE-PARITY).  That bounded first-wave
-/// duplication is harmless, so there is no single-flight machinery.
+/// Each mutex is held for one `get` or `insert` only, never across a Maude
+/// round-trip.  Concurrent misses both compute and insert the same value.
 #[derive(Default)]
 pub struct SharedMaudeCaches {
-    /// Memo for `reduce(...)` queries.  Maude `reduce` is a pure
-    /// function of the input term modulo the (fixed-per-session) theory
-    /// signature, so successful reductions can be cached across calls.
-    /// `has_non_normal_terms` (contradictions.rs) calls `reduce` on
-    /// every candidate subterm of every node, and `is_finished` runs
-    /// every search step — so the same subterm gets reduced repeatedly
-    /// during a single proof.  Caching cuts those repeat round-trips.
+    /// `reduce` results.
     reduce: Mutex<tamarin_utils::FastMap<LNTerm, LNTerm>>,
-    /// Memo for `unifiable(...)` queries — see `MaudeHandle::unifiable`.
-    /// Caches the *boolean* outcome (true = at least one unifier
-    /// exists).  Witness LVars produced inside the subst aren't safe
-    /// to cache across calls (their indices need fresh-renaming each
-    /// time) so we don't memoize substitutions, only the existence
-    /// answer.
+    /// `unifiable` answers.  Only the boolean is cached: unifiers carry
+    /// witnesses that each call numbers itself.
     unifiable: Mutex<tamarin_utils::FastMap<Vec<(LNTerm, LNTerm)>, bool>>,
-    /// Memo for the RAW REPLY BYTES of the witness-producing Maude commands
-    /// (`unify in MSG`, `get variants in MSG`, and the
-    /// two `match in MSG` matchers), keyed by the *exact command
-    /// byte-string*. The theory module is fixed for the life of the session (`sig` is
-    /// immutable after `start_with_caches()`, every sharer loads the
-    /// identical module, and `with_swapped_maude` hands out a different
-    /// pool handle rather than mutating any module). `initialize` establishes
-    /// variable-sort order; `ensure_variable_names` establishes input-name order.
-    /// These must also be independent of the worker's previous queries for
-    /// identical command bytes to imply identical replies.
-    ///
-    /// This caches ONLY the raw bytes: the per-call back-conversion (per-arm
-    /// `ConvCtx` clone, `input_max` seeded from the caller's own bindings) still
-    /// runs on every hit, so witness numbering, fresh-counter neutrality, and
-    /// arm ordering are bit-for-bit what a real round-trip produces — only the
-    /// subprocess round-trip is elided.  The reply embeds fresh-variable names
-    /// that the caller renames, but the renaming is a pure function of
-    /// `(reply bytes, this call's ctx)` and touches NO global fresh state, so a
-    /// hit and a miss consume the reply identically.
-    ///
-    /// SCOPE / MEMORY: bounded to this `SharedMaudeCaches` — i.e. to one
-    /// theory session.  It is freed when the session's last
-    /// `Arc<SharedMaudeCaches>` drops at session end; it is NOT a
-    /// process-global cache and does not accumulate across sessions.  The
-    /// distinct-command population per session is small (a theory issues only a
-    /// handful of distinct `get variants` / `unify` queries, and fixpoint
-    /// passes re-issue the same `match` commands; the win is from heavy
-    /// DUPLICATION of those few), so peak residency stays bounded even
-    /// though — like `reduce` — no per-entry eviction is performed.
+    /// Raw reply bytes of `unify`, `get variants` and `match`, keyed by the
+    /// exact command bytes.  The back-conversion still runs on every hit, so a
+    /// hit is consumed exactly like a fresh reply.  Freed with the session.
     reply: Mutex<tamarin_utils::FastMap<Vec<u8>, Vec<u8>>>,
-    stats: MaudeCacheStats,
-}
-
-impl Drop for SharedMaudeCaches {
-    /// When `TAM_MAUDE_CACHE_STATS` is set, emit one summary line for the
-    /// session to STDERR. Nothing reaches stdout.
-    fn drop(&mut self) {
-        if tamarin_utils::env_gate!("TAM_MAUDE_CACHE_STATS") {
-            let count = |n: &AtomicU64| n.load(Ordering::Relaxed);
-            let s = &self.stats;
-            eprintln!(
-                "[MAUDE_CACHE_STATS] reduce={}/{} unifiable={}/{} reply={}/{}",
-                count(&s.reduce_hits),
-                count(&s.reduce_misses),
-                count(&s.unifiable_hits),
-                count(&s.unifiable_misses),
-                count(&s.reply_hits),
-                count(&s.reply_misses),
-            );
-        }
-    }
 }
 
 struct MaudeProcessInner {
     maude_path: String,
     child: Arc<Mutex<MaudeChildReaper>>,
-    turn: Arc<Turn>,
     initialized: bool,
     /// All x0 .. x{ordered_variables - 1} have been read in a consistent
     /// order. This belongs to the subprocess, not the shared reply cache.
@@ -274,7 +172,7 @@ impl MaudeProcessInner {
                 std::panic::resume_unwind(panic);
             }
         };
-        // Any interrupted or failed exchange invalidates this connection.
+        // A cancelled or failed exchange invalidates this connection.
         // Keep complete memo entries, but discard its pipes before reuse.
         if result.is_err() {
             self.initialized = false;
@@ -289,13 +187,6 @@ impl MaudeProcessInner {
             let mut reaper = self.child.lock().unwrap();
             cancellation::check()?;
             if reaper.child.is_none() {
-                // An interrupted job gives the process up before a new one
-                // is started. The interrupter kills the process under this
-                // lock after marking the exchange, so a start that gets
-                // past this check is killed in its turn.
-                if self.turn.interrupted.load(Ordering::Acquire) {
-                    return Err(MaudeError::Other("Maude was interrupted".into()));
-                }
                 if !reaper.restart {
                     return Err(MaudeError::Other("Maude exited unexpectedly".into()));
                 }
@@ -309,7 +200,6 @@ impl MaudeProcessInner {
         }
         if !self.initialized {
             self.ordered_variables = 0;
-            let started = std::time::Instant::now();
             self.read_until_prompt()?;
             for cmd in [
                 "set show command off .\n",
@@ -343,17 +233,7 @@ impl MaudeProcessInner {
             let reply = self.execute_raw(cmd.as_bytes())?;
             check_name_registration(&reply)?;
             self.ordered_variables = 1;
-            #[cfg(test)]
-            {
-                let preamble = self.turn.preamble.lock().unwrap().clone();
-                if !preamble.is_empty() {
-                    self.execute_raw(&preamble)?;
-                }
-            }
             self.initialized = true;
-            self.turn
-                .startup_micros
-                .store(started.elapsed().as_micros() as u64, Ordering::Relaxed);
         }
         Ok(())
     }
@@ -490,245 +370,6 @@ impl MaudeProcessInner {
     }
 }
 
-/// The least time an exchange may keep a job that a sequential run would
-/// visit earlier waiting before that job interrupts it.
-const INTERRUPT_FLOOR: std::time::Duration = std::time::Duration::from_millis(250);
-/// An interrupt costs a new process. Only pay that for an exchange that has
-/// already run this many times as long as a process takes to start.
-const INTERRUPT_STARTUPS: u32 = 4;
-/// The longest an interrupted job stays away before it tries again, unless
-/// an exchange may run for longer than this before it is interrupted.
-const BACKOFF_CEILING: std::time::Duration = std::time::Duration::from_secs(4);
-
-/// The exchange in flight on a process, visible to jobs waiting for it.
-///
-/// Jobs of one parallel map share a process when they have none of their
-/// own. Some of them are speculative: a sequential run might never reach
-/// them. A speculative exchange must not hold up a job that run would reach
-/// first, so such a job may kill the process under it. The interrupted job
-/// gives the process up, stays away for a while, and then repeats its
-/// command on a new process.
-#[derive(Default)]
-struct Turn {
-    state: parking_lot::Mutex<TurnState>,
-    changed: parking_lot::Condvar,
-    /// The waiter the process is held for after an interruption, or 0.
-    /// Only that waiter may lock the process.
-    reserved: AtomicU64,
-    /// How long the last process took to start and load the theory.
-    startup_micros: AtomicU64,
-    /// Interrupted jobs staying away, and how often the process was locked
-    /// or unlocked while any of them was.
-    away: AtomicU64,
-    uses: AtomicU64,
-    /// Whether the exchange in flight has been interrupted. Readable
-    /// without `state`, by a job that holds the lock on the child.
-    interrupted: std::sync::atomic::AtomicBool,
-    /// Commands a test has every new process run after loading the theory.
-    #[cfg(test)]
-    preamble: Mutex<Vec<u8>>,
-}
-
-#[derive(Default)]
-struct TurnState {
-    exchange: Option<Exchange>,
-    waiters: u64,
-}
-
-struct Exchange {
-    rank: Option<tamarin_utils::parallel::Rank>,
-    since: std::time::Instant,
-    interrupted: bool,
-}
-
-/// Marks an exchange as in flight until it is finished or dropped.
-struct InFlight<'a>(&'a Turn);
-
-impl InFlight<'_> {
-    /// End the exchange and report whether a waiter interrupted it.
-    fn finish(self) -> bool {
-        let exchange = self.0.end();
-        std::mem::forget(self);
-        exchange.is_some_and(|exchange| exchange.interrupted)
-    }
-}
-
-impl Drop for InFlight<'_> {
-    fn drop(&mut self) {
-        self.0.end();
-    }
-}
-
-impl Turn {
-    fn begin(&self) -> InFlight<'_> {
-        let rank = tamarin_utils::parallel::Rank::current();
-        self.state.lock().exchange = Some(Exchange {
-            rank,
-            since: std::time::Instant::now(),
-            interrupted: false,
-        });
-        InFlight(self)
-    }
-
-    fn end(&self) -> Option<Exchange> {
-        let mut state = self.state.lock();
-        self.interrupted.store(false, Ordering::Release);
-        state.exchange.take()
-    }
-
-    /// Mark the exchange in flight as interrupted. The caller kills its
-    /// process next, still holding `state`.
-    fn interrupt(&self, state: &mut TurnState) {
-        let exchange = state.exchange.as_mut().expect("an exchange is in flight");
-        if tamarin_utils::env_gate!("TAM_DBG_MAUDE_INTERRUPT") {
-            eprintln!("[maude-interrupt] after {:?}", exchange.since.elapsed());
-        }
-        exchange.interrupted = true;
-        self.interrupted.store(true, Ordering::Release);
-    }
-
-    /// How long an exchange may run before an earlier job may interrupt it.
-    fn interrupt_after(&self) -> std::time::Duration {
-        let startup = std::time::Duration::from_micros(self.startup_micros.load(Ordering::Relaxed));
-        INTERRUPT_FLOOR.max(startup * INTERRUPT_STARTUPS)
-    }
-
-    /// How long until a job of this rank may interrupt the exchange in
-    /// flight. `None` if it may not: there is none, it was interrupted
-    /// already, or a sequential run would not reach the job first.
-    fn patience(
-        &self,
-        state: &TurnState,
-        rank: Option<&tamarin_utils::parallel::Rank>,
-    ) -> Option<std::time::Duration> {
-        let exchange = state.exchange.as_ref()?;
-        let holder = exchange.rank.as_ref()?;
-        (!exchange.interrupted && rank?.precedes(holder)).then(|| {
-            self.interrupt_after()
-                .saturating_sub(exchange.since.elapsed())
-        })
-    }
-
-    fn release(&self, waiter: u64) {
-        if waiter != 0
-            && self
-                .reserved
-                .compare_exchange(waiter, 0, Ordering::AcqRel, Ordering::Acquire)
-                .is_ok()
-        {
-            let _state = self.state.lock();
-            self.changed.notify_all();
-        }
-    }
-
-    /// Wait until the process is no longer held for `other`.
-    fn wait_for_release(&self, other: u64) {
-        let mut state = self.state.lock();
-        if self.reserved.load(Ordering::Acquire) == other {
-            self.changed
-                .wait_for(&mut state, std::time::Duration::from_millis(50));
-        }
-    }
-
-    /// Tell jobs that are staying away that the process is in use.
-    #[inline]
-    fn note_use(&self) {
-        if self.away.load(Ordering::Relaxed) != 0 {
-            self.uses.fetch_add(1, Ordering::Relaxed);
-        }
-    }
-
-    /// Stay away after an interruption: for `backoff`, or until nobody has
-    /// used the process for as long as an exchange may run undisturbed.
-    fn stay_away(&self, backoff: std::time::Duration) {
-        const POLL: std::time::Duration = std::time::Duration::from_millis(20);
-        self.away.fetch_add(1, Ordering::Relaxed);
-        let away = std::time::Instant::now();
-        let mut quiet = away;
-        let mut uses = self.uses.load(Ordering::Relaxed);
-        while cancellation::check().is_ok() {
-            let other = self.reserved.load(Ordering::Acquire);
-            if other != 0 {
-                self.wait_for_release(other);
-                quiet = std::time::Instant::now();
-                continue;
-            }
-            let seen = self.uses.load(Ordering::Relaxed);
-            if seen != uses {
-                uses = seen;
-                quiet = std::time::Instant::now();
-            }
-            if away.elapsed() >= backoff || quiet.elapsed() >= self.interrupt_after() {
-                break;
-            }
-            std::thread::sleep(POLL);
-        }
-        self.away.fetch_sub(1, Ordering::Relaxed);
-    }
-}
-
-/// The reservation a waiter holds after interrupting an exchange.
-struct Waiter<'a> {
-    turn: &'a Turn,
-    id: u64,
-}
-
-impl Drop for Waiter<'_> {
-    fn drop(&mut self) {
-        self.turn.release(self.id);
-    }
-}
-
-/// Exclusive use of a process's transport and counters. The lock is given
-/// up only while an interrupted command waits to be repeated.
-struct InnerGuard<'a> {
-    guard: Option<parking_lot::MutexGuard<'a, MaudeProcessInner>>,
-    handle: &'a MaudeHandle,
-}
-
-impl Deref for InnerGuard<'_> {
-    type Target = MaudeProcessInner;
-    fn deref(&self) -> &MaudeProcessInner {
-        self.guard.as_ref().expect("the process is locked")
-    }
-}
-
-impl std::ops::DerefMut for InnerGuard<'_> {
-    fn deref_mut(&mut self) -> &mut MaudeProcessInner {
-        self.guard.as_mut().expect("the process is locked")
-    }
-}
-
-impl Drop for InnerGuard<'_> {
-    fn drop(&mut self) {
-        self.guard = None;
-        self.handle.turn.note_use();
-    }
-}
-
-impl InnerGuard<'_> {
-    /// Run one command. If a job that needs the process sooner interrupts
-    /// it, give the process up and run the command again later.
-    fn execute(&mut self, cmd: &[u8], variable_bound: u64) -> Result<Vec<u8>, MaudeError> {
-        let turn = &self.handle.turn;
-        let mut backoff = turn.interrupt_after();
-        loop {
-            let exchange = turn.begin();
-            let result = MaudeProcessInner::execute(self, cmd, variable_bound);
-            if !exchange.finish() || result.is_ok() {
-                return result;
-            }
-            // A job that interrupts once will usually be back. Stay away
-            // for longer each time, so that repeating this command does not
-            // keep holding it up.
-            self.guard = None;
-            turn.stay_away(backoff);
-            self.guard = Some(self.handle.lock_process()?);
-            backoff = (backoff * 2).min(BACKOFF_CEILING.max(turn.interrupt_after()));
-        }
-    }
-}
-
 fn spawn_maude(maude_path: &str) -> Result<(ChildStdin, ChildStdout, Child), MaudeError> {
     let mut command = Command::new(maude_path);
     tamarin_utils::process::isolate_process_group(&mut command);
@@ -850,40 +491,11 @@ fn check_name_registration(reply: &[u8]) -> Result<(), MaudeError> {
 pub struct MaudeHandle {
     inner: Arc<parking_lot::Mutex<MaudeProcessInner>>,
     child: Arc<Mutex<MaudeChildReaper>>,
-    turn: Arc<Turn>,
     caches: Arc<SharedMaudeCaches>,
-    /// Monotonically-increasing counter for fresh-variable allocation.
-    ///
-    /// Mirrors Haskell's `MonadFresh` (`FreshT m` in lib/utils): a SINGLE
-    /// global counter shared across the entire proof session so that
-    /// every `freshLVar` call gets a unique idx.  Without this, two
-    /// independent Maude calls can both compute `avoid_max + 1` as the
-    /// next witness idx and produce colliding `(name, idx)` LVars at
-    /// different sorts (e.g. `~mw:Pub:17` from one call and
-    /// `~mw:Msg:17` from another).  Those collisions break our
-    /// `(name, sort, idx)` LVar identity, leading to sort-conflated
-    /// saved source cases.
-    ///
-    /// Used by:
-    /// - `msubst_to_lnsubst_with_avoid` for Maude witness allocation.
-    /// - `freshen_witness_range` (eq_store) for post-unification renames.
-    /// - `freshen_rule` (reduction) for rule shift.
-    ///
-    /// Every consumer first calls `ensure_above(local_avoid_max)` to
-    /// guarantee the counter is at least as high as the current system
-    /// bounds, then calls `fresh_idx()` to allocate.  The counter NEVER
-    /// goes backward, so once a witness/rule idx is allocated it can
-    /// never be reused.
-    fresh_counter: Arc<AtomicU64>,
-    /// The theory signature, shared (`Arc`) with `inner` and across every
-    /// `with_fresh_counter_from` clone.  Immutable after `start()`, so
-    /// `maude_sig()` hands out a cheap refcount-bumped clone WITHOUT taking the
-    /// IPC mutex or deep-cloning the `BTreeSet`s.
-    /// True iff every `sig.st_rules` LHS is Ac/C-free (`term_ac_c_free`),
-    /// i.e. `nf_via_haskell`'s no-AC st-rule matcher is complete for this
-    /// signature.  Gates `reduce`'s native normal-form fast path; computed
-    /// once at `start_with_caches` (the signature is immutable afterwards).
+    /// Every st-rule LHS is Ac/C-free, so `nf_via_haskell` is complete for
+    /// `reduce`'s normal-form fast path.  Computed once at start.
     st_lhs_ac_free: bool,
+    /// The immutable theory signature.
     sig: Arc<MaudeSig>,
 }
 
@@ -913,8 +525,6 @@ impl MaudeHandle {
         sig: MaudeSig,
         caches: Arc<SharedMaudeCaches>,
     ) -> Result<Self, MaudeError> {
-        // Wrap once: `inner`, the handle, and every `with_fresh_counter_from`
-        // clone share this single immutable signature.
         let sig = Arc::new(sig);
         // stderr: INHERIT, not pipe.  HS uses `runInteractiveCommand`
         // (System.Process) at Maude/Process.hs, which opens a PIPE for
@@ -938,11 +548,9 @@ impl MaudeHandle {
             child: Some(child),
             restart: false,
         }));
-        let turn = Arc::<Turn>::default();
         let mut inner = MaudeProcessInner {
             maude_path: maude_path.to_owned(),
             child: reaper.clone(),
-            turn: turn.clone(),
             initialized: false,
             ordered_variables: 0,
             stdin,
@@ -954,135 +562,20 @@ impl MaudeHandle {
         Ok(MaudeHandle {
             inner: Arc::new(parking_lot::Mutex::new(inner)),
             child: reaper,
-            turn,
             caches,
-            // The global fresh counter starts at 0 (HS-faithful: HS's
-            // `MonadFresh` global counter starts at 0).
-            fresh_counter: Arc::new(AtomicU64::new(0)),
             st_lhs_ac_free: sig.st_lhs_all_ac_c_free(),
             sig,
         })
     }
 
-    /// Return the next unique idx and increment the counter.
-    /// Mirrors Haskell's `freshIdent` / `freshLVar` — every call returns
-    /// a globally-unique integer across the entire proof session.
-    pub fn fresh_idx(&self) -> u64 {
-        self.fresh_counter.fetch_add(1, Ordering::SeqCst)
-    }
-
-    /// Atomically reserve `n` consecutive idxs from the global counter,
-    /// returning the FIRST one.  Used by `freshen_rule` to shift a rule's
-    /// vars into a globally unique range without per-call collisions.
-    /// Haskell's MonadFresh equivalent: `freshIdents n` (replicates
-    /// `freshIdent` n times).
-    pub fn reserve_idxs(&self, n: u64) -> u64 {
-        if n == 0 {
-            return self.fresh_counter.load(Ordering::SeqCst);
-        }
-        self.fresh_counter.fetch_add(n, Ordering::SeqCst)
-    }
-
-    /// Bump the counter so the next allocation is strictly greater than `n`.
-    /// No-op if the counter is already > `n`.  Callers use this before
-    /// `fresh_idx()` to guarantee new allocations don't collide with
-    /// any system var below `n`.  The counter never goes backward.
-    pub fn ensure_above(&self, n: u64) {
-        let target = n.saturating_add(1);
-        let mut cur = self.fresh_counter.load(Ordering::SeqCst);
-        while cur < target {
-            match self.fresh_counter.compare_exchange(
-                cur,
-                target,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            ) {
-                Ok(_) => return,
-                Err(actual) => cur = actual,
-            }
-        }
-    }
-
-    /// Current counter value (for diagnostics / probe output).
-    pub fn fresh_counter_peek(&self) -> u64 {
-        self.fresh_counter.load(Ordering::SeqCst)
-    }
-
-    /// Force-set the counter to `n` (overwriting the current value
-    /// even if `n` is BELOW current).  Used by `apply_eq_store` to
-    /// reset the counter between per-variant Maude calls so each
-    /// variant's witness allocation starts from the same baseline —
-    /// HS-faithful `evalFreshAvoiding` semantics where each
-    /// per-variant `applyBound` call has its own fresh state.
-    ///
-    /// IMPORTANT: callers MUST advance the counter back to the high
-    /// water mark after the per-variant loop or subsequent
-    /// allocations could collide with the per-variant outputs.
-    pub fn reset_counter_to(&self, n: u64) {
-        self.fresh_counter.store(n, Ordering::SeqCst);
-    }
-
-    /// Clone this handle but with a FRESH fresh_counter initialised to
-    /// `avoid_max + 1`.  Mirrors Haskell's `runReduction _ _ _ (avoid sys)`
-    /// — every Reduction starts with a counter that's local to that
-    /// Reduction call, computed from the system's current free-var max.
-    /// Within the Reduction the counter advances (so sequential calls
-    /// don't collide), but the next Reduction starts fresh.
-    ///
-    /// The Maude PROCESS state (the `inner`/`child` Arcs) is shared —
-    /// only the counter is per-handle. Logical variable indices are scoped by
-    /// each call's conversion context; the shared process serializes queries
-    /// and registers wire names in a consistent order before executing them.
-    pub fn with_fresh_counter_from(&self, avoid_max: u64) -> MaudeHandle {
-        MaudeHandle {
-            inner: self.inner.clone(),
-            child: self.child.clone(),
-            turn: self.turn.clone(),
-            caches: self.caches.clone(),
-            fresh_counter: Arc::new(AtomicU64::new(avoid_max.saturating_add(1))),
-            st_lhs_ac_free: self.st_lhs_ac_free,
-            sig: Arc::clone(&self.sig),
-        }
-    }
-
-    /// Like [`with_fresh_counter_from`] but takes the NEXT-draw value
-    /// directly (HS `FreshState` units).  HS `avoid sys` (LTerm.hs,
-    /// `maybe 0 (succ . snd) . boundsVarIdx`) is legitimately 0 for a
-    /// system with NO free variables (e.g. a lemma's root system: closed
-    /// formula, no nodes), which the `avoid_max + 1` form cannot express.
-    pub fn with_fresh_counter_next(&self, next: u64) -> MaudeHandle {
-        MaudeHandle {
-            inner: self.inner.clone(),
-            child: self.child.clone(),
-            turn: self.turn.clone(),
-            caches: self.caches.clone(),
-            fresh_counter: Arc::new(AtomicU64::new(next)),
-            st_lhs_ac_free: self.st_lhs_ac_free,
-            sig: Arc::clone(&self.sig),
-        }
-    }
-
-    /// The theory signature.  Cheap: a refcount bump on the shared immutable
-    /// `Arc<MaudeSig>` — NO IPC-mutex lock and NO deep clone of the signature's
-    /// `BTreeSet`s.  Hot proof-search predicates probe `reducible_fun_syms_fast`
-    /// etc. through this; returning the `Arc` keeps those reads allocation-free
-    /// and lock-free.
+    /// The theory signature (a refcount bump, no lock).
     pub fn maude_sig(&self) -> Arc<MaudeSig> {
         Arc::clone(&self.sig)
     }
 
-    /// Kill the underlying Maude subprocess.  Use as a watchdog when a
-    /// prove_lemma call is blocked inside a synchronous Maude IPC read
-    /// (no internal deadline can catch that — the read just sits there
-    /// waiting for stdout bytes).  After kill, any pending read returns
-    /// EOF and the worker thread unwinds with an error. The owned process
-    /// group is killed before reaping its leader, including wrapper children
-    /// holding the pipes open. Repeated calls are harmless.
-    ///
-    /// Locks ONLY `self.child` (the dedicated reaper mutex), NOT
-    /// `self.inner`, so it can fire while a reader thread holds the
-    /// I/O mutex inside `read_until_prompt`.  Without this split the
-    /// watchdog deadlocks with the very thread it's trying to unblock.
+    /// Kill the Maude process group, e.g. from a watchdog while a reader is
+    /// blocked in IPC.  Locks only the reaper mutex, not `inner`, so it cannot
+    /// deadlock with that reader.  Repeated calls are harmless.
     pub fn kill_subprocess(&self) {
         if let Ok(mut reaper) = self.child.lock() {
             reaper.restart = false;
@@ -1091,94 +584,38 @@ impl MaudeHandle {
     }
 
     /// Lock the process for this job. A cancelled waiter leaves without it.
+    ///
+    /// Callers hold the lock for one exchange, and Tamarin's Maude queries
+    /// terminate, so a job that needs the process waits for at most the
+    /// query in flight, even one a speculative branch started. parking_lot's
+    /// eventual fairness keeps a job that queries back to back from starving
+    /// a waiter.
     #[inline]
-    fn lock_inner(&self) -> Result<InnerGuard<'_>, cancellation::Cancelled> {
-        Ok(InnerGuard {
-            guard: Some(self.lock_process()?),
-            handle: self,
-        })
-    }
-
-    #[inline]
-    fn lock_process(
+    fn lock_inner(
         &self,
     ) -> Result<parking_lot::MutexGuard<'_, MaudeProcessInner>, cancellation::Cancelled> {
         // Cached operations frequently take an uncontended lock.
-        if self.turn.reserved.load(Ordering::Relaxed) == 0
-            && let Some(guard) = self.inner.try_lock()
-            // An interrupting job may have reserved the process meanwhile.
-            && self.turn.reserved.load(Ordering::Acquire) == 0
-        {
-            self.turn.note_use();
-            cancellation::check()?;
-            return Ok(guard);
-        }
-        self.lock_process_contended()
+        let guard = match self.inner.try_lock() {
+            Some(guard) => guard,
+            None => self.lock_inner_contended()?,
+        };
+        cancellation::check()?;
+        Ok(guard)
     }
 
     #[cold]
-    fn lock_process_contended(
+    fn lock_inner_contended(
         &self,
     ) -> Result<parking_lot::MutexGuard<'_, MaudeProcessInner>, cancellation::Cancelled> {
         const POLL: std::time::Duration = std::time::Duration::from_secs(1);
-        let turn = &*self.turn;
-        let mut waiter = Waiter { turn, id: 0 };
         loop {
             cancellation::check()?;
-            // A job waiting for a value this one is building can lend it an
-            // earlier rank at any time.
-            let rank = tamarin_utils::parallel::Rank::current();
-            let reserved = turn.reserved.load(Ordering::Acquire);
-            if reserved != 0 && reserved != waiter.id {
-                turn.wait_for_release(reserved);
-                continue;
-            }
             // Wake on unlock, like an ordinary mutex. The timeout bounds
-            // cancellation latency and the wait behind a speculative exchange.
-            let wait = turn
-                .patience(&turn.state.lock(), rank.as_ref())
-                .map_or(POLL, |wait| {
-                    wait.clamp(std::time::Duration::from_millis(1), POLL)
-                });
-            if let Some(guard) = self.inner.try_lock_for(wait) {
-                let reserved = turn.reserved.load(Ordering::Acquire);
-                if reserved != 0 && reserved != waiter.id {
-                    continue;
-                }
-                turn.note_use();
-                cancellation::check()?;
+            // cancellation latency.
+            if let Some(guard) = self.inner.try_lock_for(POLL) {
                 return Ok(guard);
             }
-            waiter.id = self.interrupt_exchange(rank.as_ref(), waiter.id);
         }
-    }
-
-    /// Kill the exchange in flight if a sequential run would reach `rank`
-    /// first and the exchange has had its time, and hold the process for
-    /// this waiter. Returns the waiter's reservation: `held`, or a new one.
-    fn interrupt_exchange(&self, rank: Option<&tamarin_utils::parallel::Rank>, held: u64) -> u64 {
-        let turn = &*self.turn;
-        let mut state = turn.state.lock();
-        if turn.reserved.load(Ordering::Acquire) != held
-            || !turn
-                .patience(&state, rank)
-                .is_some_and(|left| left.is_zero())
-        {
-            return held;
-        }
-        turn.interrupt(&mut state);
-        let id = if held == 0 {
-            state.waiters += 1;
-            turn.reserved.store(state.waiters, Ordering::Release);
-            state.waiters
-        } else {
-            held
-        };
-        self.child
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .invalidate();
-        id
     }
 
     /// Run a command whose reply depends on the command alone, or return
@@ -1207,10 +644,6 @@ impl MaudeHandle {
                         bump(&mut inner.stats);
                         drop(inner);
                         self.caches
-                            .stats
-                            .reply_misses
-                            .fetch_add(1, Ordering::Relaxed);
-                        self.caches
                             .reply
                             .lock()
                             .unwrap()
@@ -1220,7 +653,6 @@ impl MaudeHandle {
                 }
             }
         };
-        self.caches.stats.reply_hits.fetch_add(1, Ordering::Relaxed);
         Ok(hit.expect("a cached reply"))
     }
 
@@ -1229,82 +661,28 @@ impl MaudeHandle {
         self.inner.lock().stats
     }
 
-    /// Reduce a term to normal form modulo the theory.  Memoized via
-    /// `SharedMaudeCaches::reduce`: `reduce` is a pure function of the
-    /// input modulo the fixed-per-session Maude signature, and
-    /// `has_non_normal_terms` (called on every search step) calls it
-    /// repeatedly for the same subterms.  Cache locks are scoped to the
-    /// single `get` / `insert` statement and never held across the IPC
-    /// wait (lock-order invariant on `SharedMaudeCaches`).
+    /// HS `normViaMaude`: reduce `t` to normal form, memoised in
+    /// `SharedMaudeCaches::reduce`.
     pub fn reduce(&self, t: &LNTerm) -> Result<LNTerm, MaudeError> {
         cancellation::check()?;
         let mut ctx = ConvCtx::new();
         let hit = self.caches.reduce.lock().unwrap().get(t).cloned();
         if let Some(cached) = hit {
-            self.caches
-                .stats
-                .reduce_hits
-                .fetch_add(1, Ordering::Relaxed);
             return Ok(cached);
         }
         let reply = {
-            // Fast path: if the term contains NO reducible function
-            // symbols anywhere (and the signature has no AC theories
-            // that could rewrite via narrowing), `reduce` is the
-            // identity.  Avoids the ~0.7ms Maude IPC round-trip on the
-            // overwhelming majority of fact-term normalisations we
-            // perform during subst_system.
+            // No reducible symbol and no AC operator: `reduce` is the identity.
             if self.sig.has_no_ac_operators()
                 && !term_has_reducible_sym(t, &self.sig.reducible_fun_syms)
             {
                 return Ok(t.clone());
             }
-            // Native normal-form fast path for the cases the cheap check
-            // above rejects (AC signatures, or terms containing reducible
-            // symbols).  `nf_via_haskell` (norm.rs) ports HS `nf'`
-            // (Norm.hs `nfViaHaskell`), which upstream asserts coincides
-            // with `nfViaMaude t = (t ==) <$> norm t` (`_nfCompare'`,
-            // Norm.hs) — `true` means no rewrite rule of this
-            // signature fires anywhere in `t`, so Maude's `reduce` is the
-            // identity on it.  Its st-rule arm uses the no-AC matcher,
-            // complete only for Ac/C-free rule LHSes — hence the
-            // `st_lhs_ac_free` gate (see `term_ac_c_free`).
-            //
-            // Returning `t.clone()` is byte-identical to the round-trip
-            // because both sides of the comparison are f_app-canonical:
-            // reduce inputs are rebuilt through the smart constructors (the
-            // `Apply` instance for `VTerm` routes `FunSym::Ac`/`C` through
-            // `f_app_ac`/`f_app_c`), and Maude replies are reparsed
-            // through the SAME constructors (maude_parse.rs `build_app` →
-            // `f_app_ac`/`f_app_c`; maude_types.rs `mterm_to_lnterm` →
-            // `f_app`), so for a rewrite fixpoint the reparsed reply can
-            // only be `t` itself — Maude's transient AC print order cannot
-            // reach the result.  Mirrors the cheap fast path's
-            // conventions: no reduce-cache insert, no `norm_count` /
-            // cache-stat bump.
+            // HS asserts `nf'` agrees with `(t ==) <$> norm t` (`_nfCompare'`,
+            // Norm.hs), so a normal-form `t` reduces to itself.  The pure
+            // `nf_via_haskell` is complete only when no st-rule LHS needs AC
+            // matching.  Both `t` and a reparsed reply are in smart-constructor
+            // canonical form, so returning `t` is byte-identical.
             if self.st_lhs_ac_free && crate::norm::nf_via_haskell(&self.sig, t) {
-                // `TAM_RS_VERIFY_REDUCE_NF` oracle: ALSO run the real
-                // Maude round-trip this fast path elides and panic if
-                // Maude's answer differs from `t`.  Dead-cheap when
-                // unset; nothing reaches stdout.
-                if tamarin_utils::env_gate!("TAM_RS_VERIFY_REDUCE_NF") {
-                    let mt = lterm_to_mterm_global(t, &mut ctx);
-                    let mut cmd = b"reduce ".to_vec();
-                    pp_mterm_into(&mt, &mut cmd);
-                    cmd.extend_from_slice(b" .\n");
-                    let reply = self.lock_inner()?.execute(&cmd, ctx.variable_bound())?;
-                    let mt_back = maude_parse::parse_reduce_reply_with_sig(&reply, &self.sig)?;
-                    let mut next = 0;
-                    let maude_result = mterm_to_lnterm(&mt_back, &mut ctx, "z", &mut next);
-                    if maude_result != *t {
-                        panic!(
-                            "TAM_RS_VERIFY_REDUCE_NF: nf_via_haskell certified \
-                             a non-fixpoint as normal form — input {:?} but \
-                             Maude reduced it to {:?}",
-                            t, maude_result,
-                        );
-                    }
-                }
                 return Ok(t.clone());
             }
             let mt = lterm_to_mterm_global(t, &mut ctx);
@@ -1316,13 +694,9 @@ impl MaudeHandle {
             inner.stats.norm_count += 1;
             reply
         };
-        let mt_back = maude_parse::parse_reduce_reply_with_sig(&reply, &self.sig)?;
+        let mt_back = maude_parse::parse_reduce_reply(&reply, &self.sig)?;
         let mut next = 0;
         let result = mterm_to_lnterm(&mt_back, &mut ctx, "z", &mut next);
-        self.caches
-            .stats
-            .reduce_misses
-            .fetch_add(1, Ordering::Relaxed);
         self.caches
             .reduce
             .lock()
@@ -1337,12 +711,7 @@ impl MaudeHandle {
     /// the subprocess round-trip.  Safe to cache because the result is a
     /// context-free boolean (no witness LVars leak across calls).
     ///
-    /// Fast path: when the signature has no AC operators (DH / XOR /
-    /// multiset / nat) we can answer unifiability with the local
-    /// Robinson-style algorithm in `unification.rs`, completely
-    /// skipping Maude.  Hashing / asymmetric-encryption / pair-only
-    /// protocols hit this fast path almost exclusively, cutting the
-    /// per-step Maude call count by orders of magnitude.
+    /// For an AC-free signature the local unifier answers without Maude.
     pub fn unifiable(&self, eqs: &[Equal<LNTerm>]) -> Result<bool, MaudeError> {
         if eqs.is_empty() {
             return Ok(true);
@@ -1351,7 +720,8 @@ impl MaudeHandle {
             return Ok(true);
         }
         if self.is_ac_free() {
-            return Ok(crate::unification::unify_lnterm_no_ac(eqs.to_vec()).is_ok());
+            return Ok(crate::unification::unify_lnterm_factored(eqs.to_vec())
+                .is_some_and(|(_, residual)| residual.is_empty()));
         }
         let key: Vec<(LNTerm, LNTerm)> =
             eqs.iter().map(|e| (e.lhs.clone(), e.rhs.clone())).collect();
@@ -1361,62 +731,29 @@ impl MaudeHandle {
         cancellation::check()?;
         let hit = self.caches.unifiable.lock().unwrap().get(&key).copied();
         if let Some(hit) = hit {
-            self.caches
-                .stats
-                .unifiable_hits
-                .fetch_add(1, Ordering::Relaxed);
             return Ok(hit);
         }
         let res = self.unify(eqs)?;
         let answer = !res.is_empty();
-        self.caches
-            .stats
-            .unifiable_misses
-            .fetch_add(1, Ordering::Relaxed);
         self.caches.unifiable.lock().unwrap().insert(key, answer);
         Ok(answer)
     }
 
-    /// True when the local Robinson unifier is complete for this
-    /// signature, so every Maude unifiability query can be answered
-    /// locally.  Requires: no AC operators (DH/XOR/multiset/nat/BP)
-    /// AND no user-defined `[variant]` equations (`sig.st_rules` empty).
-    ///
-    /// When user equations are present (e.g.
-    /// `check_getmsg(pk(x), sign(x,m)) = m`, `convertpcs(...) = sign(...)`,
-    /// `checkpcs(...) = true`), Maude's `unify in MSG` narrows via the
-    /// `[variant]`-attributed equations (see ppTheory in HS's
-    /// Term.Maude.Parser, mirrored by Rust's maude_print.rs) — the local
-    /// fast path is incomplete because Robinson unification can't narrow
-    /// different-App-head equations like `true =? checkpcs(...)`.
-    ///
-    /// StatVerif_GM_Contract_Signing: keeping the variant disj alive
-    /// past `Eq_checks_succeed`'s `z.10 → true` propagation requires
-    /// Maude to narrow `true =? checkpcs(...)` via the `[variant]`
-    /// checkpcs equation, binding pcsig1 → pcs(sign(_, ct), _, _).
-    /// Without narrowing, that variant drops and the chain extension
-    /// produces a surviving Resolve2 case where xm doesn't bind to ct,
-    /// missing the N6 contradiction.
+    /// True when the local unifier answers every unifiability query: no AC
+    /// operators and no st-rules.  With st-rules, Maude's `unify` narrows
+    /// through their `[variant]` equations (e.g. StatVerif's
+    /// `true =? checkpcs(...)`), which the local unifier cannot do.
     fn is_ac_free(&self) -> bool {
         self.sig.has_no_ac_operators() && self.sig.st_rules.is_empty()
     }
 
-    /// Unify a list of equations modulo the theory, returning one
-    /// substitution per Maude unifier.
+    /// HS `unifyLTermFactored` + `flattenUnif` (Term/Unification.hs): solve
+    /// the non-AC fragment locally, send only the AC residuals to Maude
+    /// (`unifyViaMaude`), and compose each Maude unifier with the local
+    /// substitution.
     ///
-    /// Witness numbering is HS-faithful and COUNTER-NEUTRAL: HS's
-    /// `unifyViaMaude` (Term/Maude/Process.hs) numbers each reply's
-    /// fresh witnesses in a pure per-call scope seeded at
-    /// `avoid (M.elems bindings)` — the query's own exported vars — via
-    /// `evalFreshAvoiding` (Term/Maude/Types.hs), reading and
-    /// writing NO global fresh state.  This method therefore takes NO
-    /// `avoid` parameter (there is no HS analogue): the session counter is
-    /// never touched by a unify call, and the returned `SubstVFresh`
-    /// witnesses are α-scoped per subst.  Collision safety at the eq-store
-    /// call sites comes structurally from HS `applyBound`'s
-    /// `renameAvoiding` pre-step (EquationStore.hs), mirrored in
-    /// `apply_eq_store`'s rhs uniform-shift rename — NOT from inflating the
-    /// witness idxs.
+    /// Witness numbering touches no global fresh state: HS numbers witnesses
+    /// in a pure per-call scope (`runBackConversion`, Term/Maude/Types.hs).
     pub fn unify(
         &self,
         eqs: &[Equal<LNTerm>],
@@ -1424,262 +761,45 @@ impl MaudeHandle {
         if eqs.is_empty() {
             return Ok(vec![Vec::new()]);
         }
-        // NOTE: no syntactic-equality fast path here.  HS's `unifyRaw`
-        // (Unification.hs) delays AC-headed and C-headed pairs
-        // to Maude UNCONDITIONALLY — even when lhs == rhs syntactically.
-        // Maude's complete unifier set for a self-equal AC/C term is
-        // NOT just the identity: e.g. `em(hp(a),hp(b)) =? em(hp(a),hp(b))`
-        // (C/comm) also has the "diagonal" unifier a=b, and
-        // `mult(x,y) =? mult(x,y)` has the x=y merge.  Do NOT add an
-        // `all(lhs == rhs) -> [identity]` fast path: it drops these
-        // diagonal arms — observable on Scott::key_secrecy where
-        // HS's refineSubst fan-out at /case_2/Init_2/Init_1/c_kdf/
-        // split_case_3 yields 4 unifier arms for em/Mult-headed source
-        // cases (the surviving Resp_1_case_01/06/09/10 arms) while a
-        // fast path yields only 2.  Self-equal NON-AC eq sets still avoid the
-        // Maude round-trip via the local unifier below (HS-faithful:
-        // unifyRaw solves them locally).
+        // No syntactic-equality fast path: `unifyRaw` delays AC/C pairs even
+        // when both sides are equal, and Maude's unifier set for such a pair
+        // can be larger than the identity (e.g. `mult(x,y) =? mult(x,y)` also
+        // has `x = y`).
         //
-        // Local non-AC unifier first, ALWAYS — mirroring HS's
-        // `unifyLTermFactored` (Unification.hs):
-        //
-        // ```haskell
-        // unifyLTermFactored sortOf eqs = reader $ \h ->
-        //     solve h $ execRWST unif sortOf M.empty
-        //   where
-        //     unif = sequence [ unifyRaw t p | Equal t p <- eqs ]
-        //     solve _ (Just (m, [])) = (substFromMap m, [emptySubstVFresh])
-        // ```
-        //
-        //   1. Run `unifyRaw` locally (no Maude).
-        //   2. Success with no AC residual → return `[emptyVFresh
-        //      `composeVFresh` m]`, which is what `flattenUnif (m,
-        //      [emptySubstVFresh])` (Unification.hs) evaluates to.
-        //   3. Success with AC residuals → Maude on the residuals only
-        //      (the `unify_lnterm_factored` path further down).
-        //   4. Failure → return empty, WITHOUT calling Maude.
-        //
-        // Step 2's `composeVFresh` is load-bearing, not a formality: it
-        // extends the empty VFresh with renamings for `varsRange m`, so a
-        // `K → Var(V)` binding becomes the two entries
-        // `[K → Var(~Vw), V → Var(~Vw)]` Maude's own unify would produce.
-        // Skipping it leaves V in the range but not the domain, and
-        // `apply_eq_store`'s lifting then collides its witness with K's
-        // renamed target (a SubstVFresh same-target collision, observed as
-        // $R=$I on KAS_key_secrecy).
-        //
-        // Step 4 is also why this is NOT gated on `is_ac_free()`:
-        // signatures WITH [variant] equations (e.g. StatVerif's
-        // convertpcs/checkpcs) must still try the local unifier first,
-        // otherwise every unification goes to Maude, which narrows via the
-        // [variant] equations and keeps variants HS would drop.
-        {
-            let result = crate::unification::unify_lnterm_no_ac_with_counter(
-                eqs.to_vec(),
-                &self.fresh_counter,
-            );
-            match result {
-                Ok(subst) => {
-                    // HS-faithful flattenUnif: success, return [vfresh ∘ subst].
-                    let empty_vfresh =
-                        crate::subst_vfresh::LSubstVFresh::<crate::lterm::Name>::empty();
-                    let folded = crate::subst_vfresh::compose_vfresh(&empty_vfresh, &subst);
-                    return Ok(vec![folded.to_list()]);
-                }
-                Err(crate::unification::UnifyError::NoUnifier) => {
-                    // HS-faithful: unifyRaw failed.  Don't call Maude
-                    // (avoid spurious [variant] narrowing).  Return empty.
-                    return Ok(Vec::new());
-                }
-                Err(crate::unification::UnifyError::NeedsAC) => {
-                    // Fall through to the Maude call below.
-                    //
-                    // HS-faithful counter-neutrality: the global fresh
-                    // counter is NOT raised here.  HS's `unifyViaMaude`
-                    // (Term/Maude/Process.hs) numbers each reply's
-                    // witnesses in a PURE per-call scope via
-                    // `runBackConversion (...) bindings =
-                    //  evalBindT (...) bindings `evalFreshAvoiding` M.elems bindings`
-                    // (Term/Maude/Types.hs) — the fresh supply is
-                    // seeded from `avoid (M.elems bindings)` (the query's own
-                    // exported vars) and NO global state is read or written.
-                    // The reply conversion below therefore computes its
-                    // witness base locally (see `input_max`) and never
-                    // touches `self`'s counter.
-                }
-            }
-        }
-        // HS-faithful `unifyLTermFactored` (Unification.hs):
-        //
-        //   unif = sequence [ unifyRaw t p | Equal t p <- eqs ]
-        //   solve h (Just (m, leqs)) =
-        //       (subst, unifyViaMaude h sortOf $ map (applyVTerm subst <$>) leqs)
-        //     where subst = substFromMap m
-        //
-        // i.e. run the LOCAL non-AC unifier first to extract a non-AC
-        // substitution `m` and the residual AC equations `leqs`, then send
-        // ONLY the residuals (with `m` applied) to Maude.  Finally
-        // `flattenUnif (subst, substs) = map (`composeVFresh` subst) substs`
-        // (Unification.hs) composes each Maude arm with `subst = m`.
-        //
-        // We therefore factor out the non-AC substitution `m` and send only
-        // the AC residuals to Maude, so witness idxs are allocated against
-        // the residual's vars (matching HS); `m`'s bindings are composed
-        // back in below.
-        let (factored_m, residual_eqs): (
-            crate::subst::Subst<crate::lterm::Name, crate::lterm::LVar>,
-            Vec<Equal<LNTerm>>,
-        ) = match crate::unification::unify_lnterm_factored(eqs.to_vec()) {
-            Some((m, leqs)) => (m, leqs),
-            // unifyRaw failed during factoring → no unifier (HS `solve _
-            // Nothing = (emptySubst, [])` → flattenUnif maps over []).
-            None => return Ok(Vec::new()),
+        // `unifyRaw` failing means no unifier, without calling Maude, so
+        // `[variant]` equations never narrow a free clash.
+        let Some((factored_m, residual_eqs)) =
+            crate::unification::unify_lnterm_factored(eqs.to_vec())
+        else {
+            return Ok(Vec::new());
         };
-        // If factoring already solved everything (no AC residual), HS returns
-        // `(substFromMap m, [emptySubstVFresh])`; flattenUnif then yields
-        // `[emptyVFresh `composeVFresh` m]`.  Mirror that without a Maude
-        // round-trip.
+        // HS `solve _ (Just (m, [])) = (substFromMap m, [emptySubstVFresh])`.
         if residual_eqs.is_empty() {
-            let empty_vfresh = crate::subst_vfresh::LSubstVFresh::<crate::lterm::Name>::empty();
-            let composed = crate::subst_vfresh::compose_vfresh(&empty_vfresh, &factored_m);
-            return Ok(vec![composed.to_list()]);
+            let empty = crate::subst_vfresh::LSubstVFresh::<crate::lterm::Name>::empty();
+            return Ok(vec![crate::subst_vfresh::compose_vfresh(
+                &empty,
+                &factored_m,
+            )
+            .to_list()]);
         }
-        // The equations actually sent to Maude are the AC residuals.
-        let maude_eqs: &[Equal<LNTerm>] = &residual_eqs;
         let mut ctx = ConvCtx::new();
-        let cmd = build_conj_eqs_cmd(b"unify in MSG : ", maude_eqs, &mut ctx);
-        // Raw-reply memo (see `SharedMaudeCaches::reply`): identical `unify in MSG` command
-        // bytes yield an identical reply, and the per-arm back-conversion below
-        // still runs on every call, so a hit is bit-for-bit a real round-trip.
+        let cmd = build_conj_eqs_cmd(b"unify in MSG : ", &residual_eqs, &mut ctx);
         let reply = self.execute_memo(&cmd, ctx.variable_bound(), |s| s.unify_count += 1)?;
-        let msubsts = maude_parse::parse_unify_reply_with_sig(&reply, &self.sig)?;
-        // HS `avoid (M.elems bindings)` (`runBackConversion`,
-        // Term/Maude/Types.hs, via
-        // LTerm.hs `avoid = maybe 0 (succ . snd) . boundsVarIdx`):
-        // the witness fresh-supply floor is the max idx over ALL of the
-        // query's own binding vars — i.e. the vars of `maude_eqs`, which
-        // `lterm_to_mterm_global` has registered in `ctx`'s inverse map.
-        // This is the ONLY input to witness numbering: HS injects NO
-        // system-wide avoid (there is no HS `avoid` parameter on unify), so
-        // neither do we.  Each reply arm is converted below in this SAME
-        // local scope, never reading or advancing `self`'s session counter.
-        let mut input_max = 0u64;
-        for lit in ctx.bindings().values() {
-            if let crate::vterm::Lit::Var(lv) = lit
-                && lv.idx > input_max
-            {
-                input_max = lv.idx;
-            }
-        }
-        let mut out = Vec::with_capacity(msubsts.len());
-        // HS-faithful per-unifier conversion (Term/Maude/Process.hs
-        // + Term/Maude/Types.hs).  HS does:
-        //   map (msubstToLSubstVFresh bindings) <$> parseUnifyReply ...
-        // where each `msubstToLSubstVFresh bindings substMaude` calls
-        //   runBackConversion (traverse translate substMaude) bindings
-        // and `runBackConversion back bindings =
-        //   evalBindT back bindings `evalFreshAvoiding` M.elems bindings`.
-        //
-        // Every unifier conversion gets:
-        //   (a) the SAME initial bind-map `bindings` (the toMaude
-        //       conversion's output) — no carryover of witness/FreshVar
-        //       allocations from one unifier to the next, AND
-        //   (b) a fresh supply seeded LOCALLY at `avoid (M.elems bindings)`
-        //       = `input_max + 1` — the SAME base per unifier, drawn ONLY
-        //       from the query's own vars.  HS reads NO global fresh state
-        //       here and writes NONE back: after `evalFreshAvoiding` the
-        //       supply is discarded, so a `unifyViaMaude` call is
-        //       counter-neutral (the session `MonadFresh` state is
-        //       unchanged across it).
-        //
-        // This per-unifier same-base restart is load-bearing for arm Ord:
-        // on Resp_1 / Init_1 / generate_ltk multi-AC arms
-        // (UM_wPFS::wPFS_responder_key + JKL_TS2_2008), the Mult arm's
-        // witness gets a lower idx than the "everything-equates" arm's
-        // because it traverses fewer distinct FreshVars before the equate
-        // target, so HS sorts Mult before Equates under the SubstVFresh Ord.
-        //
-        // Faithful realisation: convert each arm on its OWN clone of the
-        // shared `ctx`, seeding the witness supply at the same local
-        // `input_max` via `msubst_to_lnsubst_with_avoid`.  The session
-        // counter (`self`) is never passed, never read, never advanced —
-        // matching HS's pure `evalFreshAvoiding` scope.  Sharing `ctx` (or
-        // the counter) across arms would collapse the per-arm idx
-        // differences and mis-order the arms (fallback to VALUE-structure
-        // Ord).
-        for ms in &msubsts {
-            let mut per_arm_ctx = ctx.clone();
-            out.push(msubst_to_lnsubst_with_avoid(
-                ms,
-                &mut per_arm_ctx,
-                input_max,
-            )?);
-        }
-        // HS-faithful `removeRenamings` (Maude/Types.hs): HS's
-        // `msubstToLSubstVFresh bindings substMaude` ends with
-        // `removeRenamings $ substFromListVFresh slist` — drops every
-        // entry whose image is just a Var with no role elsewhere in
-        // the substitution (`isRenamedVar` in SubstVFresh.hs).
-        // RS's `msubst_to_lnsubst_with_avoid` returns the raw slist without
-        // that filter, so it is applied here: left in, the trivial rename
-        // entries reach the disjunction's substs as extra node-id bindings
-        // and drive spurious `setNodes` collisions.
-        out = out
+        let msubsts = maude_parse::parse_unify_reply(&reply, &self.sig)?;
+        // `flattenUnif (subst, substs) = map (`composeVFresh` subst) substs`.
+        Ok(convert_reply(&msubsts, &ctx, BackConv::VFresh)?
             .into_iter()
             .map(|arm| {
-                let vfresh =
-                    crate::subst_vfresh::LSubstVFresh::<crate::lterm::Name>::from_list(arm);
-                vfresh.remove_renamings().to_list()
+                let arm = crate::subst_vfresh::LSubstVFresh::<crate::lterm::Name>::from_list(arm);
+                crate::subst_vfresh::compose_vfresh(&arm, &factored_m).to_list()
             })
-            .collect();
-        // HS `flattenUnif (subst, substs) = map (`composeVFresh` subst) substs`
-        // (Unification.hs) composes each Maude arm with `subst = m`, the
-        // non-AC factored substitution — so `factored_m` MUST be the second
-        // argument here.  The composition also RENAMES the arm's range vars
-        // (the Maude witnesses) via HS's `freshToFreeAvoidingFast` uniform
-        // shift seeded by `succ (max idx in (s2, s1_0=arm) domain)`, re-basing
-        // the Maude-allocated idxs above just the relevant domain.  That
-        // re-basing, together with sending only the AC residuals to Maude,
-        // is what keeps witness idxs aligned with HS, so alpha-equivalent
-        // substs sort identically and `perform_split` picks the same case
-        // order.
-        let renamed: Vec<Vec<(crate::lterm::LVar, LNTerm)>> = out
-            .into_iter()
-            .map(|arm| {
-                let arm_vfresh =
-                    crate::subst_vfresh::LSubstVFresh::<crate::lterm::Name>::from_list(arm);
-                let composed = crate::subst_vfresh::compose_vfresh(&arm_vfresh, &factored_m);
-                composed.to_list()
-            })
-            .collect();
-        Ok(renamed)
+            .collect())
     }
 
-    /// Compute AC matchers for a batch of `(subject, pattern)` problems.
-    ///
-    /// **Convention — faithful to Haskell.** Each `Equal { lhs, rhs }`
-    /// has `lhs = subject` (term to be matched, treated ground) and
-    /// `rhs = pattern` (vars bind). This mirrors HS exactly:
-    /// `matchWith t p = DelayedMatches [(t, p)]` is `(subject, pattern)`
-    /// (`Term/Rewriting/Definitions.hs`), and `matchViaMaude`
-    /// turns each pair into `Equal subject pattern` via
-    /// `uncurry Equal <$> ms` (`Term/Maude/Process.hs`). The
-    /// emitted Maude command is then `match PATTERN <=? SUBJECT`,
-    /// i.e. `matchCmd`'s `ppTerms t2s <> " <=? " <> ppTerms t1s` where
-    /// `(t1s, t2s) = unzip [(a, b) | Equal a b <- eqs]` so `t2s = b =
-    /// pattern` lands on Maude's LEFT (pattern slot) and `t1s = a =
-    /// subject` on the RIGHT (subject slot) — `Maude/Process.hs`.
-    ///
-    /// Maude's `match A <=? B` binds vars in **A (PATTERN, left)** and
-    /// treats **B (SUBJECT, right)** as ground (empirically confirmed).
-    /// So pattern must go LEFT — which is why
-    /// `pp_mterm_list(&pats)` (= `t2s` = each `eq.rhs`) is emitted first.
-    ///
-    /// NOTE the opposite field order from `Equal` as used by callers
-    /// that pass `Equal { lhs = pattern, rhs = subject }`: HS's `Equal`
-    /// holds `(subject, pattern)`, and so does this routine. Callers
-    /// constructed from `matchFact`/`matchWith` (e.g. `sources.rs`) MUST
-    /// therefore put the subject in `lhs` and the pattern in `rhs`.
+    /// HS `matchViaMaude`: AC matchers for `(subject, pattern)` problems.
+    /// As in HS, each `Equal` holds `lhs = subject, rhs = pattern`, and
+    /// `matchCmd` emits `match PATTERN <=? SUBJECT` (Maude binds variables on
+    /// the left only).
     pub fn match_eqs(
         &self,
         eqs: &[Equal<LNTerm>],
@@ -1687,95 +807,31 @@ impl MaudeHandle {
         if eqs.is_empty() {
             return Ok(vec![Vec::new()]);
         }
-        // Ground-pattern short-circuit (provably equivalent to the Maude
-        // call below).  The generated MSG module declares AC/C operators
-        // `[comm assoc]` / `[comm]` and NO identity axiom
-        // (`maude_print.rs:op_ac`/`op_c`), so `match P <=? S` matches modulo
-        // AC/C only.  Here the pattern is `eq.rhs` (vars bind); when every
-        // pattern is ground there are no variables to bind, so the match
-        // succeeds with the empty substitution iff each pattern equals its
-        // subject modulo AC/C — and RS keeps AC/C terms flattened+sorted at
-        // construction (`f_app_ac`/`f_app_c`), so that is exactly structural
-        // `==`, the same canonical-form equality the solver uses for dedup.
-        // Maude returns exactly one (empty) solution or none for a ground
-        // match, so this is byte-identical.  On natural-numbers/multiset
-        // theories these ground multiset comparisons dominate and are
-        // re-issued thousands of times (gcm: ~99% of all `match` queries,
-        // ~3500x redundancy) — skipping the IPC is the bulk of the win.
+        // Ground patterns: the MSG module has only `[comm assoc]` / `[comm]`
+        // axioms and AC/C terms are kept canonical, so Maude's answer (one
+        // empty matcher or none) is structural equality.  This skips most
+        // `match` queries on multiset/natural-number theories.
         if eqs.iter().all(|eq| crate::vterm::is_ground_vterm(&eq.rhs)) {
-            let matched = eqs.iter().all(|eq| eq.lhs == eq.rhs);
-            return Ok(if matched { vec![Vec::new()] } else { vec![] });
+            return Ok(structural_match(eqs));
         }
-        let mut ctx = ConvCtx::new();
-        // `subjs` ← each `eq.lhs` (HS `t1s = a = subject`);
-        // `pats`  ← each `eq.rhs` (HS `t2s = b = pattern`).
-        let mut subjs: Vec<MTerm> = Vec::with_capacity(eqs.len());
-        let mut pats: Vec<MTerm> = Vec::with_capacity(eqs.len());
-        for eq in eqs {
-            subjs.push(lterm_to_mterm_global(&eq.lhs, &mut ctx));
-            pats.push(lterm_to_mterm_global(&eq.rhs, &mut ctx));
-        }
-        // `match in MSG : list(pats) <=? list(subjs) .`
-        // Mirrors HS `matchCmd` (`Maude/Process.hs`): PATTERN on the
-        // left (vars bind), SUBJECT on the right (ground).
-        // `pp_mterm_list` emits `list( cons(t1, cons(t2, nil)) )` style,
-        // formatting the borrowed slice directly without a `Vec`+`Arc`
-        // round-trip.
-        let cmd = pp_match_cmd(&pats, &subjs);
-        let reply = self.execute_memo(&cmd, ctx.variable_bound(), |s| s.match_count += 1)?;
-        let msubsts = maude_parse::parse_match_reply_with_sig(&reply, &self.sig)?;
-        let mut out = Vec::with_capacity(msubsts.len());
-        for ms in &msubsts {
-            out.push(msubst_to_lnsubst(ms, &mut ctx)?);
-        }
-        Ok(out)
+        self.match_query(eqs, false)
     }
 
-    /// Match where BOTH the pattern and subject sides have their free
-    /// non-pattern-vars skolemized to synthetic constants — using the
-    /// SAME mapping for both sides, so that occurrences of the same
-    /// LVar in pattern and subject still match each other through
-    /// their shared synthetic constant.
-    ///
-    /// This mirrors HS's `matchTerm` (Guarded.hs) called from
-    /// `impliedFormulas` (System.hs): the universal is fully
-    /// `skolemizeGuarded`-ed before matching, so every FREE LVar
-    /// (universal-non-bound vars, originating from the system context)
-    /// becomes a `Con (SkConst x)`, while the universal-bound
-    /// (pattern) vars stay `Var x`.  The subject side (the system's
-    /// own term) is also skolemized via `skolemizeTerm`, so the same
-    /// LVar `y` on both sides maps to the same `SkConst y` constant.
-    /// Maude can then match the pattern against the subject without
-    /// spuriously binding the pattern's `y` to anything (it's a
-    /// constant on both sides).
-    ///
-    /// Used by `insert_implied_formulas_pass`'s Eq-guard branch to
-    /// handle AC-symbol patterns (e.g. multiset `y++z` against
-    /// `'1'++y++h(y)`) faithfully.
+    /// HS `matchTerm` (Guarded.hs) as `impliedFormulas` (System.hs) uses
+    /// it: every free variable outside `pattern_vars`, on either side, is
+    /// skolemized to one shared constant (`skolemizeGuarded` /
+    /// `skolemizeTerm`), so only the pattern variables bind.  Here each
+    /// `Equal` holds `lhs = pattern, rhs = subject`.
     pub fn match_eqs_skolemize_both(
         &self,
         eqs: &[Equal<LNTerm>],
         pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
     ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
-        use crate::lterm::LVar;
         if eqs.is_empty() {
             return Ok(vec![Vec::new()]);
         }
-        // Ground-pattern short-circuit (provably equivalent to the Maude
-        // call below).  The generated MSG module declares AC/C operators
-        // `[comm assoc]` / `[comm]` and NO identity axiom, so `match P <=? S`
-        // matches modulo AC/C only.  Here the pattern is `eq.lhs` and the
-        // only bindable variables are `pattern_vars` (every other var on
-        // either side is skolemized to a constant).  When no `eq.lhs`
-        // contains a `pattern_var` there is nothing to bind, so the match
-        // succeeds with the empty substitution iff each pattern equals its
-        // subject modulo AC/C.  Skolemization is a consistent var->const
-        // renaming applied to both sides, so it preserves structural
-        // equality — hence we can compare the ORIGINAL terms directly, and
-        // (canonical AC/C forms from `f_app_ac`/`f_app_c`) that equality is
-        // structural `==`.  Maude returns one (empty) solution or none for a
-        // ground match, so this is byte-identical and needs no
-        // un-skolemization (there are no bindings).
+        // No pattern variable: as in `match_eqs`, the answer is structural
+        // equality (skolemizing both sides alike preserves it).
         fn has_pattern_var(
             t: &LNTerm,
             pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
@@ -1790,60 +846,58 @@ impl MaudeHandle {
             }
         }
         if eqs.iter().all(|eq| !has_pattern_var(&eq.lhs, pattern_vars)) {
-            let matched = eqs.iter().all(|eq| eq.lhs == eq.rhs);
-            return Ok(if matched { vec![Vec::new()] } else { vec![] });
+            return Ok(structural_match(eqs));
         }
-        // Step 1: collect ALL non-pattern free vars from BOTH sides.
-        // The same LVar appearing on both sides must skolemize to the
-        // same Name so the two occurrences match each other.
-        let mut free_vars: std::collections::BTreeSet<LVar> = std::collections::BTreeSet::new();
-        for eq in eqs {
-            collect_free_non_pattern_vars(&eq.lhs, pattern_vars, &mut free_vars);
-            collect_free_non_pattern_vars(&eq.rhs, pattern_vars, &mut free_vars);
-        }
-        let (skolem_map, reverse) = build_skolem_maps(&free_vars);
-        // Step 2: rewrite BOTH sides via the shared skolem_map.
+        // One skolem constant per free variable, shared by both sides.
         let rewritten_eqs: Vec<Equal<LNTerm>> = eqs
             .iter()
             .map(|eq| Equal {
-                lhs: rewrite_skolem(&eq.lhs, &skolem_map),
-                rhs: rewrite_skolem(&eq.rhs, &skolem_map),
+                lhs: rewrite_skolem(&eq.lhs, pattern_vars),
+                rhs: rewrite_skolem(&eq.rhs, pattern_vars),
             })
             .collect();
-
-        let mut ctx = ConvCtx::new();
-        let mut pats: Vec<MTerm> = Vec::with_capacity(rewritten_eqs.len());
-        let mut subjs: Vec<MTerm> = Vec::with_capacity(rewritten_eqs.len());
-        for eq in &rewritten_eqs {
-            pats.push(lterm_to_mterm_global(&eq.lhs, &mut ctx));
-            subjs.push(lterm_to_mterm_global(&eq.rhs, &mut ctx));
-        }
-        // Maude's `match A <=? B` syntax means: find σ such that B = σ(A).
-        // So A is the PATTERN (left), B is the SUBJECT (right).
-        // Callers of THIS routine pass `Equal { lhs = pattern, rhs =
-        // subject }`, so the command is `match pattern(lhs) <=?
-        // subject(rhs)`.  The plain `match_eqs` uses the OPPOSITE `Equal`
-        // field order (`lhs = subject, rhs = pattern`, faithful to HS's
-        // `Equal a b = Equal subject pattern`); it still emits
-        // `match PATTERN <=? SUBJECT` on the wire, just sourced from the
-        // flipped fields.  So both matchers emit pattern-on-the-left,
-        // which is what Maude requires (vars bind in the left operand).
-        let cmd = pp_match_cmd(&pats, &subjs);
-        let reply = self.execute_memo(&cmd, ctx.variable_bound(), |s| s.match_count += 1)?;
-        let msubsts = maude_parse::parse_match_reply_with_sig(&reply, &self.sig)?;
-        let mut out = Vec::with_capacity(msubsts.len());
-        for ms in &msubsts {
-            let lnsubst = msubst_to_lnsubst(ms, &mut ctx)?;
-            // Un-skolemize all bindings so the caller gets LVars back.
-            out.push(unskolemize_subst(lnsubst, &reverse));
-        }
-        Ok(out)
+        Ok(self
+            .match_query(&rewritten_eqs, true)?
+            .into_iter()
+            .map(|sub| {
+                sub.into_iter()
+                    .map(|(lv, lt)| (lv, unskolemize(&lt)))
+                    .collect()
+            })
+            .collect())
     }
 
-    /// Get the variants of a term, one substitution per Maude `[variant]`.
-    /// Each variant is back-converted with its own fresh conversion
-    /// context (see the inline note) so that fresh witness vars do not
-    /// collide between variants.
+    /// HS `matchCmd` round trip: `match PATTERN <=? SUBJECT` over `eqs`,
+    /// with `pattern_is_lhs` naming the side of each `Equal` that is the
+    /// pattern.  Each equation converts `lhs` then `rhs`, so the variable
+    /// numbering (and the memoized command) does not depend on that choice.
+    fn match_query(
+        &self,
+        eqs: &[Equal<LNTerm>],
+        pattern_is_lhs: bool,
+    ) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
+        let mut ctx = ConvCtx::new();
+        let mut pats: Vec<MTerm> = Vec::with_capacity(eqs.len());
+        let mut subjs: Vec<MTerm> = Vec::with_capacity(eqs.len());
+        for eq in eqs {
+            let lhs = lterm_to_mterm_global(&eq.lhs, &mut ctx);
+            let rhs = lterm_to_mterm_global(&eq.rhs, &mut ctx);
+            if pattern_is_lhs {
+                pats.push(lhs);
+                subjs.push(rhs);
+            } else {
+                pats.push(rhs);
+                subjs.push(lhs);
+            }
+        }
+        let cmd = pp_match_cmd(&pats, &subjs);
+        let reply = self.execute_memo(&cmd, ctx.variable_bound(), |s| s.match_count += 1)?;
+        let msubsts = maude_parse::parse_match_reply(&reply, &self.sig)?;
+        convert_reply(&msubsts, &ctx, BackConv::VFree)
+    }
+
+    /// Get the variants of a term, one substitution per Maude `[variant]`
+    /// (HS `variantsViaMaude`, Maude/Process.hs).
     pub fn variants(
         &self,
         t: &LNTerm,
@@ -1860,59 +914,8 @@ impl MaudeHandle {
         // theories (Joux re-issues the same expensive `get variants` twice —
         // once in the derivcheck phase, once at main close).
         let reply = self.execute_memo(&cmd, ctx.variable_bound(), |s| s.var_count += 1)?;
-        let msubsts = maude_parse::parse_variants_reply_with_sig(&reply, &self.sig)?;
-        let mut out = Vec::with_capacity(msubsts.len());
-        // HS-faithful: each variant's back-conversion uses a fresh ctx
-        // clone.  Mirrors HS `msubstToLSubstVFresh` (Maude/Types.hs)
-        // where each call to `runBackConversion (...) bindings` runs
-        // `evalBindT back bindings` with the same INITIAL bindings —
-        // augmentations to the binding map are per-call.
-        //
-        // Without this, the shared `ctx.inverse` causes
-        // `MaudeLit::FreshVar(N, sort)` to collide between variants —
-        // variant 1's `#1:Msg` and variant 2's `%1:Msg` both parse to
-        // `FreshVar(1, Msg)` (`maude_parse.rs::parse_term` collapses
-        // # and %) and the second lookup returns the first's LVar.
-        //
-        // HS-faithful: variant back-conversion uses hint "x" unconditionally
-        // (Maude/Types.hs), NOT the perform_split-motivated
-        // name-preserve path used by `unify`/`match`.  The variants flow
-        // into `composeVFresh`+`pracVariants` rendering; using "x" here
-        // matches both HS's printed `~k = ~x.5` form AND HS's variant
-        // ordering after the per-variant Ord sort (Ord LVar = idx <> sort
-        // <> name puts `~x.N` AFTER same-idx `~na.N`/`~nb.N`).
-        for ms in &msubsts {
-            let mut variant_ctx = ctx.clone();
-            out.push(msubst_to_lnsubst_unify(ms, &mut variant_ctx)?);
-        }
-        Ok(out)
-    }
-}
-
-/// The solver's fresh supply.  HS `Reduction` is
-/// `StateT System (FreshT (DisjT (Reader ProofContext)))` (Reduction.hs)
-/// and `Control.Monad.Fresh` re-exports the FAST `FreshT`
-/// (Control/Monad/Fresh.hs), so the name is ignored and both methods draw
-/// from the one counter (Control/Monad/Fresh/Class.hs).
-impl MonadFresh for &MaudeHandle {
-    fn fresh_ident(&mut self, _name: &str) -> u64 {
-        self.reserve_idxs(1)
-    }
-
-    fn fresh_idents(&mut self, k: u64) -> u64 {
-        self.reserve_idxs(k)
-    }
-}
-
-/// One-letter sort tag for synthesizing skolem constant names.
-fn sort_tag(s: crate::lterm::LSort) -> &'static str {
-    use crate::lterm::LSort;
-    match s {
-        LSort::Msg => "M",
-        LSort::Pub => "P",
-        LSort::Fresh => "F",
-        LSort::Node => "N",
-        LSort::Nat => "T",
+        let msubsts = maude_parse::parse_variants_reply(&reply, &self.sig)?;
+        convert_reply(&msubsts, &ctx, BackConv::VFresh)
     }
 }
 
@@ -1948,247 +951,111 @@ fn pp_match_cmd(pats: &[MTerm], subjs: &[MTerm]) -> Vec<u8> {
     cmd
 }
 
-/// Build the forward (LVar→skolem `Name`) and reverse (`Name`→LVar) skolem maps
-/// for `vars`, assigning synthetic constants in BTreeSet iteration order via
-/// `skolem_name`.  Used by `match_eqs_skolemize_both`.
-fn build_skolem_maps(
-    vars: &std::collections::BTreeSet<crate::lterm::LVar>,
-) -> (
-    std::collections::BTreeMap<crate::lterm::LVar, crate::lterm::Name>,
-    std::collections::BTreeMap<crate::lterm::Name, crate::lterm::LVar>,
-) {
-    let mut skolem_map = std::collections::BTreeMap::new();
-    let mut reverse = std::collections::BTreeMap::new();
-    for (counter, lv) in (0_u64..).zip(vars.iter()) {
-        let n = skolem_name(counter, lv);
-        skolem_map.insert(*lv, n);
-        reverse.insert(n, *lv);
+/// The matcher set when no pattern variable can bind: one empty matcher if
+/// every equation's sides are structurally equal, none otherwise.
+fn structural_match(eqs: &[Equal<LNTerm>]) -> Vec<Vec<(crate::lterm::LVar, LNTerm)>> {
+    if eqs.iter().all(|eq| eq.lhs == eq.rhs) {
+        vec![Vec::new()]
+    } else {
+        vec![]
     }
-    (skolem_map, reverse)
 }
 
-/// Un-skolemize the range of each binding in `sub`, mapping synthetic
-/// constants back to their original LVars via `reverse`.  Used by
-/// `match_eqs_skolemize_both`'s result loop.
-fn unskolemize_subst(
-    sub: Vec<(crate::lterm::LVar, LNTerm)>,
-    reverse: &std::collections::BTreeMap<crate::lterm::Name, crate::lterm::LVar>,
-) -> Vec<(crate::lterm::LVar, LNTerm)> {
-    sub.into_iter()
-        .map(|(lv, lt)| (lv, unskolemize(&lt, reverse)))
-        .collect()
+/// HS `SkConst lv` (Guarded.hs): `lv` frozen into a constant of its own
+/// sort (`sortOfSkol`), ordered after every real name.  See
+/// `NameTag::Skolem`.
+fn skolem_name(lv: &crate::lterm::LVar) -> crate::lterm::Name {
+    use crate::lterm::{Name, NameId, NameTag};
+    Name {
+        tag: NameTag::Skolem {
+            idx: lv.idx,
+            sort: lv.sort,
+        },
+        id: NameId(lv.name),
+    }
 }
 
-/// Build the synthetic skolem-constant `Name` for a free/subject `LVar`
-/// `lv`, using `counter` to keep the id unique across one match call.
-///
-/// The constant must round-trip through Maude with the SAME order-sorted
-/// behaviour HS gives a `SkConst`, whose sort is `lvarSort v`
-/// (`sortOfSkol`, Guarded.hs) — i.e. the variable's *own* sort, which may be
-/// `Msg`.  Maude's `match A <=? B` requires the pattern's declared sort
-/// to be a supersort of the subject's, so encoding a `Msg`-sorted
-/// subject variable as `Pub` (a strict subsort of `Msg`) would let it
-/// match a `Msg` pattern position that HS would reject — an over-match
-/// that can change `--prove` results.
-///
-/// `NameTag` has no `Msg` variant, and adding one would break the many
-/// exhaustive `match`es on it across other crates.  Instead we carry a
-/// `Msg`-sorted skolem as a `NameTag::Pub` `Name` whose id begins with
-/// `maude_types::SKOLEM_MSG_PREFIX`; `maude_types::sort_of_name`
-/// recognises that sentinel and reports `LSort::Msg`, so the emitted
-/// Maude constant is `c(i)` (op `c : Nat -> Msg`) rather than `p(i)`.
-/// For every other sort the matching `NameTag` already yields the right
-/// Maude sort directly.
-fn skolem_name(counter: u64, lv: &crate::lterm::LVar) -> crate::lterm::Name {
-    use crate::lterm::{LSort, Name, NameTag};
-    // Every sort shares the `<prefix><counter>_<name>_<idx>_<sortTag>` id
-    // layout, so distinct LVars stay distinct; only `Msg` swaps the prefix
-    // for the sentinel `sort_of_name` decodes back to `LSortMsg`.
-    let (tag, prefix) = match lv.sort {
-        LSort::Msg => (NameTag::Pub, crate::maude_types::SKOLEM_MSG_PREFIX),
-        LSort::Pub => (NameTag::Pub, "__sk"),
-        LSort::Fresh => (NameTag::Fresh, "__sk"),
-        LSort::Nat => (NameTag::Nat, "__sk"),
-        LSort::Node => (NameTag::Node, "__sk"),
-    };
-    let id = format!(
-        "{}{}_{}_{}_{}",
-        prefix,
-        counter,
-        lv.name,
-        lv.idx,
-        sort_tag(lv.sort)
-    );
-    Name::new(tag, id)
-}
-
-/// Walk an `LNTerm` and replace any `Lit::Con(name)` whose `name` is in
-/// `reverse` with the corresponding original `Lit::Var(lv)`.  Used to
-/// un-skolemize match results from `match_eqs_skolemize_both`.
-fn unskolemize(
-    t: &LNTerm,
-    reverse: &std::collections::BTreeMap<crate::lterm::Name, crate::lterm::LVar>,
-) -> LNTerm {
+/// HS `unskolemizeBTerm` (Guarded.hs): map skolem constants in `t` back to
+/// their variables.  It is an `fmapTerm`, so AC and C argument lists are
+/// re-sorted under the restored variables.
+fn unskolemize(t: &LNTerm) -> LNTerm {
+    use crate::lterm::{LVar, Name, NameTag};
     use crate::vterm::Lit;
-    match t {
-        crate::term::Term::Lit(Lit::Con(n)) => {
-            if let Some(lv) = reverse.get(n) {
-                crate::term::Term::Lit(Lit::Var(*lv))
-            } else {
-                t.clone()
-            }
-        }
-        crate::term::Term::App(sym, args) => {
-            let new_args: Vec<LNTerm> = args.iter().map(|a| unskolemize(a, reverse)).collect();
-            crate::term::Term::App(*sym, new_args.into())
-        }
-        _ => t.clone(),
-    }
+    crate::term::map_lits(t, &mut |l| match *l {
+        Lit::Con(Name {
+            tag: NameTag::Skolem { idx, sort },
+            id,
+        }) => Lit::Var(LVar {
+            name: id.0,
+            sort,
+            idx,
+        }),
+        _ => *l,
+    })
 }
 
-/// Collect every free `LVar` in `t` whose `(name, idx)` is NOT in
-/// `pattern_vars`, appending into `out`.  `match_eqs_skolemize_both` calls
-/// it once per side.
-fn collect_free_non_pattern_vars(
-    t: &LNTerm,
-    pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
-    out: &mut std::collections::BTreeSet<crate::lterm::LVar>,
-) {
-    use crate::vterm::Lit;
-    match t {
-        crate::term::Term::Lit(Lit::Var(lv)) if !pattern_vars.contains(&(lv.name, lv.idx)) => {
-            out.insert(*lv);
-        }
-        crate::term::Term::App(_, args) => {
-            for a in args.iter() {
-                collect_free_non_pattern_vars(a, pattern_vars, out);
-            }
-        }
-        _ => {}
-    }
-}
-
-/// Rewrite `t`, replacing each `LVar` bound in `map` with its synthetic
-/// skolem `Con` constant (leaving all other subterms untouched).  Shared
-/// by `match_eqs_skolemize_both`.
+/// Replace each variable outside `pattern_vars` with its skolem constant.
+/// HS `skolemizeTerm` (Guarded.hs) is an `fmapTerm`, so AC and C argument
+/// lists are re-sorted under the new literals.
 fn rewrite_skolem(
     t: &LNTerm,
-    map: &std::collections::BTreeMap<crate::lterm::LVar, crate::lterm::Name>,
+    pattern_vars: &std::collections::BTreeSet<(&'static str, u64)>,
 ) -> LNTerm {
     use crate::vterm::Lit;
-    match t {
-        crate::term::Term::Lit(Lit::Var(lv)) => {
-            if let Some(n) = map.get(lv) {
-                crate::term::Term::Lit(Lit::Con(*n))
-            } else {
-                t.clone()
-            }
-        }
-        crate::term::Term::App(sym, args) => {
-            let new_args: Vec<LNTerm> = args.iter().map(|a| rewrite_skolem(a, map)).collect();
-            crate::term::Term::App(*sym, new_args.into())
-        }
-        _ => t.clone(),
-    }
+    crate::term::map_lits(t, &mut |l| match l {
+        Lit::Var(lv) if !pattern_vars.contains(&(lv.name, lv.idx)) => Lit::Con(skolem_name(lv)),
+        _ => *l,
+    })
 }
 
-/// Convert a Maude substitution `[((sort, idx), mt)]` into a list of
-/// `(LVar, LNTerm)`.
-///
-/// **Witness naming**: Maude returns auxiliary witness variables when
-/// expressing unifiers.  We decode each witness as an `LVar` with a
-/// dedicated name `"x"` (Maude-Witness) that no input variable can
-/// ever have — this guarantees the witness's `(name, sort, idx)`
-/// triple cannot collide with any pre-existing system variable.
-/// Without this, `LVar`'s structural equality (name + sort + idx)
-/// could treat a witness as the same variable as an input or a
-/// witness generated by another call, silently conflating distinct
-/// semantic variables when source cases are grafted.
-///
-/// **Domain order**: entries are converted in Maude's RAW returned
-/// order (`0..ms.len()`).  Current HS `msubstToLSubstVFresh`
-/// (Maude/Types.hs) does NO sort either — upstream `c9d456b8`
-/// ("More general fix for substitution canonicalisation") REMOVED the old
-/// `sortBy (comparing (snd . fst))` from both the VFresh (unify/variants)
-/// and VFree (match) conversions, moving the split-disjunction
-/// canonicalisation into `performSplit` (`sortOnMemo
-/// dropNameHintsLNSubstVFresh`, EquationStore.hs; mirrored in RS
-/// `perform_split`, 631e0a85).  RS's Maude command stream is already
-/// aligned to HS, so the raw orders coincide.
-///
-/// Match-path conversion (HS `msubstToLSubstVFree`).
-fn msubst_to_lnsubst(
-    ms: &MSubst,
-    ctx: &mut ConvCtx,
-) -> Result<Vec<(crate::lterm::LVar, LNTerm)>, MaudeError> {
-    msubst_to_lnsubst_with_avoid(ms, ctx, 0)
+/// Which HS back-conversion a reply goes through (Maude/Types.hs).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum BackConv {
+    /// `msubstToLSubstVFresh` (unify, variants): ends with `removeRenamings`.
+    VFresh,
+    /// `msubstToLSubstVFree` (match).
+    VFree,
 }
 
-/// Unify/variants-path conversion (HS `msubstToLSubstVFresh`).  Identical to
-/// `msubst_to_lnsubst` because neither path sorts the domain (see the
-/// `msubst_to_lnsubst` doc); kept as a separate name to mark the
-/// VFresh-vs-VFree call sites.
-fn msubst_to_lnsubst_unify(
-    ms: &MSubst,
-    ctx: &mut ConvCtx,
-) -> Result<Vec<(crate::lterm::LVar, LNTerm)>, MaudeError> {
-    msubst_to_lnsubst_with_avoid(ms, ctx, 0)
-}
-
-/// Convert one Maude reply substitution to `[(LVar, LNTerm)]`, minting
-/// witness idxs in a PURE per-call scope — the faithful port of HS's
-/// `msubstToLSubstVFresh bindings` / `msubstToLSubstVFree bindings`, whose
-/// `runBackConversion (...) bindings =
-///  evalBindT (...) bindings `evalFreshAvoiding` M.elems bindings`
-/// (Term/Maude/Types.hs) seeds the fresh supply at
-/// `avoid (M.elems bindings)` and reads/writes NO global fresh state.
-///
-/// `avoid_max` is the caller's `avoid (M.elems bindings)` value (max idx
-/// over the query's own binding vars); the witness supply starts at
-/// `avoid_max + 1`.  There is deliberately no `MaudeHandle` here: witness
-/// numbering must be counter-neutral so that a `unify`/`match` call leaves
-/// the session `MonadFresh` state unchanged, exactly as HS's pure
-/// `evalFreshAvoiding` scope does.
-fn msubst_to_lnsubst_with_avoid(
-    ms: &MSubst,
-    ctx: &mut ConvCtx,
-    avoid_max: u64,
-) -> Result<Vec<(crate::lterm::LVar, LNTerm)>, MaudeError> {
-    let mut out = Vec::with_capacity(ms.len());
-    // HS `avoid (M.elems bindings) = maybe 0 (succ . snd) . boundsVarIdx`
-    // (LTerm.hs): the local fresh supply starts just above the max
-    // idx among the query's own binding vars.  `avoid_max` already carries
-    // that max (the caller scans ALL of `ctx`'s Var bindings, not just
-    // `x`-named ones), so `avoid_max + 1` is the HS seed; the extra scan
-    // below is a defensive floor for any `x`-named binding.
-    let mut next: u64 = {
-        let mut n = avoid_max.saturating_add(1);
-        for lit in ctx.bindings().values() {
-            if let crate::vterm::Lit::Var(lv) = lit
-                && lv.name == "x"
-                && lv.idx >= n
-            {
-                n = lv.idx + 1;
-            }
+/// Convert every substitution of a Maude reply, as HS `map
+/// (msubstToLSubstV* bindings)` does.  Each one runs `runBackConversion`
+/// (Maude/Types.hs): from the same initial `bindings` (a clone of `ctx`),
+/// in Maude's returned order, naming witnesses `"x"` and numbering them from
+/// `avoid (M.elems bindings)`.  No global fresh state is read or written.
+fn convert_reply(
+    msubsts: &[MSubst],
+    ctx: &ConvCtx,
+    kind: BackConv,
+) -> Result<Vec<Vec<(crate::lterm::LVar, LNTerm)>>, MaudeError> {
+    use crate::vterm::Lit;
+    // `avoid = maybe 0 (succ . snd) . boundsVarIdx` (LTerm.hs).
+    let avoid = ctx
+        .bindings()
+        .values()
+        .filter_map(|l| match l {
+            Lit::Var(lv) => Some(lv.idx.saturating_add(1)),
+            Lit::Con(_) => None,
+        })
+        .max()
+        .unwrap_or(0);
+    let mut out = Vec::with_capacity(msubsts.len());
+    for ms in msubsts {
+        let mut ctx = ctx.clone();
+        let mut next = avoid;
+        let mut slist = Vec::with_capacity(ms.len());
+        for ((sort, idx), mt) in ms {
+            let lv =
+                crate::maude_types::substitute_lookup_var(&ctx, *sort, *idx).ok_or_else(|| {
+                    MaudeError::Other(format!("no binding for Maude variable x{}:{:?}", idx, sort))
+                })?;
+            slist.push((lv, mterm_to_lnterm(mt, &mut ctx, "x", &mut next)));
         }
-        n
-    };
-    // HS-faithful: both the unify/variants path (`msubstToLSubstVFresh`)
-    // and the match path (`msubstToLSubstVFree`) convert in Maude's raw
-    // returned order — neither sorts the domain (Maude/Types.hs;
-    // the unsorted order is deliberate upstream, so do not sort here).
-    for ((sort, idx), mt) in ms {
-        let lv = crate::maude_types::substitute_lookup_var(ctx, *sort, *idx).ok_or_else(|| {
-            MaudeError::Other(format!("no binding for Maude variable x{}:{:?}", idx, sort))
-        })?;
-        // HS-faithful: HS's `msubstToLSubstVFresh` (Maude/Types.hs)
-        // UNCONDITIONALLY uses `"x"` as the name hint for Maude-introduced
-        // witnesses inside `eqsConj` substitutions.  The commented-out
-        // alternative branch at Maude/Types.hs (preserve domain
-        // name for `xi → xj` renames) is explicitly marked "seems wrong".
-        let name_hint: &str = "x";
-        let t = mterm_to_lnterm(mt, ctx, name_hint, &mut next);
-        out.push((lv, t));
+        out.push(match kind {
+            BackConv::VFresh => crate::subst_vfresh::LSubstVFresh::from_list(slist)
+                .remove_renamings()
+                .to_list(),
+            BackConv::VFree => slist,
+        });
     }
     Ok(out)
 }
@@ -2206,10 +1073,7 @@ fn msubst_to_lnsubst_with_avoid(
 //
 // HS uses a single Maude per ClosedTheory (Term/Maude/Process.hs); this
 // pool is a Rust-specific implementation improvement — it doesn't
-// change semantics, only removes a serialisation point.  Per-call
-// fresh-counter scope (`with_fresh_counter_from`) already guarantees
-// HS-faithful witness allocation regardless of which pool member
-// handles a given task.
+// change semantics, only removes a serialisation point.
 // ---------------------------------------------------------------------------
 
 /// Mutable state of a `MaudePool`, guarded by a single `Mutex`.
@@ -2269,10 +1133,7 @@ impl PoolState {
 ///
 /// Released handles are reused LIFO (see `PoolState::free`), so under light
 /// contention the same warm member serves repeatedly and the lazy members
-/// stay unspawned.  Pool members are interchangeable: identical `sig`, and
-/// each draw site seeds its own fresh-counter (`with_fresh_counter_next` /
-/// `with_fresh_counter_from`), so which member — and how many — handle a
-/// task is output-invariant.
+/// stay unspawned. Pool members use the same signature.
 ///
 /// Internally a `Mutex<PoolState>` LIFO works fine — the pool is small
 /// (≤ num_cpus) and `acquire` is rare on the hot path (it happens once per

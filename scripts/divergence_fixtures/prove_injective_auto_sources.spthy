@@ -1,0 +1,25 @@
+// Category: proof corners no corpus proof reaches — `--auto-sources`.
+//
+// The injective-fact analysis runs on the macro-expanded ORIGINAL rules even
+// after auto-sources unfolds them into variants, so no injective instance is
+// reported for `S` and the counterexample is found.  The corpus
+// msr-macro-injectivity.spthy runs without --auto-sources.
+
+theory MacroInjectiveAuto begin
+builtins: symmetric-encryption
+macros: projection(x) = fst(<x,'c'>)
+rule Create: [Fr(~id)] --[Cr(~id)]-> [S(projection(~id)), Once(~id)]
+rule Use: [S(id), Once(id)] --[Use(id)]-> [S(id)]
+rule Fin: [S(id)] --[Fin(id), FinArgument(id,$x)]-> []
+rule Key: [Fr(~k)] --> [!Key(~k)]
+rule Dec: [!Key(~k),In(x)] --[Dec(sdec(x,~k))]-> [Out(sdec(x,~k))]
+tactic: prem
+presort: S
+prio:
+  regex "last\(#j\)"
+prio:
+  regex "▶₀ #j"
+lemma induction_counterexample [use_induction, heuristic={prem}]:
+  "All id #i #j #k. Cr(id)@i & Fin(id)@j & Fin(id)@k & #i < #j & #i < #k
+    & not (Ex #u. Use(id)@u) ==> F"
+end

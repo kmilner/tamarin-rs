@@ -246,12 +246,6 @@ pub fn pp_mterm(t: &Term<MaudeLit>) -> Vec<u8> {
 /// Render a `list(...)`-headed Maude term directly from a borrowed slice
 /// of elements, avoiding the `Vec`+`Arc` allocation a `Term::App(List, ..)`
 /// would require.  Byte-identical to `pp_mterm(&Term::App(FunSym::List, items))`.
-pub fn pp_mterm_list(items: &[Term<MaudeLit>]) -> Vec<u8> {
-    let mut buf = Vec::new();
-    pp_mterm_list_into(items, &mut buf);
-    buf
-}
-
 pub(crate) fn pp_mterm_list_into(items: &[Term<MaudeLit>], buf: &mut Vec<u8>) {
     buf.extend_from_slice(b"list(");
     pp_list(items, buf);
@@ -291,11 +285,7 @@ pub(crate) fn pp_mterm_into(t: &Term<MaudeLit>, buf: &mut Vec<u8>) {
                 pp_maude_ac_sym_into(*op, buf);
                 pp_args(args, buf);
             }
-            FunSym::List => {
-                buf.extend_from_slice(b"list(");
-                pp_list(args, buf);
-                buf.push(b')');
-            }
+            FunSym::List => pp_mterm_list_into(args, buf),
         },
     }
 }
@@ -370,29 +360,30 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
     out.push_str("  op cons : TOP TOP -> TOP .\n");
     out.push_str("  op nil  : -> TOP .\n");
     if msig.enable_mset {
-        op_ac(&mut out, "mun", "Msg Msg -> Msg");
+        theory_op(&mut out, None, "mun : Msg Msg -> Msg [comm assoc]");
     }
     if msig.enable_dh {
-        op_eq(&mut out, "one", "-> Msg");
-        // HS `theoryOpEq "DH-neutral  : -> Msg"` (Maude/Parser.hs) has TWO
-        // spaces before the colon; the trailing space on the name reproduces
-        // that so `format!("{} : {}")` yields `DH-neutral  : -> Msg`.
-        op_eq(&mut out, "DH-neutral ", "-> Msg");
-        op_eq(&mut out, "exp", "Msg Msg -> Msg");
-        op_ac(&mut out, "mult", "Msg Msg -> Msg");
-        op_eq(&mut out, "inv", "Msg -> Msg");
+        theory_op(&mut out, OP_EQ_ATTR, "one : -> Msg");
+        theory_op(&mut out, OP_EQ_ATTR, "DH-neutral  : -> Msg");
+        theory_op(&mut out, OP_EQ_ATTR, "exp : Msg Msg -> Msg");
+        theory_op(&mut out, None, "mult : Msg Msg -> Msg [comm assoc]");
+        theory_op(&mut out, OP_EQ_ATTR, "inv : Msg -> Msg");
     }
     if msig.enable_bp {
-        op_eq(&mut out, "pmult", "Msg Msg -> Msg");
-        op_c(&mut out, "em", "Msg Msg -> Msg");
+        theory_op(&mut out, OP_EQ_ATTR, "pmult : Msg Msg -> Msg");
+        theory_op(&mut out, None, "em : Msg Msg -> Msg [comm]");
     }
     if msig.enable_xor {
-        op_eq(&mut out, "zero", "-> Msg");
-        op_ac(&mut out, "xor", "Msg Msg -> Msg");
+        theory_op(&mut out, OP_EQ_ATTR, "zero : -> Msg");
+        theory_op(&mut out, None, "xor : Msg Msg -> Msg [comm assoc]");
     }
     if msig.enable_nat {
-        op_eq(&mut out, "tone", "-> TamNat");
-        op_ac(&mut out, "tplus", "TamNat TamNat -> TamNat");
+        theory_op(&mut out, OP_EQ_ATTR, "tone : -> TamNat");
+        theory_op(
+            &mut out,
+            None,
+            "tplus : TamNat TamNat -> TamNat [comm assoc]",
+        );
     }
     // User-defined free symbols.  `st_fun_syms` is a `BTreeSet`, so
     // iterating it directly already yields the symbols deduplicated and
@@ -451,8 +442,8 @@ pub fn pp_theory(msig: &MaudeSig) -> String {
 ///
 /// Written piecewise so the `replaceUnderscore` name bytes (`_` -> `-`; names
 /// are ASCII) go straight into `out` without a `format!` /
-/// `String::from_utf8_lossy` round-trip; the bytes are identical to what the
-/// `op(..)` helper produces.
+/// `String::from_utf8_lossy` round-trip; the bytes are identical to what
+/// [`theory_op`] produces.
 fn op_user_head(
     out: &mut String,
     p: Privacy,
@@ -469,41 +460,27 @@ fn op_user_head(
     }
 }
 
-fn op_eq(out: &mut String, name: &str, sort: &str) {
-    // HS `theoryOpEq = theoryOp (Just (Public,Constructor,NotAC,NotNDC))`
-    // (Maude/Parser.hs).
-    op(
-        out,
-        Privacy::Public,
-        Constructability::Constructor,
-        AcState::NotAc,
-        NdcState::NotNdc,
-        &format!("{} : {}", name, sort),
-    );
-}
+/// The attributes HS `theoryOpEq = theoryOp (Just (Public,Constructor,NotAC,NotNDC))`
+/// (Maude/Parser.hs) passes; `theoryOpAC` and `theoryOpC` pass `Nothing`.
+const OP_EQ_ATTR: Option<(Privacy, Constructability, AcState, NdcState)> = Some((
+    Privacy::Public,
+    Constructability::Constructor,
+    AcState::NotAc,
+    NdcState::NotNdc,
+));
 
-fn op_ac(out: &mut String, name: &str, sort: &str) {
+/// HS `theoryOp attr fsort` (Maude/Parser.hs):
+/// `"  op " <> funSymPrefix <> maybeEncode attr <> fsort <> " ."`.
+fn theory_op(
+    out: &mut String,
+    attr: Option<(Privacy, Constructability, AcState, NdcState)>,
+    fsort: &str,
+) {
     out.push_str("  op ");
     out.push_str(FUN_SYM_PREFIX);
-    out.push_str(name);
-    out.push_str(" : ");
-    out.push_str(sort);
-    out.push_str(" [comm assoc] .\n");
-}
-
-fn op_c(out: &mut String, name: &str, sort: &str) {
-    out.push_str("  op ");
-    out.push_str(FUN_SYM_PREFIX);
-    out.push_str(name);
-    out.push_str(" : ");
-    out.push_str(sort);
-    out.push_str(" [comm] .\n");
-}
-
-fn op(out: &mut String, p: Privacy, c: Constructability, ac: AcState, ndc: NdcState, fsort: &str) {
-    out.push_str("  op ");
-    out.push_str(FUN_SYM_PREFIX);
-    out.push_str(fun_sym_encode_attr(p, c, ac, ndc));
+    if let Some((p, c, ac, ndc)) = attr {
+        out.push_str(fun_sym_encode_attr(p, c, ac, ndc));
+    }
     out.push_str(fsort);
     out.push_str(" .\n");
 }
@@ -539,15 +516,37 @@ mod tests {
             appended,
             b"prefix:list(cons(x18446744073709551615:Msg,cons(f(0),nil)))"
         );
-        assert_eq!(pp_mterm_list(&items), &appended[b"prefix:".len()..]);
+        let list = Term::App(FunSym::List, items.to_vec().into());
+        assert_eq!(pp_mterm(&list), &appended[b"prefix:".len()..]);
     }
 
+    /// The builtin operator declarations of HS `ppTheory` (Maude/Parser.hs),
+    /// byte for byte, with every equational builtin enabled: `theoryOpEq`
+    /// lines carry the public-constructor attribute block, `theoryOpAC` and
+    /// `theoryOpC` lines carry none.
     #[test]
-    fn dh_neutral_op_has_two_spaces_before_colon() {
-        // HS `theoryOpEq "DH-neutral  : -> Msg"` (Maude/Parser.hs) emits TWO
-        // spaces before the colon; the emitted module must match byte-for-byte.
-        let s = pp_theory(&dh_maude_sig());
-        assert!(s.contains("op tamXCFUDH-neutral  : -> Msg ."));
+    fn builtin_theory_ops_match_hs() {
+        let sig = dh_maude_sig()
+            .merge(bp_maude_sig())
+            .merge(crate::maude_sig::mset_maude_sig())
+            .merge(crate::maude_sig::xor_maude_sig())
+            .merge(crate::maude_sig::nat_maude_sig());
+        let s = pp_theory(&sig);
+        assert!(s.contains(concat!(
+            "  op nil  : -> TOP .\n",
+            "  op tammun : Msg Msg -> Msg [comm assoc] .\n",
+            "  op tamXCFUone : -> Msg .\n",
+            "  op tamXCFUDH-neutral  : -> Msg .\n",
+            "  op tamXCFUexp : Msg Msg -> Msg .\n",
+            "  op tammult : Msg Msg -> Msg [comm assoc] .\n",
+            "  op tamXCFUinv : Msg -> Msg .\n",
+            "  op tamXCFUpmult : Msg Msg -> Msg .\n",
+            "  op tamem : Msg Msg -> Msg [comm] .\n",
+            "  op tamXCFUzero : -> Msg .\n",
+            "  op tamxor : Msg Msg -> Msg [comm assoc] .\n",
+            "  op tamXCFUtone : -> TamNat .\n",
+            "  op tamtplus : TamNat TamNat -> TamNat [comm assoc] .\n",
+        )));
     }
 
     /// The complete module that the port sends to Maude for the pairing
@@ -730,7 +729,7 @@ mod tests {
 
     /// The Maude names of the four builtin AC operators.  Each name must be
     /// the same name that `pp_theory` declares the operator with, which is
-    /// the literal in `op_ac`.  If the two names differ, an operator that the
+    /// the literal in its `theory_op` line.  If the two names differ, an operator that the
     /// module never declares heads a query.  `maude_parse::build_app` matches
     /// replies against the same constants.
     #[test]

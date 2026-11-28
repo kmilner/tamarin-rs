@@ -1,0 +1,56 @@
+theory SingleRecv
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) Send:
+   [ Fr( ~k ) ] --[ S( ~k ) ]-> [ Out( ~k ) ]
+
+rule (modulo E) Recv:
+   [ In( x ) ] --[ R( x ) ]-> [ ]
+
+lemma chain:
+  exists-trace "∃ k #i #j. (S( k ) @ #i) ∧ (R( k ) @ #j)"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ k #i #j. (S( k ) @ #i) ∧ (R( k ) @ #j)"
+*/
+by sorry
+
+end
+theory CliFlagsBasic
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) Gen:
+   [ Fr( ~k ) ] --[ Gen( ~k ) ]-> [ St( ~k ), Out( ~k ) ]
+
+rule (modulo E) Use:
+   [ St( ~k ), In( x ) ] --[ Use( ~k, x ) ]-> [ ]
+
+lemma reach:
+  exists-trace "∃ k x #i. Use( k, x ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ k x #i. (Use( k, x ) @ #i)"
+*/
+by sorry
+
+lemma leaks:
+  all-traces "∀ k #i. (Gen( k ) @ #i) ⇒ (¬(∃ #j. K( k ) @ #j))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ k #i. (Gen( k ) @ #i) ∧ ∃ #j. (K( k ) @ #j)"
+*/
+by sorry
+
+end

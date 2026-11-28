@@ -1,0 +1,9 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// A duplicate rule across an `#include`d sibling: `duplicate rule`.
+// No corpus theory fails this way.
+
+theory RuleDuplicateInclude begin
+#include "err_rule_duplicate_include.inc"
+rule R1[color=00ff00]: [ ] --> [ ]
+end

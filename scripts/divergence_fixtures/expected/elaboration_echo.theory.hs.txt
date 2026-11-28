@@ -1,0 +1,112 @@
+theory ElaborationEcho
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: natural-numbers
+functions: c/0, f/1, fst/1, g/1 [private,constructor], h/1, pair/2,
+           snd/1, zero/0, add/2 [AC]
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+macros: m( x ) =  h(x),
+        konst( ) =  h('seed')
+
+rule (modulo E) A:
+   [ Fr( ~k ) ] --[ A( m(~k) ) ]-> [ Out( m(~k) ) ]
+
+  /*
+  rule (modulo AC) A:
+     [ Fr( ~k ) ] --[ A( h(~k) ) ]-> [ Out( h(~k) ) ]
+  */
+
+rule (modulo E) Konst:
+   [ In( konst ) ] --[ M( konst ) ]-> [ ]
+
+  /*
+  rule (modulo AC) Konst:
+     [ In( h('seed') ) ] --[ M( h('seed') ) ]-> [ ]
+  */
+
+rule (modulo E) NatDigit:
+   [ In( %12 ) ] --> [ Out( %1 ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) LetBinder:
+   [ ] --[ E( c ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+predicate: Between( x, y, z )<=>∃ #i #j #k.
+ ((((Ev( x ) @ #i) ∧ (Ev( y ) @ #j)) ∧ (Ev( z ) @ #k)) ∧
+  (#i < #j)) ∧
+ (#j < #k)
+
+rule (modulo E) Ev:
+   [ In( x ) ] --[ Ev( x ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Dup:
+   [ ] --> [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Dup:
+   [ ] --> [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) DupLet:
+   [ Fr( ~k ) ] --> [ Out( <~k, ~k> ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) DupLet:
+   [ Fr( ~k ) ] --> [ Out( <~k, ~k> ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Equal:
+   [ In( x ) ] --> [ Out( f(x) ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Equal:
+   [ In( x ) ] --> [ Out( f(x) ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) S:
+   [ ] --[ S( ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+lemma stored:
+  exists-trace "∃ #i. S( ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ #i. (S( ) @ #i)"
+*/
+simplify
+sorry /* invalid proof step encountered */
+solve( !KU( zero ) @ #vk.3 ) /* unannotated */
+solve( F( (z add h(y)) ) @ #i ) /* unannotated */
+solve( (#i.2, 0) ~~> (#j, 1) ) /* unannotated */
+by sorry /* unannotated */
+
+lemma wrapped:
+  exists-trace "⊤"
+/*
+guarded formula characterizing all satisfying traces:
+"⊤"
+*/
+simplify
+sorry /* invalid proof step encountered */
+solve( !KU( (x add y) ) @ #i ) /* unannotated */
+by sorry /* unannotated */
+
+
+
+end

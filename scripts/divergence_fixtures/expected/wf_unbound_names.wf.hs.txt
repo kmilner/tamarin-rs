@@ -1,0 +1,22 @@
+WARNING: the following wellformedness checks failed!
+
+Unbound variables
+=================
+
+  rule `Order' has unbound variables: 
+    ~nr, mi, ni
+  
+  rule `Builtin' has unbound variables: 
+    true, zero
+  
+  rule `Capital' has unbound variables: 
+    True
+
+Public constants with mismatching capitalization
+================================================
+
+Identifiers are case-sensitive, mismatched capitalizations are considered as different, i.e., 'ID' is different from 'id'. Check the capitalization of your identifiers.
+
+  1. rule "A_rule_with_a_deliberately_long_name":  name 'Identifier',
+     rule "Another_rule_with_a_deliberately_long_name":  name 'identifier'
+*/

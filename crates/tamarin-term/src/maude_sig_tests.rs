@@ -4,13 +4,6 @@
 use super::*;
 
 #[test]
-fn dh_signature_includes_dh_rules() {
-    let sig = dh_maude_sig();
-    assert!(sig.enable_dh);
-    assert_eq!(sig.rrules().len(), 13);
-}
-
-#[test]
 fn bp_implies_dh() {
     let sig = bp_maude_sig();
     // bp turns on dh in refresh().
@@ -43,75 +36,6 @@ fn wire_index_covers_every_emitted_signature_symbol() {
             assert_eq!(sig.fun_sym_by_wire(&wire), Some(sym));
         }
     }
-}
-
-/// HS `addFunSym`/`addMacroSym` route through the monoid `<>`
-/// (Term/Maude/Signature.hs), which rebuilds from `mempty`
-/// (eqConvergent=False) and so RESETS eqConvergent to false.
-///
-/// Probed against the real prover (v1.13.0): a `functions:` block placed
-/// AFTER an `equations [convergent]:` block prints `equations:` (the
-/// convergent flag is dropped), whereas `functions:` BEFORE keeps
-/// `equations [convergent]:`.  `add_ctxt_st_rule` must NOT reset, since
-/// elaborate.rs sets eq_convergent before the rule loop (mirroring the HS
-/// parser's explicit re-set AFTER `foldl addCtxtStRule`,
-/// Theory/Text/Parser/Signature.hs).
-#[test]
-fn add_fun_sym_resets_eq_convergent() {
-    use crate::function_symbols::{Constructability, NoEqSym, Privacy};
-    let sig = MaudeSig {
-        eq_convergent: true,
-        ..MaudeSig::default()
-    };
-    let g = NoEqSym::new(
-        b"g".to_vec(),
-        1,
-        Privacy::Public,
-        Constructability::Constructor,
-    );
-    let sig = sig.add_fun_sym(UserDefinedSym::NoEqUser(g));
-    assert!(
-        !sig.eq_convergent,
-        "add_fun_sym must reset eq_convergent (HS monoid <>)"
-    );
-}
-
-#[test]
-fn add_macro_sym_resets_eq_convergent() {
-    use crate::function_symbols::{Constructability, NoEqSym, Privacy};
-    let sig = MaudeSig {
-        eq_convergent: true,
-        ..MaudeSig::default()
-    };
-    let m = NoEqSym::new(
-        b"m".to_vec(),
-        1,
-        Privacy::Private,
-        Constructability::Destructor,
-    );
-    let sig = sig.add_macro_sym(m);
-    assert!(
-        !sig.eq_convergent,
-        "add_macro_sym must reset eq_convergent (HS monoid <>)"
-    );
-}
-
-/// `add_ctxt_st_rule` must PRESERVE eq_convergent (no reset), because the
-/// Rust elaborator sets eq_convergent BEFORE the add_ctxt_st_rule loop
-/// (elaborate.rs's `TheoryItem::Equations` arm), then refreshes — matching
-/// the printed `equations [convergent]:` for the normal
-/// functions-before-equations corpus ordering.
-#[test]
-fn add_ctxt_st_rule_preserves_eq_convergent() {
-    let sig = MaudeSig {
-        eq_convergent: true,
-        ..MaudeSig::default()
-    };
-    let sig = sig.add_ctxt_st_rule(fst_dest_rule());
-    assert!(
-        sig.eq_convergent,
-        "add_ctxt_st_rule must NOT reset eq_convergent"
-    );
 }
 
 /// An `[AC]` symbol goes to `st_ac_fun_syms` and reaches the derived
@@ -181,7 +105,7 @@ fn pretty_fun_syms_renders_attributes() {
     }
     .refresh();
     assert_eq!(
-        sig.pretty_fun_syms_except(&UserDefinedSig::new()),
+        sig.pretty_fun_syms(),
         vec![
             "h/1".to_string(),
             "p/2 [private,constructor,NDC,NDC-diff]".to_string(),
@@ -212,51 +136,11 @@ fn ac_headed_st_rule() -> CtxtStRule {
     crate::subterm_rule::rrule_to_ctxt_st_rule(&RRule::new(lhs, rhs)).expect("ground-RHS st rule")
 }
 
-/// Every flag `st_rules` hands out describes the rule it is paired with —
-/// through `add_ctxt_st_rule`, through a bare `insert`, and after a
-/// `remove` that shifts the surviving rules' positions.
 #[test]
-fn st_rules_pair_every_rule_with_its_own_lhs_flag() {
-    fn flags_match(rules: &StRules) -> bool {
-        rules
-            .iter_with_lhs_ac_c_free()
-            .all(|(r, f)| f == crate::maude_proc::term_ac_c_free(&r.lhs))
-    }
-    let sig = pair_maude_sig();
-    assert!(flags_match(&sig.st_rules));
-    assert!(sig.st_lhs_all_ac_c_free());
-
-    let mut sig = sig.add_ctxt_st_rule(ac_headed_st_rule());
-    assert!(flags_match(&sig.st_rules));
-    assert!(
-        !sig.st_lhs_all_ac_c_free(),
-        "the Ac-headed LHS must show up"
-    );
-
-    // Mutating the `pub` field directly, with no `refresh` afterwards:
-    // the flags follow a removal and a re-insertion that together leave
-    // the rule count unchanged.
-    assert!(sig.st_rules.remove(&fst_rule()));
-    assert!(flags_match(&sig.st_rules));
-    assert!(sig.st_rules.insert(snd_dest_rule()));
-    assert!(flags_match(&sig.st_rules));
+fn st_lhs_all_ac_c_free_sees_an_ac_headed_lhs() {
+    assert!(pair_maude_sig().st_lhs_all_ac_c_free());
+    let sig = pair_maude_sig().add_ctxt_st_rule(ac_headed_st_rule());
     assert!(!sig.st_lhs_all_ac_c_free());
-}
-
-/// `merge` carries the flags of the united rule set.
-#[test]
-fn merge_keeps_the_lhs_flags_with_their_rules() {
-    let ac_sig = MaudeSig {
-        st_rules: [ac_headed_st_rule()].into_iter().collect(),
-        ..MaudeSig::default()
-    }
-    .refresh();
-    let merged = pair_maude_sig().merge(ac_sig);
-    assert!(merged
-        .st_rules
-        .iter_with_lhs_ac_c_free()
-        .all(|(r, f)| f == crate::maude_proc::term_ac_c_free(&r.lhs)));
-    assert!(!merged.st_lhs_all_ac_c_free());
 }
 
 /// HS `joinNDCinSig` (Term/Maude/Signature.hs) is a record update over

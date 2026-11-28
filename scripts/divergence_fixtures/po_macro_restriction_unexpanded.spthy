@@ -1,0 +1,20 @@
+// Category: the --parse-only open-theory printer (`prettyOpenTheory`),
+// which no corpus gate runs: the gates load and close every theory.
+//
+// Open restriction: macro form on top, NO `/* expanded formula: */` block
+// (parse-time `_rstrOriginalFormula` is Nothing; oracle-verified against the
+// closed print which HAS the block).
+
+theory MacroRst
+begin
+
+functions: h/1
+macros: m1(x) = h(x)
+
+rule A:
+  [ ] --[ A(m1('a')) ]-> [ ]
+
+restriction rst:
+  "All z #i. A(z) @ i ==> A(m1('a')) @ i"
+
+end

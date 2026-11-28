@@ -1,0 +1,8 @@
+theory RestrictionFactMultiplicity begin
+// The restriction bans linear Mark actions only: HS matchFact compares whole
+// fact tags, so the persistent !Mark action does not trigger it.
+rule A: [] --[!Mark('a'), Done()]-> []
+restriction BanLinearMark: "All x #i. Mark(x)@i ==> F"
+lemma reachable: exists-trace "Ex #i. Done()@i"
+lemma impossible: "All #i. Done()@i ==> F"
+end

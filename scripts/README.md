@@ -82,8 +82,7 @@ negative-input, equivalence-mode and export-only scenarios are not covered
 merely by adding their theory to this proof gate. See
 [regression coverage](../TESTING.md#upstream-regression-coverage).
 The fast CI proof set includes the merged upstream trace-proof
-regressions. GDH is covered by CLI rejection tests and the full proof gate;
-the fast reference contains only successful prover invocations. For the hash
+regressions. The full proof gate covers rejection of GDH. The fast reference contains only successful prover invocations. For the hash
 check, `./setup.sh testing-sources` prepares the fixtures without building
 Haskell; `scripts/rs_ref_check.sh check` then needs only Rust and Maude.
 
@@ -123,7 +122,7 @@ You do not need to run every script to generate the two caches.
 |---|---|---|
 | Test the harness itself | `scripts/test.sh harness` | Cache, certificate, crawler and comparison regression tests; no full corpus run |
 | GUI browser tests | `node scripts/test_gui.mjs` | Embedded and standalone assets and graph rendering in Chromium; see [setup](../TESTING.md#gui-browser-regression) |
-| Rust unit/integration tests | `cargo test` | Fast, local coverage independent of corpus parity |
+| Rust unit/integration tests | `make test` | Fast, local coverage independent of corpus parity |
 | Fast CI proof check | `rs_ref_check.sh check` | Committed certified hashes; no Haskell run |
 | Upstream command regressions | `scripts/test.sh regressions` | Automatically discovered scenarios and assertions; no Haskell build or cache |
 | Fast load-only feedback | `pretty_gate.sh`, `wf_gate.sh` | Shared load cache; no proofs |

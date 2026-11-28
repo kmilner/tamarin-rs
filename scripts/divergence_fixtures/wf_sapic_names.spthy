@@ -1,0 +1,28 @@
+// Category: names in the rule checks — the public names of a SAPIC
+// condition.
+//
+// HS `publicNamesReport` (Theory/Tools/Wellformedness.hs) walks every
+// generated rule with `universeBi`, so the public names inside a process
+// condition join the capitalization check: 'Foo' (under `h`) clashes with
+// 'foo' sent later.  A fresh literal and a declared nullary function in a
+// condition are not public names.  No corpus process tests a public name in
+// a condition against a differently capitalized one.
+
+theory WfSapicNames
+begin
+
+builtins: hashing
+
+functions: nil/0
+
+predicates: Eq(x, y) <=> x = y
+
+process:
+  new k;
+  in(x);
+  if Eq(h('Foo'), 'bar') then
+    out(<'foo', x>)
+  else
+    if Eq(nil, k) then out(nil)
+
+end

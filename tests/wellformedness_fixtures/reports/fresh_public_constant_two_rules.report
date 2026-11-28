@@ -1,0 +1,11 @@
+# source: oracle a75fec7f, --derivcheck-timeout=0
+/*
+WARNING: the following wellformedness checks failed!
+
+Fresh public constants
+======================
+
+  rule `R1': fresh public constants are not allowed: ~'one'
+  
+  rule `R2': fresh public constants are not allowed: ~'two'
+*/

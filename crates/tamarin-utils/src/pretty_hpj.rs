@@ -20,11 +20,10 @@
 //! HughesPJ's `lineLength` field, `ribbonsPerLine = 1.5` (HS HughesPJ.hs),
 //! giving `ribbon = round(110/1.5) = 73` (HS HughesPJ.hs).
 //!
-//! Subset choice: we omit `Above`/`Beside` lazy constructors and the
-//! `g` (with-space) tracking around fillNB's special "Empty after
-//! Nest" handling — our concrete callers always emit explicit
-//! `TextBeside " "` between items.  We also omit annotations
-//! (`AnnotStart`/`AnnotEnd`) — text output only.
+//! Subset choice: we omit the `Above`/`Beside` lazy constructors and
+//! annotations (`AnnotStart`/`AnnotEnd`) — text output only.  The `g`
+//! (with-space) flag and fillNB's `Empty` handling are ported
+//! (`sep_nb`, `fill_nb`, `fill_nbe`).
 
 use std::rc::Rc;
 
@@ -41,25 +40,9 @@ pub const RIBBON: usize = 73;
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-/// Process-wide DISPLAY width used by the bare [`Doc::render`] path.
-///
-/// The two output modes render at different widths in HS, and it is a
-/// property of the whole process (you invoke either `--prove` OR
-/// `interactive`, never both in one process):
-///   - the CLI (`--prove`) renders at the *console* width
-///     `LINE_LENGTH`/`RIBBON` = 110/73 (`src/Main/Console.hs`
-///     `renderDoc`);
-///   - the interactive web server renders every HTTP response at HS's
-///     *web* width 100/67 — HughesPJ's default `style` used by `render`
-///     (`getTheorySourceR` = `render . prettyClosedTheory`,
-///     `src/Web/Handler.hs`) and by `renderHtmlDoc`
-///     (`Text/PrettyPrint/Html.hs`).
-///
-/// Defaults to 110/73 so the CLI path is unchanged; the server calls
-/// [`set_display_width`] once at startup, before any rendering.  This is
-/// presentation-only — it can never affect proof search or verdicts —
-/// and the explicit `render_with`/`render_at` widths (WF/oracle/goal
-/// rendering) are unaffected.
+/// Width of the bare [`Doc::render`]: the console's 110/73 for the CLI
+/// (`src/Main/Console.hs`), or HughesPJ's default 100/67, which the
+/// interactive server installs once at startup (HS web `render`).
 static DISPLAY_LINE_LENGTH: AtomicUsize = AtomicUsize::new(LINE_LENGTH);
 static DISPLAY_RIBBON: AtomicUsize = AtomicUsize::new(RIBBON);
 
@@ -90,61 +73,6 @@ pub fn set_display_width(line_length: usize, ribbon: usize) {
 }
 
 thread_local! {
-    /// When set, [`Doc::text`]/[`Doc::char`] measure each token's *fill* width
-    /// as its HTML-entity-escaped column count instead of its visible column
-    /// count.  This mirrors HS's web render path, which builds every document
-    /// through the `HtmlDoc Doc` transformer: its `Document (HtmlDoc d)`
-    /// instance (`Text/PrettyPrint/Html.hs`) runs `escapeHtmlEntities`
-    /// on every `text`/`char` token BEFORE the HughesPJ fill measures it, so a
-    /// `<`/`>` costs 4 columns (`&lt;`/`&gt;`) and a `'` costs 5 (`&#39;`) when
-    /// deciding line breaks.  The interactive server escapes AFTER rendering
-    /// (`html_escape`), so without matching this accounting its `fsep`/`fcat`
-    /// wraps a pair-tuple `<…>` at a different column than HS (a space
-    /// appears/disappears before a tuple's closing `>`).
-    ///
-    /// This is presentation-only: it never affects proof search or verdicts,
-    /// and it is scoped (via [`HtmlEntityWidthGuard`]) to the web
-    /// constraint-system pane only, so the `--prove` byte-identity corpus is
-    /// untouched (the flag defaults to `false`).
-    static HTML_ENTITY_WIDTH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Column width of `s` after HTML-entity escaping, matching HS
-/// `escapeHtmlEntities` (`Text/PrettyPrint/Html.hs`) and the server's
-/// `html_escape`: `<`/`>` → `&lt;`/`&gt;` (4), `&` → `&amp;` (5), `'` →
-/// `&#39;` (5), `"` → `&quot;` (6); every other codepoint counts as 1 column.
-fn html_entity_col_width(s: &str) -> usize {
-    s.chars()
-        .map(|c| match c {
-            '<' | '>' => 4,
-            '&' | '\'' => 5,
-            '"' => 6,
-            _ => 1,
-        })
-        .sum()
-}
-
-/// RAII guard enabling HTML-entity fill-width accounting on the current thread
-/// until dropped (see [`HTML_ENTITY_WIDTH`]).  Restores the previous value on
-/// drop, so nested/re-entrant use is safe.
-#[must_use = "dropping this guard immediately ends the scope it protects"]
-pub struct HtmlEntityWidthGuard(bool);
-
-impl HtmlEntityWidthGuard {
-    /// Enable entity-width accounting for the current thread; the previous
-    /// value is restored when the returned guard is dropped.
-    pub fn enable() -> Self {
-        HtmlEntityWidthGuard(HTML_ENTITY_WIDTH.with(|c| c.replace(true)))
-    }
-}
-
-impl Drop for HtmlEntityWidthGuard {
-    fn drop(&mut self) {
-        HTML_ENTITY_WIDTH.with(|c| c.set(self.0));
-    }
-}
-
-thread_local! {
     /// The full "HtmlDoc" render mode: a faithful port of HS building every
     /// web pane through the `HtmlDoc Doc` transformer (`Text/PrettyPrint/Html.hs`).
     /// When enabled:
@@ -152,8 +80,7 @@ thread_local! {
     ///     BEFORE it enters the layout, exactly as the `Document (HtmlDoc d)`
     ///     instance (`Html.hs`) — so the stored bytes are already escaped
     ///     and the HughesPJ fill measures each token at its escaped-entity width
-    ///     (`<`/`>` = 4, `&`/`'` = 5, `"` = 6).  This is a superset of the
-    ///     width-only [`HtmlEntityWidthGuard`].
+    ///     (`<`/`>` = 4, `&`/`'` = 5, `"` = 6).
     ///   * the highlight combinators ([`keyword`]/[`operator`]/[`comment`] via
     ///     [`Doc::highlight`]) wrap their argument in a `<span class="hl_*">…</span>`
     ///     emitted as ZERO-WIDTH text (HS `withTag`, `Html.hs`,
@@ -204,18 +131,19 @@ pub fn html_mode() -> bool {
 /// HS `escapeHtmlEntities` (`Text/PrettyPrint/Html.hs`, copied there
 /// from blaze-html) — escape the five HTML metacharacters in the exact HS
 /// order/mapping so escaped column widths and output bytes match.
-pub use crate::pretty_html::escape_html_entities;
-
-/// The fill width of a text run `s`: its visible column count, or — under an
-/// active [`HtmlEntityWidthGuard`] or [`HtmlDocGuard`] — its HTML-entity-escaped
-/// column count.
-#[inline]
-fn fill_width(s: &str) -> usize {
-    if HTML_MODE.with(|c| c.get()) || HTML_ENTITY_WIDTH.with(|c| c.get()) {
-        html_entity_col_width(s)
-    } else {
-        s.chars().count()
+pub fn escape_html_entities(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            x => out.push(x),
+        }
     }
+    out
 }
 
 // ============================================================================
@@ -342,8 +270,7 @@ impl Doc {
             let w = esc.chars().count();
             Doc::text_w(&esc, w)
         } else {
-            let w = fill_width(s);
-            Doc::text_w(s, w)
+            Doc::text_w(s, s.chars().count())
         }
     }
 
@@ -372,20 +299,9 @@ impl Doc {
         }
     }
 
+    /// HS `char c = text [c]`, also under `HtmlDoc` (`Html.hs`).
     pub fn char(c: char) -> Doc {
-        let mut buf = [0u8; 4];
-        let s = c.encode_utf8(&mut buf);
-        // HS `Document (HtmlDoc d)` (`Html.hs`): `char = HtmlDoc . text .
-        // escapeHtmlEntities . return`.  Escape in HtmlDoc mode (a bare `<`
-        // becomes `&lt;`, width 4); plain mode is unchanged.
-        if html_mode() {
-            let esc = escape_html_entities(s);
-            let w = esc.chars().count();
-            Doc::text_w(&esc, w)
-        } else {
-            let w = fill_width(s);
-            Doc::text_w(s, w)
-        }
+        Doc::text(c.encode_utf8(&mut [0u8; 4]))
     }
 
     /// HS `<>` (beside without space).
@@ -433,7 +349,7 @@ impl Doc {
     pub fn render_with(self, line_length: usize, ribbon: usize) -> String {
         let reduced = reduce_doc(self);
         let r = ribbon as isize;
-        let best = get_doc(line_length as isize, r, &reduced);
+        let best = get(line_length as isize, r, reduced);
         let mut out = String::new();
         lay(0, &best, &mut out);
         out
@@ -611,6 +527,11 @@ pub fn op_parens(d: Doc) -> Doc {
 /// (no highlight), used e.g. around `(modulo AC)`.
 pub fn parens(d: Doc) -> Doc {
     Doc::char('(').beside(d).beside(Doc::char(')'))
+}
+
+/// HS `doubleQuotes p = char '"' <> p <> char '"'` (`Text/PrettyPrint/Class.hs`).
+pub fn double_quotes(d: Doc) -> Doc {
+    Doc::text("\"").beside(d).beside(Doc::text("\""))
 }
 
 // -- Postprocessing (HS Html.hs) --------------------------------------
@@ -1117,12 +1038,7 @@ fn fill_nbe(g: bool, k: isize, y: Doc, ys: Vec<Doc>) -> Doc {
 // best / get / get1 / nicest1 / fits
 // ============================================================================
 
-/// HS `best w r doc = get w doc`.
-fn get_doc(w: isize, r: isize, d: &Doc) -> Doc {
-    get(w, r, d.clone())
-}
-
-/// HS `get w doc` (line-start case).
+/// HS `get w doc` (line-start case); HS `best w r doc = get w doc`.
 ///
 /// LAZINESS (the whole point — see `Doc::Deferred`): every recursive
 /// reduction is wrapped in `defer`, so this returns only the HEAD
@@ -1394,7 +1310,3 @@ pub fn numbered_prime(ds: Vec<Doc>) -> Doc {
 #[cfg(test)]
 #[path = "pretty_hpj_tests.rs"]
 mod tests;
-
-#[cfg(test)]
-#[path = "pretty_hpj_sep_nb_regression_tests.rs"]
-mod sep_nb_regression_tests;

@@ -28,6 +28,7 @@ use tamarin_term::term::{f_app, map_lits, Term};
 use tamarin_term::vterm::{var_term, Lit};
 use tamarin_utils::cow::{cow_map_arc, cow_map_vec, cow_pair};
 use tamarin_utils::fresh::MonadFresh;
+use tamarin_utils::prelude_ext::nub;
 
 // =============================================================================
 // Guarded data type
@@ -135,106 +136,53 @@ pub fn reducible_formula(fm: &Guarded) -> bool {
     }
 }
 
-/// Smart `Conj` — recursively flatten nested `Conj`s and short-circuit.
-/// HS-faithful: mirrors Haskell `gconj` (Guarded.hs), whose helper
-/// `flatten (GConj conj) = concatMap flatten $ getConj conj`
-/// recursively unwraps every level of nested conjunction.  Must flatten
-/// EVERY level (not just one): a binary-And chain parsed as
-/// `Conj(Conj(Conj(a, b), c), d)` must collapse to a single 4-item Conj,
-/// else the runtime sees a 2-item Conj and mismatches HS's
-/// case-enumeration shape.
+/// HS `gconj` (Guarded.hs): flatten nested conjunctions at every level,
+/// `nub`, then a singleton is itself and any `gfalse` absorbs. A `gfalse`
+/// gives `gfalse` either way, so it is checked before the quadratic `nub`,
+/// which HS's lazy `any` also never finishes in that case.
 pub fn gconj(items: Vec<Guarded>) -> Guarded {
-    fn flatten(item: Guarded, out: &mut Vec<Guarded>) -> bool {
-        // returns true if gfalse encountered (absorbs)
-        match item {
-            Guarded::Conj(inner) => {
-                for x in inner.iter() {
-                    if flatten(x.clone(), out) {
-                        return true;
-                    }
-                }
-                false
-            }
-            x if x == gfalse() => true,
-            x => {
-                out.push(x);
-                false
-            }
+    fn flatten(gf: Guarded, out: &mut Vec<Guarded>) {
+        match gf {
+            Guarded::Conj(conj) => conj.iter().for_each(|x| flatten(x.clone(), out)),
+            gf => out.push(gf),
         }
     }
-    let mut out = Vec::new();
-    for it in items {
-        if flatten(it, &mut out) {
-            return gfalse();
-        }
+    let mut flat = Vec::new();
+    items.into_iter().for_each(|gf| flatten(gf, &mut flat));
+    if flat.contains(&gfalse()) {
+        return gfalse();
     }
-    // Like HS, deduplicate before collapsing a singleton so construction
-    // is idempotent: gconj [a, a] becomes a in one pass.
-    let mut deduped: Vec<Guarded> = Vec::with_capacity(out.len());
-    for x in out {
-        if !deduped.contains(&x) {
-            deduped.push(x);
-        }
+    let mut gfs = nub(flat);
+    if gfs.len() == 1 {
+        gfs.pop().unwrap()
+    } else {
+        Guarded::Conj(gfs.into())
     }
-    if deduped.len() == 1 {
-        return deduped.into_iter().next().unwrap();
-    }
-    Guarded::Conj(deduped.into())
 }
 
-/// Smart `Disj` — flatten recursively, short-circuit on `gtrue`, drop
-/// `gfalse` items.  Mirrors Haskell's `gdisj` which treats `Disj` as a
-/// set semantically: True absorbs, False is the unit.  Without dropping
-/// gfalse items, partial_atom_valuation can turn `Disj([Eq(j,i),
-/// Less(i,j)])` into `Disj([gfalse, gfalse])` (when j<i is known via
-/// the order graph) and we'd split a 2-case Disj goal whose branches
-/// both close — Haskell collapses this to `gfalse` directly.
+/// HS `gdisj` (Guarded.hs): flatten nested disjunctions at every level
+/// (`gfalse`, the empty disjunction, flattens away), then a singleton is
+/// itself, any `gtrue` absorbs, and the rest is `nub`bed.
 pub fn gdisj(items: Vec<Guarded>) -> Guarded {
-    // Recursively flatten nested `Disj`s. HS-faithful: mirrors Haskell
-    // `gdisj` (Guarded.hs) whose helper
-    // `flatten (GDisj disj) = concatMap flatten $ getDisj disj`
-    // recursively unwraps every level. Must flatten EVERY level (not just
-    // one): a 5-way `∨` parsed as a binary `Or` chain
-    // (`Disj(Disj(Disj(Disj(a, b), c), d), e)`) must collapse to a single
-    // 5-alt Disj goal, else the runtime sees a 2-alt Disj and mismatches
-    // the case-enumeration of skeleton proofs like YubiSecure
-    // slightly_weaker_invariant.
-    fn flatten(item: Guarded, out: &mut Vec<Guarded>) -> bool {
-        // returns true if gtrue encountered (absorbs)
-        match item {
-            Guarded::Disj(inner) => {
-                for x in inner.iter() {
-                    if flatten(x.clone(), out) {
-                        return true;
-                    }
-                }
-                false
-            }
-            x if x == gtrue() => true,
-            x if x == gfalse() => false,
-            x => {
-                out.push(x);
-                false
-            }
+    fn flatten(gf: Guarded, out: &mut Vec<Guarded>) {
+        match gf {
+            Guarded::Disj(disj) => disj.iter().for_each(|x| flatten(x.clone(), out)),
+            gf => out.push(gf),
         }
     }
-    let mut out = Vec::new();
-    for it in items {
-        if flatten(it, &mut out) {
-            return gtrue();
-        }
+    let mut gfs = Vec::new();
+    items.into_iter().for_each(|gf| flatten(gf, &mut gfs));
+    if gfs.len() == 1 {
+        return gfs.pop().unwrap();
     }
-    // Deduplicate before collapsing a singleton so normalization is idempotent.
-    let mut deduped: Vec<Guarded> = Vec::with_capacity(out.len());
-    for x in out {
-        if !deduped.contains(&x) {
-            deduped.push(x);
-        }
+    if gfs.contains(&gtrue()) {
+        return gtrue();
     }
-    if deduped.len() == 1 {
-        deduped.pop().unwrap()
+    let mut gfs = nub(gfs);
+    if gfs.len() == 1 {
+        gfs.pop().unwrap()
     } else {
-        Guarded::Disj(deduped.into())
+        Guarded::Disj(gfs.into())
     }
 }
 
@@ -297,44 +245,49 @@ pub fn gall(vars: Vec<(String, LSort)>, guards: Vec<Atom<BLNTerm>>, body: Guarde
 ///   True and keep only the unknown ones, then recurse on the body.
 /// - Guarded quantifiers with bound vars are left intact — the body
 ///   gets simplified once the quantifier is gone (matches Haskell).
-pub fn simplify_guarded_with(
+///
+/// A valuation error aborts the simplification.
+pub fn simplify_guarded_with<E>(
     fm: &Guarded,
-    valuation: &dyn Fn(&Atom<LNTerm>) -> Option<bool>,
-) -> Guarded {
+    valuation: &dyn Fn(&Atom<LNTerm>) -> Result<Option<bool>, E>,
+) -> Result<Guarded, E> {
     // HS `simplifyGuardedOrReturn` calls `valuation =<< unbindAtom ato`
     // (Guarded.hs), which is `Nothing` whenever any `Bound` leaf is
     // present.
-    let eval = |a: &Atom<BLNTerm>| -> Option<bool> { unbind_atom(a).and_then(|la| valuation(&la)) };
-    match fm {
-        Guarded::Atom(a) => match eval(a) {
+    let eval = |a: &Atom<BLNTerm>| -> Result<Option<bool>, E> {
+        match unbind_atom(a) {
+            Some(la) => valuation(&la),
+            None => Ok(None),
+        }
+    };
+    Ok(match fm {
+        Guarded::Atom(a) => match eval(a)? {
             Some(true) => gtrue(),
             Some(false) => gfalse(),
             None => fm.clone(),
         },
-        Guarded::Disj(items) => {
-            let simplified: Vec<_> = items
+        Guarded::Disj(items) => gdisj(
+            items
                 .iter()
                 .map(|g| simplify_guarded_with(g, valuation))
-                .collect();
-            gdisj(simplified)
-        }
-        Guarded::Conj(items) => {
-            let simplified: Vec<_> = items
+                .collect::<Result<Vec<_>, E>>()?,
+        ),
+        Guarded::Conj(items) => gconj(
+            items
                 .iter()
                 .map(|g| simplify_guarded_with(g, valuation))
-                .collect();
-            gconj(simplified)
-        }
+                .collect::<Result<Vec<_>, E>>()?,
+        ),
         Guarded::GGuarded {
             qua: Quantifier::All,
             vars,
             guards,
             body,
         } if vars.is_empty() => {
-            let evals: Vec<Option<bool>> = guards.iter().map(eval).collect();
+            let evals: Vec<Option<bool>> = guards.iter().map(eval).collect::<Result<_, E>>()?;
             // Any False guard → universal vacuously holds.
             if evals.iter().any(|v| v == &Some(false)) {
-                return gtrue();
+                return Ok(gtrue());
             }
             // Keep only the Unknown guards — True guards are vacuous.
             let kept: Vec<Atom<BLNTerm>> = guards
@@ -343,7 +296,7 @@ pub fn simplify_guarded_with(
                 .filter(|(_, v)| v.is_none())
                 .map(|(a, _)| a.clone())
                 .collect();
-            let body_s = simplify_guarded_with(body, valuation);
+            let body_s = simplify_guarded_with(body, valuation)?;
             // HS-faithful: `simp` builds the universal via `gall [] (...) (simp
             // gf)` (Guarded.hs).  `gall` collapses to the body when the
             // kept guards are empty AND collapses the whole universal to
@@ -356,7 +309,7 @@ pub fn simplify_guarded_with(
         // Quantifiers with bound vars stay as-is — Haskell delays
         // simplification past the binder.
         Guarded::GGuarded { .. } => fm.clone(),
-    }
+    })
 }
 
 // =============================================================================
@@ -725,7 +678,7 @@ pub fn close_guarded(
         .map(|a| subst_free_atom(&s, &lift_free_atom(a)))
         .collect();
     let new_body = subst_free(&s, &body);
-    let vs: Vec<(String, LSort)> = xs.iter().map(|v| (v.name.to_string(), v.sort)).collect();
+    let vs: Vec<(String, LSort)> = xs.iter().map(crate::formula::lvar_hint).collect();
     match qua {
         Quantifier::Ex => gex(vs, new_guards, new_body),
         Quantifier::All => gall(vs, new_guards, new_body),
@@ -811,41 +764,21 @@ fn unguarded_error(positions: &[usize], freshened: &[LVar]) -> GuardError {
 // Normal form of a stored formula
 // =============================================================================
 
-/// Rebuild a guarded formula bottom-up through the `gconj`/`gdisj` smart
-/// constructors, restoring the normal form that formula conversion
-/// (`convert`) establishes at creation: flattened, duplicate-free
-/// connectives.  Port of HS `normaliseGuarded` (150f5eba).
-/// NOTE: disjunctions are normalised CONSTRUCTOR-PRESERVING at every
-/// level (`normalise_disj_list_cow`), not via the full `gdisj`: a singleton
-/// disjunction wrapping a conjunction is load-bearing for the S_∀
-/// saturation dedup — `insert_formula` STORES disjunctions (formula +
-/// `Goal::Disj` twin) but DECOMPOSES bare conjunctions without storing
-/// them, so unwrapping the singleton turns a storable, dedupable derived
-/// instance into one that re-fires every simplifier iteration (livelock
-/// on ake/bilinear/TAK1_eCK_like.spthy).  Conjunctions use the full
-/// `gconj` (their singleton unwrap is harmless because conjunctions are
-/// decomposed on insertion anyway); this requires `gconj` to be
-/// idempotent — see the note on `gconj`.
-///
-/// Copy-on-write: returns `None` when normalisation leaves `g` structurally
-/// unchanged (so an owning caller can reuse `g` by move with zero
-/// allocation), `Some(rebuilt)` otherwise.  Mirrors the `subst_guarded_cow`
-/// convention (recursion returns `None` when all children are unchanged).
+/// HS `normaliseGuarded` (Guarded.hs): rebuild bottom-up through `gconj`,
+/// while every disjunction keeps its constructor (`normaliseDisj`), so a
+/// stored disjunction stays storable and in step with its `Goal::Disj` twin.
+/// `None` when `g` is unchanged.
 pub fn normalise_guarded_cow(g: &Guarded) -> Option<Guarded> {
     match g {
         // An atom carries no connectives to flatten → always unchanged.
         Guarded::Atom(_) => None,
         Guarded::Disj(items) => normalise_disj_list_cow(items).map(|v| Guarded::Disj(v.into())),
         Guarded::Conj(items) => {
-            // Normalise children first (COW), then re-run the `gconj`
-            // smart-constructor step (flatten nested Conj / absorb gfalse /
-            // dedup / singleton-unwrap).  When no child changed AND `gconj`
-            // is a structural no-op on the (already-normalised) children, the
-            // whole node is unchanged.  Otherwise the rebuild is exactly
-            // `gconj(children)`.
+            // Unchanged children on which `gconj` is a no-op leave the node.
             let mapped = cow_map_vec(items, normalise_guarded_cow);
             let children: &[Guarded] = mapped.as_deref().unwrap_or(&items[..]);
             if mapped.is_none() && gconj_is_structural_noop(children) {
+                debug_assert!(gconj(children.to_vec()) == *g);
                 None
             } else {
                 Some(gconj(children.to_vec()))
@@ -869,13 +802,8 @@ pub fn normalise_guarded_cow(g: &Guarded) -> Option<Guarded> {
     }
 }
 
-/// `gconj(items) == Guarded::Conj(items)` — i.e. the `gconj` smart
-/// constructor is a structural no-op on this (already child-normalised)
-/// list.  True iff none of `gconj`'s transformations fire: no nested-`Conj`
-/// child to flatten (including an empty `Conj` = `gtrue`, which `gconj`
-/// drops), no `gfalse` (`Disj([])`) child to absorb, no duplicate to `nub`,
-/// and length != 1 (which would singleton-unwrap).  Keep in exact lock-step
-/// with `gconj`.
+/// Whether `gconj(items) == Conj(items)`: no nested conjunction, no `gfalse`,
+/// no duplicate and not a singleton.  Debug builds check it against `gconj`.
 fn gconj_is_structural_noop(items: &[Guarded]) -> bool {
     if items.len() == 1 {
         return false;
@@ -894,35 +822,21 @@ fn gconj_is_structural_noop(items: &[Guarded]) -> bool {
     true
 }
 
-/// Normalise the disjunct list of a stored disjunction WITHOUT changing
-/// its constructor: each disjunct normalised, nested disjunctions
-/// flattened one level, duplicates dropped — but no singleton unwrap and
-/// no truth-value absorption, so a `Guarded::Disj` formula and its
-/// `Goal::Disj` twin (same payload, different wrapper) stay in LOCKSTEP.
-/// Port of HS `normaliseDisjList` (150f5eba); see that commit for why
-/// full `gdisj` here desynchronises the twin stores (gcm livelock).
-/// Copy-on-write disjunction normalization: `None` when the
-/// constructor-preserving normalisation leaves the disjunct list unchanged
-/// (every disjunct normalises in place, none is a nested `Disj` to flatten,
-/// no duplicate to drop), `Some(rebuilt)` otherwise.  BYTE-IDENTICAL to
-/// a freshly rebuilt list in the `Some` case.
+/// HS `normaliseDisjList` (Guarded.hs): normalise each disjunct, then
+/// `normaliseDisj`.  `None` when the list is unchanged.
 pub(crate) fn normalise_disj_list_cow(items: &[Guarded]) -> Option<Vec<Guarded>> {
-    // Normalise each disjunct (COW); `children` is the normalised list — the
-    // originals when `mapped` is `None` (all disjuncts unchanged).
     let mapped = cow_map_vec(items, normalise_guarded_cow);
     let children: &[Guarded] = mapped.as_deref().unwrap_or(items);
     if mapped.is_none() && disj_flatten_is_structural_noop(children) {
+        debug_assert!(flatten_dedup_disj(children) == items);
         None
     } else {
         Some(flatten_dedup_disj(children))
     }
 }
 
-/// `flatten_dedup_disj(items) == items` — the constructor-preserving disjunct
-/// normalisation (one-level flatten of a nested `Disj`, then `nub`) is a
-/// no-op.  True iff no disjunct is itself a `Disj` (any `Disj` has its wrapper
-/// spliced away) and there is no duplicate.  Lock-step with
-/// `flatten_dedup_disj`.
+/// Whether `flatten_dedup_disj(items) == items`: no nested disjunction and no
+/// duplicate.  Debug builds check it against `flatten_dedup_disj`.
 fn disj_flatten_is_structural_noop(items: &[Guarded]) -> bool {
     for (i, x) in items.iter().enumerate() {
         if matches!(x, Guarded::Disj(_)) {
@@ -935,36 +849,18 @@ fn disj_flatten_is_structural_noop(items: &[Guarded]) -> bool {
     true
 }
 
-/// One-level flatten of nested `Disj`s + duplicate drop over an
-/// already-normalised disjunct list.  This is the outer-loop body of
-/// disjunction normalizer factored out so it runs on the COW-normalised
-/// children; BYTE-IDENTICAL to that original loop (same push/dedup order).
+/// HS `normaliseDisj` (Guarded.hs): splice nested disjunctions one level
+/// deep, then `nub`.
 fn flatten_dedup_disj(children: &[Guarded]) -> Vec<Guarded> {
-    fn push(g: Guarded, out: &mut Vec<Guarded>) {
-        if !out.contains(&g) {
-            out.push(g);
-        }
-    }
-    let mut out: Vec<Guarded> = Vec::new();
-    for it in children {
-        match it {
-            Guarded::Disj(ds) => {
-                for d in ds.iter() {
-                    push(d.clone(), &mut out);
-                }
-            }
-            g => push(g.clone(), &mut out),
-        }
-    }
-    out
+    nub(children.iter().flat_map(|g| match g {
+        Guarded::Disj(ds) => ds.to_vec(),
+        g => vec![g.clone()],
+    }))
 }
 
-/// Normalise a stored formula while preserving disjunction constructors at
-/// every level. The top-level wrapper stays in lockstep with its `Goal::Disj`
-/// twin; nested wrappers remain available for deduplication when inserted
-/// later (see [`normalise_guarded_cow`]). Port of HS `normaliseStoredFormula`.
-///
-/// Copy-on-write: `None` when unchanged, `Some(rebuilt)` otherwise.
+/// HS `normaliseStoredFormula` (Guarded.hs): a top-level disjunction keeps
+/// its constructor too, matching its `Goal::Disj` twin.  `None` when
+/// unchanged.
 pub fn normalise_stored_formula_cow(g: &Guarded) -> Option<Guarded> {
     match g {
         Guarded::Disj(items) => normalise_disj_list_cow(items).map(|v| Guarded::Disj(v.into())),
@@ -1240,7 +1136,7 @@ fn subst_gpair_cow(x: &BLNTerm, y: &BLNTerm, s: &LNSubst) -> Option<(BLNTerm, BL
 }
 
 fn subst_gfact_cow(f: &Fact<BLNTerm>, s: &LNSubst) -> Option<Fact<BLNTerm>> {
-    cow_map_arc(&f.terms, |a| subst_blnterm_cow(a, s)).map(|terms| f.with_terms(terms))
+    cow_map_arc(f.terms(), |a| subst_blnterm_cow(a, s)).map(|terms| f.with_terms(terms))
 }
 
 /// Apply an [`LNSubst`] to a guarded formula: each free leaf in the domain

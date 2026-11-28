@@ -1,0 +1,10 @@
+theory DualTypedAcSymbol begin
+
+// An AC f/2 and a free f/2 are distinct symbols, each with its own declared
+// type, so the equation types the free f as bar.
+functions: f(bitstring,bitstring):foo [AC], f(bitstring,bitstring):bar, g(bar):bar
+equations: g(f(x,y)) = x
+
+rule Fire: [] --> [Out('a')]
+
+end

@@ -18,11 +18,17 @@
 # check explicitly. All report captures disable it with --derivcheck-timeout=0.
 
 exists_trace_reuse                 : Lemma annotations
+fact_arity_lemma_show              : Fact arity issues
 fact_arity_mismatch                : Fact arity issues
+fact_arity_nullary                 : Fact arity issues
 fact_multiplicity_mismatch         : Fact multiplicity issues, Facts occur in the left-hand-side but not in any right-hand-side
 formula_unguarded                  : Formula terms
-fresh_public_constant              : Fresh public constants
 fr_with_pub_var                    : Fr facts must only use a fresh- or a msg-variable
+fresh_public_constant              : Fresh public constants
+fresh_public_constant_two_rules    : Fresh public constants
+lhs_no_rhs_far                     : Facts occur in the left-hand-side but not in any right-hand-side
+lhs_no_rhs_nearest                 : Facts occur in the left-hand-side but not in any right-hand-side
+lhs_no_rhs_tie                     : Facts occur in the left-hand-side but not in any right-hand-side
 lhs_not_used                       : Facts occur in the left-hand-side but not in any right-hand-side
 multiplication_in_rule_lhs -m=msr --derivcheck-timeout=0 : Multiplication restriction of rules, Unsupported multiplication outside exponents
 nat_wrong_sort                     : Nat Sorts, Unbound variables

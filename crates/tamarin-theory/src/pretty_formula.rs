@@ -46,11 +46,9 @@ use crate::pretty_hpj::{self as hpj, Doc, FLAT_WIDTH};
 /// column 0 (the `nest 2` indent IS included in the output, like HS's
 /// `nest 2` rendered at the theory's column 0).
 pub fn lemma_header_line_doc(quant: &str, formula_doc: Doc) -> String {
-    // `doubleQuotes d = "\"" <> d <> "\""` (Text/PrettyPrint/Class.hs).
-    let dq = Doc::text("\"").beside(formula_doc).beside(Doc::text("\""));
-    // `sep [quant, dq]` then `nest 2`.
-    let line = hpj::sep(vec![Doc::text(quant), dq]).nest(2);
-    line.render()
+    hpj::sep(vec![Doc::text(quant), hpj::double_quotes(formula_doc)])
+        .nest(2)
+        .render()
 }
 
 /// Render `nest n $ doubleQuotes (prettyLNFormula f)` through the
@@ -60,53 +58,15 @@ pub fn lemma_header_line_doc(quant: &str, formula_doc: Doc) -> String {
 /// real Doc `beside` so the formula's wrapped continuation lines indent to
 /// the formula's start column.
 pub(crate) fn doublequoted_nested_doc(formula_doc: Doc, nest_n: usize) -> String {
-    doublequoted_nested(formula_doc, nest_n).render()
+    hpj::double_quotes(formula_doc)
+        .nest(nest_n as isize)
+        .render()
 }
 
-fn doublequoted_nested(formula_doc: Doc, nest_n: usize) -> Doc {
-    let dq = Doc::text("\"").beside(formula_doc).beside(Doc::text("\""));
-    dq.nest(nest_n as isize)
-}
-
-/// [`guarded_doc`] laid out flat — the one-line string the web layer's
-/// disjunction-goal label quotes each disjunct with (HS `prettyGoal (DisjG
-/// (Disj gfs))`, Constraints.hs).
-pub fn pretty_guarded(g: &Guarded) -> String {
-    guarded_doc(g).render_with(FLAT_WIDTH, FLAT_WIDTH)
-}
-
-/// Test-only: pretty-print a guarded formula with HS-style
-/// `sep`/`nest`-driven line wrapping.  `indent` is the column where the
-/// first character of the formula will land in the final output.  The page
-/// /ribbon widths are the fixed `LINE_LENGTH`/`RIBBON` constants, so there
-/// is no per-call width knob.  Mirrors Haskell's `prettyGuarded`
-/// (Guarded.hs) composed with the HughesPJ `sep`/`nest` layout
-/// semantics.
-///
-/// Routes through the HS-faithful Doc engine (`crate::pretty_hpj`):
-/// `guarded_to_doc` builds a `Doc` tree that mirrors HS `prettyGuarded`'s
-/// `sep`/`nest`/`fsep` structure node-for-node, then `render_at` lays it
-/// out with the same `get1` per-NilAbove `w`-shrinkage HughesPJ uses
-/// (HughesPJ.hs).  `indent` is the column where the formula's first
-/// char will land (e.g. 1, right after the opening `"` of the lemma's
-/// `doubleQuotes` wrap, lib/theory/src/Lemma.hs).
-///
-/// NOTE: `render_at`'s `sl_initial` only shrinks the budget; it does NOT
-/// shift continuation lines by the leading prefix width.  In HS the
-/// `prettyGuarded` doc is the RIGHT operand of `doubleQuotes`'s `<>`
-/// (`"\"" <> prettyGuarded <> "\""`, Text/PrettyPrint/Class.hs), and HughesPJ `beside`
-/// DOES shift the right doc's vertical layout by the leading `"`'s width
-/// (1 col).  Callers that place the formula after a 1-col prefix must use
-/// `pretty_guarded_doublequoted` (which models the `"` as a real Doc
-/// `beside`, getting the continuation indent right).  Used only by the
-/// unit tests in this module; production callers use
-/// `pretty_guarded_doublequoted`.
+/// [`guarded_doc`] laid out flat, for test assertions.
 #[cfg(test)]
-fn pretty_guarded_wrapped(g: &Guarded, indent: usize) -> String {
-    use crate::pretty_hpj as hpj;
-    let mut state = avoid_precise_guarded(g);
-    let doc = guarded_to_doc(g, &mut state);
-    doc.render_at(hpj::LINE_LENGTH, hpj::RIBBON, indent)
+pub(crate) fn pretty_guarded(g: &Guarded) -> String {
+    guarded_doc(g).render_with(FLAT_WIDTH, FLAT_WIDTH)
 }
 
 /// HS `doubleQuotes (prettyGuarded gf)` (lib/theory/src/Lemma.hs, Text/PrettyPrint/Class.hs).
@@ -115,10 +75,7 @@ fn pretty_guarded_wrapped(g: &Guarded, indent: usize) -> String {
 /// formula's start column (1, right after the opening quote) — matching
 /// HS byte-exact.  The result is the full `"..."` string.
 pub fn pretty_guarded_doublequoted(g: &Guarded) -> String {
-    use crate::pretty_hpj::Doc;
-    let mut state = avoid_precise_guarded(g);
-    let doc = guarded_to_doc(g, &mut state);
-    Doc::text("\"").beside(doc).beside(Doc::text("\"")).render()
+    hpj::double_quotes(guarded_doc(g)).render()
 }
 
 /// HS bare `prettyGuarded gf` (Guarded.hs) as a Doc — WITHOUT the
@@ -127,7 +84,7 @@ pub fn pretty_guarded_doublequoted(g: &Guarded) -> String {
 /// `sSolvedFormulas` sections with (System.hs), so the
 /// formula participates in the surrounding pane Doc and wraps at the
 /// pane's width/nesting exactly as in HS.
-pub(crate) fn guarded_doc(g: &Guarded) -> crate::pretty_hpj::Doc {
+pub(crate) fn guarded_doc(g: &Guarded) -> Doc {
     let mut state = avoid_precise_guarded(g);
     guarded_to_doc(g, &mut state)
 }
@@ -138,39 +95,15 @@ pub(crate) fn guarded_doc(g: &Guarded) -> crate::pretty_hpj::Doc {
 /// Each disjunct is `nest 1 (parens (prettyGuarded gf))`, the separator is
 /// `"  ∥"` (two spaces + ∥) placed AFTER each non-last item by `punctuate`,
 /// and the items are joined by `fsep` (paragraph-fill, one space between).
-pub fn disj_goal_to_doc(gfs: &[Guarded]) -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj::{self as hpj, Doc};
+pub fn disj_goal_to_doc(gfs: &[Guarded]) -> Doc {
     let items: Vec<Doc> = gfs
         .iter()
-        .map(|g| {
-            let mut state = avoid_precise_guarded(g);
-            let inner = guarded_to_doc(g, &mut state);
-            // `nest 1 (parens (prettyGuarded gf))` — `parens` (Text/PrettyPrint/Class.hs)
-            // is `char '(' <> d <> char ')'` (PLAIN).
-            Doc::char('(').beside(inner).beside(Doc::char(')')).nest(1)
-        })
+        .map(|g| hpj::parens(guarded_doc(g)).nest(1))
         .collect();
     // HS `punctuate (operator_ "  ∥")` (Constraints.hs) — the `∥`
     // separator is an `hl_operator` span.
     let punct = hpj::punctuate(hpj::operator_("  \u{2225}"), items); // "  ∥"
     hpj::fsep(punct)
-}
-
-/// HS `multiComment_ ["unannotated"]`
-/// (Theory/Text/Pretty.hs):
-///   `comment $ fsep [text "/*", vcat $ map text ls, text "*/"]`
-/// With a single line `"unannotated"`, `vcat [text "unannotated"]` is
-/// just `text "unannotated"`, and `fsep` joins the three with single
-/// spaces when they fit (they always do at any indent ≤ ribbon), giving
-/// `/* unannotated */`.  `comment` is a highlight wrapper — a no-op for
-/// raw (non-coloured) output.
-fn unannotated_comment_doc() -> crate::pretty_hpj::Doc {
-    use crate::pretty_hpj::{self as hpj, Doc};
-    hpj::fsep(vec![
-        Doc::text("/*"),
-        Doc::text("unannotated"),
-        Doc::text("*/"),
-    ])
 }
 
 /// Render a proof-step line that may carry the `/* unannotated */`
@@ -205,7 +138,7 @@ pub fn step_line_with_unann(
     let core = if annotated {
         method_doc
     } else {
-        hpj::sep(vec![method_doc, unannotated_comment_doc()])
+        hpj::sep(vec![method_doc, hpj::multi_comment_(&["unannotated"])])
     };
     // HS `ppCases ps [] = prettyCase ps (kwBy <> text " ") <> prettyStep ps`
     // (Theory/Proof.hs): the `by ` keyword is laid out BESIDE the WHOLE
@@ -450,20 +383,6 @@ fn open_display_prefix<'a, S>(
         .collect();
     (vs, inner)
 }
-
-// =============================================================================
-// HS HughesPJ ribbon + fit constants, used by the Doc-engine
-// `render_at` layout for both the full-formula and guarded wrapped paths.
-// =============================================================================
-
-/// HS ribbon width.  HS sets `lineWidth = 110` (`Main/Console.hs`)
-/// and `defaultStyle.ribbonsPerLine = 1.5` (`HughesPJ.hs`), giving
-/// `ribbonLen = round(110/1.5) = 73` (`HughesPJ.hs`).
-pub const RIBBON: usize = 73;
-
-/// HS hard page width.  Mirrors `lineWidth = 110`
-/// (`Main/Console.hs`).
-pub const LINE_LENGTH: usize = 110;
 
 // =============================================================================
 // Guarded — the `prettyGuarded` Doc

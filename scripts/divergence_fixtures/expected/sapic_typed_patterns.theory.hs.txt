@@ -1,0 +1,135 @@
+theory SapicTypedPatterns
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+heuristic: p
+
+rule (modulo E) Init[color=#ffffff, process="in(x.1:ty);", issapicrule,
+                     role='Process']:
+   [ ] --[ Init( ) ]-> [ State_( ) ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) inxty_0_[color=#ffffff, process="in(x.1:ty);",
+                         issapicrule, role='Process']:
+   [ State_( ), In( x.1 ) ] --> [ State_1( x.1 ) ]
+
+  /*
+  rule (modulo AC) inxty_0_[color=#ffffff, process="in(x.1:ty);",
+                            issapicrule, role='Process']:
+     [ State_( ), In( x ) ] --> [ State_1( x ) ]
+  */
+
+rule (modulo E) letxtyyxtyxtyvxty_0_1[color=#ffffff,
+                                      process="let <=x.1:ty, y.1, =x.1:ty>=<x.1:ty, 'v', x.1:ty>",
+                                      issapicrule, role='Process']:
+   [ State_1( x.1 ) ] --> [ Let_11( <x.1, 'v', x.1>, x.1 ) ]
+
+  /*
+  rule (modulo AC) letxtyyxtyxtyvxty_0_1[color=#ffffff,
+                                         process="let <=x.1:ty, y.1, =x.1:ty>=<x.1:ty, 'v', x.1:ty>",
+                                         issapicrule, role='Process']:
+     [ State_1( x ) ] --> [ Let_11( <x, 'v', x>, x ) ]
+  */
+
+rule (modulo E) letxtyyxtyxtyvxty_1_1[color=#ffffff,
+                                      process="let <=x.1:ty, y.1, =x.1:ty>=<x.1:ty, 'v', x.1:ty>",
+                                      issapicrule, role='Process']:
+   [ Let_11( <x.1, y.1, x.1>, x.1 ) ] --> [ State_11( x.1, y.1 ) ]
+
+  /*
+  rule (modulo AC) letxtyyxtyxtyvxty_1_1[color=#ffffff,
+                                         process="let <=x.1:ty, y.1, =x.1:ty>=<x.1:ty, 'v', x.1:ty>",
+                                         issapicrule, role='Process']:
+     [ Let_11( <x, y, x>, x ) ] --> [ State_11( x, y ) ]
+  */
+
+rule (modulo E) incxtyzxty_0_11[color=#ffffff,
+                                process="in('c',<=x.1:ty, z.1, =x.1:ty>);", issapicrule, role='Process']:
+   [ State_11( x.1, y.1 ), Message( 'c', x.2 ) ]
+  -->
+   [ Let_111( x.2, x.1, y.1 ), Ack( 'c', x.2 ) ]
+
+  /*
+  rule (modulo AC) incxtyzxty_0_11[color=#ffffff,
+                                   process="in('c',<=x.1:ty, z.1, =x.1:ty>);", issapicrule, role='Process']:
+     [ State_11( x, y ), Message( 'c', x.1 ) ]
+    -->
+     [ Let_111( x.1, x, y ), Ack( 'c', x.1 ) ]
+  */
+
+rule (modulo E) incxtyzxty_1_11[color=#ffffff,
+                                process="in('c',<=x.1:ty, z.1, =x.1:ty>);", issapicrule, role='Process']:
+   [ Let_111( <x.1, z.1, x.1>, x.1, y.1 ) ]
+  -->
+   [ State_111( x.1, y.1, z.1 ) ]
+
+  /*
+  rule (modulo AC) incxtyzxty_1_11[color=#ffffff,
+                                   process="in('c',<=x.1:ty, z.1, =x.1:ty>);", issapicrule, role='Process']:
+     [ Let_111( <x, z, x>, x, y ) ] --> [ State_111( x, y, z ) ]
+  */
+
+rule (modulo E) incxtyzxty_2_11[color=#ffffff,
+                                process="in('c',<=x.1:ty, z.1, =x.1:ty>);", issapicrule, role='Process']:
+   [ State_11( x.1, y.1 ), In( <'c', x.2> ) ]
+  -->
+   [ Let_111( x.2, x.1, y.1 ) ]
+
+  /*
+  rule (modulo AC) incxtyzxty_2_11[color=#ffffff,
+                                   process="in('c',<=x.1:ty, z.1, =x.1:ty>);", issapicrule, role='Process']:
+     [ State_11( x, y ), In( <'c', x.1> ) ] --> [ Let_111( x.1, x, y ) ]
+  */
+
+rule (modulo E) incxtyzxty_3_11[color=#ffffff,
+                                process="in('c',<=x.1:ty, z.1, =x.1:ty>);", issapicrule, role='Process']:
+   [ Let_111( <x.1, z.1, x.1>, x.1, y.1 ) ]
+  -->
+   [ State_111( x.1, y.1, z.1 ) ]
+
+  /*
+  rule (modulo AC) incxtyzxty_3_11[color=#ffffff,
+                                   process="in('c',<=x.1:ty, z.1, =x.1:ty>);", issapicrule, role='Process']:
+     [ Let_111( <x, z, x>, x, y ) ] --> [ State_111( x, y, z ) ]
+  */
+
+rule (modulo E) eventEyz_0_111[color=#ffffff,
+                               process="event E( y.1, z.1 );", issapicrule, role='Process']:
+   [ State_111( x.1, y.1, z.1 ) ]
+  --[ E( y.1, z.1 ) ]->
+   [ State_1111( x.1, y.1, z.1 ) ]
+
+  /*
+  rule (modulo AC) eventEyz_0_111[color=#ffffff,
+                                  process="event E( y.1, z.1 );", issapicrule, role='Process']:
+     [ State_111( x, y, z ) ] --[ E( y, z ) ]-> [ State_1111( x, y, z ) ]
+  */
+
+rule (modulo E) p_0_1111[color=#ffffff, process="0", issapicrule,
+                         role='Process']:
+   [ State_1111( x.1, y.1, z.1 ) ] --> [ ]
+
+  /*
+  rule (modulo AC) p_0_1111[color=#ffffff, process="0", issapicrule,
+                            role='Process']:
+     [ State_1111( x, y, z ) ] --> [ ]
+  */
+
+restriction single_session:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+  /*
+  expanded formula:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  */
+
+
+
+end

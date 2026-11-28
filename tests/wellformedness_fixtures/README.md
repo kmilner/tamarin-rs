@@ -39,17 +39,10 @@ This corpus provides focused topic and byte-level coverage of
    what harness 1 iterates, so this test keeps it honest inside the
    normal test suite.
 
-The runner's topic comparison has two rules:
-
-- Topics compare modulo trailing whitespace — some Haskell titles carry
-  a source-literal trailing space (e.g. `"Facts occur in the
-  left-hand-side but not in any right-hand-side "`), which the
-  comma-separated `expected.txt` cannot represent.
-- The `Rule has no variants` and `Message Derivation Checks` topics are
-  checked only against the tamarin binary. Both need a live Maude
-  process that the runner does not spawn: the batch driver (`run.rs`)
-  splices them into the pass's result afterwards. Each is covered by
-  its own unit tests and by the corpus parity gates.
+The runner compares topic names after trimming trailing whitespace. Both Rust
+and Haskell must satisfy every listed positive and negative expectation.
+The Rust check uses the static wellformedness pass. The shared production
+loader also checks rule variants and message derivability with Maude.
 
 ## `reports/`
 
@@ -64,16 +57,8 @@ separately with Maude.
 Every fixture carries a `.report` file, so harness 2 pins the whole
 block of every one of them.
 
-The `Left rule`, `Right rule` and `Reserved prefixes` topics of HS
-`checkWellformednessDiff` (Wellformedness.hs) have no fixture
-here, because the port does not implement that pass: `run_batch`
-refuses `--diff` (`crates/tamarin-prover/src/run.rs`),
-`parse_theory` pins the parser AST's `is_diff` to `false`
-(`crates/tamarin-parser/src/parser.rs`), and the internal
-`theory::Theory` carries no `is_diff` at all. A `--diff` port adds
-`diff_left_right_mismatch`, `diff_reserved_prefix` and
-`diff_right_rule_mismatch` here, built from `theory::DiffTheory`, each
-with an oracle-captured `.report` block.
+The fixtures cover trace theories. The parser library can read diff theories,
+but the CLI rejects `--diff` and the diff-theory wellformedness pass is unported.
 
 To re-capture a report after a submodule bump, follow these steps.
 Load the fixture through the pinned `tamarin-prover` build. You do not
@@ -86,43 +71,10 @@ section removed.
 
 ## Check categories
 
-The definitive topic strings live in the submodule at
-`tamarin-prover/lib/theory/src/Theory/Tools/Wellformedness.hs` (grep
-`underlineTopic`, plus the LHS-usage `topic` literal). Note the source
-carries quirks verbatim — the diff-theory checks spell two of them
-`Inexistant lemma actions` and `Restriction actions` where the
-plain-theory ones say `Inexistent …`. The guardedness topic is
-`"Formula guardedness"`. Categories no
-fixture pins yet are marked *(unpinned)*:
-
-- Check presence of the --prove/--lemma arguments in theory *(unpinned)*
-- Reserved names
-- Reserved prefixes *(unported — `checkWellformednessDiff`)*
-- Special facts
-- Fr facts must only use a fresh- or a msg-variable
-- Fact capitalization issues *(unpinned)*
-- Fact arity issues
-- Fact multiplicity issues
-- Fact usage *(unpinned)*
-- Facts occur in the left-hand-side but not in any right-hand-side
-- Fresh public constants
-- Public constants with mismatching capitalization
-- Variable with mismatching sorts or capitalization
-- Quantifier sorts *(unpinned — `quantifier_wrong_sort` is pinned on
-  `Formula terms`)*
-- Unbound variables
-- Multiplication restriction of rules
-- Unsupported multiplication outside exponents
-- Variants / Rule has no variants *(unpinned)*
-- Lemma annotations
-- Inexistent lemma actions *(unpinned)*
-- Inexistent restriction actions *(unpinned)*
-- Inexistant lemma actions / Restriction actions, diff theories *(unpinned)*
-- Formula guardedness *(no fixture of its own. `quantifier_wrong_sort`
-  also trips this check, and its `reports/` block pins it)*
-- Formula terms
-- Nat Sorts
-- Subterm Convergence Warning
-- Left rule / Right rule *(unported — `checkWellformednessDiff`)*
-
-Each fixture is named after the category it targets.
+[`expected.txt`](expected.txt) lists the positive and negative topics checked
+for each model. The matching file under [`reports/`](reports/) gives the full
+diagnostic, including any additional topics that the model triggers. The
+upstream pass defines the category titles in
+[Wellformedness.hs](../../tamarin-prover/lib/theory/src/Theory/Tools/Wellformedness.hs). For example,
+`quantifier_wrong_sort` requires the `Formula terms` topic, and its full
+[report](reports/quantifier_wrong_sort.report) also checks `Formula guardedness`.

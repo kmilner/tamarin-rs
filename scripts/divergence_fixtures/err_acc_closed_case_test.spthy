@@ -1,0 +1,14 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// An accountability lemma whose case test has no free variables: the
+// verification-condition generators fold over the test's free variables with
+// partial folds (`ntuple`'s `foldr1`, Accountability/Generation.hs), which die
+// on the empty list.  No corpus case test is closed.
+
+theory AccClosedCaseTest begin
+rule L:
+  [ ] --[ Log() ]-> [ ]
+test a:
+  "Ex #i. Log()@i"
+lemma acc: a account for "All #i. Log()@i ==> F"
+end

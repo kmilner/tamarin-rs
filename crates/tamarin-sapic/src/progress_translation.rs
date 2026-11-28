@@ -4,15 +4,10 @@
 //! Port of `Sapic.ProgressTranslation`
 //! (`lib/sapic/src/Sapic/ProgressTranslation.hs`).
 //!
-//! Wraps the base translation with the local-progress events/restrictions:
-//!   - `progress_init`   (HS `progressInit`):  adds `ProgressFrom_` to the init
-//!     rules if `[] ∈ dom(pf)`, and extends the initial `~x`.
-//!   - `progress_trans_*` (HS `progressTransAct`/`progressTransComb`):  adds
-//!     `ProgressFrom`/`ProgressTo` events + extends `~x` per action/combinator.
-//!   - `progress_restr`  (HS `progressRestr`):  the `Progress_<pos>_to_<...>`
-//!     restrictions + `resProgressInit`.
+//! Wraps the base translation with the local-progress events and
+//! restrictions; [`Progress`] holds the progress function the passes share.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use tamarin_term::lterm::LVar;
 use tamarin_theory::formula::LNFormula;
@@ -25,155 +20,138 @@ use crate::facts::{
     add_var_to_state, is_non_semi_state, msg_var_progress, var_progress, AnnotatedRule, StateKind,
     TransAction, TransFact,
 };
-use crate::progress_function::{pf, pf_from};
+use crate::progress_function::{pf, pf_from, pf_inv};
 
 type Pos = Vec<i64>;
 type PosSet = BTreeSet<Pos>;
 type AProc = Process<ProcessAnnotation<LVar>, SapicLVar>;
 
-/// `lhsP pos` / `rhsP pos`: append 1 / 2.
-fn lhs_p(pos: &[i64]) -> Pos {
-    let mut v = pos.to_vec();
-    v.push(1);
-    v
-}
-fn rhs_p(pos: &[i64]) -> Pos {
-    let mut v = pos.to_vec();
-    v.push(2);
-    v
+/// The progress function's domain `pfFrom anP` and inverse `pfInv anP`
+/// (ProgressFunction.hs).  Haskell recomputes both at every use; they depend
+/// only on the annotated process, so the translation computes them once.
+pub(crate) struct Progress {
+    dom: PosSet,
+    inv: BTreeMap<Pos, Pos>,
 }
 
-/// `addProgressFrom domPF child (l,a,r,res)` (ProgressTranslation.hs):
-/// add a `Fr (varProgress child)` premise, a `ProgressFrom child` action, and
-/// thread the progress var into every rhs state fact — IF any rhs fact is a
-/// non-semi state AND `child ∈ domPF`.
-fn add_progress_from(
-    dom_pf: &PosSet,
-    child: &Pos,
-    prems: &mut Vec<TransFact>,
-    acts: &mut Vec<TransAction>,
-    concs: &mut Vec<TransFact>,
-) {
-    if concs.iter().any(is_non_semi_state) && dom_pf.contains(child) {
-        let vp = var_progress(child);
-        prems.insert(0, TransFact::Fr(vp));
-        acts.insert(0, TransAction::ProgressFrom(child.clone()));
-        for fact in concs {
-            *fact = add_var_to_state(&vp, fact);
+impl Progress {
+    pub(crate) fn new(an_proc: &AProc) -> Result<Self, String> {
+        let dom = pf_from(an_proc)?;
+        let inv = pf_inv(an_proc, &dom)?;
+        Ok(Progress { dom, inv })
+    }
+
+    /// `addProgressFrom domPF child (l,a,r,res)` (ProgressTranslation.hs):
+    /// add a `Fr (varProgress child)` premise, a `ProgressFrom child` action,
+    /// and thread the progress variable into every conclusion state, if a
+    /// conclusion is a non-semi state and `child ∈ domPF`.
+    fn add_progress_from(
+        &self,
+        child: &Pos,
+        prems: &mut Vec<TransFact>,
+        acts: &mut Vec<TransAction>,
+        concs: &mut [TransFact],
+    ) {
+        if concs.iter().any(is_non_semi_state) && self.dom.contains(child) {
+            let vp = var_progress(child);
+            prems.insert(0, TransFact::Fr(vp));
+            acts.insert(0, TransAction::ProgressFrom(child.clone()));
+            for fact in concs {
+                *fact = add_var_to_state(&vp, fact);
+            }
         }
     }
-}
 
-/// `addProgressTo invPF child (l,a,r,res)` (ProgressTranslation.hs): add a
-/// `ProgressTo child posFrom` action IF any rhs fact is a "target state" whose
-/// next-position is `child` (an `LState`/`PState`), and `child` has an inverse.
-fn add_progress_to<F: Fn(&[i64]) -> Option<Pos>>(
-    inv_pf: &F,
-    child: &Pos,
-    (prems, mut acts, concs, restr): RuleBody,
-) -> RuleBody {
-    let is_target_state = |fct: &TransFact| -> bool {
-        matches!(
-            fct,
-            TransFact::State(kind, next_pos, _)
-                if next_pos == child
-                    && matches!(kind, StateKind::PState | StateKind::LState)
-        )
-    };
-    if concs.iter().any(is_target_state)
-        && let Some(pos_from) = inv_pf(child)
-    {
-        acts.insert(0, TransAction::ProgressTo(child.clone(), pos_from));
+    /// `addProgressTo invPF child (l,a,r,res)` (ProgressTranslation.hs): add a
+    /// `ProgressTo child posFrom` action if a conclusion is an `LState` /
+    /// `PState` at `child` and `child` has an inverse.
+    fn add_progress_to(&self, child: &Pos, acts: &mut Vec<TransAction>, concs: &[TransFact]) {
+        let is_target_state = |fct: &TransFact| {
+            matches!(
+                fct,
+                TransFact::State(kind, next_pos, _)
+                    if next_pos == child
+                        && matches!(kind, StateKind::PState | StateKind::LState)
+            )
+        };
+        if concs.iter().any(is_target_state)
+            && let Some(pos_from) = self.inv.get(child)
+        {
+            acts.insert(0, TransAction::ProgressTo(child.clone(), pos_from.clone()));
+        }
     }
-    (prems, acts, concs, restr)
-}
 
-/// `addProgressItems domPF invPF pos` (ProgressTranslation.hs):
-///   addProgressFrom domPF (lhsP pos) . addProgressTo invPF (lhsP pos) . addProgressTo invPF (rhsP pos)
-fn add_progress_items<F: Fn(&[i64]) -> Option<Pos>>(
-    dom_pf: &PosSet,
-    inv_pf: &F,
-    pos: &[i64],
-    body: RuleBody,
-) -> RuleBody {
-    let lhs = lhs_p(pos);
-    let b = add_progress_to(inv_pf, &rhs_p(pos), body);
-    let (mut prems, mut acts, mut concs, restr) = add_progress_to(inv_pf, &lhs, b);
-    add_progress_from(dom_pf, &lhs, &mut prems, &mut acts, &mut concs);
-    (prems, acts, concs, restr)
-}
+    /// The rule half of `progressTransAct` / `progressTransComb`
+    /// (ProgressTranslation.hs): `addProgressItems domPF invPF pos` =
+    /// `addProgressFrom domPF (lhsP pos) . addProgressTo invPF (lhsP pos) .
+    /// addProgressTo invPF (rhsP pos)` on every rule.
+    pub(crate) fn trans_rules(&self, pos: &[i64], rules: Vec<RuleBody>) -> Vec<RuleBody> {
+        let lhs = child(pos, 1);
+        let rhs = child(pos, 2);
+        rules
+            .into_iter()
+            .map(|(mut prems, mut acts, mut concs, restr)| {
+                self.add_progress_to(&rhs, &mut acts, &concs);
+                self.add_progress_to(&lhs, &mut acts, &concs);
+                self.add_progress_from(&lhs, &mut prems, &mut acts, &mut concs);
+                (prems, acts, concs, restr)
+            })
+            .collect()
+    }
 
-/// `extendVars domPF pos tx` (ProgressTranslation.hs): add `varProgress
-/// (lhsP pos)` to `tx` if `lhsP pos ∈ domPF`.
-fn extend_vars(dom_pf: &PosSet, pos: &[i64], tx: &mut BTreeSet<LVar>) {
-    let lhs = lhs_p(pos);
-    if dom_pf.contains(&lhs) {
-        tx.insert(var_progress(&lhs));
+    /// `extendVars domPF pos tx` (ProgressTranslation.hs): add `varProgress
+    /// (lhsP pos)` to `tx` if `lhsP pos ∈ domPF`.  `progressTransComb` applies
+    /// it to both continuations' variables.
+    pub(crate) fn extend_vars(&self, pos: &[i64], tx: &mut BTreeSet<LVar>) {
+        let lhs = child(pos, 1);
+        if self.dom.contains(&lhs) {
+            tx.insert(var_progress(&lhs));
+        }
+    }
+
+    /// `progressInit anP (initrules, initTx)` (ProgressTranslation.hs).
+    pub(crate) fn init(
+        &self,
+        init_rules: Vec<AnnotatedRule<ProcessAnnotation<LVar>>>,
+        mut init_tx: BTreeSet<LVar>,
+    ) -> (Vec<AnnotatedRule<ProcessAnnotation<LVar>>>, BTreeSet<LVar>) {
+        let empty: Pos = Vec::new();
+        // `initTx' = if [] ∈ domPF then {varProgress []} else {}`
+        if self.dom.contains(&empty) {
+            init_tx.insert(var_progress(&empty));
+        }
+        // `initrules' = map (mapAct $ addProgressFrom domPF []) initrules`
+        let rules = init_rules
+            .into_iter()
+            .map(|mut r| {
+                self.add_progress_from(&empty, &mut r.prems, &mut r.acts, &mut r.concs);
+                r
+            })
+            .collect();
+        (rules, init_tx)
+    }
+
+    /// `progressRestr anP restrictions` (ProgressTranslation.hs): one
+    /// `Progress_<pos>_to_<...>` restriction per element of `pf anP pos`, over
+    /// the ascending domain, then `progressInit`.
+    pub(crate) fn restr(
+        &self,
+        an_proc: &AProc,
+        mut restrictions: Vec<Restriction>,
+    ) -> Result<Vec<Restriction>, String> {
+        for pos in &self.dom {
+            for tos in &pf(an_proc, pos)? {
+                restrictions.push(make_restriction(pos, tos));
+            }
+        }
+        restrictions.push(res_progress_init());
+        Ok(restrictions)
     }
 }
 
-/// `progressInit anP (initrules, initTx)` (ProgressTranslation.hs).
-pub(crate) fn progress_init(
-    an_proc: &AProc,
-    init_rules: Vec<AnnotatedRule<ProcessAnnotation<LVar>>>,
-    init_tx: BTreeSet<LVar>,
-) -> Result<(Vec<AnnotatedRule<ProcessAnnotation<LVar>>>, BTreeSet<LVar>), String> {
-    let dom_pf = pf_from(an_proc)?;
-    let empty: Pos = Vec::new();
-    // `initTx' = if [] ∈ domPF then {varProgress []} else {}`
-    let mut new_tx = init_tx;
-    if dom_pf.contains(&empty) {
-        new_tx.insert(var_progress(&empty));
-    }
-    // `initrules' = map (mapAct $ addProgressFrom domPF []) initrules`
-    let new_rules: Vec<AnnotatedRule<ProcessAnnotation<LVar>>> = init_rules
-        .into_iter()
-        .map(|mut r| {
-            add_progress_from(&dom_pf, &empty, &mut r.prems, &mut r.acts, &mut r.concs);
-            r
-        })
-        .collect();
-    Ok((new_rules, new_tx))
-}
-
-/// `progressTransAct` (ProgressTranslation.hs): post-process the base
-/// action translation result.  `dom_pf` / the inverse are computed once and
-/// threaded in.
-pub(crate) fn progress_trans_act(
-    dom_pf: &PosSet,
-    inv_pf: &impl Fn(&[i64]) -> Option<Pos>,
-    pos: &[i64],
-    rules: Vec<RuleBody>,
-    mut tx1: BTreeSet<LVar>,
-) -> (Vec<RuleBody>, BTreeSet<LVar>) {
-    let new_rules = rules
-        .into_iter()
-        .map(|b| add_progress_items(dom_pf, inv_pf, pos, b))
-        .collect();
-    extend_vars(dom_pf, pos, &mut tx1);
-    (new_rules, tx1)
-}
-
-/// `progressTransComb` (ProgressTranslation.hs).  Note: HS uses the SAME
-/// `extendVars domPF pos` on both `tx1` and (fmap'd) `tx2`.
-pub(crate) fn progress_trans_comb(
-    dom_pf: &PosSet,
-    inv_pf: &impl Fn(&[i64]) -> Option<Pos>,
-    pos: &[i64],
-    rules: Vec<RuleBody>,
-    mut tx1: BTreeSet<LVar>,
-    tx2: Option<BTreeSet<LVar>>,
-) -> (Vec<RuleBody>, BTreeSet<LVar>, Option<BTreeSet<LVar>>) {
-    let new_rules = rules
-        .into_iter()
-        .map(|b| add_progress_items(dom_pf, inv_pf, pos, b))
-        .collect();
-    extend_vars(dom_pf, pos, &mut tx1);
-    let new_tx2 = tx2.map(|mut t| {
-        extend_vars(dom_pf, pos, &mut t);
-        t
-    });
-    (new_rules, tx1, new_tx2)
+/// `lhsP pos` / `rhsP pos`: `pos ++ [i]`.
+fn child(pos: &[i64], i: i64) -> Pos {
+    [pos, &[i]].concat()
 }
 
 /// `resProgressInit` (ProgressTranslation.hs): `∃ #t. Init( ) @ #t`.
@@ -181,34 +159,6 @@ fn res_progress_init() -> Restriction {
     use crate::restriction_builder as rb;
     let t = rb::node("t");
     rb::restriction("progressInit", rb::exists(&[t], rb::action("Init", &[], t)))
-}
-
-/// `progressRestr anP restrictions` (ProgressTranslation.hs): append the
-/// per-from-position `Progress_<pos>_to_<...>` restrictions, then `progressInit`.
-pub(crate) fn progress_restr(
-    an_proc: &AProc,
-    mut restrictions: Vec<Restriction>,
-) -> Result<Vec<Restriction>, String> {
-    let dom_pf = pf_from(an_proc)?;
-    // `lss_to <- mapM restriction (toList domPF)` — over the ascending domain.
-    let mut lss_to: Vec<Restriction> = Vec::new();
-    for pos in &dom_pf {
-        lss_to.extend(restriction_for(an_proc, pos)?);
-    }
-    restrictions.extend(lss_to);
-    restrictions.push(res_progress_init());
-    Ok(restrictions)
-}
-
-/// `restriction pos` (ProgressTranslation.hs): for the given from-`pos`,
-/// one restriction per element of `pf anP pos` (the CNF set-of-sets of "to"s).
-fn restriction_for(an_proc: &AProc, pos: &[i64]) -> Result<Vec<Restriction>, String> {
-    let toss = pf(an_proc, pos)?;
-    let mut out = Vec::new();
-    for tos in &toss {
-        out.push(make_restriction(pos, tos));
-    }
-    Ok(out)
 }
 
 /// Build one `Progress_<pos>_to_<t1>_or_<t2>...` restriction.

@@ -1,0 +1,26 @@
+// Category: SAPIC binders named after a declared nullary function.
+//
+// `new c` and `lookup … as c` bind a variable that shadows the constant
+// `c/0`.  The translation renames the binder (`c.1`) in the generated rules,
+// while the condition's restriction keeps the bare constant `c` and takes no
+// argument.  sapic_nullary_cond pins a condition over the constant without
+// a clashing binder; no corpus theory names a binder after a nullary
+// function.
+
+theory SapicNullaryBinders
+begin
+
+functions: c/0
+
+predicates: Eq(a, b) <=> a = b
+
+process:
+  ( new c;
+    if Eq(c, 'x') then out('yes') else out('no') )
+  ||
+  ( lookup 'k' as c in
+      if Eq(c, 'x') then out('yes') else out('no')
+    else
+      out('no') )
+
+end

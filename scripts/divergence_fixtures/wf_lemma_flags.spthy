@@ -1,0 +1,18 @@
+// Category: the --prove/--lemma presence check (`checkIfLemmasInTheory`,
+// Theory/Tools/Wellformedness.hs), under flags no corpus row passes.
+//
+//   - @prefix: `--prove=go*` matches the lemma `good` by prefix, so nothing
+//     is reported;
+//   - @bare: a bare `--prove` beside `--lemma=good` records the empty name,
+//     which matches no lemma and is reported as ''.
+// s8_lemma_arg_order pins the order of several unmatched names.
+
+theory WfLemmaFlags
+begin
+
+rule R: [ Fr(~x) ] --[ A(~x) ]-> [ Out(~x) ]
+
+lemma good:
+  exists-trace "Ex x #i. A(x) @ #i"
+
+end

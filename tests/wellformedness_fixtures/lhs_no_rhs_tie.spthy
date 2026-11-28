@@ -1,0 +1,13 @@
+// Fixture: triggers `Facts occur in the left-hand-side but not in any
+// right-hand-side`.  Two rhs facts tie at distance one; the suggestion is
+// the first in source order.
+theory LhsNoRhsTie
+begin
+
+rule A: [ Aaa(x) ] --[ ]-> [ ]
+
+rule B: [ ] --[ ]-> [ Aax(x) ]
+
+rule C: [ ] --[ ]-> [ Aay(x) ]
+
+end

@@ -1,0 +1,14 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// A user rule named like a SAPIC-generated rule (`Init`): `duplicate
+// rule`, after translation.
+// No corpus theory fails this way.
+
+theory T begin
+
+rule Init: [ ] --> [ Out('a') ]
+
+process:
+new x; out(x)
+
+end

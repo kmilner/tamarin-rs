@@ -1,0 +1,24 @@
+// Category: the unbound-variable report over SAPIC-generated rules.
+//
+// HS runs one wellformedness pass over the TRANSLATED theory, so
+// `unboundReport` walks the generated rules too: a variable free only inside
+// a process's embedded `_restrict` is lifted into the generated rule's
+// `Restr_…` action, where no premise binds it.  The generated-rule entries
+// follow every user-rule entry, because SAPIC appends its rules.  No corpus
+// process carries an embedded restriction with a free variable.
+
+theory SapicRestrictUnbound
+begin
+
+rule ZUserA:
+  [ In(a) ] --[ Uv(b) ]-> [ Out(a) ]
+
+process:
+  in(m);
+  [ ] --[ Ev(m), _restrict(k.5 = 'b') ]-> [ ];
+  in(k); out(k)
+
+rule AUserB:
+  [ In(c) ] --[ Uv(d) ]-> [ Out(c) ]
+
+end

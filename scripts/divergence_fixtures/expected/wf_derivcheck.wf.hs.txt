@@ -1,0 +1,20 @@
+WARNING: the following wellformedness checks failed!
+
+Rule has no variants
+====================
+
+  Rule NoVariants has no variants.
+  
+  Most likely, this means that the rule's use of fresh variables is contradictory. For exaple, a rule with the premises In(~x) and Fr(~x) has no variants because ~x cannot be sent before it is generated.
+
+Message Derivation Checks
+=========================
+
+  The variables of the following rule(s) are not derivable from their premises, you may be performing unintended pattern matching.
+
+Rule RevealPriv: 
+Failed to derive Variable(s): m
+
+Rule NoVariants: 
+Failed to derive Variable(s): n
+*/

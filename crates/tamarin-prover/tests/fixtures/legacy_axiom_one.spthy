@@ -1,0 +1,12 @@
+theory AxOne
+begin
+
+axiom Ax1: "All x #i. A(x) @ i ==> F"
+
+restriction R1: "All x #i. B(x) @ i ==> F"
+
+axiom Ax2: "All x #i. C(x) @ i ==> F"
+
+rule R: [ ] --[ A('x') ]-> [ ]
+
+end

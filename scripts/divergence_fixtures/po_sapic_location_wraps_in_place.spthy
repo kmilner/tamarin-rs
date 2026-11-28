@@ -1,0 +1,10 @@
+// Category: the --parse-only open-theory printer (`prettyOpenTheory`),
+// which no corpus gate runs: the gates load and close every theory.
+//
+// A process location too wide for one line wraps in place, aligned under
+// its opening parenthesis.
+
+theory Loc begin
+functions: f/4
+process: (out('hello_world_hello_world'))@f('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
+end

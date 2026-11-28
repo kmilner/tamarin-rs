@@ -87,9 +87,25 @@ pub fn fixture_path(name: &str) -> PathBuf {
         .join(name)
 }
 
+/// The corpus theory most route tests serve (the capture script's too).
+#[allow(dead_code)]
+pub const ISSUE193: &str = "tamarin-prover/examples/regression/trace/issue193.spthy";
+
+/// Resolve a theory a test serves: a bare file name is one of this crate's
+/// `tests/fixtures/`, anything with a `/` is relative to the workspace root
+/// (a corpus file) or absolute.
+pub fn theory_path(name: &str) -> PathBuf {
+    if name.contains('/') {
+        workspace_root().join(name)
+    } else {
+        fixture_path(name)
+    }
+}
+
 /// Spawn the server with one theory eagerly loaded.  The server lives
 /// until the returned [`TestServer`] is dropped (`oneshot` cancels the
 /// listener, then the task exits).
+#[allow(dead_code)]
 pub async fn start_server_with_theory(fixture_name: &str) -> TestServer {
     start_server_with_theory_and(fixture_name, |_| {}).await
 }
@@ -108,7 +124,7 @@ pub async fn start_server_with_theory_and(
     // `render()` uses the console width instead of the web one.
     tamarin_server::init_process_globals();
 
-    let theory_path = fixture_path(fixture_name);
+    let theory_path = theory_path(fixture_name);
     assert!(
         theory_path.is_file(),
         "fixture {} missing at {}",
@@ -124,30 +140,16 @@ pub async fn start_server_with_theory_and(
     // cannot disagree about which binary they mean.
     let maude_path = detect_maude();
 
-    let mut cfg = ServerConfig {
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        data_dir,
-        frontend_dist: None,
-        maude_path: maude_path.clone(),
-        // Match ServerConfig::new's default (HS interactive default 5s).
-        derivcheck_timeout: tamarin_theory::deriv_check::DerivCheckTimeout::DEFAULT,
-        solver_parameters: Default::default(),
-        stop_on_trace: None,
-        // Match ServerConfig::new's defaults (HS `dotPath`,
-        // Environment.hs, and an absent `--with-json`).
-        dot_path: "dot".to_string(),
-        json_path: None,
-        auto_sources: false,
-        ndc_check: true,
-        lemmas_to_prove: Vec::new(),
-        parser_flags: Vec::new(),
-        cancel_cleanup: None,
-    };
+    let mut cfg = ServerConfig::new("127.0.0.1:0".parse().unwrap(), data_dir, maude_path.clone());
     mutate(&mut cfg);
 
-    // Load theory before starting server.
+    // Load theory before starting server. A web load closes the theory with
+    // Maude, so it uses the probed binary even when `mutate` points the
+    // server's later proof sessions elsewhere.
     let store = TheoryStore::default();
-    let entry = tamarin_server::theory_io::load_from_path(&theory_path, &cfg)
+    let mut load_cfg = cfg.clone();
+    load_cfg.load.maude_path = maude_path.clone();
+    let entry = tamarin_server::theory_io::load_from_path(&theory_path, &load_cfg)
         .expect("fixture should parse + elaborate");
     let _idx = store.insert(entry);
 
@@ -219,15 +221,6 @@ fn detect_maude() -> String {
     tamarin_test_support::maude_path().unwrap_or_else(|| "maude".into())
 }
 
-/// True when a Maude binary is available — the guard the tests that boot a
-/// real `ProofContext` open with.  With no maude anywhere this PANICS instead
-/// of answering `false`; `tamarin_test_support` documents why and names the
-/// opt-out.
-#[allow(dead_code)]
-pub fn maude_available() -> bool {
-    tamarin_test_support::maude_available()
-}
-
 /// Read a captured Haskell response from `tests/fixtures/haskell-responses/`.
 #[allow(dead_code)]
 pub fn haskell_capture(name: &str) -> String {
@@ -273,22 +266,16 @@ pub fn blank_times(s: &str) -> String {
 /// theory's origin path.  The oracle serves `./<fixture>` out of its own work
 /// directory (see `tests/capture_haskell_fixtures.sh`).  The harness loads the
 /// fixture by absolute path.
-fn blank_load_stamp(s: &str, fixture: &str) -> String {
-    let s = s.replace(&fixture_path(fixture).display().to_string(), "<THEORY>");
-    let s = s.replace(&format!("./{fixture}"), "<THEORY>");
-    blank_times(&s)
-}
-
-/// Compare an HTML page that carries a theory's load stamp against its
-/// capture.  Every byte of the template outside the load time and the origin
-/// path must be the same as the byte in the oracle's capture.
 #[allow(dead_code)]
-pub fn assert_page_matches_capture(body: &str, capture: &str, fixture: &str) {
-    assert_eq!(
-        blank_load_stamp(body, fixture),
-        blank_load_stamp(&haskell_capture(capture), fixture),
-        "{capture} (load time and origin path blanked)"
-    );
+pub fn blank_load_stamp(s: &str, fixture: &str) -> String {
+    let path = theory_path(fixture);
+    let name = path
+        .file_name()
+        .expect("theory file name")
+        .to_string_lossy();
+    let s = s.replace(&path.display().to_string(), "<THEORY>");
+    let s = s.replace(&format!("./{name}"), "<THEORY>");
+    blank_times(&s)
 }
 
 /// The build-specific lines of the `Generated from:` block.  The oracle's
@@ -305,7 +292,8 @@ pub fn assert_page_matches_capture(body: &str, capture: &str, fixture: &str) {
 /// batch binary already fills in.
 const VERSION_BANNER_PREFIXES: [&str; 3] = ["Maude version", "Git revision:", "Compiled at:"];
 
-fn blank_version_banner(s: &str) -> String {
+#[allow(dead_code)]
+pub fn blank_version_banner(s: &str) -> String {
     s.split_inclusive('\n')
         .map(|line| {
             let (text, nl) = match line.strip_suffix('\n') {
@@ -321,84 +309,4 @@ fn blank_version_banner(s: &str) -> String {
             }
         })
         .collect()
-}
-
-/// Compare a `prettyClosedTheory` rendering against its capture.  This
-/// function blanks only the build-specific values of the `Generated from:`
-/// banner.
-///
-/// Three routes serve that one document: `getTheorySourceR`
-/// (`src/Web/Handler.hs`), `getTheoryMessageDeductionR`
-/// (`src/Web/Handler.hs`) and `getDownloadTheoryR`
-/// (`src/Web/Handler.hs`).  `getDownloadTheoryR` returns the body of
-/// `getTheorySourceR`.
-#[allow(dead_code)]
-pub fn assert_theory_source_matches_capture(body: &str, capture: &str) {
-    assert_eq!(
-        blank_version_banner(body),
-        blank_version_banner(&haskell_capture(capture)),
-        "{capture} (Generated-from banner values blanked)"
-    );
-}
-
-/// GET `path`, assert the status and content type of Yesod's Not Found page,
-/// and hand the body back for the caller's own assertion.
-#[allow(dead_code)]
-async fn not_found_body(s: &TestServer, path: &str) -> String {
-    let res = s.get(path).await;
-    assert_eq!(res.status(), 404, "{path} must be a 404");
-    assert_eq!(
-        content_type(&res),
-        "text/html; charset=utf-8",
-        "{path} must carry the Not Found page's content type"
-    );
-    res.text().await.expect("text")
-}
-
-/// Assert that `path` answers Yesod's Not Found page: 404, the error page's
-/// content type, and the `defaultErrorHandler` widget — `<h1>Not Found</h1>`
-/// over the request's raw path.  Every `notFound` carries this one page
-/// (`handlers::mod::not_found_response`), whatever raised it, so this is the
-/// shared assertion for the routes that answer a miss without a capture.
-#[allow(dead_code)]
-pub async fn assert_not_found_page(s: &TestServer, path: &str) {
-    let body = not_found_body(s, path).await;
-    assert!(
-        body.contains(&format!("<h1>Not Found</h1>\n<p>{path}</p>\n")),
-        "{path} must carry the Not Found widget over its own path; got: {body}"
-    );
-}
-
-/// The same page, pinned byte-for-byte against the captured Haskell body.
-#[allow(dead_code)]
-pub async fn assert_not_found_capture(s: &TestServer, path: &str, capture: &str) {
-    assert_eq!(
-        not_found_body(s, path).await,
-        haskell_capture(capture),
-        "{path}"
-    );
-}
-
-/// Parse a captured Haskell JSON response and return its top-level keys.
-/// Used for the "same JSON envelope" assertion.
-#[allow(dead_code)]
-pub fn haskell_capture_keys(name: &str) -> std::collections::BTreeSet<String> {
-    let s = haskell_capture(name);
-    let v: serde_json::Value =
-        serde_json::from_str(&s).unwrap_or_else(|e| panic!("parse capture {}: {}", name, e));
-    json_top_keys(&v)
-}
-
-/// The key set a single-field JSON envelope (`{alert}`, `{redirect}`) has.
-#[allow(dead_code)]
-pub fn one_key_set(k: &str) -> std::collections::BTreeSet<String> {
-    std::iter::once(k.to_string()).collect()
-}
-
-#[allow(dead_code)]
-pub fn json_top_keys(v: &serde_json::Value) -> std::collections::BTreeSet<String> {
-    match v {
-        serde_json::Value::Object(m) => m.keys().cloned().collect(),
-        _ => Default::default(),
-    }
 }

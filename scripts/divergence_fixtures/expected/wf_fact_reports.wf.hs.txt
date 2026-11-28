@@ -1,0 +1,222 @@
+WARNING: the following wellformedness checks failed!
+
+Unbound variables
+=================
+
+  rule `NestPair' has unbound variables: 
+    x, y
+  
+  rule `MacroOne' has unbound variables: 
+    x
+  
+  rule `MacroTwo' has unbound variables: 
+    x, y
+
+Fr facts must only use a fresh- or a msg-variable
+=================================================
+
+  rule `FrPair' fact: Fr( <a, b> )
+  
+  rule `Fr1' fact: Fr( (a*b*c) )
+  
+  rule `Fr2' fact: Fr( (a add b add c) )
+  
+  rule `Fr3' fact: Fr( zz((a*b)) )
+  
+  rule `Fr4' fact: Fr( em(a, b) )
+  
+  rule `Fr5' fact: Fr( $y.2 )
+  
+  rule `Fr6' fact: Fr( zz(x.1) )
+
+Special facts
+=============
+
+  rule `AC1' uses disallowed facts on left-hand-side:
+    Out( (z++(p add q)) )
+  
+  rule `AC2' uses disallowed facts on left-hand-side:
+    Out( (z++(p add q)) )
+  
+  rule `AC3' uses disallowed facts on left-hand-side:
+    Out( (z++(p add q add r)) )
+  
+  rule `AC4' uses disallowed facts on left-hand-side:
+    Out( (x++z) )
+  
+  rule `AC5' uses disallowed facts on left-hand-side:
+    Out( (z++(a add b add c)) )
+  
+  rule `AC6' uses disallowed facts on left-hand-side:
+    Out( (z++(p add q)++(r mix s)) )
+  
+  rule `AC7' uses disallowed facts on left-hand-side:
+    Out( (zz(c) add (a mix b)) )
+  
+  rule `AC8' uses disallowed facts on left-hand-side:
+    Out( (c^d++zz(u)++(x*y)++(a⊕b)++(%e%+%f)++(p add q)++(r mix s)) )
+  
+  rule `Pair1' uses disallowed facts on left-hand-side:
+    Out( (fst(<e, f>)++<a, b>++<c, d>) )
+  
+  rule `Pair2' uses disallowed facts on left-hand-side:
+    Out( <<a, b>, c> ), Out( <a, b, c> ), Out( <<a, b>, c> )
+  
+  rule `Pair3' uses disallowed facts on left-hand-side:
+    Out( <a, b, c> ), Out( <a, b, c> ), Out( <a, b> )
+
+Fact arity issues
+=================
+
+Same fact is used with different arities, i.e., Fact('A','B') is different from Fact('A'). 
+Check the arguments of your facts.
+  
+
+  Fact `a':
+
+     1. Rule `Show', arity 1
+          A( ~n )
+    
+     2. Lemma `Show1', arity 2
+          Fact {factTag = ProtoFact Linear "A" 2, factAnnotations = fromList [], factTerms = [Mult(Bound 1,Bound 2),'p']}
+    
+     3. Lemma `Show2', arity 2
+          Fact {factTag = ProtoFact Linear "A" 2, factAnnotations = fromList [], factTerms = [Mult(Bound 1,Bound 2,Bound 3),'p']}
+    
+     4. Lemma `Show3', arity 2
+          Fact {factTag = ProtoFact Linear "A" 2, factAnnotations = fromList [], factTerms = [add(Bound 1,Bound 2,Bound 3),'p']}
+    
+     5. Lemma `Show4', arity 2
+          Fact {factTag = ProtoFact Linear "A" 2, factAnnotations = fromList [], factTerms = [Bound 1,'p']}
+    
+     6. Lemma `Show5', arity 2
+          Fact {factTag = ProtoFact Linear "A" 2, factAnnotations = fromList [], factTerms = [Mult(Bound 1,Free x),'p']}
+    
+     7. Lemma `Show6', arity 2
+          Fact {factTag = ProtoFact Linear "A" 2, factAnnotations = fromList [], factTerms = [Mult('c',Bound 1),'p']}
+    
+     8. Lemma `Show7', arity 2
+          Fact {factTag = ProtoFact Linear "A" 2, factAnnotations = fromList [], factTerms = [Mult(~'f','c',Bound 1),'p']}
+    
+     9. Lemma `Show8', arity 2
+          Fact {factTag = ProtoFact Linear "A" 2, factAnnotations = fromList [], factTerms = [Mult(Bound 1,one),'p']}
+    
+    10. Lemma `Show9', arity 2
+          Fact {factTag = ProtoFact Linear "A" 2, factAnnotations = fromList [], factTerms = [Mult(Bound 1,zz(Bound 2)),'p']}
+    
+    11. Lemma `Show10', arity 2
+          Fact {factTag = ProtoFact Linear "A" 2, factAnnotations = fromList [], factTerms = [Union(Mult(Bound 1,Bound 2),Xor(Bound 1,Bound 2)),'p']}
+    
+    12. Lemma `Show11', arity 2
+          Fact {factTag = ProtoFact Linear "A" 2, factAnnotations = fromList [], factTerms = [em(Bound 1,Bound 2),'p']}
+    
+    13. Lemma `Show12', arity 2
+          Fact {factTag = ProtoFact Linear "A" 2, factAnnotations = fromList [], factTerms = [em(Bound 1,zz(Bound 2)),'p']}
+    
+    14. Lemma `Show13', arity 2
+          Fact {factTag = ProtoFact Linear "A" 2, factAnnotations = fromList [], factTerms = [Mult(Bound 2,pair(Bound 1,Bound 2)),'p']}
+    
+    15. Lemma `Show14', arity 2
+          Fact {factTag = ProtoFact Linear "A" 2, factAnnotations = fromList [], factTerms = [Mult(Bound 2,exp(Bound 2,Bound 1)),'p']}
+  
+  Fact `b':
+
+    1. Rule `NestPair', arity 2
+         B( x, y )
+    
+    2. Lemma `NestPair', arity 1
+         Fact {factTag = ProtoFact Linear "B" 1, factAnnotations = fromList [], factTerms = [pair(Free x,pair(Free y,Free z))]}
+  
+  Fact `c':
+
+    1. Rule `MacroOne', arity 1
+         C( x )
+    
+    2. Rule `MacroTwo', arity 2
+         C( x, y )
+    
+    3. Lemma `MacroLemma', arity 1
+         Fact {factTag = ProtoFact Linear "C" 1, factAnnotations = fromList [], factTerms = [MAC(Bound 1)]}
+  
+  Fact `foo':
+
+    1. Rule `c_senc', arity 1
+         Foo( x )
+    
+    2. Rule `c_senc', arity 2
+         Foo( x, y )
+  
+
+Formula terms
+=============
+
+  Lemma `NestPair' uses terms of the wrong form:
+    `pair(Free x,pair(Free y,Free z))'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+  
+  Lemma `Show5' uses terms of the wrong form: `Mult(Bound 1,Free x)'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+  
+  Lemma `Show7' uses terms of the wrong form:
+    `Mult(~'f','c',Bound 1)'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+  
+  Lemma `Show10' uses terms of the wrong form:
+    `Union(Mult(Bound 1,Bound 2),Xor(Bound 1,Bound 2))'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+  
+  Lemma `Show11' uses terms of the wrong form: `em(Bound 1,Bound 2)'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+  
+  Lemma `Show12' uses terms of the wrong form:
+    `em(Bound 1,zz(Bound 2))'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+  
+  Lemma `Show14' uses terms of the wrong form:
+    `Mult(Bound 2,exp(Bound 2,Bound 1))'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+
+Unsupported multiplication outside exponents
+============================================
+
+  Rule AC8 has products outside exponents: (x*y)
+  
+  Rule Fr1 has products outside exponents: (a*b*c)
+  
+  Rule Fr3 has products outside exponents: (a*b)
+*/

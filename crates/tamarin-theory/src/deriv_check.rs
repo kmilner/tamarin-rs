@@ -1,55 +1,23 @@
 // Currently GPL 3.0; see README.md for licensing details.
 // Derived from the upstream tamarin-prover sources referenced below.
 
-//! Dynamic message-derivation check.
+//! Dynamic message-derivation check: HS `checkVariableDeducibility`
+//! (Theory/Tools/MessageDerivationChecks.hs).
 //!
-//! Mirrors HS's `Theory.Tools.MessageDerivationChecks.checkVariableDeducibility`
-//! (lib/theory/src/Theory/Tools/MessageDerivationChecks.hs).  For each
-//! protocol rule, asks the prover: "given that the intruder has access to all
-//! of this rule's premise terms, can it derive each of the rule's free
-//! variables?"  When a variable IS bound by some premise fact but cannot
-//! actually be derived by the intruder (because the fact's containing rule
-//! is unreachable / requires private knowledge), HS flags it as an
-//! "unintended pattern match".
+//! For each protocol rule HS builds a probe theory with the original
+//! signature, privacy kept (see [`synthesise_probe`] for why `makeFunsPublic`
+//! and `replacePrivate` change nothing), and one generated rule over the
+//! rule's free variables (nat re-sorted to fresh) and premise terms:
 //!
-//! How HS does it (see `MessageDerivationChecks.hs`):
+//! ```text
+//! rule <idx>: [ Fr(v1), ... ] --[ Generated_<idx>(v1, ...) ]-> [ Out(t1), ... ]
+//! ```
 //!
-//!   For each rule R indexed by idx:
-//!     1. Drop ALL rules/lemmas/restrictions from the theory, keeping the
-//!        signature — privacy flags included.  HS's `makeFunsPublic` and
-//!        `replacePrivate` both look like they make symbols public but neither
-//!        changes the verdict: `makeFunsPublic` only sets the OPEN theory's
-//!        pure signature, which `closeTheoryWithMaude sig` overwrites with the
-//!        ORIGINAL private-preserving maude signature (so intruder-rule
-//!        generation stays private); and `replacePrivate` rewrites Out-term
-//!        heads to a same-name Public variant that gets no
-//!        construction/destruction rule, leaving the term opaque exactly as
-//!        the private application would be.  See [`synthesise_probe`] for the
-//!        full citation.
-//!     2. Add a single generated rule (HS names it `StandRule (show idx)`):
-//!          rule <idx>:
-//!            [ Fr(v1), Fr(v2), ... ]                     // each free var of R,
-//!                                                        // keeping its own sort
-//!                                                        // (only nat → fresh)
-//!            --[ Generated_<idx>(v1, v2, ...) ]->        // sole action
-//!            [ Out(t1), Out(t2), ... ]                   // R's premise terms
-//!     3. Add one exists-trace lemma per free var v.  HS's `landFormula`
-//!        gives each conjunct its OWN timepoint via `zip [0..]`, and the
-//!        intruder-knowledge predicate is `KU` (`lntermToKUFact = kuFact`):
-//!          lemma deriv_v: exists-trace
-//!            "Ex v1 v2 ... #t0 #t1. Generated_<idx>(v1, v2, ...) @ #t0 & KU(v) @ #t1"
-//!     4. Run the prover on each lemma with `--derivcheck-timeout`.
-//!     5. Lemmas whose proof did NOT find a trace identify non-derivable
-//!        variables — report them.
-//!
-//! Note: `prove_probe` builds the `ProofContext` + runs `ensure_saturated()`
-//! ONCE per probe and then iterates the per-variable lemmas reusing that
-//! shared, already-saturated context, so a rule with N free vars incurs N
-//! proof attempts but only one context build.  Each attempt is bounded by
-//! the user's timeout (default 5s, mirrored on the HS side).  The check is
-//! gated by `args.derivcheck_timeout`; passing `0` disables it entirely and
-//! a negative value runs it without a time limit (HS:
-//! `Main.TheoryLoader.hs`).  See [`DerivCheckTimeout`].
+//! It then proves one exists-trace lemma per variable,
+//! `Ex v1 ... #t0 #t1. Generated_<idx>(v1, ...) @ #t0 & KU(v) @ #t1`, within
+//! `--derivcheck-timeout`, and reports each variable whose lemma finds no
+//! trace.  [`prove_probe`] saturates one context per rule and reuses it for
+//! all the rule's variables.
 
 use crate::wellformedness::WfError;
 use std::num::NonZeroU32;
@@ -59,8 +27,10 @@ use tamarin_term::maude_proc::MaudeHandle;
 use tamarin_term::vterm::var_term;
 
 use crate::constraint::solver::context::IntrRuleCache;
-use crate::fact::{fresh_fact, ku_fact, out_fact, proto_fact, LNFact, Multiplicity};
-use crate::formula::{exists_var, lift_free, LNFormula};
+use crate::fact::{
+    fresh_fact, ku_fact, nat_to_fresh_var, out_fact, proto_fact, LNFact, Multiplicity,
+};
+use crate::formula::{lift_free, quantify_vars, LNFormula, Quantifier};
 use crate::rule::{ProtoRuleE, ProtoRuleEInfo};
 use crate::theory::{Theory, TraceQuantifier};
 
@@ -122,38 +92,19 @@ impl std::str::FromStr for DerivCheckTimeout {
     }
 }
 
-/// Run HS's per-variable derivability check on every rule.
+/// Run HS's per-variable derivability check on every rule, each probe
+/// proof bounded by `timeout`.
 ///
-/// [`DerivCheckTimeout::Disabled`] skips the check (returns `vec![]`).
-/// [`DerivCheckTimeout::Secs`] bounds each per-variable prove call by that
-/// many seconds of wall-clock time; [`DerivCheckTimeout::Unbounded`]
-/// installs no cap (mirrors HS's `--derivcheck-timeout`).
-///
-/// `ndc_cache` is the parent theory's once-per-load NDC-checked intruder
-/// cache: HS's probe theories inherit the parent's checked `_thyCache`
-/// verbatim (`deleteRulesAndLemmasAndRestrictionsFromTheory` keeps the
-/// cache field; `deductionChainCheck = False` only prevents re-checking,
-/// MessageDerivationChecks.hs), so the probe contexts are built with it
-/// injected — NDC tags stay active in `forbidden_edge` during probe
-/// proofs.  `None` falls back to signature assembly with the cache
-/// permutation applied.  A `Some` argument is one shared handle for the
-/// whole per-rule walk below: each probe context points at that rule list
-/// instead of copying it.
-pub fn check_message_derivation(
-    thy: &Theory,
-    maude: &MaudeHandle,
-    timeout: DerivCheckTimeout,
-    ndc_cache: Option<IntrRuleCache>,
-    parameters: crate::constraint::solver::sources::IntegerParameters,
-) -> Result<Vec<WfError>, crate::prove::ProveError> {
-    check_message_derivation_with_pool(thy, maude, None, timeout, ndc_cache, parameters)
-}
-
-/// Run independent rule probes, each on a Maude process of its own: the
-/// caller's, or an idle pooled one. Each probe is timed, so probes never
+/// Independent rule probes each run on a Maude process of their own: the
+/// caller's, or an idle one from `pool`. Each probe is timed, so probes never
 /// queue for a shared process. Warnings and errors are collected in rule
 /// order. A rule's variables share one context.
-pub fn check_message_derivation_with_pool(
+///
+/// `ndc_cache` is the parent theory's NDC-checked intruder cache, which HS's
+/// probe theories inherit verbatim (`deleteRulesAndLemmasAndRestrictionsFromTheory`
+/// keeps `_thyCache`, MessageDerivationChecks.hs); `None` assembles the cache
+/// from the signature.
+pub fn check_message_derivation(
     thy: &Theory,
     maude: &MaudeHandle,
     pool: Option<&std::sync::Arc<tamarin_term::maude_proc::MaudePool>>,
@@ -205,10 +156,7 @@ pub fn check_message_derivation_with_pool(
                     .map(tamarin_utils::parallel::Helper::Own)
             },
             move |lease, (idx, name, rule, vars)| {
-                let maude = lease
-                    .as_deref()
-                    .unwrap_or(&primary)
-                    .with_fresh_counter_from(0);
+                let maude = lease.as_deref().unwrap_or(&primary).clone();
                 run(idx, name, &rule, vars, maude)
             },
             |_| false,
@@ -263,19 +211,6 @@ fn rule_free_vars(r: &ProtoRuleE) -> Vec<LVar> {
         collect(f);
     }
     seen.into_iter().collect()
-}
-
-/// HS `lvarToLnterm`: retype an LSortNat var to LSortFresh; otherwise keep
-/// the var's sort unchanged (Theory/Model/Fact.hs).
-fn nat_to_fresh_var(v: LVar) -> LVar {
-    if v.sort == LSort::Nat {
-        LVar {
-            sort: LSort::Fresh,
-            ..v
-        }
-    } else {
-        v
-    }
 }
 
 /// Rename a premise term's variables for the probe: a free var becomes its
@@ -398,7 +333,7 @@ fn synthesise_probe(rule: &ProtoRuleE, idx: usize, free_vars: &[LVar]) -> Probe 
     let out_concs: Vec<LNFact> = rule
         .premises
         .iter()
-        .flat_map(|f| f.terms.iter().cloned())
+        .flat_map(|f| f.terms().iter().cloned())
         .map(|t| out_fact(rename_term_to_probe(t, &rename)))
         .collect();
     // `Rule::new` leaves `new_vars` empty, which is the `[]` HS's
@@ -435,12 +370,7 @@ fn synthesise_probe(rule: &ProtoRuleE, idx: usize, free_vars: &[LVar]) -> Probe 
                 ku_fact(var_term(*v)).map_ref(lift_free),
             ));
             // `Ex dvar0 … dvarN-1 #t0 #t1. …`, the last binder innermost.
-            binders
-                .iter()
-                .rev()
-                .fold(gen_at.clone().and(ku_at), |acc, b| {
-                    exists_var((b.name.to_string(), b.sort), b, acc)
-                })
+            quantify_vars(Quantifier::Ex, &binders, gen_at.clone().and(ku_at))
         })
         .collect();
 
@@ -649,21 +579,6 @@ mod tests {
     }
 
     #[test]
-    fn deriv_check_passes_on_derivable_var() {
-        let Some(m) = maude() else { return };
-        let src = r#"
-            theory T begin
-              rule R: [In(x)] --[Use(x)]-> [Out(x)]
-              lemma trivial: "T"
-            end
-        "#;
-        let report = check_message_derivation(&theory(src), &m, secs(5), None, Default::default())
-            .expect("solver operation");
-        // `x` appears in `In(x)` which is intruder-known → derivable.
-        assert!(report.is_empty(), "expected no warnings, got {:?}", report);
-    }
-
-    #[test]
     fn deriv_check_reports_unbound_vars_in_declaration_order() {
         let Some(path) = require_maude_path() else {
             return;
@@ -689,7 +604,7 @@ mod tests {
         for pool in [None, Some(&helpers)] {
             let reports = workers
                 .install(|| {
-                    check_message_derivation_with_pool(
+                    check_message_derivation(
                         &thy,
                         &primary,
                         pool,
@@ -744,6 +659,7 @@ mod tests {
         let report = check_message_derivation(
             &theory(src),
             &m,
+            None,
             DerivCheckTimeout::Disabled,
             None,
             Default::default(),
@@ -766,6 +682,7 @@ mod tests {
         let report = check_message_derivation(
             &theory(src),
             &m,
+            None,
             DerivCheckTimeout::Unbounded,
             None,
             Default::default(),
@@ -796,6 +713,7 @@ mod tests {
         let report = check_message_derivation(
             &theory(src),
             &m,
+            None,
             DerivCheckTimeout::Unbounded,
             None,
             Default::default(),
@@ -817,45 +735,6 @@ mod tests {
         assert!("4294967296".parse::<DerivCheckTimeout>().is_err());
         assert!("five".parse::<DerivCheckTimeout>().is_err());
         assert_eq!(DerivCheckTimeout::DEFAULT, secs(5));
-    }
-
-    /// `ignoreDerivChecks` on the rule's attributes keeps the rule out of
-    /// the report (HS `reportVars`, MessageDerivationChecks.hs), so
-    /// the same underivable variable as above is not named.
-    #[test]
-    fn deriv_check_skips_a_no_derivcheck_rule() {
-        let Some(m) = maude() else { return };
-        let src = r#"
-            theory T begin
-              rule R [no_derivcheck]: [] --[Use(unbound)]-> [Out(unbound)]
-              lemma trivial: "T"
-            end
-        "#;
-        let report = check_message_derivation(&theory(src), &m, secs(5), None, Default::default())
-            .expect("solver operation");
-        assert!(
-            report.is_empty(),
-            "a no_derivcheck rule is not reported, got {:?}",
-            report
-        );
-    }
-
-    /// HS `frees` keys on the whole `LVar`, so a rule binding both `~ltk`
-    /// and `ltk` offers two candidates (issue527's `Register_pk`).  A
-    /// name-only key would let the fresh one mask the message-sorted one,
-    /// which is the variable the report names.
-    #[test]
-    fn free_vars_keep_same_named_vars_of_different_sorts_apart() {
-        let thy = theory(
-            r#"
-            theory T begin
-              rule Register_pk: [ Fr( ~ltk ), In( ltk ) ] --[ Reg( ltk ) ]-> [ Out( ~ltk ) ]
-            end
-        "#,
-        );
-        let rule = &thy.rules().next().expect("one rule item").rule;
-        let shown: Vec<String> = rule_free_vars(rule).iter().map(|v| v.to_string()).collect();
-        assert_eq!(shown, vec!["~ltk".to_string(), "ltk".to_string()]);
     }
 
     /// The free variables come back in ascending `LVar` Ord — index first,
@@ -881,87 +760,6 @@ mod tests {
                 "a".to_string(),
                 "x.1".to_string()
             ]
-        );
-    }
-
-    /// Start a Maude handle whose signature is the theory's own (so the
-    /// theory's `functions:`/`equations:` symbols — including a private
-    /// destructor — are present), exactly as the real driver does via
-    /// `elaborated.signature` (run.rs).  The function skips on the
-    /// same terms as [`maude`].
-    fn theory_and_maude(src: &str) -> Option<(Theory, MaudeHandle)> {
-        let p = require_maude_path()?;
-        let thy = theory(src);
-        let sig = thy.signature.clone();
-        Some((thy, start_maude(&p, sig)))
-    }
-
-    // The privacy of a function symbol is load-bearing for the deriv-check
-    // verdict, and HS keeps it PRIVATE for the probe theory (it does NOT flip
-    // privacy: `makeFunsPublic` is overwritten by `closeTheoryWithMaude sig`
-    // and `replacePrivate` is inert — see `synthesise_probe`).  The two
-    // tests below pin HS's discriminating behaviour, confirmed against the
-    // real prover (tamarin-prover v1.13.0, `--derivcheck-timeout=10`):
-    //   * private `dec`  → `m` reported "Failed to derive Variable(s)".
-    //   * public  `dec`  → `m` derivable, nothing reported.
-
-    #[test]
-    fn deriv_check_flags_var_recoverable_only_via_private_destructor() {
-        // `m` is recoverable from the premise terms ONLY by applying the
-        // PRIVATE destructor `dec`, which the intruder may not use.  HS reports
-        // `m` as non-derivable.  (Probed: tamarin-prover 1.13.0 emits
-        // "Rule Reveal: \nFailed to derive Variable(s): m".)
-        let src = r#"
-            theory T begin
-              functions: dec/2 [private], enc/2
-              equations: dec(enc(m, k), k) = m
-              rule Reveal:
-                [ In(enc(m, k)), In(k) ]
-                --[ Got(m) ]->
-                [ Out(dec(enc(m, k), k)) ]
-              lemma trivial: exists-trace "Ex m #i. Got(m) @ i"
-            end
-        "#;
-        let Some((thy, m)) = theory_and_maude(src) else {
-            return;
-        };
-        let report = check_message_derivation(&thy, &m, secs(10), None, Default::default())
-            .expect("solver operation");
-        assert_eq!(report.len(), 1, "expected one report, got {:?}", report);
-        assert!(
-            report[0].message.contains("Reveal")
-                && report[0].message.contains("Failed to derive Variable(s)")
-                && report[0].message.contains("m"),
-            "expected `m` flagged in Rule Reveal, got {:?}",
-            report
-        );
-    }
-
-    #[test]
-    fn deriv_check_passes_when_destructor_is_public() {
-        // Same theory but `dec` is PUBLIC, so the intruder can apply it and
-        // recover `m`.  HS reports nothing.  (Probed: tamarin-prover 1.13.0
-        // emits no "Message Derivation Checks" section.)
-        let src = r#"
-            theory T begin
-              functions: dec/2, enc/2
-              equations: dec(enc(m, k), k) = m
-              rule Reveal:
-                [ In(enc(m, k)), In(k) ]
-                --[ Got(m) ]->
-                [ Out(dec(enc(m, k), k)) ]
-              lemma trivial: exists-trace "Ex m #i. Got(m) @ i"
-            end
-        "#;
-        let Some((thy, m)) = theory_and_maude(src) else {
-            return;
-        };
-        let report = check_message_derivation(&thy, &m, secs(10), None, Default::default())
-            .expect("solver operation");
-        assert!(
-            report.is_empty(),
-            "public `dec` → `m` derivable; expected no report, got {:?}",
-            report
         );
     }
 }

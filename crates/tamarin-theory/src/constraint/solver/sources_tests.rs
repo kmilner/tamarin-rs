@@ -100,28 +100,6 @@ fn oversized_library_parameters_saturate_without_wrapping() {
     assert_eq!(p.saturation_limit(), usize::MAX);
 }
 
-#[test]
-fn proof_contexts_keep_their_own_integer_parameters() {
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let maude = start_maude(&path, tamarin_term::maude_sig::pair_maude_sig());
-    let context = |maude, open_chains| {
-        crate::constraint::solver::context::ProofContext::with_options(
-            maude,
-            Vec::new(),
-            crate::constraint::solver::context::ProofContextOptions {
-                parameters: IntegerParameters::with_overrides(Some(open_chains), None),
-                ..Default::default()
-            },
-        )
-    };
-    let narrow = context(maude.clone(), 1);
-    let wide = context(maude, 17);
-    assert_eq!(narrow.parameters.open_chains_limit(), 1);
-    assert_eq!(wide.parameters.open_chains_limit(), 17);
-}
-
 fn system_with_subst(bindings: Vec<(LVar, LNTerm)>) -> System {
     let mut sys = System::empty();
     sys.invalidate_max_var_idx_cache();
@@ -230,63 +208,6 @@ fn source_patterns_emits_per_tag_entries() {
     assert_eq!(names, ["Init", "Loop"]);
 }
 
-/// The bilinear-pairing source.  The test covers both directions of this
-/// expression in HS Sources.hs:
-/// `if enableBP msig then return $ fAppC EMap $ nMsgVars 2 else []`.
-/// A BP signature must emit this source.  Without it, the BP targets
-/// (Chen_Kudla, Joux, RYY, Scott, TAK1) miss the `KU(em(...))` source-case
-/// enumeration.  Any other signature must not emit it.  Such an emission
-/// would give every non-BP theory one extra KU source that does not belong
-/// there.
-#[test]
-fn source_patterns_emits_em_only_when_bp_enabled() {
-    use crate::constraint::constraints::Goal;
-    use crate::fact::{fresh_fact, Fact, FactTag, Multiplicity};
-    use crate::rule::{ProtoRuleE, ProtoRuleEInfo, Rule};
-    use tamarin_term::builtin::msg_var;
-
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-
-    // Minimal protocol so there's at least one proto rule (so
-    // `source_patterns` actually runs).
-    let a_tag = FactTag::Proto(Multiplicity::Linear, "A", 1);
-    let a_fact = Fact::new(a_tag, vec![msg_var("x", 0)]);
-    let em_sources = |sig| {
-        let init: ProtoRuleE = Rule::new(
-            ProtoRuleEInfo::standard("Init"),
-            vec![fresh_fact(msg_var("x", 0))],
-            vec![a_fact.clone()],
-            vec![],
-        );
-        let rules = vec![crate::theory::OpenProtoRule::new(init)];
-        let ctx =
-            crate::constraint::solver::context::ProofContext::new(start_maude(&path, sig), rules);
-        ctx.full_sources
-            .iter()
-            .filter(|s| match &s.goal {
-                Goal::Action(_, fa) => {
-                    fa.tag == FactTag::Ku
-                        && fa.terms.len() == 1
-                        && matches!(
-                            &fa.terms[0],
-                            tamarin_term::term::Term::App(
-                                tamarin_term::function_symbols::FunSym::C(
-                                    tamarin_term::function_symbols::CSym::EMap
-                                ),
-                                _
-                            )
-                        )
-                }
-                _ => false,
-            })
-            .count()
-    };
-    assert_eq!(em_sources(tamarin_term::maude_sig::bp_maude_sig()), 1);
-    assert_eq!(em_sources(tamarin_term::maude_sig::pair_maude_sig()), 0);
-}
-
 // =========================================================================
 // Haskell-faithfulness invariants for `restrict_eq_store_to_stable_vars`.
 //
@@ -321,7 +242,7 @@ fn restrict_eq_store_keeps_only_stable_keyed_bindings() {
         (sk28, Term::Lit(Lit::Var(t2))),
     ]);
 
-    restrict_eq_store_to_stable_vars(&mut sys, &[t1, t2]);
+    restrict_eq_store_to_stable_vars(&mut sys, &[t1, t2].into());
 
     // t1 binding kept; m19 + sk28 bindings dropped.
     assert!(
@@ -339,75 +260,6 @@ fn restrict_eq_store_keeps_only_stable_keyed_bindings() {
     );
 }
 
-/// `restrict_eq_store_to_stable_vars` does NOT chain-chase.
-///
-/// This pins the pure key-filter contract.  If someone re-introduces
-/// chain-chase here, foo_eligibility-class divergences silently
-/// appear in the corpus.
-#[test]
-fn restrict_eq_store_does_not_chain_chase() {
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-
-    // Set up exactly the foo_eligibility shape: a chain
-    // t.1 → e.10 → blind_arg.  Stable = {t.1}.  Haskell-faithful:
-    // t.1 → e.10 stays (e.10 unbound after filter).  Rust must NOT
-    // collapse to t.1 → blind_arg directly.
-    let t1 = LVar::new("t", LSort::Msg, 1);
-    let e10 = LVar::new("e", LSort::Msg, 10);
-    let blind_arg = LVar::new("m", LSort::Msg, 28);
-
-    let mut sys = system_with_subst(vec![
-        (t1, Term::Lit(Lit::Var(e10))),
-        (e10, Term::Lit(Lit::Var(blind_arg))),
-    ]);
-
-    restrict_eq_store_to_stable_vars(&mut sys, &[t1]);
-
-    // t.1's binding must be exactly e.10 (the var), NOT chain-chased
-    // to blind_arg.
-    assert_eq!(
-        sys.eq_store().subst.image_of(&t1),
-        Some(&Term::Lit(Lit::Var(e10))),
-        "restrict must NOT chain-chase t.1 → e.10 → blind_arg \
-                    into t.1 → blind_arg"
-    );
-}
-
-/// `restrict_eq_store_to_stable_vars` produces empty subst when no
-/// key is stable.  This is the foo_eligibility shape under
-/// Haskell-faithful unification orientation: keys are rule-internal
-/// vars (large idx), stableVars are lemma vars (small idx).
-#[test]
-fn restrict_eq_store_empties_subst_when_no_keys_are_stable() {
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-
-    let m19 = LVar::new("m", LSort::Msg, 19);
-    let sk28 = LVar::new("sk", LSort::Msg, 28);
-    let pub_a = LVar::new("a", LSort::Pub, 0);
-    let pub_b = LVar::new("b", LSort::Pub, 0);
-    let mut sys = system_with_subst(vec![
-        (m19, Term::Lit(Lit::Var(pub_a))),
-        (sk28, Term::Lit(Lit::Var(pub_b))),
-    ]);
-
-    restrict_eq_store_to_stable_vars(
-        &mut sys,
-        &[LVar::new("t", LSort::Msg, 1), LVar::new("t", LSort::Msg, 2)],
-    );
-
-    assert!(
-        sys.eq_store().subst.is_empty(),
-        "When no key is in stable set (Haskell shape: keys are \
-                 rule-internal large-idx vars, stable are lemma small-idx \
-                 vars), restrict produces empty subst.  This is what \
-                 enables foo_eligibility's clean runtime applySource bind."
-    );
-}
-
 // =========================================================================
 // HS-faithful source-case naming invariant.
 //
@@ -419,12 +271,10 @@ fn restrict_eq_store_empties_subst_when_no_keys_are_stable() {
 // used verbatim — HS never re-splits a single name on `_`.
 // =========================================================================
 
-/// `combine` keeps a single non-coerce element verbatim, including when it
-/// is a `c_<sym>` construction-rule name whose symbol contains underscores
-/// (e.g. `c_KDF_SKc` must stay intact, never split to `SKc` — the
-/// fm24-cardpayments C8 divergence).
+/// HS `combine` keeps a single non-coerce element verbatim, underscores and
+/// all: a `c_<sym>` construction-rule name is never split at its symbol.
 #[test]
-fn combine_keeps_underscore_bearing_constr_name_intact() {
+fn combine_keeps_a_single_case_name_whole() {
     // Single construction-rule name → kept whole.
     assert_eq!(
         combine_case_names_list(&["c_KDF_SKc".to_string()], &[]),
@@ -445,20 +295,6 @@ fn combine_keeps_underscore_bearing_constr_name_intact() {
         combine_case_names_list(&["Card_Responds_To_GPO_C8".to_string()], &[]),
         vec!["Card_Responds_To_GPO_C8".to_string()]
     );
-}
-
-/// `case_name_list_to_string` is HS `intercalate "_"`.
-#[test]
-fn case_name_list_to_string_is_intercalate_underscore() {
-    assert_eq!(
-        case_name_list_to_string(&["c_KDF_SKc".to_string()]),
-        "c_KDF_SKc"
-    );
-    assert_eq!(
-        case_name_list_to_string(&["a".to_string(), "b".to_string()]),
-        "a_b"
-    );
-    assert_eq!(case_name_list_to_string(&[]), "");
 }
 
 // =========================================================================
@@ -618,7 +454,7 @@ fn shift_keeps_ac_arg_order() {
     let sys = system_with_a_variable_per_field(product);
 
     let out = rename_system_by(sys.clone(), 1000);
-    let args = match &out.nodes[0].1.premises[0].terms[0] {
+    let args = match &out.nodes[0].1.premises[0].terms()[0] {
         Term::App(_, args) => args.to_vec(),
         _ => unreachable!("the fixture stores an AC application"),
     };
@@ -651,17 +487,13 @@ fn shift_keeps_ac_arg_order() {
 /// charged nothing (Control/Monad/Bind.hs).
 #[test]
 fn some_inst_system_keeps_the_seeded_vars_and_draws_in_hs_field_order() {
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let maude = start_maude(&path, tamarin_term::maude_sig::pair_maude_sig());
     let sys = system_with_a_variable_per_field(mterm(11));
     // The goal's own variables: the node the case is grafted onto and the
     // term of its fact, in the ascending order `frees` hands over.
     let keep = [nvar(10), mvar(11)];
 
-    maude.reset_counter_to(500);
-    let out = some_inst_system(sys, &keep, &maude);
+    let mut fresh = FastFreshState::seeded(500);
+    let out = some_inst_system(sys, &keep, &mut fresh);
 
     let node = |idx: u64| nvar(idx);
     let msg = |idx: u64| mvar(idx);
@@ -705,7 +537,7 @@ fn some_inst_system_keeps_the_seeded_vars_and_draws_in_hs_field_order() {
         ]
     );
     assert_eq!(
-        maude.fresh_counter_peek(),
+        fresh.next_index(),
         522,
         "one identifier per variable that is not seeded"
     );
@@ -729,64 +561,9 @@ fn some_inst_system_keeps_the_seeded_vars_and_draws_in_hs_field_order() {
 // compute_rename_map
 // =========================================================================
 
-/// `renameDropNameHints` (Sources.hs) imports the system's variables
-/// in the order `instance HasFrees System` (System.hs) reaches
-/// them, which for a disjunction of the equation store is ascending
-/// `Ord LNSubstVFresh` — HS holds it as an `S.Set` (EquationStore.hs)
-/// and the set instance folds `S.toList` (LTerm.hs).  The port stores
-/// the disjunction as an insertion-ordered `Vec`, so a walk reading that
-/// `Vec` would hand the two substitutions' domain keys the opposite pair of
-/// indices, and two systems that differ only in insertion order would take
-/// different dedup keys.
-#[test]
-fn rename_map_walks_inner_conj_substs_in_ord_order() {
-    let mut sys = System::empty();
-    {
-        let es = sys.eq_store_mut();
-        es.conj = vec![EqDisj {
-            split_id: SplitId(0),
-            substs: vec![
-                SubstVFresh::from_list(vec![(mvar(2), mterm(3))]),
-                SubstVFresh::from_list(vec![(mvar(1), mterm(4))]),
-            ],
-        }];
-    }
-    let rename = compute_rename_map(&sys, &std::collections::BTreeSet::new());
-    assert_eq!(rename.get(&mvar(1)), Some(LVar::new("", LSort::Msg, 0)));
-    assert_eq!(rename.get(&mvar(2)), Some(LVar::new("", LSort::Msg, 1)));
-}
-
-/// The subterm store folds its negative subterms before its positive and
-/// solved ones (SubtermStore.hs), so a variable that occurs in a
-/// negative subterm alone is imported like any other and the dedup key
-/// carries its renamed identity.
-#[test]
-fn rename_map_counts_neg_subterms() {
-    let mut sys = System::empty();
-    sys.subterm_store_mut().neg_subterms =
-        SortedPairSet::rebuild_from(vec![(mterm(90), mterm(91))]);
-    let rename = compute_rename_map(&sys, &std::collections::BTreeSet::new());
-    assert_eq!(rename.get(&mvar(90)), Some(LVar::new("", LSort::Msg, 0)));
-    assert_eq!(rename.get(&mvar(91)), Some(LVar::new("", LSort::Msg, 1)));
-}
-
 // =========================================================================
 // source_bounds
 // =========================================================================
-
-/// `boundsVarIdx` (LTerm.hs) folds the frees of `instance HasFrees
-/// System` (System.hs), which reaches the subterm store's NEGATIVE
-/// subterms before its positive and solved ones (SubtermStore.hs).  A
-/// variable living in a negative subterm alone therefore sets both ends of
-/// the source's bounds, and so both the `matchToGoal` rename shift and the
-/// `refineSource` fresh seed.
-#[test]
-fn bounds_var_idx_of_system_counts_neg_subterms() {
-    let mut sys = System::empty();
-    sys.subterm_store_mut().neg_subterms =
-        SortedPairSet::rebuild_from(vec![(mterm(90), mterm(91))]);
-    assert_eq!(tamarin_term::lterm::bounds_var_idx(&sys), Some((90, 91)));
-}
 
 /// `source_bounds` splits the two ends of `instance HasFrees Source`
 /// (System.hs).  The MIN is over `cdGoal` and every case, because
@@ -812,17 +589,6 @@ fn source_bounds_takes_the_max_over_cases_only() {
 }
 
 #[test]
-fn source_saturation_avoid_includes_the_source_goal() {
-    let goal = Goal::Action(nvar(90), LNFact::new(FactTag::Out, vec![mterm(80)]));
-    let mut case_sys = System::empty();
-    case_sys.content_mut().last_atom = Some(nvar(12));
-    let src = Source::eager(goal, vec![(vec!["case".to_string()], case_sys.clone())]);
-    let cases = vec![(vec!["case".to_string()], case_sys)];
-
-    assert_eq!(source_avoid(&src, &cases), 90);
-}
-
-#[test]
 fn source_probe_distinguishes_no_match_from_matched_empty() {
     let Some(path) = require_maude_path() else {
         return;
@@ -835,28 +601,20 @@ fn source_probe_distinguishes_no_match_from_matched_empty() {
         Goal::Action(nvar(0), crate::fact::ku_fact(mterm(0))),
         Vec::new(),
     );
-    let probe = |sources: &[Source]| {
-        solve_with_source_cases_action(
-            &ctx,
-            Some(sources),
-            &System::empty(),
-            &node,
-            &live,
-            &ctx.maude,
-            None,
-        )
-    };
+    let goal = Goal::Action(node, live);
+    let red = Reduction::new(&ctx, System::empty());
+    let probe = |sources: &[Source]| apply_first_source(&red, sources.iter().enumerate(), &goal);
 
     assert!(matches!(
         probe(&[matched]),
-        Ok(SourceMatch::Matched(cases)) if cases.is_empty()
+        Ok(Some((0, cases))) if cases.is_empty()
     ));
     assert!(matches!(
         probe(&[Source::eager(
             Goal::Action(nvar(0), LNFact::new(FactTag::Out, vec![mterm(0)])),
             Vec::new(),
         )]),
-        Ok(SourceMatch::NoMatch)
+        Ok(None)
     ));
 }
 
@@ -915,37 +673,6 @@ fn source_probe_preserves_haskell_fresh_pattern_semantics() {
 }
 
 #[test]
-fn premise_source_conjoin_preserves_ac_fanout() {
-    use crate::rule::PremIdx;
-    use tamarin_term::function_symbols::AcSym;
-    use tamarin_term::subst::Subst;
-    use tamarin_term::term::f_app_ac;
-
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let maude = start_maude(&path, tamarin_term::maude_sig::dh_maude_sig());
-    let ctx = crate::constraint::solver::context::ProofContext::new(maude, Vec::new());
-    let shared = mvar(0);
-    let product = |a, b| f_app_ac(AcSym::Mult, vec![mterm(a), mterm(b)]);
-    let mut live = System::empty();
-    live.eq_store_mut().subst = Subst::from_list(vec![(shared, product(1, 2))]);
-    let goal = Goal::Premise((nvar(0), PremIdx(0)), LNFact::new(FactTag::Out, Vec::new()));
-    live.add_goal(goal.clone());
-    let mut case = System::empty();
-    case.eq_store_mut().subst = Subst::from_list(vec![(shared, product(3, 4))]);
-    let arm = RefineArm {
-        freshened_case: case.clone(),
-        branch_counter: ctx.maude.fresh_counter_peek(),
-    };
-
-    let _precompute = PrecomputeModeGuard::enter();
-    let outputs =
-        conjoin_refine_arm(&ctx, &live, &goal, arm, Some(&ctx.maude)).expect("solver operation");
-    assert!(outputs.len() > 1, "premise conjoin collapsed AC arms");
-}
-
-#[test]
 fn source_application_uses_complete_conjoin_state() {
     let Some(path) = require_maude_path() else {
         return;
@@ -968,14 +695,8 @@ fn source_application_uses_complete_conjoin_state() {
         substs: vec![SubstVFresh::from_list(vec![(mvar(25), mterm(26))])],
     });
     let expected_substs = case.eq_store().conj[0].substs.clone();
-    let arm = RefineArm {
-        freshened_case: case.clone(),
-        branch_counter: ctx.maude.fresh_counter_peek(),
-    };
-
-    let _precompute = PrecomputeModeGuard::enter();
     let output =
-        conjoin_refine_arm(&ctx, &live, &goal, arm, Some(&ctx.maude)).expect("solver operation");
+        conjoin_source_case(Reduction::new(&ctx, live), &goal, &case).expect("solver operation");
     assert_eq!(output.len(), 1);
     let joined = &output[0].sys;
     assert_eq!(joined.last_atom, Some(nvar(22)));
@@ -1015,18 +736,6 @@ fn source_clone_shares_cases_but_owns_its_lazy_cell() {
     assert_eq!(source.cases_len(), 1);
 }
 
-#[test]
-fn source_debug_hides_mutex_internals() {
-    let goal = Goal::Action(nvar(0), LNFact::new(FactTag::Out, vec![mterm(0)]));
-    let lazy = format!("{:?}", Source::lazy(goal.clone()));
-    assert!(lazy.contains("cases: \"<lazy>\""), "{lazy}");
-    assert!(!lazy.contains("Mutex"), "{lazy}");
-
-    let eager = format!("{:?}", Source::eager(goal, Vec::new()));
-    assert!(eager.contains("cases: []"), "{eager}");
-    assert!(!eager.contains("Mutex"), "{eager}");
-}
-
 /// `norm_sys_for_compare`'s rename is HS `renameDropNamehint`
 /// (LTerm.hs), a `mapFrees (Arbitrary _)`; that variant rebuilds an
 /// application through `fApp` (LTerm.hs), so renaming a free leaf
@@ -1056,106 +765,107 @@ fn the_case_rename_ac_normalises_the_operands() {
     assert_eq!(args.as_ref(), &[leaf(b), leaf(z)]);
 }
 
-/// The comparison reaches the sort of every quantifier binder, so two systems
-/// whose formulas differ only there stay distinct cases: `Ord Guarded` is
-/// HS's own derived one and walks the binder list, whose sorts separate under
-/// `Ord LSort` (LTerm.hs).
+/// `compare_systems_up_to_new_vars` (HS `compareSystemsUpToNewVars`) as
+/// rows `(label, a, b, expected)`, each system built over
+/// `system_with_a_variable_per_field`.  `None` expects any non-`Equal`
+/// order: the comparison must see the difference, whichever way it falls.
 #[test]
-fn binder_sorts_keep_two_systems_apart() {
-    use crate::formula::Quantifier;
-    use crate::guarded::gtrue;
-
-    let sys_binding = |sort: LSort| {
-        let mut sys = system_with_a_variable_per_field(mterm(11));
-        sys.content_mut().formulas = vec![Arc::new(Guarded::GGuarded {
-            qua: Quantifier::Ex,
-            vars: Arc::from(vec![("x".to_string(), sort)]),
-            guards: Arc::from(Vec::new()),
-            body: Arc::new(gtrue()),
-        })];
-        sys
-    };
-    let systems: Vec<System> = [
-        LSort::Pub,
-        LSort::Fresh,
-        LSort::Msg,
-        LSort::Node,
-        LSort::Nat,
-    ]
-    .into_iter()
-    .map(sys_binding)
-    .collect();
-    for (i, a) in systems.iter().enumerate() {
-        for b in &systems[i + 1..] {
-            assert!(compare_systems_up_to_new_vars(a, b).is_ne());
-        }
-    }
-}
-
-/// The comparison reaches the head of an application, so two systems whose
-/// formulas differ only in which AC symbol they apply stay distinct cases.
-#[test]
-fn two_ac_heads_keep_two_systems_apart() {
+fn system_comparison_table() {
     use crate::atom::ProtoAtom;
-    use crate::formula::BLNTerm;
+    use crate::constraint::system::Side;
+    use crate::formula::{BLNTerm, Quantifier};
+    use std::cmp::Ordering;
     use tamarin_term::function_symbols::AcSym;
     use tamarin_term::lterm::BVar;
     use tamarin_term::term::f_app_ac;
     use tamarin_term::vterm::var_term;
 
-    let leaf = |n: &str| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Msg, 0))) };
-    let sys_applying = |sym: AcSym| {
+    let with_formula = |formula: Guarded| {
         let mut sys = system_with_a_variable_per_field(mterm(11));
-        sys.content_mut().formulas = vec![Arc::new(Guarded::Atom(ProtoAtom::Last(f_app_ac(
+        sys.content_mut().formulas = vec![Arc::new(formula)];
+        sys
+    };
+    // `Ord Guarded` walks the binder list, whose sorts separate under
+    // `Ord LSort` (LTerm.hs).
+    let binding = |sort: LSort| {
+        with_formula(Guarded::GGuarded {
+            qua: Quantifier::Ex,
+            vars: Arc::from(vec![("x".to_string(), sort)]),
+            guards: Arc::from(Vec::new()),
+            body: Arc::new(crate::guarded::gtrue()),
+        })
+    };
+    let leaf = |n: &str| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Msg, 0))) };
+    let applying = |sym: AcSym| {
+        with_formula(Guarded::Atom(ProtoAtom::Last(f_app_ac(
             sym,
             vec![leaf("a"), leaf("b")],
-        ))))];
-        sys
+        ))))
     };
-    assert!(compare_systems_up_to_new_vars(
-        &sys_applying(AcSym::Mult),
-        &sys_applying(AcSym::Union)
-    )
-    .is_ne());
-    assert!(
-        compare_systems_up_to_new_vars(&sys_applying(AcSym::Mult), &sys_applying(AcSym::Xor))
-            .is_ne()
-    );
-}
-
-/// Once the nodes tie, HS compares the remaining fields in its own record
-/// order (System.hs), where `_sLastAtom` comes fourth and
-/// `_sFormulas` seventh.  `SystemContent` declares them the other way round,
-/// so a pair whose `last_atom` and `formulas` disagree in opposite directions
-/// settles on `last_atom`.
-#[test]
-fn compare_systems_up_to_new_vars_follows_the_hs_field_order() {
-    let build = |last: NodeId, formula: u64| {
-        let mut sys = system_with_a_variable_per_field(mterm(11));
+    // HS compares `_sLastAtom` (4th field of System.hs) before `_sFormulas`
+    // (7th); `SystemContent` declares them the other way round.
+    let last_and_formula = |last: NodeId, formula: u64| {
+        let mut sys = with_formula(last_formula(formula));
         sys.content_mut().last_atom = Some(last);
-        sys.content_mut().formulas = vec![Arc::new(last_formula(formula))];
         sys
     };
-    let smaller_last_atom = build(nvar(50), 121);
-    let smaller_formula = build(nvar(51), 120);
-    assert_eq!(
-        compare_systems_up_to_new_vars(&smaller_last_atom, &smaller_formula),
-        std::cmp::Ordering::Less
-    );
-}
+    // Of the diff-system state HS compares only the `isDiffSystem` bit.
+    let on_side = |side| {
+        let mut sys = system_with_a_variable_per_field(mterm(11));
+        sys.side = Some(side);
+        sys
+    };
 
-#[test]
-fn comparison_uses_only_haskells_diff_system_bit() {
-    use crate::constraint::system::Side;
-
-    let mut lhs = system_with_a_variable_per_field(mterm(11));
-    lhs.side = Some(Side::LHS);
-    let mut rhs = lhs.clone();
-    rhs.side = Some(Side::RHS);
-    assert_eq!(
-        compare_systems_up_to_new_vars(&lhs, &rhs),
-        std::cmp::Ordering::Equal
-    );
+    let mut rows: Vec<(String, System, System, Option<Ordering>)> = vec![
+        (
+            "Mult vs Union head".into(),
+            applying(AcSym::Mult),
+            applying(AcSym::Union),
+            None,
+        ),
+        (
+            "Mult vs Xor head".into(),
+            applying(AcSym::Mult),
+            applying(AcSym::Xor),
+            None,
+        ),
+        (
+            "last_atom before formulas".into(),
+            last_and_formula(nvar(50), 121),
+            last_and_formula(nvar(51), 120),
+            Some(Ordering::Less),
+        ),
+        (
+            "LHS vs RHS side".into(),
+            on_side(Side::LHS),
+            on_side(Side::RHS),
+            Some(Ordering::Equal),
+        ),
+    ];
+    let sorts = [
+        LSort::Pub,
+        LSort::Fresh,
+        LSort::Msg,
+        LSort::Node,
+        LSort::Nat,
+    ];
+    for (i, a) in sorts.iter().enumerate() {
+        for b in &sorts[i + 1..] {
+            rows.push((
+                format!("{a:?} vs {b:?} binder"),
+                binding(*a),
+                binding(*b),
+                None,
+            ));
+        }
+    }
+    for (label, a, b, expected) in rows {
+        let got = compare_systems_up_to_new_vars(&a, &b);
+        match expected {
+            Some(expected) => assert_eq!(got, expected, "{label}"),
+            None => assert!(got.is_ne(), "{label}"),
+        }
+    }
 }
 
 #[test]

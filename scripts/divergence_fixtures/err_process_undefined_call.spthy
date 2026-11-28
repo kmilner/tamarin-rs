@@ -1,0 +1,8 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// A call to a process never defined: `process not defined`.
+// No corpus theory fails this way.
+
+theory ProcessUndefinedCall begin
+process: Nope
+end

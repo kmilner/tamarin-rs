@@ -68,6 +68,64 @@ impl<'a> IntoIterator for &'a IntrRuleCache {
     }
 }
 
+/// A rule instance with its variant disjunction (`Maybe RuleACConstrs`);
+/// intruder rules carry none.
+pub(crate) type RuleWithConstrs = (
+    crate::rule::RuleACInst,
+    Option<Vec<tamarin_term::subst_vfresh::LNSubstVFresh>>,
+);
+
+/// HS `ClassifiedRules` (System.hs), partitioned once per context.
+#[derive(Debug)]
+pub(crate) struct ClassifiedRules {
+    /// `crProtocol`: the intruder rules that neither construct nor destruct,
+    /// then the protocol rules (`rulesAC = intruder ++ proto`).
+    pub(crate) protocol: Vec<RuleWithConstrs>,
+    /// `crDestruct`: destructor rules and `IEquality`.
+    pub(crate) destruct: Vec<RuleWithConstrs>,
+    /// `crConstruct`: constructor rules and `Coerce`.
+    pub(crate) construct: Vec<RuleWithConstrs>,
+}
+
+impl ClassifiedRules {
+    fn new(rules: &[OpenProtoRule], intruder_rules: &[IntrRuleAC]) -> Self {
+        use crate::constraint::solver::reduction::{
+            canonical_rule_inst, intr_rule_to_rule_ac_inst,
+        };
+        use crate::rule::{is_constr_rule, is_destr_rule};
+        let intr = |keep: fn(&crate::rule::IntrRuleACInfo) -> bool| {
+            intruder_rules
+                .iter()
+                .filter(|ir| keep(&ir.info))
+                .map(|ir| (intr_rule_to_rule_ac_inst(ir.clone()), None))
+                .collect::<Vec<RuleWithConstrs>>()
+        };
+        let mut protocol = intr(|info| !is_constr_rule(info) && !is_destr_rule(info));
+        protocol.extend(rules.iter().map(|o| {
+            // HS `someRuleACInst`: `Just` the disjunction, even an empty one.
+            let constrs = match &o.variants {
+                crate::theory::RuleVariants::Closed { variants, .. } => Some(variants.clone()),
+                _ => None,
+            };
+            (canonical_rule_inst(o), constrs)
+        }));
+        ClassifiedRules {
+            protocol,
+            destruct: intr(is_destr_rule),
+            construct: intr(is_constr_rule),
+        }
+    }
+
+    /// HS `nonSilentRules = filter (not . null . get rActs) . joinAllRules`.
+    pub(crate) fn non_silent(&self) -> impl Iterator<Item = &RuleWithConstrs> {
+        self.protocol
+            .iter()
+            .chain(&self.destruct)
+            .chain(&self.construct)
+            .filter(|(rule, _)| !rule.actions.is_empty())
+    }
+}
+
 /// Read-only, immutable-after-build bundle of a `ProofContext`.
 ///
 /// These fields are computed once at theory-load time and shared unchanged by
@@ -93,6 +151,8 @@ pub struct ProofContextShared {
     /// shared [`IntrRuleCache`] handle, so cloning the bundle shares the
     /// rule list instead of copying it.
     pub intruder_rules: IntrRuleCache,
+    /// `rules` and `intruder_rules` partitioned as HS `ClassifiedRules`.
+    pub(crate) classified_rules: ClassifiedRules,
     /// Action `(tag, arity)` shapes that occur in exactly one protocol or
     /// intruder rule. `solveUniqueActions` consults this on every simplify
     /// iteration, so derive it once with the immutable rule bundle.
@@ -110,10 +170,7 @@ pub struct ProofContextShared {
     pub other_restrictions: Vec<std::sync::Arc<crate::guarded::Guarded>>,
     /// Fact tags whose instances are uniquely identified by their first
     /// argument. Computed once from the theory and immutable thereafter.
-    pub injective_fact_insts: std::collections::BTreeMap<
-        crate::fact::FactTag,
-        Vec<Vec<crate::tools::injective_fact_instances::MonotonicBehaviour>>,
-    >,
+    pub injective_fact_insts: crate::tools::injective_fact_instances::InjectiveFactInsts,
     /// `pcTrueSubterm` — True iff every destructor rule has its
     /// RHS as a proper subterm of its LHS (`all isSubtermRule $
     /// filter isDestrRule $ intruder_rules`).  Mirrors Haskell's
@@ -137,10 +194,6 @@ pub struct ProofContext {
     /// one per task instead of serialising on `maude`'s IPC mutex, and falls
     /// back to `maude` when none is free. `None` means only `maude` exists
     /// and every task shares it.
-    ///
-    /// HS uses a single Maude per ClosedTheory. The pool does not change
-    /// semantics: every lease site seeds its own fresh counter, so which
-    /// process serves a task does not affect the result.
     pub maude_pool: Option<std::sync::Arc<MaudePool>>,
     /// Which expanded proof nodes retain their constraint systems.
     pub(crate) sys_retention: crate::constraint::solver::search::SysRetention,
@@ -197,14 +250,14 @@ pub struct ProofContextOptions {
     /// executable rules have been unfolded or annotated by auto-sources.
     pub macros: Vec<tamarin_term::macro_expand::LNMacro>,
     pub restrictions: Vec<crate::guarded::Guarded>,
-    pub forced_injective_facts: Vec<crate::fact::FactTag>,
+    pub forced_injective_facts: std::collections::BTreeSet<crate::fact::FactTag>,
     pub intruder_rules: Option<IntrRuleCache>,
     pub parameters: crate::constraint::solver::sources::IntegerParameters,
     pub sys_retention: crate::constraint::solver::search::SysRetention,
     pub show_saturation_steps: bool,
     /// The caller already annotated loop breakers while closing the theory.
-    /// Standalone contexts leave this false. Variant preparation is completed
-    /// here in either case because raw AC queries are phase-sensitive.
+    /// Standalone contexts leave this false; their unprepared rules get
+    /// their variants here.
     pub loop_breakers_prepared: bool,
 }
 
@@ -284,6 +337,14 @@ impl std::ops::Deref for ProofContext {
     type Target = ProofContextShared;
     fn deref(&self) -> &ProofContextShared {
         &self.shared
+    }
+}
+
+impl ProofContextShared {
+    /// Membership in HS `S.map fst $ L.get pcInjectiveFactInsts ctxt`
+    /// (Contradictions.hs, Simplify.hs).
+    pub fn is_injective_tag(&self, tag: &crate::fact::FactTag) -> bool {
+        self.injective_fact_insts.iter().any(|(t, _)| t == tag)
     }
 }
 
@@ -394,15 +455,7 @@ impl ProofContext {
     /// Number of protocol-class rules, including non-constructor/non-destructor
     /// intruder rules, after compiled-member deduplication.
     pub fn protocol_rule_count(&self) -> usize {
-        self.rules.len()
-            + self
-                .intruder_rules
-                .iter()
-                .filter(|rule| {
-                    !crate::rule::is_constr_rule(&rule.info)
-                        && !crate::rule::is_destr_rule(&rule.info)
-                })
-                .count()
+        self.classified_rules.protocol.len()
     }
 
     /// Whether a search with a deadline visits its cases in order: a witness
@@ -426,10 +479,11 @@ impl ProofContext {
         worker
     }
 
-    pub(crate) fn for_dfs_case(&self, lease: Option<&OwnedPooledMaude>, next_counter: u64) -> Self {
+    pub(crate) fn for_dfs_case(&self, lease: Option<&OwnedPooledMaude>) -> Self {
         let mut worker = self.clone();
-        let maude = lease.map_or(&self.maude, |lease| lease.handle());
-        worker.maude = maude.with_fresh_counter_next(next_counter);
+        if let Some(lease) = lease {
+            worker.maude = lease.handle().clone();
+        }
         worker
     }
 
@@ -458,12 +512,15 @@ impl ProofContext {
     pub(crate) fn build_source_sets(
         mut self,
     ) -> Result<(SharedSources, SharedSources), ProveError> {
+        let raw = self.build_raw_sources()?;
+        let refined =
+            super::sources::refine_with_source_asms(raw.to_vec(), &self.typing_assumptions, &self)?;
+        Ok((raw, Arc::new(refined)))
+    }
+
+    /// Saturate the raw sources (HS `precomputeSources`).
+    pub(crate) fn build_raw_sources(&mut self) -> Result<SharedSources, ProveError> {
         self.sources = ContextSources::Materialized;
-        // Source refinement uses local fresh variables. A cancelled build can
-        // drop its entire working set without touching a proof's counter or cases.
-        self.maude = self
-            .maude
-            .with_fresh_counter_next(self.maude.fresh_counter_peek());
         self.full_sources = Arc::new(
             self.full_sources
                 .iter()
@@ -471,25 +528,16 @@ impl ProofContext {
                 .collect(),
         );
         for src in self.full_sources.iter() {
-            src.set_cases(super::sources::initial_source_cases(&src.goal, &self)?);
+            src.set_cases(super::sources::initial_source_cases(&src.goal, self)?);
         }
         let saturated = super::sources::saturate_sources_with_simp(
             self.full_sources.to_vec(),
             self.parameters.saturation_limit(),
-            &self,
+            self,
         )?;
         let raw = Arc::new(saturated);
-        self.full_sources = if self.typing_assumptions.is_empty() {
-            raw.clone()
-        } else {
-            Arc::new(super::sources::refine_with_source_asms(
-                raw.to_vec(),
-                &self.typing_assumptions,
-                &self,
-            )?)
-        };
-        self.dump_sources();
-        Ok((raw, self.full_sources))
+        Self::dump_sources(&raw);
+        Ok(raw)
     }
 
     pub(crate) fn use_materialized_sources(&mut self, sources: SharedSources) {
@@ -541,10 +589,9 @@ impl ProofContext {
         sig: &tamarin_term::maude_sig::MaudeSig,
         maude: &MaudeHandle,
         initial: &[IntrRuleAC],
-    ) -> Vec<IntrRuleAC> {
-        let mut intruder_rules =
-            crate::intruder_rules::subterm_constructor_rules(false, maude, sig);
-        intruder_rules.extend(crate::intruder_rules::special_intruder_rules(false));
+    ) -> Result<Vec<IntrRuleAC>, tamarin_term::maude_proc::MaudeError> {
+        let mut intruder_rules = crate::intruder_rules::subterm_constructor_rules(maude, sig)?;
+        intruder_rules.extend(crate::intruder_rules::special_intruder_rules());
         // Union construction and decomposition supply multiset KU sources
         // and KD chain extensions (`multisetIntruderRules`, IntruderRules.hs).
         if sig.enable_mset {
@@ -567,15 +614,13 @@ impl ProofContext {
         // AC first, then NoEq; appended after `rules0` and before the
         // DH/BP cached variants.
         intruder_rules.extend(crate::intruder_rules::destruction_rules_ac(
-            false,
             maude,
             &sig.ac_user_fun_syms(),
-        ));
+        )?);
         intruder_rules.extend(crate::intruder_rules::destruction_rules_no_eq(
-            false,
             maude,
             &sig.no_eq_fun_syms(),
-        ));
+        )?);
         // DH / BP intruder variants — port of HS
         // `Main.TheoryLoader.addMessageDeductionRuleVariants`
         // (src/Main/TheoryLoader.hs):
@@ -603,7 +648,7 @@ impl ProofContext {
         // and making us mechanism-identical to HS.  The runtime
         // generator (`dh_intruder_rules`) is retained as the regenerator
         // (callable when one wants to refresh the cache from local
-        // Maude); a bridge test in `tests/intruder_variants_render.rs` flags any
+        // Maude); the `variants` row of the prover's cli_refs table flags any
         // divergence.
         //
         // Ordering matches HS exactly: DH BEFORE BP, both AFTER
@@ -625,7 +670,7 @@ impl ProofContext {
                 assembled.push(rule);
             }
         }
-        assembled
+        Ok(assembled)
     }
 
     /// Debug dump of the context's final intruder-rule cache, gated by
@@ -674,12 +719,12 @@ impl ProofContext {
     /// Debug dump of this context's precomputed sources — one line per
     /// source, with its goal and its materialised case names — gated by
     /// `TAM_RS_DBG_SOURCES_DUMP`.
-    fn dump_sources(&self) {
+    fn dump_sources(sources: &[Source]) {
         if !tamarin_utils::env_gate!("TAM_RS_DBG_SOURCES_DUMP") {
             return;
         }
         use crate::constraint::constraints::Goal;
-        for (i, src) in self.full_sources.iter().enumerate() {
+        for (i, src) in sources.iter().enumerate() {
             let goal = match &src.goal {
                 Goal::Action(_, fa) => format!("Action {}", crate::pretty_system::pretty_fact(fa)),
                 Goal::Premise(_, fa) => {
@@ -787,28 +832,19 @@ impl ProofContext {
         let intruder_rules: IntrRuleCache = match intr_override {
             Some(cache) => cache,
             None => IntrRuleCache::from(Self::ndc_check_cache_order(
-                Self::assemble_intruder_rules(&sig, &maude, &[]),
+                Self::assemble_intruder_rules(&sig, &maude, &[])?,
             )),
         };
         Self::dump_intruder_rules(&intruder_rules);
         // HS closeRuleCache analyzes macro-expanded cprRuleE, including
         // after auto-sources has replaced executable bodies by AC members.
-        let mut injective_fact_insts =
+        let injective_fact_insts =
             crate::tools::injective_fact_instances::injective_fact_instances_for_rules(
                 &rules,
                 &macros,
                 &sig.reducible_fun_syms_fast,
+                &forced_injective_facts,
             );
-        // HS `closeRuleCache` (CloseRule.hs): union the FORCED injective
-        // fact tags BEFORE source precomputation reads `injective_fact_insts`.
-        if !forced_injective_facts.is_empty() {
-            injective_fact_insts =
-                crate::tools::injective_fact_instances::union_forced_injective_fact_instances(
-                    injective_fact_insts,
-                    &forced_injective_facts,
-                );
-        }
-        let injective_fact_insts = injective_fact_insts.into_iter().collect();
         // Explicit AC families are executable rules, not display-only metadata.
         // Keep injectivity based on the original expanded E rules, but build
         // all solver indices and loop breakers from the supplied members.
@@ -830,7 +866,7 @@ impl ProofContext {
                 .collect();
         }
         if !loop_breakers_prepared || has_explicit_variants {
-            annotate_loop_breakers(&mut rules.iter_mut().collect::<Vec<_>>(), &maude);
+            annotate_loop_breakers(&mut rules.iter_mut().collect::<Vec<_>>(), &maude)?;
         }
         for rule in &mut rules {
             crate::tools::rule_variants::prepare_open_rule_variant(rule, &maude)?;
@@ -849,9 +885,7 @@ impl ProofContext {
                 .flat_map(|rule| &rule.rule.actions)
                 .chain(intruder_rules.iter().flat_map(|rule| &rule.actions))
             {
-                *counts
-                    .entry((action.tag, action.terms.len()))
-                    .or_insert(0usize) += 1;
+                *counts.entry((action.tag, action.arity())).or_insert(0usize) += 1;
             }
             counts
                 .into_iter()
@@ -883,6 +917,7 @@ impl ProofContext {
             shared: std::sync::Arc::new(ProofContextShared {
                 #[cfg(test)]
                 worker_gate: std::sync::Mutex::new(None),
+                classified_rules: ClassifiedRules::new(&rules, &intruder_rules),
                 rules,
                 intruder_rules,
                 unique_action_shapes,
@@ -916,11 +951,11 @@ impl ProofContext {
 /// The rules are taken by `&mut` reference each, so a caller holding them
 /// inside a theory can borrow them where they live: only `loop_breakers` is
 /// written, and a `Vec<OpenProtoRule>` copy would deep-clone every rule's
-/// `variant_substs` and `abstracted_rule` just to copy that one field back.
+/// variants just to copy that one field back.
 pub(crate) fn annotate_loop_breakers(
     rules: &mut [&mut OpenProtoRule],
     maude: &tamarin_term::maude_proc::MaudeHandle,
-) {
+) -> Result<(), tamarin_term::maude_proc::MaudeError> {
     use crate::rule::PremIdx;
 
     // HS keys the relation nodes by the WHOLE closed theory item under its
@@ -937,9 +972,7 @@ pub(crate) fn annotate_loop_breakers(
     // identity — HS compares the pre-annotation items, where every
     // `pracLoopBreakers` is still `[]`.
     let same_item = |a: &OpenProtoRule, b: &OpenProtoRule| -> bool {
-        a.rule == b.rule
-            && a.variant_substs == b.variant_substs
-            && a.abstracted_rule == b.abstracted_rule
+        a.rule == b.rule && a.variants == b.variants
     };
     let mut keys: Vec<usize> = Vec::with_capacity(rules.len());
     for i in 0..rules.len() {
@@ -951,15 +984,17 @@ pub(crate) fn annotate_loop_breakers(
     // facts. The cached abstracted bodies and variant substitutions include
     // reducible-term normalization, including flattened DH exponents. An empty
     // variant list yields the bare fact.
-    let variant_substs: Vec<&Vec<tamarin_term::subst_vfresh::LNSubstVFresh>> =
-        rules.iter().map(|o| &o.variant_substs).collect();
+    let variants: Vec<&crate::theory::RuleVariants> = rules.iter().map(|o| &o.variants).collect();
 
     // `instances ru fa`: apply each variant subst (as a free subst via
     // `freshToFreeAvoiding`) to `fa`.  Empty variant list ⇒ `[fa]`.
     let instances = |rule_idx: usize, fa: &crate::fact::LNFact| -> Vec<crate::fact::LNFact> {
         use tamarin_term::lterm::HasFrees;
-        let substs = variant_substs[rule_idx];
-        if substs.is_empty() || substs.iter().all(|s| s.is_empty()) {
+        let substs = match variants[rule_idx] {
+            crate::theory::RuleVariants::Closed { variants, .. } => variants.as_slice(),
+            _ => return vec![fa.clone()],
+        };
+        if !substs.is_empty() && substs.iter().all(|s| s.is_empty()) {
             return vec![fa.clone()];
         }
         substs
@@ -977,14 +1012,14 @@ pub(crate) fn annotate_loop_breakers(
                     }
                 });
                 let mut next = avoid_max;
-                let free = s.fresh_to_free(|_| {
+                let free = s.fresh_to_free_avoiding(|_| {
                     let i = next;
                     next += 1;
                     i
                 });
                 // freshToFree rename + apply — frees change; recompute the bloom.
                 let terms: Vec<tamarin_term::lterm::LNTerm> = fa
-                    .terms
+                    .terms()
                     .iter()
                     .map(|t| tamarin_term::subst::apply_vterm(&free, t.clone()))
                     .collect();
@@ -1014,12 +1049,8 @@ pub(crate) fn annotate_loop_breakers(
     // ruFrom because that's the outermost loop.
     // HS enumerates premises/conclusions of the AC rule, i.e. the
     // *abstracted* rule (whose reducible-headed sub-terms are replaced by
-    // the fresh z-vars the variant substs are keyed on).  Use
-    // `abstracted_rule` when present, falling back to the raw E-rule.
-    let ac_rules: Vec<&crate::rule::ProtoRuleE> = rules
-        .iter()
-        .map(|o| o.abstracted_rule.as_ref().unwrap_or(&o.rule))
-        .collect();
+    // the fresh z-vars the variant substs are keyed on).
+    let ac_rules: Vec<&crate::rule::ProtoRuleE> = rules.iter().map(|o| o.ac_body()).collect();
     // Memoize variant instances only after a compatible fact tag is found.
     // Upstream #978 rejects incompatible tags before instantiation; retaining
     // the memoized lists also avoids repeating substitutions for later edges.
@@ -1082,23 +1113,28 @@ pub(crate) fn annotate_loop_breakers(
                 // i.e. iterate the VARIANT INSTANCES of both the premise and
                 // each conclusion, rename the conclusion away from the
                 // premise's frees, and check Maude AC-unifiability.
-                let conc_unifies = ru_from_ac.conclusions.iter().enumerate().any(|(ci, c0)| {
+                // HS runs the unifier purely, so a failed backend aborts
+                // the pass instead of dropping the edge.
+                let mut conc_unifies = false;
+                'concs: for (ci, c0) in ru_from_ac.conclusions.iter().enumerate() {
                     if c0.tag != prem_fa.tag {
-                        return false;
+                        continue;
                     }
                     let prem_insts = prem_insts_by_rule[i_to][to_prem_idx.0]
                         .get_or_init(|| instances(i_to, prem_fa));
                     let conc_insts =
                         conc_insts_by_rule[i_from][ci].get_or_init(|| instances(i_from, c0));
-                    conc_insts.iter().any(|conc| {
-                        prem_insts.iter().any(|prem| {
+                    for conc in conc_insts {
+                        for prem in prem_insts {
                             let mut fresh = tamarin_term::lterm::avoid(prem);
                             let conc_fresh = tamarin_term::lterm::rename(conc.clone(), &mut fresh);
-                            crate::rule::unifiable_ln_facts(maude, &conc_fresh, prem)
-                                .unwrap_or(false)
-                        })
-                    })
-                });
+                            if crate::rule::unifiable_ln_facts(maude, &conc_fresh, prem)? {
+                                conc_unifies = true;
+                                break 'concs;
+                            }
+                        }
+                    }
+                }
                 if !conc_unifies {
                     continue;
                 }
@@ -1121,6 +1157,7 @@ pub(crate) fn annotate_loop_breakers(
             .map(|(_, p)| *p)
             .collect();
     }
+    Ok(())
 }
 
 /// Run [`annotate_loop_breakers`] over a theory's rules, in place and in
@@ -1136,7 +1173,7 @@ pub(crate) fn annotate_loop_breakers(
 pub fn annotate_theory_loop_breakers(
     theory: &mut crate::theory::Theory,
     maude: &tamarin_term::maude_proc::MaudeHandle,
-) {
+) -> Result<(), tamarin_term::maude_proc::MaudeError> {
     use crate::theory::TheoryItem;
     let mut rules: Vec<&mut OpenProtoRule> = theory
         .items
@@ -1146,151 +1183,18 @@ pub fn annotate_theory_loop_breakers(
             _ => None,
         })
         .collect();
-    annotate_loop_breakers(&mut rules, maude);
+    annotate_loop_breakers(&mut rules, maude)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Arc, IntrRuleCache, ProofContext, ProveError, SourceSlot};
+    use super::{Arc, IntrRuleCache, ProveError, SourceSlot};
     use crate::rule::IntrRuleAC;
-    use tamarin_test_support::require_maude_path;
-
-    #[test]
-    fn explicit_variant_actions_are_used_by_the_solver() {
-        let Some(path) = require_maude_path() else {
-            return;
-        };
-        let source = r#"theory ExplicitActions begin
-rule Emit: [In(x)] --[Original(x)]-> []
-variants
-rule (modulo AC) Emit___VARIANT_1: [In(y.8)] --[Original(y.8), Added(y.8)]-> []
-end"#;
-        let theory =
-            crate::elaborate::elaborate(&tamarin_parser::parse_theory(source, &[]).unwrap())
-                .unwrap();
-        let maude =
-            tamarin_term::maude_proc::MaudeHandle::start(&path, theory.signature.clone()).unwrap();
-        let ctx = ProofContext::new(maude, theory.rules().cloned().collect());
-        assert_eq!(ctx.rules.len(), 1);
-        assert_eq!(ctx.rules[0].rule.actions.len(), 2);
-        assert_eq!(ctx.rules[0].variant_substs.len(), 1);
-        assert!(ctx.rules[0].variant_substs[0].is_empty());
-    }
-
-    #[test]
-    fn injectivity_analysis_uses_original_rules_after_unfolding() {
-        use crate::fact::{FactTag, Multiplicity};
-        use crate::tools::injective_fact_instances::MonotonicBehaviour;
-        let Some(path) = require_maude_path() else {
-            return;
-        };
-        for first_argument in ["~id", "projection(~id)"] {
-            let source = format!(
-                r#"theory UnfoldedInjectivity begin
-macros: projection(x) = fst(<x, 'c'>)
-rule Init: [Fr(~id), In(x)] --> [S({first_argument}, x)]
-rule Update: [S(~id, x)] --> [S(~id, projection(x))]
-end"#
-            );
-            let theory =
-                crate::elaborate::elaborate(&tamarin_parser::parse_theory(&source, &[]).unwrap())
-                    .unwrap();
-            let maude =
-                tamarin_term::maude_proc::MaudeHandle::start(&path, theory.signature.clone())
-                    .unwrap();
-            // Model the normalized executable members while retaining the
-            // original E halves. The CLI regression covers actual unfolding.
-            let compiled = crate::elaborate::elaborate(&tamarin_parser::parse_theory(
-                "theory Compiled begin rule Init: [Fr(~id), In(x)] --> [S(~id,x)] rule Update: [S(~id,x)] --> [S(~id,x)] end",
-                &[],
-            ).unwrap()).unwrap();
-            let rules = theory
-                .rules()
-                .zip(compiled.rules())
-                .map(|(original, member)| {
-                    let mut rule = original.clone();
-                    rule.rule_e = Some(Box::new(original.rule_e().clone()));
-                    rule.rule = member.rule.clone();
-                    rule
-                })
-                .collect();
-            let ctx = ProofContext::with_options(
-                maude,
-                rules,
-                super::ProofContextOptions {
-                    macros: theory.macros().cloned().collect(),
-                    ..Default::default()
-                },
-            );
-            let expected =
-                (first_argument == "~id").then(|| vec![vec![MonotonicBehaviour::Unstable]]);
-            assert_eq!(
-                ctx.injective_fact_insts
-                    .get(&FactTag::Proto(Multiplicity::Linear, "S", 2)),
-                expected.as_ref()
-            );
-        }
-    }
-
-    #[test]
-    fn injectivity_analysis_uses_expanded_macros_not_display_rules() {
-        use crate::fact::{FactTag, Multiplicity};
-        use crate::tools::injective_fact_instances::{
-            simple_injective_fact_instances, MonotonicBehaviour,
-        };
-        let Some(path) = require_maude_path() else {
-            return;
-        };
-        // Upstream baf837f / msr-macro-injectivity: unexpanded macro
-        // applications look like strictly increasing free constructors.
-        let source = r#"theory MacroInjectivity begin
-macros: identity(x) = x, constant(x) = 'c', projection(x) = fst(<x, 'c'>)
-rule Init: [Fr(~id), In(x)] --> [S(~id, x), C(~id, x), P(~id, x)]
-rule Identity: [S(~id, x)] --> [S(~id, identity(x))]
-rule Constant: [C(~id, x)] --> [C(~id, constant(x))]
-rule Projection: [P(~id, x)] --> [P(~id, projection(x))]
-end"#;
-        let theory =
-            crate::elaborate::elaborate(&tamarin_parser::parse_theory(source, &[]).unwrap())
-                .unwrap();
-        let rules: Vec<_> = theory.rules().cloned().collect();
-        assert!(rules[1..].iter().all(|r| r.rule_e.is_some()));
-        let unexpanded = simple_injective_fact_instances(
-            &rules.iter().map(|r| r.rule_e()).collect::<Vec<_>>(),
-            &theory.signature.reducible_fun_syms_fast,
-        );
-        assert_eq!(unexpanded.len(), 3);
-        assert!(unexpanded
-            .iter()
-            .all(|(_, shape)| *shape == vec![vec![MonotonicBehaviour::StrictlyIncreasing]]));
-        let maude =
-            tamarin_term::maude_proc::MaudeHandle::start(&path, theory.signature.clone()).unwrap();
-        let ctx = ProofContext::with_options(
-            maude,
-            rules,
-            super::ProofContextOptions {
-                macros: theory.macros().cloned().collect(),
-                ..Default::default()
-            },
-        );
-        for (tag, behaviour) in [
-            ("S", MonotonicBehaviour::Constant),
-            ("C", MonotonicBehaviour::Unstable),
-            ("P", MonotonicBehaviour::Unstable),
-        ] {
-            assert_eq!(
-                ctx.injective_fact_insts
-                    .get(&FactTag::Proto(Multiplicity::Linear, tag, 2)),
-                Some(&vec![vec![behaviour]]),
-                "{tag} must be analysed after macro expansion"
-            );
-        }
-    }
 
     /// A small Maude-free rule list: the special intruder rules
     /// (`coerce`, `pub`, `fresh`, `isend`, `irecv`).
     fn sample_rules() -> Vec<IntrRuleAC> {
-        let rules = crate::intruder_rules::special_intruder_rules(false);
+        let rules = crate::intruder_rules::special_intruder_rules();
         assert!(rules.len() > 1, "sample needs several rules to compare");
         rules
     }

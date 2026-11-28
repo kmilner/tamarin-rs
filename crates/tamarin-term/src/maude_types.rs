@@ -9,7 +9,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::lterm::{LNTerm, LSort, LVar, Name, NameTag};
+use crate::lterm::{LNTerm, LSort, LVar, Name};
 use crate::term::Term;
 use crate::vterm::Lit;
 
@@ -92,46 +92,6 @@ impl ConvCtx {
 }
 
 // =============================================================================
-// Sort lookup for constants
-// =============================================================================
-
-/// Name-id prefix used by `maude_proc.rs` to mark a synthetic skolem
-/// constant whose intended Maude sort is `Msg`.
-///
-/// `NameTag` has no `Msg` variant (a `Name` constant is always Fresh,
-/// Pub, Node or Nat), and adding one would require non-exhaustive
-/// `match`es across many crates to be updated.  The Maude wire encoding,
-/// however, *does* support a `Msg`-sorted constant directly: the emitted
-/// theory declares `op c : Nat -> Msg` and `MaudeConst(i, LSort::Msg)`
-/// prints as `c(i)`.  So to faithfully mirror HS's
-/// `sortOfSkol (SkConst v) = lvarSort v` (Guarded.hs) — where a
-/// skolemized free variable keeps its *own* sort, which may be `Msg` —
-/// we carry a `Msg`-sorted skolem as a `NameTag::Pub` `Name` whose id
-/// begins with this sentinel, and recognise it here so that
-/// `sort_of_name` returns `LSort::Msg` (not the carrier tag's `Pub`).
-///
-/// `Pub` is a strict subsort of `Msg`, so without this a `Msg` skolem
-/// would be emitted as `p(i)` and Maude order-sorted matching would
-/// *over-match* (succeeding where HS, treating it as `Msg`, would not).
-///
-/// This sentinel is namespaced (double-underscore + `skMSG` + double
-/// underscore) so it cannot collide with any real protocol constant
-/// (which originate from `'...'`/`~'...'` literals).
-pub const SKOLEM_MSG_PREFIX: &str = "__skMSG__";
-
-/// `sortOfName` — the sort of a `Name` literal.
-pub fn sort_of_name(n: &Name) -> LSort {
-    // Msg-sorted skolem constants are carried as `NameTag::Pub` names
-    // with a sentinel id prefix; recover their true `Msg` sort here so
-    // the Maude wire constant is `c(i)` (Msg), not `p(i)` (Pub).  See
-    // `SKOLEM_MSG_PREFIX`.
-    if matches!(n.tag, NameTag::Pub) && n.id.as_str().starts_with(SKOLEM_MSG_PREFIX) {
-        return LSort::Msg;
-    }
-    crate::lterm::sort_of_name(n)
-}
-
-// =============================================================================
 // LNTerm -> MTerm (forward)
 // =============================================================================
 
@@ -156,7 +116,7 @@ fn import_lit(l: &Lit<Name, LVar>, ctx: &mut ConvCtx) -> MaudeLit {
             MaudeLit::MaudeVar(id, lv.sort)
         }
         Lit::Con(n) => {
-            let s = sort_of_name(n);
+            let s = crate::lterm::sort_of_name(n);
             let id = ctx.fresh_id();
             MaudeLit::MaudeConst(id, s)
         }
@@ -279,6 +239,7 @@ pub fn lookup_canonical_var_lit(ctx: &ConvCtx, sort: LSort, idx: u64) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::lterm::{NameId, NameTag};
 
     /// The variant order `MaudeVar < FreshVar < MaudeConst`, and inside a
     /// variant the index before the sort, as HS's `MaudeLit` declares them.
@@ -291,39 +252,26 @@ mod tests {
         assert!(MaudeLit::MaudeVar(0, LSort::Pub) < MaudeLit::MaudeVar(0, LSort::Fresh));
     }
 
+    /// HS sends a constant with `sortOfSkol` (Guarded.hs): a skolem keeps its
+    /// variable's sort, here `Msg` (`c`), while a real public name is `Pub`
+    /// (`p`) whatever its id.
     #[test]
-    fn skolem_msg_constant_sorts_as_msg() {
-        use crate::lterm::{Name, NameId, NameTag};
-        // A sentinel-prefixed Pub-carrier name is reported as Msg so the
-        // Maude wire constant is `c(i)` (HS `sortOfSkol = lvarSort v`).
+    fn skolem_constant_keeps_its_variable_sort() {
         let msg_skol = Name {
-            tag: NameTag::Pub,
-            id: NameId::new(format!("{}0_x_7_M", SKOLEM_MSG_PREFIX)),
+            tag: NameTag::Skolem {
+                idx: 7,
+                sort: LSort::Msg,
+            },
+            id: NameId::new("x"),
         };
-        assert_eq!(sort_of_name(&msg_skol), LSort::Msg);
-        // A non-skolem Pub constant is still Pub.
-        let real_pub = Name {
-            tag: NameTag::Pub,
-            id: NameId::new("alice"),
-        };
-        assert_eq!(sort_of_name(&real_pub), LSort::Pub);
-        // The sentinel only applies to Pub-tagged carriers.
-        let fresh = Name {
-            tag: NameTag::Fresh,
-            id: NameId::new("k"),
-        };
-        assert_eq!(sort_of_name(&fresh), LSort::Fresh);
-        // The emitted Maude constant also uses the `c` (Msg) symbol.  It does
-        // not use the `p` (Pub) symbol that the carrier tag would give.
-        let t: LNTerm = Term::Lit(Lit::Con(msg_skol));
+        let user_pub = Name::new(NameTag::Pub, "__skMSG__ordinary");
         let mut ctx = ConvCtx::new();
-        let mt = lterm_to_mterm_global(&t, &mut ctx);
-        let wire = String::from_utf8(crate::maude_print::pp_mterm(&mt)).unwrap();
-        assert_eq!(wire, "c(0)");
-        let real: LNTerm = Term::Lit(Lit::Con(real_pub));
-        let mt = lterm_to_mterm_global(&real, &mut ctx);
-        let wire = String::from_utf8(crate::maude_print::pp_mterm(&mt)).unwrap();
-        assert_eq!(wire, "p(1)");
+        let wire = |n: Name, ctx: &mut ConvCtx| {
+            let mt = lterm_to_mterm_global(&Term::Lit(Lit::Con(n)), ctx);
+            String::from_utf8(crate::maude_print::pp_mterm(&mt)).unwrap()
+        };
+        assert_eq!(wire(msg_skol, &mut ctx), "c(0)");
+        assert_eq!(wire(user_pub, &mut ctx), "p(1)");
     }
 
     /// A variable survives the `LNTerm -> MTerm -> LNTerm` round trip and
@@ -360,60 +308,12 @@ mod tests {
         assert_eq!(ctx.variable_bound(), 2);
     }
 
-    /// Pins the load-bearing sort-tolerant DOMAIN fallback in
-    /// `substitute_lookup_var`.  HS `lookupVar s i = lookupBinding
-    /// (MaudeVar i s)` (Term/Maude/Types.hs) is strict and would
-    /// `error` on a sort-miss; the Rust fallback instead recovers the
-    /// original LVar by (idx, ANY sort).  This test locks the CURRENT Rust
-    /// behavior so any change to that fallback is caught and re-validated
-    /// against the corpus.  If the upstream registration cause is ever
-    /// traced and the fallback removed, this test changes with it.
-    #[test]
-    fn substitute_lookup_var_recovers_widened_sort() {
-        let mut ctx = ConvCtx::new();
-        // Bind MaudeVar(6, Fresh) -> ~k1 (a Fresh-sorted LVar).
-        let k1 = LVar::new("~k", LSort::Fresh, 1);
-        ctx.inverse
-            .insert(MaudeLit::MaudeVar(6, LSort::Fresh), Lit::Var(k1));
-        // Maude references it back with a WIDENED sort (Msg); the strict
-        // (6, Msg) key misses, but the (idx, any-sort) fallback recovers
-        // the original Fresh-sorted LVar.
-        let got = substitute_lookup_var(&ctx, LSort::Msg, 6);
-        assert_eq!(got, Some(k1));
-        // A genuinely unknown idx still returns None (no fabrication).
-        assert_eq!(substitute_lookup_var(&ctx, LSort::Msg, 99), None);
-    }
-
-    /// Pins the load-bearing sort-tolerant RANGE fallback used by
-    /// `mterm_to_lnterm` via `lookup_canonical_var_lit`.  HS `importLit`
-    /// (Term/Maude/Types.hs) is strict on the full sort and on a miss
-    /// mints a FRESH `LVar` at the widened sort; the Rust fallback instead
-    /// recovers the original LVar identity.  Locks current Rust behavior.
-    #[test]
-    fn mterm_to_lnterm_recovers_widened_sort_var() {
-        let mut ctx = ConvCtx::new();
-        // ctx only has MaudeVar(idx, Fresh) bound.
-        let k = LVar::new("~k", LSort::Fresh, 3);
-        ctx.inverse
-            .insert(MaudeLit::MaudeVar(4, LSort::Fresh), Lit::Var(k));
-        // Maude hands back the SAME idx widened to Msg.
-        let mt: MTerm = Term::Lit(MaudeLit::MaudeVar(4, LSort::Msg));
-        let mut next = 50;
-        let back = mterm_to_lnterm(&mt, &mut ctx, "x", &mut next);
-        // Rust recovers the original Fresh-sorted LVar rather than minting
-        // a fresh Msg-sorted one (which is what HS would do).  next is
-        // untouched because no new LVar was allocated.
-        assert_eq!(back, Term::Lit(Lit::Var(k)));
-        assert_eq!(next, 50);
-    }
-
-    /// Regression for #330: `mterm_to_lnterm` must sort `em` (C/EMap) args
-    /// by the FINAL `LVar` order, not leave them in Maude's back-conversion
-    /// order.  An MTerm `em(<id for x.10>, <id for x.9>)` whose args map
+    /// `mterm_to_lnterm` sorts `em` (C/EMap) args by the FINAL `LVar`
+    /// order, not Maude's back-conversion order.  An MTerm `em(<id for x.10>, <id for x.9>)` whose args map
     /// back to `x.10` and `x.9` must come back as `em(x.9, x.10)` (idx-first
     /// `LVar` order), matching HS `mTermToLNTerm`'s `fApp o`/`fAppC EMap`.
     #[test]
-    fn emap_args_sorted_by_final_lvar_order() {
+    fn back_conversion_sorts_c_arguments_by_final_lvar_order() {
         use crate::function_symbols::{CSym, FunSym};
         // Build the MaudeVar ids in the REVERSE-of-sorted order: id 0 binds
         // to the larger var (x.10), id 1 to the smaller (x.9).  So the raw

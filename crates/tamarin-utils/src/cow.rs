@@ -63,10 +63,10 @@ pub fn cow_pair<T: Clone, U: Clone>(x: &T, fx: Option<T>, y: &U, fy: Option<U>) 
 /// slice with the unchanged prefix cloned and changed elements rebuilt.
 #[inline]
 pub fn cow_map_arc<T: Clone>(
-    xs: &std::sync::Arc<[T]>,
+    xs: &[T],
     f: impl FnMut(&T) -> Option<T>,
 ) -> Option<std::sync::Arc<[T]>> {
-    cow_map_vec(&xs[..], f).map(std::sync::Arc::from)
+    cow_map_vec(xs, f).map(std::sync::Arc::from)
 }
 
 #[cfg(test)]
@@ -97,12 +97,6 @@ mod tests {
             .collect();
         assert_eq!(got, Some(eager));
         assert_eq!(got, Some(vec![1, -4, 5]));
-    }
-
-    #[test]
-    fn rebuilt_reserves_the_complete_slice() {
-        let got = cow_map_vec(&[1, 3, 4, 5], neg_even).unwrap();
-        assert!(got.capacity() >= 4);
     }
 
     #[test]

@@ -1,0 +1,17 @@
+WARNING: the following wellformedness checks failed!
+
+Formula guardedness
+===================
+
+  Restriction `Restr_Mixed_1' cannot be converted to a guarded formula:
+    universal quantifier without toplevel implication
+      "∀ #i. A( x ) @ #i"
+    in the formula
+      "∀ x #NOW. (Restr_Mixed_1( x ) @ #NOW) ⇒ (∀ #i. A( x ) @ #i)"
+  
+  Restriction `Restr_Bound_1' cannot be converted to a guarded formula:
+    universal quantifier without toplevel implication
+      "∀ x #i. A( x ) @ #i"
+    in the formula
+      "∀ #NOW. (Restr_Bound_1( ) @ #NOW) ⇒ (∀ x #i. A( x ) @ #i)"
+*/

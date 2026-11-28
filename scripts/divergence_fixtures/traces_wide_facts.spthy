@@ -1,0 +1,29 @@
+// Category: the trace graphs `--output-dot` and `--output-json` write for a
+// found trace, which only json_sweep.sh and the web crawl compare, locally.
+//
+//   - Token: persistent facts with long nested pairs (an OIDC-style
+//     `id_token`), which the dot record labels balance across lines;
+//   - Wide: a 20-deep nested term in one fact, which the json writer
+//     flattens back to one line.
+// output_traces.rs pins one small graph; no CI gate compares these shapes.
+
+theory TracesWideFacts
+begin
+
+functions: f/2, g/1
+
+rule Token:
+  [ Fr(~n) ]
+  --[ Issued(~n) ]->
+  [ !Server_to_Client_TLS($Server1, 'BR1', <'RE1', $uri, 'AU1', <'id_token', <'iss', 'iss'>, <'sub', 'sub'>, <'aud', 'aud'>, 'nonce', ~n>, 'sig'>),
+    !St_Browser_Session('BR2', $Server1, 'BR1') ]
+
+rule Wide:
+  [ Fr(~x), Fr(~y) ]
+  --[ Done(g(f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, f(~x, ~x))))))))))))))))))))),
+           g(f(~y, f(~y, f(~y, f(~y, f(~y, f(~y, f(~y, f(~y, f(~y, f(~y, f(~y, f(~y, f(~y, f(~y, f(~y, f(~y, f(~y, f(~y, f(~y, f(~y, ~y)))))))))))))))))))))) ]->
+  [ ]
+
+lemma both: exists-trace "Ex n x y #i #j. Issued(n) @ #i & Done(x, y) @ #j"
+
+end

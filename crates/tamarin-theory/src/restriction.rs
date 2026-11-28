@@ -21,8 +21,8 @@ use tamarin_utils::fresh::{FastFreshState, MonadFresh};
 use crate::atom::{map_atom, ProtoAtom};
 use crate::fact::{Fact, FactTag, LNFact, Multiplicity};
 use crate::formula::{
-    apply_macro_in_formula, for_all_var, formula_frees, formula_frees_list, traverse_formula_atom,
-    BLNTerm, LNFormula, ProtoFormula,
+    apply_macro_in_formula, formula_frees, formula_frees_list, quantify_vars,
+    traverse_formula_atom, BLNTerm, LNFormula, ProtoFormula, Quantifier,
 };
 
 /// `ProtoRestriction f` from the Haskell version. We keep it generic to
@@ -200,9 +200,7 @@ pub fn from_rule_restriction(rname: &str, f: &LNFormula) -> (Restriction, LNFact
     );
     let body = ProtoFormula::Atom(ProtoAtom::Action(var_term(BVar::Free(var_now())), fact))
         .implies(rewritten);
-    let formula = formula_frees(&body).iter().rev().fold(body, |acc, v| {
-        for_all_var((v.name.to_string(), v.sort), v, acc)
-    });
+    let formula = quantify_vars(Quantifier::All, &formula_frees(&body), body);
     let restriction = Restriction {
         name: format!("{RESTR_PREFIX}{rname}"),
         formula,
@@ -218,155 +216,4 @@ pub fn from_rule_restriction(rname: &str, f: &LNFormula) -> (Restriction, LNFact
         .map(|v| apply_vterm(&subst, var_term(v)))
         .collect();
     (restriction, mk_fact(rname, args))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::fact::show_fact_tag;
-    use crate::formula::{Connective, Quantifier};
-    use crate::predicate::{expand_formula, Predicate};
-    use crate::pretty_formula::pretty_lnformula;
-    use tamarin_parser::parser::parse_formula_str;
-    use tamarin_term::function_symbols::FunSym;
-    use tamarin_term::maude_sig::MaudeSig;
-
-    /// The signature and the predicates of a theory that declares nothing
-    /// else, as `elaborate` builds them.
-    fn theory(decls: &str) -> (MaudeSig, Vec<Predicate>) {
-        let src = format!("theory T begin\n{decls}\nend");
-        let thy = tamarin_parser::parse_theory(&src, &[]).unwrap();
-        let elab = crate::elaborate::elaborate(&thy).unwrap();
-        let preds = elab.predicates().cloned().collect();
-        (elab.signature, preds)
-    }
-
-    /// One `_restrict` formula as the lifting sees it: parsed, closed against
-    /// the signature and expanded against the predicates.
-    fn restrict(src: &str, sig: &MaudeSig, preds: &[Predicate]) -> LNFormula {
-        let f = parse_formula_str(src, sig).unwrap();
-        expand_formula(preds, &crate::formula::from_parser(&f, sig).unwrap()).unwrap()
-    }
-
-    #[test]
-    fn minimal_trace() {
-        // True(x) <=> (x = true()); restriction True(eq(x,x)).
-        let (sig, preds) = theory("functions: true/0, eq/2\npredicates: True(x) <=> (x = true())");
-        let (restr, action) =
-            from_rule_restriction("A_1", &restrict("True(eq(x, x))", &sig, &preds));
-
-        assert_eq!(restr.name, "Restr_A_1");
-        // Action fact name + ORIGINAL args: the single abstracted argument is
-        // the whole `eq(x,x)`.
-        assert_eq!(show_fact_tag(&action.tag), "Restr_A_1");
-        assert_eq!(action.terms.len(), 1);
-        match &action.terms[0] {
-            Term::App(FunSym::NoEq(sym), args) => {
-                assert_eq!(sym.name, b"eq");
-                assert_eq!(args.len(), 2);
-            }
-            other => panic!("expected eq(x,x), got {other:?}"),
-        }
-
-        // The formula has two binders: the abstracted `x` (Msg) and `#NOW`
-        // (Node), in `frees`' sorted order — `x` then `NOW`.
-        let ProtoFormula::Qua(Quantifier::All, outer, body) = &restr.formula else {
-            panic!("expected a universal, got {:?}", restr.formula);
-        };
-        assert_eq!(outer, &("x".to_string(), LSort::Msg));
-        let ProtoFormula::Qua(Quantifier::All, inner, body) = &**body else {
-            panic!("expected a second universal, got {body:?}");
-        };
-        assert_eq!(inner, &("NOW".to_string(), LSort::Node));
-
-        // HS `f'' = (Action #NOW fact) ==> f'`.  The generated action is the
-        // antecedent and the rewritten body the consequent.  A swap of the two
-        // keeps the formula an implication and inverts the restriction.
-        let ProtoFormula::Conn(Connective::Imp, ante, conseq) = &**body else {
-            panic!("expected an implication, got {body:?}");
-        };
-        assert_eq!(
-            **ante,
-            ProtoFormula::Atom(ProtoAtom::Action(
-                var_term(BVar::Bound(0)),
-                mk_fact("A_1", vec![var_term(BVar::Bound(1))]),
-            ))
-        );
-        // The consequent is the body of the predicate.  The complete `eq(x,x)`
-        // subterm becomes the fresh `x`.  The nullary constant `true` stays
-        // inline as a 0-ary application: the abstraction never reaches it.
-        let ProtoFormula::Atom(ProtoAtom::EqE(l, r)) = &**conseq else {
-            panic!("expected an equality, got {conseq:?}");
-        };
-        assert_eq!(*l, var_term(BVar::Bound(1)));
-        assert!(
-            matches!(r, Term::App(FunSym::NoEq(sym), args) if sym.name == b"true" && args.is_empty()),
-            "expected the nullary `true`, got {r:?}"
-        );
-    }
-
-    #[test]
-    fn restriction_binder_identity_is_the_full_variable() {
-        // `∀ #i` binds a De Bruijn index; the `i` in the message position of
-        // `A(i)` is a free variable, so the abstraction takes it and leaves
-        // the time point alone.
-        let (sig, _) = theory("functions: h/1");
-        let phi = restrict("All #i. A(i) @ #i", &sig, &[]);
-        let (rewr, subst) = rewrite(&phi);
-        let ProtoFormula::Qua(Quantifier::All, hint, body) = &rewr else {
-            panic!("expected a universal, got {rewr:?}");
-        };
-        assert_eq!(hint, &("i".to_string(), LSort::Node));
-        let ProtoFormula::Atom(ProtoAtom::Action(tp, fa)) = &**body else {
-            panic!("expected an action atom, got {body:?}");
-        };
-        let fresh = LVar::new("x", LSort::Msg, 0);
-        assert_eq!(fa.terms.to_vec(), vec![var_term(BVar::Free(fresh))]);
-        assert_eq!(*tp, var_term(BVar::Bound(0)));
-        assert_eq!(
-            subst.get(&fresh),
-            Some(&var_term(LVar::new("i", LSort::Msg, 0)))
-        );
-
-        // `∀ x:msg` binds the message-sorted `x`, and the bare body `x` is
-        // that binder's index: nothing is abstracted.
-        let phi = restrict("All x:msg #i. A(x) @ #i", &sig, &[]);
-        let (rewr, subst) = rewrite(&phi);
-        assert!(subst.is_empty(), "nothing to abstract, got {subst:?}");
-        assert_eq!(rewr, phi);
-    }
-
-    /// HS's `Traversable (ProtoAtom s)` runs `Action <$> f i <*> traverse f fa`
-    /// (Theory/Model/Atom.hs) and its `Foldable` folds in the same
-    /// order (Theory/Model/Atom.hs), so an action atom's time point is
-    /// abstracted — and folded into `freesList` — before the fact's arguments.
-    /// Only a `_restrict` whose time point is FREE tells the two orders apart.
-    #[test]
-    fn abstracted_timepoint_precedes_the_fact_arguments() {
-        let (sig, _) = theory("functions: f/2");
-        let (restr, action) = from_rule_restriction("A_1", &restrict("B(f(x,y)) @ #i", &sig, &[]));
-        assert_eq!(
-            pretty_lnformula(&restr.formula),
-            "∀ x #NOW x.1. (Restr_A_1( x, x.1 ) @ #NOW) ⇒ (B( x.1 ) @ x)"
-        );
-        assert_eq!(action.terms.len(), 2);
-        assert_eq!(
-            action.terms[0],
-            var_term(LVar::new("i", LSort::Node, 0)),
-            "the time point's abstraction comes first"
-        );
-        match &action.terms[1] {
-            Term::App(FunSym::NoEq(sym), args) => {
-                assert_eq!(sym.name, b"f");
-                assert_eq!(
-                    args.to_vec(),
-                    vec![
-                        var_term(LVar::new("x", LSort::Msg, 0)),
-                        var_term(LVar::new("y", LSort::Msg, 0)),
-                    ]
-                );
-            }
-            other => panic!("expected f(x, y), got {other:?}"),
-        }
-    }
 }

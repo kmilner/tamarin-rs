@@ -2,6 +2,7 @@
 // Derived from the upstream tamarin-prover sources referenced below.
 
 use super::*;
+use crate::constraint::solver::proof_method::Result as MethodResult;
 use crate::constraint::solver::search::run_proof_search;
 use crate::constraint::system::System;
 use crate::theory::ProofTree;
@@ -57,7 +58,7 @@ fn sorry_leaf_runs_auto_prover_only_for_prove_targets() {
     // Skeleton = `by sorry`.
     let skel = ProofTree {
         method: ProofMethod::Sorry(None),
-        cases: Vec::new(),
+        cases: BTreeMap::new(),
     };
     let replayed =
         replace_sorry_prove(&ctx, past_initial_system(), &skel, 50).expect("proof search");
@@ -78,7 +79,10 @@ fn sorry_leaf_runs_auto_prover_only_for_prove_targets() {
         "a non-target lemma's stored sorry must survive unproved"
     );
     assert!(matches!(kept.method, ProofMethod::Sorry(None)));
-    assert!(kept.annotated, "a stored sorry leaf stays annotated");
+    assert!(
+        kept.annotation.is_checked(),
+        "a stored sorry leaf stays annotated"
+    );
 
     let reason = "kept reason".to_string();
     let explained = check_and_extend(
@@ -86,7 +90,7 @@ fn sorry_leaf_runs_auto_prover_only_for_prove_targets() {
         past_initial_system(),
         &ProofTree {
             method: ProofMethod::Sorry(Some(reason.clone())),
-            cases: Vec::new(),
+            cases: BTreeMap::new(),
         },
         50,
     )
@@ -100,11 +104,11 @@ fn sorry_with_children_is_replaced_as_one_node() {
     let ctx = ProofContext::new(h, Vec::new());
     let child = ProofTree {
         method: ProofMethod::Finished(MethodResult::Contradictory(None)),
-        cases: Vec::new(),
+        cases: BTreeMap::new(),
     };
     let skel = ProofTree {
         method: ProofMethod::Sorry(Some("stale".into())),
-        cases: vec![("kept".into(), child)],
+        cases: BTreeMap::from([("kept".into(), child)]),
     };
 
     let replayed =
@@ -114,27 +118,19 @@ fn sorry_with_children_is_replaced_as_one_node() {
 
     let checked = check_and_extend(&ctx, past_initial_system(), &skel, 50).expect("proof replay");
     assert_eq!(checked.method, ProofMethod::Sorry(Some("stale".into())));
-    assert!(checked.annotated);
+    assert!(checked.annotation.is_checked());
     let kept = &checked.children["kept"];
-    assert!(!kept.annotated, "stored children have no checked system");
+    assert!(
+        !kept.annotation.is_checked(),
+        "stored children have no checked system"
+    );
     assert_eq!(
         kept.method,
         ProofMethod::Finished(MethodResult::Contradictory(None))
     );
 }
 
-/// A `by contradiction` leaf on a system with no contradictions
-/// must NOT silently emit Finished(Contradictory).  Per the
-/// walker contract (the contradiction-leaf branch, `finished_leaf`),
-/// when the runtime doesn't agree with the skeleton's `by contradiction`
-/// claim, the walker falls back to `run_proof_search` — the
-/// auto-prover then finds whatever the system actually proves
-/// (or emits Sorry honestly).  Crucially, the walker must NOT
-/// fabricate a Contradictory status.
-///
-/// On a system with no goals and no contradictions, the auto-prover
-/// recognises the system as trivially Solved.  The assertion that matters
-/// here is `status != Contradictory`.
+/// A stale contradiction must be re-proved against the current system.
 #[test]
 fn contradiction_leaf_without_contradiction_falls_back_to_auto() {
     let Some(h) = maude() else { return };
@@ -142,7 +138,7 @@ fn contradiction_leaf_without_contradiction_falls_back_to_auto() {
     let sys = past_initial_system();
     let skel = ProofTree {
         method: ProofMethod::Finished(MethodResult::Contradictory(None)),
-        cases: Vec::new(),
+        cases: BTreeMap::new(),
     };
     let result = replace_sorry_prove(&ctx, sys, &skel, 50).expect("proof search");
     // No goals, no contradictions → auto-prover recognises Solved. The
@@ -156,53 +152,219 @@ fn contradiction_leaf_without_contradiction_falls_back_to_auto() {
     assert_eq!(result.status, NodeStatus::Solved);
 }
 
-// Every stored goal below is a `Goal` value, the shape
-// `elaborate::goal_from_parsed` builds, and `match_goal` looks it up among
-// all of the system's goals by structural equality — HS's `M.member`
-// (ProofMethod.hs).
-
-/// Match an Action goal whose fact takes no arguments.
+/// `match_goal` binds a stored proof step's goal to a live goal by
+/// structural equality over all of the system's goals, solved or not: HS's
+/// `M.member` (ProofMethod.hs).  There is no fallback to a unique goal of
+/// the same kind, so any drift in a name, index, sort, argument or
+/// alternative misses.  Rows: `(label, live goals, stored goal, hit?)`;
+/// a hit returns the stored goal itself.
 #[test]
-fn match_action_goal_by_name_arity() {
+fn match_goal_is_structural_membership() {
+    use crate::atom::ProtoAtom;
+    use crate::constraint::constraints::{Disj, SplitId};
+    use crate::constraint::system::GoalStatus;
     use crate::fact::{Fact, FactTag, Multiplicity};
-    let i = LVar::new("t", LSort::Node, 0);
-    let tag = FactTag::Proto(Multiplicity::Linear, "Setup", 0);
-    let goal = Goal::Action(i, Fact::new(tag, Vec::new()));
-    let mut sys = System::empty();
-    sys.goals_mut().push((goal.clone(), Default::default()));
-    assert_eq!(match_goal(&goal, &sys).expect("should match"), goal);
-}
+    use crate::formula::BLNTerm;
+    use crate::guarded::Guarded;
+    use crate::rule::{ConcIdx, PremIdx};
+    use tamarin_term::function_symbols::AcSym;
+    use tamarin_term::lterm::BVar;
+    use tamarin_term::term::{f_app_ac, Term};
+    use tamarin_term::vterm::{var_term, Lit};
 
-/// match_goal returns None when no goal matches the fact name.
-#[test]
-fn no_match_returns_none() {
-    use crate::fact::{Fact, FactTag, Multiplicity};
-    let i = LVar::new("t", LSort::Node, 0);
-    let goal = |name: &'static str| {
-        Goal::Action(
-            i,
-            Fact::new(FactTag::Proto(Multiplicity::Linear, name, 0), Vec::new()),
-        )
+    let msg = |n: &str, idx| Term::Lit(Lit::Var(LVar::new(n, LSort::Msg, idx)));
+    let node = |n: &str, idx| LVar::new(n, LSort::Node, idx);
+    let action = |name: &'static str, tp: &str, idx, args: Vec<_>| {
+        let tag = FactTag::Proto(Multiplicity::Linear, name, args.len());
+        Goal::Action(node(tp, idx), Fact::new(tag, args))
     };
-    let mut sys = System::empty();
-    sys.goals_mut().push((goal("Setup"), Default::default()));
-    assert!(match_goal(&goal("WrongName"), &sys).is_none());
-}
-
-/// HS's membership check ranges over all of `sGoals`, including entries whose
-/// status says that simplification has already solved them.
-#[test]
-fn match_goal_includes_a_solved_goal() {
-    use crate::fact::{Fact, FactTag, Multiplicity};
-    let tag = FactTag::Proto(Multiplicity::Linear, "Setup", 0);
-    let goal = Goal::Action(LVar::new("t", LSort::Node, 0), Fact::new(tag, Vec::new()));
-    let mut sys = System::empty();
-    let status = crate::constraint::system::GoalStatus {
+    // HS shows a timepoint as `#t2` at index 0 and `#t2.7` at index 7
+    // (`Show LVar`, LTerm.hs), so a stored goal names the index too.
+    let step = |tp: &str, idx, arg: &str| action("Step", tp, idx, vec![msg(arg, 0)]);
+    let premise = |n: &str| {
+        let tag = FactTag::Proto(Multiplicity::Linear, "Inp", 0);
+        Goal::Premise((node(n, 0), PremIdx(0)), Fact::new(tag, Vec::new()))
+    };
+    // `ChainG NodeConc NodePrem` carries a full node variable at each end.
+    let chain = |i, j| Goal::Chain((node("i", i), ConcIdx(0)), (node("j", j), PremIdx(2)));
+    let subterm = |small: &str, big: &str, idx| Goal::Subterm((msg(small, idx), msg(big, idx)));
+    let free = |n: &str, sort| -> BLNTerm { var_term(BVar::Free(LVar::new(n, sort, 0))) };
+    let last = |n: &str| Guarded::Atom(ProtoAtom::Last(free(n, LSort::Node)));
+    let disj = |alts: Vec<Guarded>| Goal::Disj(Disj::new(alts));
+    let sorted_eq = |sort| Guarded::Atom(ProtoAtom::EqE(free("x", sort), free("x", sort)));
+    // `fAppAC` flattens and sorts (Term/Raw.hs), so both foldings are one value.
+    let union_eq = |left_nested: bool| {
+        let leaf = |n| free(n, LSort::Msg);
+        let un = |l, r| f_app_ac(AcSym::Union, vec![l, r]);
+        let chain = if left_nested {
+            un(un(leaf("a"), leaf("b")), leaf("c"))
+        } else {
+            un(leaf("a"), un(leaf("b"), leaf("c")))
+        };
+        Guarded::Atom(ProtoAtom::EqE(chain, leaf("z")))
+    };
+    let solved = GoalStatus {
         solved: true,
         ..Default::default()
     };
-    sys.goals_mut().push((goal.clone(), status));
-    assert_eq!(match_goal(&goal, &sys), Some(goal));
+    let open = GoalStatus::default;
+
+    let steps = vec![(step("t1", 5, "x"), open()), (step("t2", 7, "y"), open())];
+    // Yubikey `slightly_weaker_invariant` at `/non_empty_trace/case_1`: two
+    // IH-body disjunctions that differ only in `last(#t1)` vs `last(#t2)`.
+    let ih = vec![
+        (disj(vec![last("t1"), last("a")]), open()),
+        (disj(vec![last("t2"), last("a")]), open()),
+    ];
+    let pair = vec![(disj(vec![last("a"), last("b")]), open())];
+    let rows: Vec<(&str, Vec<(Goal, GoalStatus)>, Goal, bool)> = vec![
+        (
+            "nullary action",
+            vec![(action("Setup", "t", 0, vec![]), open())],
+            action("Setup", "t", 0, vec![]),
+            true,
+        ),
+        (
+            "other fact name",
+            vec![(action("Setup", "t", 0, vec![]), open())],
+            action("WrongName", "t", 0, vec![]),
+            false,
+        ),
+        (
+            "solved goal",
+            vec![(action("Setup", "t", 0, vec![]), solved)],
+            action("Setup", "t", 0, vec![]),
+            true,
+        ),
+        (
+            "first of two actions",
+            steps.clone(),
+            step("t1", 5, "x"),
+            true,
+        ),
+        (
+            "second of two actions",
+            steps.clone(),
+            step("t2", 7, "y"),
+            true,
+        ),
+        (
+            "drifted timepoint index",
+            steps.clone(),
+            step("t2", 9, "y"),
+            false,
+        ),
+        ("drifted argument", steps, step("t2", 7, "x"), false),
+        (
+            "premise by node",
+            vec![(premise("u"), open()), (premise("v"), open())],
+            premise("v"),
+            true,
+        ),
+        ("chain", vec![(chain(3, 5), open())], chain(3, 5), true),
+        (
+            "chain without node indices",
+            vec![(chain(3, 5), open())],
+            chain(0, 0),
+            false,
+        ),
+        (
+            "split 3",
+            vec![
+                (Goal::Split(SplitId(7)), open()),
+                (Goal::Split(SplitId(3)), open()),
+            ],
+            Goal::Split(SplitId(3)),
+            true,
+        ),
+        (
+            "split 7",
+            vec![
+                (Goal::Split(SplitId(7)), open()),
+                (Goal::Split(SplitId(3)), open()),
+            ],
+            Goal::Split(SplitId(7)),
+            true,
+        ),
+        (
+            "unknown split",
+            vec![(Goal::Split(SplitId(7)), open())],
+            Goal::Split(SplitId(99)),
+            false,
+        ),
+        (
+            "subterm",
+            vec![(subterm("x", "y", 99), open())],
+            subterm("x", "y", 99),
+            true,
+        ),
+        (
+            "sole subterm, other terms",
+            vec![(subterm("x", "y", 99), open())],
+            subterm("p", "q", 99),
+            false,
+        ),
+        (
+            "sole subterm, other index",
+            vec![(subterm("x", "y", 99), open())],
+            subterm("x", "y", 0),
+            false,
+        ),
+        (
+            "disjunction t2",
+            ih.clone(),
+            disj(vec![last("t2"), last("a")]),
+            true,
+        ),
+        (
+            "disjunction t1",
+            ih.clone(),
+            disj(vec![last("t1"), last("a")]),
+            true,
+        ),
+        (
+            "disjunction t3",
+            ih,
+            disj(vec![last("t3"), last("a")]),
+            false,
+        ),
+        (
+            "fewer alternatives",
+            pair.clone(),
+            disj(vec![last("a")]),
+            false,
+        ),
+        (
+            "more alternatives",
+            pair,
+            disj(vec![last("a"), last("b"), last("c")]),
+            false,
+        ),
+        (
+            "disjunct of the same sort",
+            vec![(disj(vec![sorted_eq(LSort::Msg)]), open())],
+            disj(vec![sorted_eq(LSort::Msg)]),
+            true,
+        ),
+        (
+            "disjunct of another sort",
+            vec![(disj(vec![sorted_eq(LSort::Msg)]), open())],
+            disj(vec![sorted_eq(LSort::Fresh)]),
+            false,
+        ),
+        (
+            "AC chain folded the other way",
+            vec![(disj(vec![union_eq(false)]), open())],
+            disj(vec![union_eq(true)]),
+            true,
+        ),
+    ];
+    for (label, live, stored, hit) in rows {
+        let mut sys = System::empty();
+        sys.goals_mut().extend(live);
+        let expected = hit.then(|| stored.clone());
+        assert_eq!(match_goal(&stored, &sys), expected, "{label}");
+    }
 }
 
 /// Stored induction is valid only at HS's initial-system shape. In
@@ -223,353 +385,29 @@ fn replay_checks_induction_applicability() {
         .is_none());
 }
 
-/// Two same-fact-name Action goals at different timepoints: the stored goal
-/// carries the FULL timepoint LVar, name and index, so it binds exactly one
-/// of them and a drifted index binds neither.
-///
-/// HS pretty-prints a timepoint as `#t2` when its index is 0 and `#t2.7`
-/// when it is 7 (`Show LVar`, LTerm.hs), so the index in a stored
-/// goal is the index of the goal it names.
-#[test]
-fn match_action_disambiguates_by_time_var_root() {
-    use crate::fact::{Fact, FactTag, Multiplicity};
-    let tag = FactTag::Proto(Multiplicity::Linear, "Step", 1);
-    let arg = |n: &str| {
-        vec![tamarin_term::term::Term::Lit(
-            tamarin_term::vterm::Lit::Var(LVar::new(n, LSort::Msg, 0)),
-        )]
-    };
-    let goal = |tp: &str, idx: u64, a: &str| {
-        Goal::Action(LVar::new(tp, LSort::Node, idx), Fact::new(tag, arg(a)))
-    };
-    let g1 = goal("t1", 5, "x");
-    let g2 = goal("t2", 7, "y");
-    let mut sys = System::empty();
-    sys.goals_mut().push((g1.clone(), Default::default()));
-    sys.goals_mut().push((g2.clone(), Default::default()));
-    assert_eq!(match_goal(&g2, &sys).expect("should match"), g2);
-    assert_eq!(match_goal(&g1, &sys).expect("should match"), g1);
-    // A drifted index (stored `#t2.9`, runtime `#t2.7`) is an `M.member`
-    // miss in HS.
-    assert!(
-        match_goal(&goal("t2", 9, "y"), &sys).is_none(),
-        "drifted timepoint idx must miss like HS `M.member`"
-    );
-    // So is a drifted argument.
-    assert!(match_goal(&goal("t2", 7, "x"), &sys).is_none());
-}
-
-/// Two same-(name, arity, prem idx) Premise goals at different node
-/// timepoints.
-#[test]
-fn match_premise_disambiguates_by_time_var_root() {
-    use crate::fact::{Fact, FactTag, Multiplicity};
-    use crate::rule::PremIdx;
-    let tag = FactTag::Proto(Multiplicity::Linear, "Inp", 0);
-    let goal = |n: &str| {
-        Goal::Premise(
-            (LVar::new(n, LSort::Node, 0), PremIdx(0)),
-            Fact::new(tag, Vec::new()),
-        )
-    };
-    let mut sys = System::empty();
-    sys.goals_mut().push((goal("u"), Default::default()));
-    sys.goals_mut().push((goal("v"), Default::default()));
-    assert_eq!(
-        match_goal(&goal("v"), &sys).expect("should match"),
-        goal("v")
-    );
-}
-
-/// HS's `ChainG NodeConc NodePrem` carries a full `nodevar` at each
-/// endpoint (Theory/Text/Parser/Proof.hs), so a stored chain goal
-/// whose endpoint index differs from the runtime one is an `M.member` miss.
-#[test]
-fn chain_goal_requires_the_node_index() {
-    use crate::rule::{ConcIdx, PremIdx};
-    let chain = |i: u64, j: u64| {
-        Goal::Chain(
-            (LVar::new("i", LSort::Node, i), ConcIdx(0)),
-            (LVar::new("j", LSort::Node, j), PremIdx(2)),
-        )
-    };
-    let goal = chain(3, 5);
-    let mut sys = System::empty();
-    sys.goals_mut().push((goal.clone(), Default::default()));
-    assert_eq!(match_goal(&goal, &sys).expect("should match"), goal);
-    // The same root names with the indices dropped name a different goal.
-    assert!(match_goal(&chain(0, 0), &sys).is_none());
-}
-
-/// Split matcher — exact id match on `Goal::Split(SplitId(n))`.
-#[test]
-fn match_split_goal_by_id() {
-    use crate::constraint::constraints::SplitId;
-    let goal_a = Goal::Split(SplitId(7));
-    let goal_b = Goal::Split(SplitId(3));
-    let mut sys = System::empty();
-    sys.goals_mut().push((goal_a.clone(), Default::default()));
-    sys.goals_mut().push((goal_b.clone(), Default::default()));
-    assert_eq!(
-        match_goal(&Goal::Split(SplitId(3)), &sys).expect("should match"),
-        goal_b
-    );
-    assert_eq!(
-        match_goal(&Goal::Split(SplitId(7)), &sys).expect("should match"),
-        goal_a
-    );
-    assert!(match_goal(&Goal::Split(SplitId(99)), &sys).is_none());
-}
-
-/// Subterm matcher — the two terms are compared as `LNTerm`s, and a stored
-/// goal that names neither open goal misses even when only one is open.
-#[test]
-fn subterm_goal_has_no_unique_fallback() {
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::Lit;
-    let v = |n: &str, idx: u64| -> tamarin_term::lterm::LNTerm {
-        Term::Lit(Lit::Var(LVar::new(n, LSort::Msg, idx)))
-    };
-    let goal = |small: &str, big: &str, idx: u64| Goal::Subterm((v(small, idx), v(big, idx)));
-    let mut sys = System::empty();
-    sys.goals_mut()
-        .push((goal("x", "y", 99), Default::default()));
-    assert_eq!(
-        match_goal(&goal("x", "y", 99), &sys).expect("should match"),
-        goal("x", "y", 99)
-    );
-    // The sole open Subterm goal is not a fallback: a stored goal naming
-    // other terms, or the same names at another index, misses.
-    assert!(match_goal(&goal("p", "q", 99), &sys).is_none());
-    assert!(match_goal(&goal("x", "y", 0), &sys).is_none());
-}
-
-/// `last(#<name>)` as one alternative of a disjunction goal.
-fn last_alt(name: &str) -> crate::guarded::Guarded {
-    use crate::atom::ProtoAtom;
-    use crate::guarded::Guarded;
-    use tamarin_term::lterm::{BVar, LVar};
-    use tamarin_term::vterm::var_term;
-    Guarded::Atom(ProtoAtom::Last(var_term(BVar::Free(LVar::new(
-        name,
-        LSort::Node,
-        0,
-    )))))
-}
-
-fn disj(alts: Vec<crate::guarded::Guarded>) -> Goal {
-    Goal::Disj(crate::constraint::constraints::Disj::new(alts))
-}
-
-/// A disjunction goal binds the alternative list it names, not one of the
-/// same length: HS compares the parsed `Disj [LNGuarded]` with `M.member`
-/// (ProofMethod.hs).
-#[test]
-fn disj_goal_is_structural() {
-    // The two open goals share their alternative count and every
-    // alternative's shape; only one atom differs.  This is Yubikey
-    // `slightly_weaker_invariant` at `/non_empty_trace/case_1`, where the
-    // two IH-body disjunctions differ in `last(#t1)` vs `last(#t2)`.
-    let first = disj(vec![last_alt("t1"), last_alt("a")]);
-    let second = disj(vec![last_alt("t2"), last_alt("a")]);
-    let mut sys = System::empty();
-    sys.goals_mut().push((first.clone(), Default::default()));
-    sys.goals_mut().push((second.clone(), Default::default()));
-    assert_eq!(match_goal(&second, &sys).expect("should match"), second);
-    assert_eq!(match_goal(&first, &sys).expect("should match"), first);
-    assert!(match_goal(&disj(vec![last_alt("t3"), last_alt("a")]), &sys).is_none());
-}
-
-#[test]
-fn disj_goal_rejects_a_different_alt_count() {
-    let two = disj(vec![last_alt("a"), last_alt("b")]);
-    let mut sys = System::empty();
-    sys.goals_mut().push((two, Default::default()));
-    assert!(match_goal(&disj(vec![last_alt("a")]), &sys).is_none());
-    assert!(match_goal(
-        &disj(vec![last_alt("a"), last_alt("b"), last_alt("c")]),
-        &sys
-    )
-    .is_none());
-}
-
-/// The alternatives of a stored disjunction carry the sort of every free
-/// leaf, so a disjunct that names the leaf at another sort is an `M.member`
-/// miss.
-#[test]
-fn disj_goal_of_another_sort_misses() {
-    use crate::atom::ProtoAtom;
-    use crate::formula::BLNTerm;
-    use crate::guarded::Guarded;
-    use tamarin_term::lterm::{BVar, LVar};
-    use tamarin_term::vterm::var_term;
-    let leaf = |sort: LSort| -> BLNTerm { var_term(BVar::Free(LVar::new("x", sort, 0))) };
-    let alt = |sort: LSort| Guarded::Atom(ProtoAtom::EqE(leaf(sort), leaf(sort)));
-    let live = disj(vec![alt(LSort::Msg)]);
-    let mut sys = System::empty();
-    sys.goals_mut().push((live.clone(), Default::default()));
-    assert_eq!(
-        match_goal(&disj(vec![alt(LSort::Msg)]), &sys).expect("should match"),
-        live
-    );
-    assert!(match_goal(&disj(vec![alt(LSort::Fresh)]), &sys).is_none());
-}
-
-/// `fAppAC` flattens and sorts its arguments (Term/Raw.hs `fAppAC`), so an
-/// AC chain built either way round is ONE value and a disjunction goal
-/// folded the other way is a `M.member` hit.
-#[test]
-fn disj_goal_matches_either_ac_folding() {
-    use crate::atom::ProtoAtom;
-    use crate::formula::BLNTerm;
-    use crate::guarded::Guarded;
-    use tamarin_term::function_symbols::AcSym;
-    use tamarin_term::lterm::{BVar, LVar};
-    use tamarin_term::term::f_app_ac;
-    use tamarin_term::vterm::var_term;
-    let leaf = |n: &str| -> BLNTerm { var_term(BVar::Free(LVar::new(n, LSort::Msg, 0))) };
-    let un = |l: BLNTerm, r: BLNTerm| f_app_ac(AcSym::Union, vec![l, r]);
-    let left = un(un(leaf("a"), leaf("b")), leaf("c"));
-    let right = un(leaf("a"), un(leaf("b"), leaf("c")));
-    let alt = |t: BLNTerm| Guarded::Atom(ProtoAtom::EqE(t, leaf("z")));
-    let live = disj(vec![alt(right)]);
-    let mut sys = System::empty();
-    sys.goals_mut().push((live.clone(), Default::default()));
-    let stored = disj(vec![alt(left)]);
-    assert_eq!(stored, live, "the two foldings are the same AC term");
-    assert_eq!(match_goal(&stored, &sys).expect("should match"), live);
-}
-
-/// HS check-and-extend, `mergeMapsWith` rightOnly branch
-/// (Theory/Proof.hs): a stored-skeleton case that the
-/// re-executed method does NOT produce is mapped through
-/// `noSystemPrf` over the WHOLE subtree → every node `Nothing` →
-/// `/* unannotated */`.  `parsed_to_unannotated` must therefore set
-/// `annotated == false` on EVERY node of the converted subtree, not
-/// just the root.
+/// A stored-only case and all its descendants are unchecked.
 #[test]
 fn parsed_to_unannotated_marks_whole_subtree() {
     // Skeleton:  simplify → case "a" (by sorry), case "b" (by sorry)
     let leaf = |m| ProofTree {
         method: m,
-        cases: Vec::new(),
+        cases: BTreeMap::new(),
     };
     let skel = ProofTree {
         method: ProofMethod::Simplify,
-        cases: vec![
+        cases: BTreeMap::from([
             ("a".to_string(), leaf(ProofMethod::Sorry(None))),
             ("b".to_string(), leaf(ProofMethod::Sorry(None))),
-        ],
+        ]),
     };
-    let node = parsed_to_unannotated(&skel, System::empty());
-    assert!(!node.annotated, "root must be unannotated");
+    let node = parsed_to_unannotated(&skel);
+    assert!(!node.annotation.is_checked(), "root must be unannotated");
     assert_eq!(node.children.len(), 2);
     for (name, child) in &node.children {
-        assert!(!child.annotated, "child `{name}` must be unannotated");
+        assert!(
+            !child.annotation.is_checked(),
+            "child `{name}` must be unannotated"
+        );
         assert!(matches!(child.method, ProofMethod::Sorry(None)));
-    }
-}
-
-#[test]
-fn cancellation_during_terminal_classification_cannot_change_the_verdict() {
-    use crate::constraint::solver::cancellation_tests::{Work, WorkerGate};
-    use crate::fact::{Fact, FactTag, Multiplicity};
-    use crate::rule::{
-        IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo,
-    };
-    use std::time::Duration;
-    use tamarin_term::builtin::{fresh_var, msg_var};
-    use tamarin_term::function_symbols::{AcFctSym, Constructability, NdcState, NoEqSym, Privacy};
-    use tamarin_term::rewriting::RRule;
-    use tamarin_term::term::{f_app_acfct, f_app_no_eq};
-    use tamarin_utils::cancellation::{CancellationGuard, CancellationToken};
-
-    let Some(path) = tamarin_test_support::require_maude_path() else {
-        return;
-    };
-    let xorr = AcFctSym::new(
-        b"xorr".to_vec(),
-        Privacy::Public,
-        Constructability::Constructor,
-        NdcState::IsNdc,
-    );
-    let zeroo = NoEqSym::new(
-        b"zeroo".to_vec(),
-        0,
-        Privacy::Public,
-        Constructability::Constructor,
-    );
-    let mut sig = pair_maude_sig();
-    sig.st_ac_fun_syms.insert(xorr);
-    sig.st_fun_syms.insert(zeroo);
-    let x = msg_var("x", 0);
-    sig.st_rules.insert(
-        tamarin_term::subterm_rule::rrule_to_ctxt_st_rule(&RRule::new(
-            f_app_acfct(xorr, vec![x.clone(), x]),
-            f_app_no_eq(zeroo, vec![]),
-        ))
-        .unwrap(),
-    );
-    let ctx = ProofContext::new(MaudeHandle::start(&path, sig.refresh()).unwrap(), vec![]);
-    let k = fresh_var("k", 0);
-    let mut sys = past_initial_system();
-    sys.add_node(
-        LVar::new("i", LSort::Node, 0),
-        Rule::new(
-            RuleInfo::<ProtoRuleACInstInfo, IntrRuleACInfo>::Proto(ProtoRuleACInstInfo {
-                name: ProtoRuleName::Stand("R"),
-                attributes: RuleAttributes::empty(),
-                loop_breakers: vec![],
-            }),
-            vec![],
-            vec![Fact::new(
-                FactTag::Proto(Multiplicity::Linear, "F", 1),
-                vec![f_app_acfct(xorr, vec![k.clone(), k])],
-            )],
-            vec![],
-        ),
-    );
-    // The non-normal xorr(k,k) makes this system contradictory. Swallowing
-    // cancellation in its AC match used to reject the valid contradiction
-    // and, worse, accept an invalid stored SOLVED claim.
-    for stored in [
-        Some(MethodResult::Contradictory(None)),
-        Some(MethodResult::Solved),
-        None,
-    ] {
-        let skeleton = stored.clone().map(|method| ProofTree {
-            method: ProofMethod::Finished(method),
-            cases: vec![],
-        });
-        let run = |sys| match &skeleton {
-            Some(skeleton) => check_and_extend(&ctx, sys, skeleton, usize::MAX),
-            None => run_proof_search(&ctx, sys, usize::MAX),
-        };
-        let baseline = run(sys.clone()).unwrap();
-        if matches!(stored, Some(MethodResult::Solved)) {
-            assert!(matches!(baseline.method, ProofMethod::Sorry(_)));
-        } else {
-            assert_eq!(baseline.status, NodeStatus::Contradictory);
-        }
-        let (gate, entered) = WorkerGate::new(Work::Terminal, 1);
-        *ctx.worker_gate.lock().unwrap() = Some(gate.clone());
-        let token = CancellationToken::default();
-        std::thread::scope(|scope| {
-            let worker_token = token.clone();
-            let cancelled_sys = sys.clone();
-            let worker = scope.spawn(|| {
-                let _guard = CancellationGuard::new(Some(worker_token));
-                run(cancelled_sys)
-            });
-            // The solver has passed its entry check. Interrupt terminal
-            // classification, before its boolean normal-form queries.
-            entered.recv_timeout(Duration::from_secs(5)).unwrap();
-            token.cancel();
-            gate.release();
-            assert!(matches!(worker.join().unwrap(), Err(ProveError::Cancelled)));
-        });
-        *ctx.worker_gate.lock().unwrap() = None;
-        let retried = run(sys.clone()).unwrap();
-        assert_eq!(format!("{retried:?}"), format!("{baseline:?}"));
     }
 }

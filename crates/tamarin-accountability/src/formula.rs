@@ -14,16 +14,17 @@ use tamarin_term::function_symbols::pair_sym;
 use tamarin_term::lterm::{BVar, LSort, LVar};
 use tamarin_term::term::f_app_no_eq;
 use tamarin_term::vterm::var_term;
-use tamarin_theory::atom::{ProtoAtom, SyntacticSugar};
+use tamarin_theory::atom::ProtoAtom;
 use tamarin_theory::fact::{Fact, FactTag, Multiplicity};
 use tamarin_theory::formula::{
-    apply_rename, exists_var, for_all_var, for_each_formula_atom, formula_facts, formula_frees,
-    BLNTerm, ProtoFormula, SyntacticLNFormula,
+    apply_rename, formula_frees, BLNTerm, ProtoFormula, SyntacticLNFormula,
 };
+
+use crate::AccError;
 
 // The connective/quantifier enums (HS Theory/Model/Formula.hs) are
 // shared with the ProtoFormula data-type port in `tamarin_theory::formula`.
-pub(crate) use tamarin_theory::formula::{Connective as Conn, Quantifier as Quant};
+pub(crate) use tamarin_theory::formula::{quantify_vars, Connective as Conn, Quantifier as Quant};
 
 // =============================================================================
 // Term / atom builders (Generation.hs)
@@ -81,108 +82,97 @@ fn eq_vars(x: &LVar, y: &LVar) -> SyntacticLNFormula {
 /// HS `ntuple vars = foldr1 (curry fAppPair) (map (varTerm . Free) vars)`
 /// (Generation.hs): a singleton is the bare term, longer lists nest to
 /// the right through `fAppPair` (Term/Term.hs).
-fn ntuple(vars: &[LVar]) -> BLNTerm {
+fn ntuple(vars: &[LVar]) -> Result<BLNTerm, AccError> {
     let mut it = vars.iter().rev().copied().map(free_term);
-    let mut acc = it.next().expect("ntuple: empty variable list");
+    let mut acc = it.next().ok_or(AccError::EmptyList("foldr1"))?;
     for t in it {
         acc = f_app_no_eq(pair_sym(), vec![t, acc]);
     }
-    acc
+    Ok(acc)
 }
 
 /// HS `varsEq l r = Ato $ EqE (ntuple l) (ntuple r)` (Generation.hs).
-pub(crate) fn vars_eq(l: &[LVar], r: &[LVar]) -> SyntacticLNFormula {
-    ProtoFormula::Atom(ProtoAtom::EqE(ntuple(l), ntuple(r)))
+pub(crate) fn vars_eq(l: &[LVar], r: &[LVar]) -> Result<SyntacticLNFormula, AccError> {
+    Ok(ProtoFormula::Atom(ProtoAtom::EqE(ntuple(l)?, ntuple(r)?)))
 }
 
 /// HS `isElem v vars = foldr1 (.||.) (map (eq v) vars)` (Generation.hs).
-fn is_elem(v: &LVar, vars: &[LVar]) -> SyntacticLNFormula {
+fn is_elem(v: &LVar, vars: &[LVar]) -> Result<SyntacticLNFormula, AccError> {
     fold_r1(Conn::Or, vars.iter().map(|w| eq_vars(v, w)).collect())
 }
 
 /// HS `corruptSubsetFrees vars` (Generation.hs):
 /// `∀ a i. Corrupted(a)@i ⇒ isElem a vars`.
-pub(crate) fn corrupt_subset_frees(vars: &[LVar]) -> SyntacticLNFormula {
+pub(crate) fn corrupt_subset_frees(vars: &[LVar]) -> Result<SyntacticLNFormula, AccError> {
     let body = proto_fact_formula("Corrupted", vec![msg_term("a")], temp_term("i"))
-        .implies(is_elem(&msg_var("a"), vars));
-    quantify_vars(Quant::All, &[msg_var("a"), temp_var("i")], body)
+        .implies(is_elem(&msg_var("a"), vars)?);
+    Ok(quantify_vars(
+        Quant::All,
+        &[msg_var("a"), temp_var("i")],
+        body,
+    ))
 }
 
 /// HS `strictSubsetOf lhs rhs = subset lhs rhs .&&. strict lhs rhs`
 /// (Generation.hs).
-pub(crate) fn strict_subset_of(lhs: &[LVar], rhs: &[LVar]) -> SyntacticLNFormula {
+pub(crate) fn strict_subset_of(lhs: &[LVar], rhs: &[LVar]) -> Result<SyntacticLNFormula, AccError> {
     // subset xs ys = foldr1 (.&&.) (map (\x -> foldr1 (.||.) (map (eq x) ys)) xs)
     let subset = fold_r1(
         Conn::And,
         lhs.iter()
             .map(|x| fold_r1(Conn::Or, rhs.iter().map(|y| eq_vars(x, y)).collect()))
-            .collect(),
-    );
+            .collect::<Result<_, _>>()?,
+    )?;
     // strict xs ys = foldr1 (.||.) (map (\y -> foldr1 (.&&.) (map (Not . eq y) xs)) ys)
     let strict = fold_r1(
         Conn::Or,
         rhs.iter()
             .map(|y| fold_r1(Conn::And, lhs.iter().map(|x| eq_vars(y, x).not()).collect()))
-            .collect(),
-    );
-    subset.and(strict)
+            .collect::<Result<_, _>>()?,
+    )?;
+    Ok(subset.and(strict))
 }
 
 // =============================================================================
 // Connective folds (Generation.hs)
 // =============================================================================
 
-/// HS `foldr1 op` for a non-empty list; right-associative.
-pub(crate) fn fold_r1(op: Conn, mut fms: Vec<SyntacticLNFormula>) -> SyntacticLNFormula {
-    let last = fms.pop().expect("fold_r1: empty list");
-    fms.into_iter().rev().fold(last, |acc, f| {
+/// HS `foldr1 op`, right-associative; GHC's `errorEmptyList` on an empty
+/// list, which a case test without free variables reaches.
+pub(crate) fn fold_r1(
+    op: Conn,
+    mut fms: Vec<SyntacticLNFormula>,
+) -> Result<SyntacticLNFormula, AccError> {
+    let last = fms.pop().ok_or(AccError::EmptyList("foldr1"))?;
+    Ok(fms.into_iter().rev().fold(last, |acc, f| {
         ProtoFormula::Conn(op, Box::new(f), Box::new(acc))
-    })
+    }))
 }
 
-/// HS `foldl1 op` for a non-empty list; left-associative.
-pub(crate) fn fold_l1(op: Conn, fms: Vec<SyntacticLNFormula>) -> SyntacticLNFormula {
+/// HS `foldl1 op`, left-associative; GHC's `errorEmptyList` on an empty list.
+pub(crate) fn fold_l1(
+    op: Conn,
+    fms: Vec<SyntacticLNFormula>,
+) -> Result<SyntacticLNFormula, AccError> {
     let mut it = fms.into_iter();
-    let first = it.next().expect("fold_l1: empty list");
-    it.fold(first, |acc, f| {
+    let first = it.next().ok_or(AccError::EmptyList("foldl1"))?;
+    Ok(it.fold(first, |acc, f| {
         ProtoFormula::Conn(op, Box::new(acc), Box::new(f))
-    })
+    }))
 }
 
 /// HS `foldConn` (Generation.hs): a singleton is itself, otherwise
 /// `foldl1 op`.
-pub(crate) fn fold_conn(op: Conn, fms: Vec<SyntacticLNFormula>) -> SyntacticLNFormula {
-    if fms.len() == 1 {
-        fms.into_iter().next().unwrap()
-    } else {
-        fold_l1(op, fms)
-    }
+pub(crate) fn fold_conn(
+    op: Conn,
+    fms: Vec<SyntacticLNFormula>,
+) -> Result<SyntacticLNFormula, AccError> {
+    fold_l1(op, fms)
 }
 
 // =============================================================================
 // Quantifier introduction (Generation.hs)
 // =============================================================================
-
-/// HS `hinted quan v = quan (hint v) v` (Theory/Model/Formula.hs):
-/// the hint is the variable's name and sort (Theory/Model/Formula.hs).
-fn qua_var(quant: Quant, x: &LVar, fm: SyntacticLNFormula) -> SyntacticLNFormula {
-    let hint = (x.name.to_string(), x.sort);
-    match quant {
-        Quant::All => for_all_var(hint, x, fm),
-        Quant::Ex => exists_var(hint, x, fm),
-    }
-}
-
-/// HS `quantifyVars quan vars fm = foldr (hinted quan) fm vars`
-/// (Generation.hs): `vars[0]` is the OUTERMOST binder, `vars[last]` the
-/// innermost.
-pub(crate) fn quantify_vars(
-    quant: Quant,
-    vars: &[LVar],
-    fm: SyntacticLNFormula,
-) -> SyntacticLNFormula {
-    vars.iter().rev().fold(fm, |acc, v| qua_var(quant, v, acc))
-}
 
 /// HS `quantifyFrees quan fm = quantifyVars quan (frees fm) fm`
 /// (Generation.hs).
@@ -212,29 +202,6 @@ pub(crate) fn rename(fm: &SyntacticLNFormula, counter: &mut u64) -> SyntacticLNF
     apply_rename(fm.clone(), &mut |v| {
         LVar::new(v.name, v.sort, (v.idx as i64 + shift) as u64)
     })
-}
-
-// =============================================================================
-// Atom queries (Generation.hs)
-// =============================================================================
-
-/// HS `formulaActionFacts` (Generation.hs): the `Fact`s appearing in
-/// `Action` atoms of a formula.
-pub(crate) fn formula_action_facts(fm: &SyntacticLNFormula) -> Vec<Fact<BLNTerm>> {
-    formula_facts(fm).into_iter().cloned().collect()
-}
-
-/// The `Fact`s appearing in the predicate-sugar atoms of a formula — the
-/// atoms HS `expandFormula` resolves against the theory's predicates
-/// (Theory/Syntactic/Predicate.hs).
-pub(crate) fn formula_pred_facts(fm: &SyntacticLNFormula) -> Vec<Fact<BLNTerm>> {
-    let mut out = Vec::new();
-    for_each_formula_atom(fm, &mut |a| {
-        if let ProtoAtom::Syntactic(SyntacticSugar::Pred(f)) = a {
-            out.push(f.clone());
-        }
-    });
-    out
 }
 
 #[cfg(test)]

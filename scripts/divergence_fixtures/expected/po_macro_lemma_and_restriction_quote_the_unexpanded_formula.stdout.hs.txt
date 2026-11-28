@@ -1,0 +1,28 @@
+theory MacroView
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, h/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+macros: m1( x ) =  h(x),
+        m2( x, y ) =  <m1(x), y>
+
+rule (modulo E) A:
+   [ ] --[ A( m2('a', 'b') ) ]-> [ ]
+
+restriction rst:
+  "∀ z #i #j. ((A( z ) @ #i) ∧ (A( m2('a', 'b') ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+lemma lem:
+  all-traces "∀ z #i. (A( z ) @ #i) ⇒ (z = m2('a', 'b'))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ z #i. (A( z ) @ #i) ∧ ¬(z = m2('a', 'b'))"
+*/
+by sorry
+
+end

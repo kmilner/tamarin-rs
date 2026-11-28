@@ -159,7 +159,7 @@ impl Job {
         self.child.as_ref().expect("unreaped child").id() as libc::pid_t
     }
 
-    fn signal(&self, signal: libc::c_int) -> io::Result<()> {
+    fn signal(&mut self, signal: libc::c_int) -> io::Result<()> {
         // Negative PID addresses only the dedicated prover process group.
         if unsafe { libc::kill(-self.pid(), signal) } == -1 {
             let err = io::Error::last_os_error();
@@ -177,26 +177,10 @@ impl Job {
         Ok(())
     }
 
-    fn exited(&self) -> io::Result<bool> {
-        // SAFETY: zero-initialized siginfo is valid storage for waitid, which
-        // writes it before we read si_pid. WNOWAIT leaves the child waitable.
-        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
-        let result = unsafe {
-            libc::waitid(
-                libc::P_PID,
-                self.pid() as libc::id_t,
-                &mut info,
-                libc::WEXITED | libc::WNOHANG | libc::WNOWAIT,
-            )
-        };
-        if result == -1 {
-            let err = io::Error::last_os_error();
-            if err.kind() == io::ErrorKind::Interrupted {
-                return Ok(false);
-            }
-            return Err(err);
-        }
-        Ok(unsafe { info.si_pid() } != 0)
+    /// Whether the worker has exited, observed without reaping it.
+    fn exited(&mut self) -> io::Result<bool> {
+        let child = self.child.as_mut().expect("unreaped child");
+        tamarin_utils::process::child_is_running(child).map(|running| !running)
     }
 
     fn finish(&mut self, code: Option<u8>) -> io::Result<u8> {

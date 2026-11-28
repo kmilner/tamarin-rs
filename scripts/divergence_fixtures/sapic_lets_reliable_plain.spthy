@@ -1,0 +1,19 @@
+// Category: SAPIC translation corners of `let` — sapic_lets_plain over a
+// reliable channel, whose translation wraps the input differently: only the
+// rules that merely match an equation skip the derivation checks.  The
+// corpus derivation-check regression covers the plain wrapper only.
+
+theory SapicLetsReliable_plain
+begin
+
+builtins: reliable-channel
+
+
+functions: d/1 [destructor], wrap/1
+
+equations: d(wrap(x)) = x
+
+process:
+  in('r', x); let y = d(d(x)) in out('r', y) else event Failed()
+
+end

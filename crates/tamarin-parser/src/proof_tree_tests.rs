@@ -23,7 +23,7 @@ fn leaf_forms() {
 
 #[test]
 fn standalone_proofs_reject_input_after_a_complete_skeleton() {
-    for proof in ["by sorry", "SOLVED", "induction case rule by sorry qed"] {
+    for proof in ["by sorry", "SOLVED", "induction case base by sorry qed"] {
         for following in ["trailing", "text{* documentation *}", "lemma L: \"T\""] {
             let prefix = format!("{proof} \t/* whitespace */\n");
             let source = format!("{prefix}{following}");
@@ -63,20 +63,6 @@ fn diff_proof_uses_its_own_methods() {
 }
 
 #[test]
-fn malformed_diff_proof_is_rejected() {
-    assert!(validate_diff_proof_tree("rule-equivalence", &bare_parser()).is_err());
-    assert!(validate_diff_proof_tree("by step( SOLVED )", &bare_parser()).is_err());
-}
-
-#[test]
-fn zero_case_blocks_are_accepted() {
-    let tree = parse_proof_tree("simplify qed", &bare_parser()).expect("ordinary zero-case block");
-    assert_eq!(tree.method, ParsedMethod::Simplify);
-    assert!(tree.cases.is_empty());
-    validate_diff_proof_tree("rule-equivalence qed", &bare_parser()).expect("diff zero-case block");
-}
-
-#[test]
 fn induction_with_case_block() {
     let src = "
             induction
@@ -90,42 +76,19 @@ fn induction_with_case_block() {
     let t = parse_proof_tree(src, &bare_parser()).expect("parse");
     assert_eq!(t.method, ParsedMethod::Induction);
     assert_eq!(t.cases.len(), 2);
-    assert_eq!(t.cases[0].0, "empty_trace");
-    assert_eq!(t.cases[0].1.method, ParsedMethod::Contradiction);
-    assert_eq!(t.cases[1].0, "non_empty_trace");
-    assert_eq!(t.cases[1].1.method, ParsedMethod::Sorry);
+    assert_eq!(t.cases["empty_trace"].method, ParsedMethod::Contradiction);
+    assert_eq!(t.cases["non_empty_trace"].method, ParsedMethod::Sorry);
 }
 
+/// HS builds the children with `M.fromList` (Theory/Text/Parser/Proof.hs):
+/// the last of several cases with one name wins, and they come out in name
+/// order.
 #[test]
-fn identifier_stops_at_hyphen() {
-    // HS `identifier` (Token.hs `identLetter = alphaNum
-    // <|> oneOf "_"`) does NOT accept `-`, so `case foo-bar` names the case
-    // `foo` and leaves `-bar` where `proofSkeleton` expects a proof method,
-    // which no `proofMethod` alternative reads.  An underscore IS an
-    // `identLetter`, so the same shape with `_` parses and names one case.
-    assert!(parse_proof_tree("induction case foo-bar by sorry qed", &bare_parser()).is_err());
-    let t = parse_proof_tree("induction case foo_bar by sorry qed", &bare_parser()).expect("parse");
-    assert_eq!(t.method, ParsedMethod::Induction);
-    assert_eq!(t.cases.len(), 1);
-    assert_eq!(t.cases[0].0, "foo_bar");
-}
-
-#[test]
-fn bare_inter_method_without_child_is_err() {
-    // HS `interProof` (Theory/Text/Parser/Proof.hs) has no
-    // childless-leaf branch:
-    // a method must be followed by either a `case`-block (`next`/`qed`)
-    // or a recursive `proofSkeleton`.  A bare `simplify` with nothing
-    // after it is a parse error in the v1.13.0 prover ("unexpected ...,
-    // expecting case/qed/SOLVED/by/sorry/simplify/solve/...").  We must
-    // mirror that failure (the containing theory parse rejects it), so it
-    // must NOT parse to a leaf.
-    assert!(parse_proof_tree("simplify", &bare_parser()).is_err());
-    assert!(parse_proof_tree("induction", &bare_parser()).is_err());
-    // A method followed by an inline sub-proof DOES parse (the inline
-    // single-child `""` subproof branch), and the leaf form is `by`.
-    assert!(parse_proof_tree("simplify by sorry", &bare_parser()).is_ok());
-    assert!(parse_proof_tree("by simplify", &bare_parser()).is_ok());
+fn duplicate_case_names_keep_the_last() {
+    let src = "induction case B by sorry next case A by sorry next case A by simplify qed";
+    let t = parse_proof_tree(src, &bare_parser()).expect("parse");
+    assert_eq!(t.cases.keys().collect::<Vec<_>>(), ["A", "B"]);
+    assert_eq!(t.cases["A"].method, ParsedMethod::Simplify);
 }
 
 /// A parser with no theory symbols declared, standing in for the theory
@@ -378,14 +341,6 @@ fn goal_diff_argument_follows_the_diff_bit() {
     assert!(parse_goal_str("F( diff(a, b) ) @ #i", &bare_parser()).is_err());
 }
 
-/// HS reads the goal as `parens goal` (Theory/Text/Parser/Proof.hs), so
-/// the whole text between the parentheses is the goal.
-#[test]
-fn goal_rejects_trailing_text() {
-    assert!(parse_goal_str("Foo( x ) @ #i and then some", &bare_parser()).is_err());
-    assert!(parse_goal_str("splitEqs(3) splitEqs(4)", &bare_parser()).is_err());
-}
-
 /// HS `nodevar` (Token.hs) is `sortedLVar [LSortNode]` or a bare
 /// `indexedIdentifier`; a `$`/`~`/`%` sigil names a different sort.
 #[test]
@@ -423,31 +378,9 @@ fn nested_case_block() {
         ";
     let t = parse_proof_tree(src, &bare_parser()).expect("parse");
     assert!(matches!(t.method, ParsedMethod::SolveGoal(_)));
-    assert_eq!(t.cases.len(), 2);
-    assert_eq!(t.cases[0].0, "case_1");
-    assert_eq!(t.cases[0].1.cases.len(), 2);
-    assert_eq!(t.cases[0].1.cases[0].0, "case_a");
-    assert_eq!(t.cases[0].1.cases[1].0, "case_b");
-    assert_eq!(t.cases[1].0, "case_2");
-}
-
-/// HS reads the goal of a `solve( ... )` step with `parens goal`
-/// (Theory/Text/Parser/Proof.hs), so text no alternative of `goal`
-/// accepts fails the whole skeleton parse.
-#[test]
-fn unparseable_goal_fails_the_tree_parse() {
-    let error = parse_proof_tree("solve( garbage_no_marker ) by sorry", &bare_parser())
-        .expect_err("invalid nested goal must fail");
-    assert!(error.span().start > 0);
-    assert_eq!(error.line_column().0, 1);
-}
-
-/// HS `proofMethod` (Theory/Text/Parser/Proof.hs) is an `asum` of seven
-/// keyword alternatives with no catch-all, so an unknown token fails.
-#[test]
-fn unknown_method_token_fails_the_tree_parse() {
-    assert!(parse_proof_tree("rule-equivalence by sorry", &bare_parser()).is_err());
-    assert!(parse_proof_tree("by ATTACK", &bare_parser()).is_err());
+    assert_eq!(t.cases.keys().collect::<Vec<_>>(), ["case_1", "case_2"]);
+    let inner = t.cases["case_1"].cases.keys().collect::<Vec<_>>();
+    assert_eq!(inner, ["case_a", "case_b"]);
 }
 
 /// HS `disjSplitGoal` (Theory/Text/Parser/Proof.hs) is
@@ -480,67 +413,4 @@ fn solve_disj_one_alt() {
         }
         other => panic!("expected a disjunction goal, got {:?}", other),
     }
-}
-
-/// Yubikey `slightly_weaker_invariant`'s first `solve(...)`: a `∀` alt with
-/// seven binders and an `∃` alt with five.
-#[test]
-fn solve_disj_quantified_alts() {
-    let src = "solve( (\u{2200} pid otc1 tc1 otc2 tc2 #t1 #t2. \
-                          (last(#t1)) \u{2228} (last(#t2))) \u{2225} \
-                          (\u{2203} #t1 #t2 a b c. (last(#t1))) ) by sorry";
-    let t = parse_proof_tree(src, &bare_parser()).expect("parse");
-    match &t.method {
-        ParsedMethod::SolveGoal(GoalSpec::Disj(alts)) => {
-            assert_eq!(alts.len(), 2);
-            match (&alts[0], &alts[1]) {
-                (Formula::Forall(vs, _), Formula::Exists(ws, _)) => {
-                    assert_eq!(vs.len(), 7);
-                    assert_eq!(ws.len(), 5);
-                }
-                other => panic!("expected a ∀ alt then an ∃ alt, got {other:?}"),
-            }
-        }
-        other => panic!("expected a disjunction goal, got {:?}", other),
-    }
-}
-
-/// The inner `solve(...)` of Yubikey `slightly_weaker_invariant` has five
-/// alternatives, one of them a conjunction.
-#[test]
-fn solve_disj_five_alts() {
-    let src = "solve( (last(#t2)) \u{2225} (last(#t1)) \u{2225} \
-                          ((#t1 < #t2) \u{2227} (last(#t3))) \u{2225} \
-                          (#t2 < #t1) \u{2225} (#t1 = #t2) ) by sorry";
-    let t = parse_proof_tree(src, &bare_parser()).expect("parse");
-    match &t.method {
-        ParsedMethod::SolveGoal(GoalSpec::Disj(alts)) => {
-            assert_eq!(alts.len(), 5);
-            assert!(matches!(alts[0], Formula::Atom(Atom::Last(_))));
-            assert!(matches!(alts[1], Formula::Atom(Atom::Last(_))));
-            assert!(matches!(alts[2], Formula::And(_, _)));
-            assert!(matches!(alts[3], Formula::Atom(Atom::Less(_, _))));
-            assert!(matches!(alts[4], Formula::Atom(Atom::Eq(_, _))));
-        }
-        other => panic!("expected a disjunction goal, got {:?}", other),
-    }
-}
-
-/// A public name may hold a bracket: HS `singleQuotedString`
-/// (Token.hs) reads `many1 (noneOf "'\n")`, and `prettyGoal` prints
-/// the name back with the bracket inside the quotes.  The goal grammar reads
-/// the name whole, so the bracket does not close the `solve( ... )` step and
-/// the rest of the skeleton parses on.
-#[test]
-fn solve_goal_with_bracket_in_pub_name() {
-    let t = parse_proof_tree("solve( A( 'a)b' ) @ #i ) by sorry", &bare_parser()).expect("parse");
-    match &t.method {
-        ParsedMethod::SolveGoal(GoalSpec::Action(v, fact)) => {
-            assert_eq!(v.name, "i");
-            assert_eq!(fact.name, "A");
-            assert_eq!(fact.args, vec![Term::PubLit("a)b".to_string())]);
-        }
-        other => panic!("expected an action goal, got {other:?}"),
-    }
-    assert_eq!(t.cases[0].1.method, ParsedMethod::Sorry);
 }

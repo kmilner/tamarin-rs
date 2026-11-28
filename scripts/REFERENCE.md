@@ -11,7 +11,7 @@ under `scripts/results/` (gitignored); direct engine defaults differ.
 Most scripts take `ALLOWLIST=` (file of corpus-relative paths) to run a
 subset, and `RS_PATH=`/`HS_PATH=` to point at other binaries.
 
-**Build the port first.** Every gate checks an in-tree `target/` binary against
+**Build the port first.** The proof and load gates check an in-tree `target/` binary against
 Cargo's dep-info (or a conservative source fallback) and refuses a stale one;
 `ALLOW_STALE_BIN=1` is the deliberate override. An external/sealed `RS_PATH`
 cannot be attributed to this checkout by its timestamps, so it is content-
@@ -126,7 +126,7 @@ tools. `divergence_fixtures/_common.sh` keeps its own small setup.
 
 `capture_cli_refs.sh` deliberately does not use the shared maude resolver: it
 walks the RS test harness's ladder because its captures must use the maude
-`cli_e2e.rs` will.
+`cli_refs.rs` will.
 
 ## Primary gates — run these before trusting a change
 
@@ -139,10 +139,10 @@ walks the RS test harness's ladder because its captures must use the maude
   row (`RC_UNKNOWN` counts entries predating that channel and is not a
   failure). Its first five TSV columns remain the summary contract; columns
   six and seven record the exact input identity and normalized RS output SHA
-  used to certify a later reference generation. It is the heaviest thing here — `JOBS=4` oracles at `-N4 -M11g`
-  plus four Rust provers, up to ~44 GB of GHC heap — and carries the shared
-  `oom_prologue` (`oom_score_adj=1000` plus a 24 GiB `ulimit -v`) like the
-  other gates, which every child inherits. It resolves one maude up front and
+  used to certify a later reference generation. With `JOBS=4`, four concurrent
+  Haskell oracles at `-N4 -M11g` can use up to 44 GiB of GHC heap between
+  them. Each child also inherits the 24 GiB virtual-memory limit from
+  `oom_prologue`. It resolves one maude up front and
   exits 2 when nothing resolves; the selected path is passed explicitly to
   both provers. Empty unexplained oracle runs are not cached. Lower `JOBS` on
   a constrained box rather than raising it.
@@ -161,7 +161,7 @@ walks the RS test harness's ladder because its captures must use the maude
 - **`pretty_gate.sh`** — fast theory pretty-print gate (same ~45 s): diffs the
   load-time `theory … end` echo against the oracle. Run when touching parsing
   or printing. Its PHASE 0 fills the same `.load.gz` artifact and derives its
-  `.theory.gz` slice from it; `NO_HS_FILL=1` skips the fill for a warm cache,
+  versioned theory slice from it; `NO_HS_FILL=1` skips the fill for a warm cache,
   and turns a cold one into an all-`SKIP` (failing) run. Both gates need the
   oracle binary even cache-warm — its fingerprint is part of the cache key —
   and exit 2 without one, `NO_HS_FILL=1` included. `wf_gate.sh` caps its fill
@@ -185,8 +185,8 @@ walks the RS test harness's ladder because its captures must use the maude
   zero entries — the whole-run form of comparing nothing, which a `verdict=OK`
   over an empty histogram would otherwise read as a pass.
 - **`web_parity.sh`** — interactive-mode gate: crawls both web servers per
-  theory and diffs the responses — pane/JSON semantically, graph routes
-  byte-for-byte. Runs two theories concurrently by default (`JOBS=1` for
+  theory and diffs the responses — HTML and graph text byte for byte after environment
+  normalization, and JSON by decoded value. Runs two theories concurrently by default (`JOBS=1` for
   serial execution). Each worker adds 2 to `HS_PORT`/`RS_PORT`, so the defaults
   reserve ports 3021–3024. Increase `JOBS` cautiously: each server has its own
   memory cap, and large response manifests can exceed a GiB. Results are
@@ -392,9 +392,9 @@ walks the RS test harness's ladder because its captures must use the maude
 
 - **`bump_submodule.sh`** — submodule bump workflow: checks each entry in
   `patches/series`, rebuilds the oracle, refreshes the tamarin-server HTTP
-  captures, and prints a six-step
-  re-certification checklist covering the divergence and CLI captures,
-  batch/fast/flag gates, server tests, and web ladder. `SKIP_BUILD=1` also
+  captures, and prints the recertification
+  commands for parser, CLI and divergence captures, proof and web gates, and
+  server tests. `SKIP_BUILD=1` also
   skips the HTTP capture and warns that it must be run explicitly. The gate
   caches are deliberately left alone (see the fingerprint note above — a
   rebuilt oracle turns every pre-bump entry into a MISS by key). `-h` prints its header; it
@@ -403,7 +403,7 @@ walks the RS test harness's ladder because its captures must use the maude
   `test.sh --help` for the public corpus runner.
 - **`capture_cli_refs.sh`** — captures the ORACLE's stdout for every row of
   `crates/tamarin-prover/tests/fixtures/cli_refs/cases.tsv`, which is the argv
-  table `cli_e2e.rs`'s flag pins read as well — adding a pin is "add a row,
+  table `cli_refs.rs` reads as well — adding a pin is "add a row,
   re-run this". Deliberately serial and proving: the oracle's `--prove` output
   is nondeterministic under parallel load, and a flaky reference is worse than
   none. Writes `<name>.stdout` (raw bytes; both sides normalise build info,
@@ -415,9 +415,11 @@ walks the RS test harness's ladder because its captures must use the maude
   is missing, empty, or fails its `relation` column. Env: `HS_PATH`, `MAUDE`
   (its own harness-mirroring ladder, not the shared resolver — and not
   `MAUDE_PATH`), `FILE_TIMEOUT` (120 s), `ALLOW_ORACLE_REV_MISMATCH`.
-- **`hpj_oracle.sh`** — the second oracle in this repo. It is the only oracle
-  that is not the tamarin-prover binary.
-  `crates/tamarin-theory/src/pretty_hpj.rs` ports GHC's `pretty` package. GHC
+- **`capture_parse_refs.sh`** refreshes the Haskell accept/reject column in the
+  parser test table. Run `cargo test -p tamarin-parser --test parse_table`
+  to check the Rust outcomes.
+- **`hpj_oracle.sh`** derives pretty-printing expectations from GHC.
+  `crates/tamarin-utils/src/pretty_hpj.rs` ports GHC's `pretty` package. GHC
   9.6.7 ships exactly the version that the port targets, `pretty-1.1.3.6`.
   This script therefore derives an HPJ layout expectation from the real engine
   in one compile. You do not search the corpus for the expectation. You also do
@@ -468,106 +470,22 @@ walks the RS test harness's ladder because its captures must use the maude
   the emitted proofs with the Haskell prover; stdout is the re-verified proof
   file.
 
-## Divergence fixtures — corners the corpus cannot reach
+## Focused prover fixtures
 
-`divergence_fixtures/` covers observable behaviour that no theory under the
-submodule's `examples/` tree exercises, so every corpus gate stays green
-across a regression in it. These fixtures pin slice-level bytes against oracle
-captures committed in-tree, so the check needs no oracle binary. The manifest
-can also record an intentional divergence when one exists; currently every row
-must match.
+The [fixture manifest](divergence_fixtures/fixtures.tsv) defines the input,
+command-line flags, comparison mode and output slices for every case. It
+includes small local theories and invocations of upstream models. The manifest
+header documents each slice, including proof summaries, trace exports and
+diagnostics.
 
-- **`divergence_fixtures/capture.sh`** — records the oracle's bytes for every
-  fixture into `divergence_fixtures/expected/`. It resolves the oracle inside
-  `tamarin-prover-testing/` and **refuses any binary whose baked git revision
-  differs from the submodule pin** (same policy as
-  `crates/tamarin-server/tests/capture_haskell_fixtures.sh`): these bytes are
-  the reference, so a capture from another revision would silently redefine
-  what the port is checked against. `--record-rs` additionally re-records the
-  port side of any manifest row marked `diverge` — never a side effect.
-- **`divergence_fixtures/check.sh`** — runs only the port and compares against
-  those captures. Cheap (~5–10 s for all 55: no oracle, no proving), which is why
-  CI runs it: the `test` job's `Divergence fixtures` step builds
-  `--profile ci --bin tamarin-rs`, prepends `/opt/maude` to `PATH` (the port's
-  own probe does not read `MAUDE_PATH`) and invokes it with an absolute
-  `RS_PATH`, so a drift on any fixture or an `expected/oracle_rev` that is not
-  the current submodule pin fails the build.
-  It is not reachable by `cargo test` or by any corpus gate, so run it by hand
-  too, next to `wf_gate.sh` and `pretty_gate.sh`.
-- **`divergence_fixtures/fixtures.tsv`** — per fixture: which output slices are
-  compared, whether the port must `match` the oracle or `diverge` from it, and
-  the flags both engines get. Two slices exist, both load-time: `wf` =
-  `wf_gate.sh`'s block and `theory` = `pretty_gate.sh`'s echo (several
-  fixtures are cut from one theory load), and `slice()` dies on anything else.
-  So "corners the corpus cannot reach" is covered for the two blocks a bare
-  theory load prints, and not for the `--prove`, `--output-json`/`--output-dot`
-  or interactive surfaces.
-
-Today's fixtures, in manifest order:
-
-- **`mixed_ac_wf`** — AC operands headed by *different* operators, rendered in
-  a wellformedness message.
-- **`pair_echo_order`** — two same-headed `pair` chains in one AC chain, whose
-  order is decided below the head and is not by operand size.
-- **`wf_user_ac_report`** — a user-declared `[AC]` symbol in a wellformedness
-  message: its operand rank against the builtin AC operators, and its
-  space-padded infix spelling.
-- **`sapic_lowering`** — the SAPIC translation's `LNTerm` → parser-AST
-  projection: infix `exp`, right-spine `pair` splitting.
-- **`sapic_user_ac`** — a user-declared `[AC]` symbol inside a SAPIC process,
-  reaching a `let`'s and an `if`'s derived rule names, generated restrictions
-  and `process=` attributes.
-- **`sapic_nullary_cond`** — a nullary function symbol inside a SAPIC
-  conditional, reaching the derived rule and restriction names, the `process=`
-  attribute and the AC-variant block.
-- **`sapic_formula_terms`** — a SAPIC-generated restriction that fails the
-  `Formula terms` check, to be picked out of two generated candidates.
-- **`formula_terms_offenders`** — two offending lemmas sharing one `Formula
-  terms` header, one of them naming two offenders, spelled by HS's `Show` for
-  terms rather than by the pretty printer.
-- **`wf_topic_interleave`** — a wellformedness topic that closes and reopens
-  under a second header, because `formulaReports`' checks report per formula
-  and not per topic. An earlier and a later check's entries bracket the run,
-  so its position in the report is pinned as well as its internal order.
-- **`guarded_name_collision`** — an inner binder sharing a name with an
-  enclosing one, which stays guarded and keeps its `// safety formula` line.
-- **`guarded_freshened_names`** — the names in the `unguarded variable(s) …`
-  diagnostic, whose supply runs across the whole formula, against the pretty
-  printer's own names for the same binders, whose supply is restored per
-  quantifier. Lemmas only: the oracle dies while printing an unguardable
-  restriction.
-- **`mult_restricted_report`** — both triggers of the `Multiplication
-  restriction of rules` check, one rule each: a product in a conclusion, and a
-  reducible left-hand side whose abstraction orphans right-hand-side variables.
-  The same rule is printed at two different widths in the two slices.
-- **`ac_marker_collapse`** — a `tamXCA…`-named function, pinning the corrected
-  upstream handling of singleton user-AC applications.
-- **`dual_declared_names`** — one name declared BOTH as a NoEq funsym and as a
-  user `[AC]` symbol: the prefix and `op{a}b` spellings resolve NoEq, the infix
-  spelling stays AC, and a bare nullary name the NoEq constant.
-- **`dual_declared_exp`** — the same collision against a symbol the BUILTINS
-  contribute (`exp/2` under `diffie-hellman`), so prefix `exp(a,b)` renders
-  `a^b` and is a reducible Formula-terms offender while infix `a exp b` is not.
-- **`dual_declared_equations`** — an `equations:` left-hand side written prefix
-  over such a name: the equation registers under the NoEq symbol and makes it
-  reducible.
-- **`naryapp_arity_folds`** — `naryOpApp`'s argument-list shapes: an arity-1
-  head folding its commas into a right-associative pair (function and macro
-  heads alike), an arity-0 head applied as `f()`, and a trailing comma.
-- **`ac_prefix_arities`** — prefix and `op{t1}t2` applications of a user `[AC]`
-  symbol, whose arity check is skipped: any argument count parses, and the
-  singleton application collapses to its argument.
-- **`positional_ac_prefix`** — the same name declared `[AC]` and then NoEq, with
-  a use between the two declarations and a use after both: prefix resolution
-  reads the signature built so far, so the two uses render differently.
-
-Every current fixture must reproduce the pinned oracle's bytes. `check.sh`
-still requires an explicit shape assertion before any future intentional
-divergence can be added.
-
-`bump_submodule.sh`'s checklist lists both scripts: `capture.sh` re-reads the
-fixtures from the new oracle, and `git diff divergence_fixtures/expected/` is
-then upstream behaviour moving under them.
+- `divergence_fixtures/check.sh` runs Rust and checks the selected output
+  against the committed captures in `divergence_fixtures/expected/`. It also
+  checks the upstream revision stamped in `expected/oracle_rev`. CI invokes
+  it independently of the Rust test suite.
+- `divergence_fixtures/capture.sh` runs the pinned Haskell prover to refresh
+  all manifest rows. For an intentional
+  `diverge` row, `--record-rs` also records the Rust expectation. Review the
+  resulting diff before committing it.
 
 ## Upstream references and licensing
 

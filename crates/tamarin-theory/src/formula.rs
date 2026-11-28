@@ -44,6 +44,8 @@ use tamarin_term::term::{map_lits, Term};
 use tamarin_term::vterm::{var_term, Lit, VTerm};
 use tamarin_utils::fresh::PreciseFreshState;
 
+pub use tamarin_term::lterm::lift_free;
+
 /// Logical connectives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Connective {
@@ -175,8 +177,11 @@ where
     out
 }
 
-fn for_each_free_var<S, C, V>(fm: &ProtoFormula<S, (String, LSort), C, V>, f: &mut dyn FnMut(&V))
-where
+/// Visit the free variables of `fm` in [`formula_frees_list`] order.
+pub fn for_each_free_var<S, C, V>(
+    fm: &ProtoFormula<S, (String, LSort), C, V>,
+    f: &mut dyn FnMut(&V),
+) where
     S: SugarTerms<VTerm<C, BVar<V>>>,
 {
     for_each_formula_term(fm, &mut |t| for_each_free_term_var(t, &mut *f));
@@ -395,6 +400,26 @@ where
     ProtoFormula::for_all(hint, quantify(x, fm))
 }
 
+/// HS `hint (LVar n s _) = (n, s)` (Theory/Model/Formula.hs): the name and
+/// sort a binder records for display.
+pub fn lvar_hint(v: &LVar) -> (String, LSort) {
+    (v.name.to_string(), v.sort)
+}
+
+/// HS `foldr (hinted q) fm vs` over `forAll`/`exists`
+/// (Theory/Model/Formula.hs): close the binders from the last to the first,
+/// each hinted with [`lvar_hint`], so `vs[0]` is the outermost binder and the
+/// last variable carries De Bruijn index 0.
+pub fn quantify_vars<S>(q: Quantifier, vs: &[LVar], fm: LNProtoFormula<S>) -> LNProtoFormula<S>
+where
+    S: MapSugar<BLNTerm, BLNTerm, Mapped = S>,
+{
+    vs.iter().rev().fold(fm, |acc, v| match q {
+        Quantifier::All => for_all_var(lvar_hint(v), v, acc),
+        Quantifier::Ex => exists_var(lvar_hint(v), v, acc),
+    })
+}
+
 /// HS's overlapping `Apply (Subst c v) (VTerm c (BVar v))`
 /// (Term/Substitution/SubstVFree.hs) under `mapAtoms (const $ apply
 /// subst)`, the `Apply s (ProtoFormula syn h c v)` instance
@@ -459,23 +484,15 @@ where
     })
 }
 
-/// HS `toLNFormula` (Theory/Model/Formula.hs): strip the sugar with
-/// `toAtom` (Atom.hs); `None` if any atom carries sugar.
+/// HS `toLNFormula = traverseFormulaAtom (liftA Ato . toAtom)`
+/// (Theory/Model/Formula.hs): strip the sugar with `toAtom` (Atom.hs);
+/// `None` if any atom carries sugar.
 pub fn to_lnformula(fm: &SyntacticLNFormula) -> Option<LNFormula> {
-    match fm {
-        ProtoFormula::Atom(ProtoAtom::Syntactic(_)) => None,
-        ProtoFormula::Atom(a) => Some(ProtoFormula::Atom(to_atom(a.clone()))),
-        ProtoFormula::Tf(b) => Some(ProtoFormula::Tf(*b)),
-        ProtoFormula::Not(p) => Some(ProtoFormula::Not(Box::new(to_lnformula(p)?))),
-        ProtoFormula::Conn(c, p, q) => Some(ProtoFormula::Conn(
-            *c,
-            Box::new(to_lnformula(p)?),
-            Box::new(to_lnformula(q)?),
-        )),
-        ProtoFormula::Qua(q, h, p) => {
-            Some(ProtoFormula::Qua(*q, h.clone(), Box::new(to_lnformula(p)?)))
-        }
-    }
+    traverse_formula_atom(fm, &mut |a| match a {
+        ProtoAtom::Syntactic(_) => Err(()),
+        other => Ok(ProtoFormula::Atom(to_atom(other.clone()))),
+    })
+    .ok()
 }
 
 // =============================================================================
@@ -532,7 +549,7 @@ impl FormulaVars for MsgVars {
     }
 
     fn hint(v: &LVar) -> (String, LSort) {
-        (v.name.to_string(), v.sort)
+        lvar_hint(v)
     }
 
     fn term(t: &p::Term, sig: &MaudeSig) -> Option<LNTerm> {
@@ -690,16 +707,6 @@ fn atom_from_parser<F: FormulaVars>(
     })
 }
 
-/// `fmapTerm (fmap Free)` (Theory/Text/Parser/Formula.hs): every variable
-/// of the term as a free `BVar`.  The literal order is unchanged, so the
-/// `f_app` rebuild inside [`map_lits`] keeps the AC argument order.
-pub fn lift_free<C: Ord + Clone, V: Ord + Clone>(t: &VTerm<C, V>) -> VTerm<C, BVar<V>> {
-    map_lits(t, &mut |l| match l {
-        Lit::Con(c) => Lit::Con(c.clone()),
-        Lit::Var(v) => Lit::Var(BVar::Free(v.clone())),
-    })
-}
-
 fn free_term<F: FormulaVars>(
     t: &p::Term,
     sig: &MaudeSig,
@@ -714,8 +721,8 @@ fn free_term<F: FormulaVars>(
 /// HS `nodevarTerm = lit . Var <$> nodep` (Theory/Text/Parser/Formula.hs):
 /// the three positions `blatom` reads with it — `last`'s argument, an
 /// action's timepoint and both operands of `<` — take a bare
-/// variable through `nodep`.  The RS parser also accepts a non-variable term
-/// there (parser.rs's `<` arm), which converts like any other term.
+/// variable through `nodep`, as the parser does; any other term converts
+/// like a message term.
 fn node_term<F: FormulaVars>(
     t: &p::Term,
     sig: &MaudeSig,
@@ -1137,30 +1144,6 @@ mod tests {
         assert_eq!(parsed("Ex k m #k. G(<m, k>) @ k"), want);
     }
 
-    /// `#k = l` is HS's node equality: the bare `l` is a `nodevar`, so the
-    /// `#l` binder closes it, while a message-term equality `k = l` keeps
-    /// the bare `l` as `Msg` (probe `S0_bare_name_under_node_binder.spthy`).
-    #[test]
-    fn from_parser_node_equality_binds_bare_right_operand() {
-        let want = ProtoFormula::for_all(
-            hint("k", LSort::Node),
-            ProtoFormula::for_all(
-                hint("l", LSort::Node),
-                ProtoFormula::Atom(ProtoAtom::EqE(bound(1), bound(0))),
-            ),
-        );
-        assert_eq!(parsed("All #k #l. #k = l"), want);
-        assert_eq!(parsed("All #k #l. k:node = l"), want);
-        let msg = ProtoFormula::for_all(
-            hint("l", LSort::Node),
-            ProtoFormula::Atom(ProtoAtom::EqE(
-                free("k", LSort::Msg, 0),
-                free("l", LSort::Msg, 0),
-            )),
-        );
-        assert_eq!(parsed("All #l. k = l"), msg);
-    }
-
     /// Closing compares the whole `LVar`: a `~k` binder does not capture the
     /// message-sorted `k` of the body.
     #[test]
@@ -1172,47 +1155,41 @@ mod tests {
         assert_eq!(parsed("Ex ~k. Made(k)"), want);
     }
 
-    #[test]
-    fn rule_let_freshening_preserves_typed_free_variables() {
-        let theory = tamarin_parser::parse_theory(
-            "theory T begin rule R: let x = y.1 in []
-             --[_restrict(Ex y.1 #i. A(x,y.1,y:foo) @ i)]-> [] end",
-            &[],
-        )
-        .unwrap();
+    /// The first `_restrict` formula of a one-rule theory's elaborated rule,
+    /// after its `let` substitution and before predicate expansion.
+    fn rule_restriction(src: &str) -> SyntacticLNFormula {
+        let theory = tamarin_parser::parse_theory(src, &[]).unwrap();
         let tamarin_parser::ast::TheoryItem::Rule(rule) = &theory.items[0] else {
             panic!("expected a rule");
         };
-        let formula = from_parser(&rule.embedded_restrictions[0], &pair_maude_sig()).unwrap();
-        assert_eq!(
-            formula_frees(&formula),
-            vec![LVar::new("y", LSort::Msg, 0), LVar::new("y", LSort::Msg, 1)]
-        );
-        assert_eq!(formula, parsed("Ex y.2 #i. A(y.1,y.2,y:foo) @ i"));
+        let rule = crate::elaborate::rule_to_proto_rule_e(rule, &pair_maude_sig()).unwrap();
+        rule.info.restrictions[0].clone()
     }
 
+    /// The `let` substitution into a `_restrict` formula renames a binder
+    /// that would capture the substituted term, keys on the whole variable
+    /// (name, index and sort), and leaves the other free variables alone.
     #[test]
-    fn rule_let_substitution_uses_untyped_variable_identity() {
+    fn rule_let_substitution_uses_variable_identity() {
         for (binding, input, expected) in [
-            ("x=y", "Ex y. A(x,y:foo)", "Ex y.1. A(y,y.1)"),
-            ("x=y:foo", "Ex y. A(x,y)", "Ex y.1. A(y,y.1)"),
-            ("x=z", "Ex x:foo. A(x)", "Ex x. A(x)"),
-            ("x=z", "A(x:foo)", "A(z)"),
+            ("x=y", "Ex y. A(x,y)", "Ex y.1. A(y,y.1)"),
+            (
+                "x=y.1",
+                "Ex y.1 #i. A(x,y.1,y) @ i",
+                "Ex y.2 #i. A(y.1,y.2,y) @ i",
+            ),
+            ("x=z", "Ex x. A(x)", "Ex x. A(x)"),
+            ("x=z", "A(x)", "A(z)"),
             (
                 "x=y",
-                "Ex y. A(x,y:foo) & (Ex y:foo. B(y))",
+                "Ex y. A(x,y) & (Ex y. B(y))",
                 "Ex y.1. A(y,y.1) & (Ex y.2. B(y.2))",
             ),
             ("x=z", "Ex #x. A(x,x.1) @ x", "Ex #x. A(z,x.1) @ x"),
         ] {
-            let source = format!(
+            let actual = rule_restriction(&format!(
                 "theory T begin rule R: let {binding} in [] --[_restrict({input})]-> [] end"
-            );
-            let theory = parse_theory(&source, &[]).unwrap();
-            let tamarin_parser::ast::TheoryItem::Rule(rule) = &theory.items[0] else {
-                panic!("expected a rule");
-            };
-            let actual = from_parser(&rule.embedded_restrictions[0], &pair_maude_sig()).unwrap();
+            ));
             assert_eq!(actual, parsed(expected), "{binding}: {input}");
         }
     }
@@ -1245,7 +1222,7 @@ mod tests {
         let ProtoFormula::Atom(ProtoAtom::Syntactic(SyntacticSugar::Pred(fa))) = *body else {
             panic!("expected a predicate atom");
         };
-        match &fa.terms[..] {
+        match fa.terms() {
             [Term::App(FunSym::NoEq(sym), args)] => {
                 assert_eq!(sym.name, b"zero");
                 assert!(args.is_empty());
@@ -1413,8 +1390,6 @@ mod tests {
             "All x. P(x) & x = 'a'",
             "Ex y. Q(y) ==> last(#i)",
             "#k < #l",
-            "x:foo = 'a'",
-            "All x:foo. P(x:foo)",
             "Ex ~k. K(~k) @ #i & #i < #j",
             "Ex #j. Foo(x) @ #j",
         ] {

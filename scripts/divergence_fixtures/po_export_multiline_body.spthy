@@ -1,0 +1,21 @@
+// Category: the --parse-only open-theory printer (`prettyOpenTheory`),
+// which no corpus gate runs: the gates load and close every theory.
+//
+// Multi-line `export` body: whitespace right after the opening quote is part
+// of the body, and therefore survives printing.
+
+theory ExportML
+begin
+
+builtins: symmetric-encryption
+
+export queries:
+  "
+free c: channel.
+query attacker(s).
+"
+
+process:
+out('x')
+
+end

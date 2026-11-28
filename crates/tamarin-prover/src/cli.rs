@@ -66,7 +66,7 @@
 //!
 //! The run pipeline consumes the flat [`Args`] struct; [`parse_args`] builds
 //! it from the clap tree.  `--quiet`, `--verbose`, `--proverif-no-*`,
-//! `--replication-bound`, `--image-format`, `--debug`, `--no-logging`,
+//! `--replication-bound`, `--debug`, `--no-logging`,
 //! and `--no-compress` are accepted but have no effect on output, and
 //! `--diff` errors at run time (see each field's doc).
 
@@ -107,8 +107,8 @@ pub enum Subcommand {
     InputManifest,
 }
 
-/// Image format used for graph rendering in interactive mode.  Accepted for
-/// compatibility; rendering currently always produces SVG.
+/// `--image-format`: the interactive graph image format (HS
+/// `readImageFormat`, Interactive.hs; matched case-insensitively).
 #[derive(Debug, Clone, PartialEq, Eq, ValueEnum)]
 pub enum ImageFormat {
     Png,
@@ -154,14 +154,9 @@ pub struct Args {
     /// `[Theory X] …` markers and the summary block all print regardless.
     /// It gates only Rust-side diagnostics with no oracle counterpart.
     pub quiet: bool,
-    pub verbose: bool,
     pub open_chains: Option<u64>,
     pub saturation: Option<u64>,
     pub derivcheck_timeout: Option<DerivCheckTimeout>,
-    pub proverif_no_reuse_lemmas: bool,
-    pub proverif_no_restrictions: bool,
-    pub replication_bound: Option<u32>,
-    pub no_compress: bool,
     pub parse_only: bool,
     pub precompute_only: bool,
 
@@ -200,8 +195,6 @@ pub struct Args {
     pub port: Option<u16>,
     pub interface: Option<String>,
     pub image_format: Option<ImageFormat>,
-    pub debug: bool,
-    pub no_logging: bool,
     pub data_dir: Option<String>,
 }
 
@@ -284,6 +277,7 @@ struct LoadOpts {
 
     /// Accepted for compatibility (the oracle's verbose trace has no port)
     #[arg(short = 'v', long, global = true)]
+    #[allow(dead_code)] // accepted, never read
     verbose: bool,
 
     /// Cap on open chain constraints during source precomputation
@@ -316,16 +310,19 @@ struct LoadOpts {
 
     /// Accepted for compatibility (ProVerif export is not ported)
     #[arg(long = "proverif-no-reuse-lemmas", global = true)]
+    #[allow(dead_code)] // accepted, never read
     proverif_no_reuse_lemmas: bool,
 
     /// Accepted for compatibility (ProVerif export is not ported)
     #[arg(long = "proverif-no-restrictions", global = true)]
+    #[allow(dead_code)] // accepted, never read
     proverif_no_restrictions: bool,
 
     /// Accepted for compatibility (DeepSec export is not ported;
     /// default: 3)
     #[arg(long = "replication-bound", global = true, num_args = 0..=1,
           require_equals = true, default_missing_value = "3", value_name = "N")]
+    #[allow(dead_code)] // accepted, never read
     replication_bound: Option<u32>,
 }
 
@@ -426,7 +423,7 @@ struct InteractiveOpts {
     #[arg(short = 'i', long, require_equals = true, value_name = "INTERFACE")]
     interface: Option<String>,
 
-    /// Graph image format (accepted; rendering currently always uses SVG)
+    /// Graph image format (default: svg)
     #[arg(
         long = "image-format",
         value_enum,
@@ -438,11 +435,13 @@ struct InteractiveOpts {
 
     /// Accepted for compatibility (HS web debug output has no port)
     #[arg(long)]
+    #[allow(dead_code)] // accepted, never read
     debug: bool,
 
     /// Accepted for compatibility (the port installs no HTTP request
     /// logger to turn off)
     #[arg(long = "no-logging")]
+    #[allow(dead_code)] // accepted, never read
     no_logging: bool,
 
     /// Override the embedded GUI with static web assets from DIR
@@ -710,14 +709,9 @@ pub fn parse_args(raw: &[String]) -> Result<Args, clap::Error> {
         oracle_name: cli.load.oracle_name,
         oracle_only: cli.load.oracle_only,
         quiet: cli.load.quiet,
-        verbose: cli.load.verbose,
         open_chains: cli.load.open_chains,
         saturation: cli.load.saturation,
         derivcheck_timeout: cli.load.derivcheck_timeout,
-        proverif_no_reuse_lemmas: cli.load.proverif_no_reuse_lemmas,
-        proverif_no_restrictions: cli.load.proverif_no_restrictions,
-        replication_bound: cli.load.replication_bound,
-        no_compress: cli.batch.no_compress,
         parse_only: cli.batch.parse_only,
         precompute_only: cli.batch.precompute_only,
         processors: rts.processors.or(cli.tools.processors),
@@ -745,8 +739,6 @@ pub fn parse_args(raw: &[String]) -> Result<Args, clap::Error> {
             args.port = web.port;
             args.interface = web.interface;
             args.image_format = web.image_format;
-            args.debug = web.debug;
-            args.no_logging = web.no_logging;
             args.data_dir = web.data_dir;
         }
         Some(Cmd::Variants { output_dir }) => {
@@ -784,32 +776,6 @@ impl Args {
         }
         self.maude_processes.unwrap_or(workers).max(1)
     }
-}
-
-/// Does the lemma name match the user's `--prove`/`--lemma` filter?
-///
-/// Mirrors HS `lemmaSelector` (TheoryLoader.hs#lemmaSelector): the empty
-/// filter `[]`, the single-empty filter `[""]`, and the double-empty
-/// filter `["",""]` all mean "all lemmas".  Otherwise we run
-/// `any lemmaMatches filter` where a pattern ending in `*` matches by
-/// prefix (with the `*` dropped) and any other pattern (including a
-/// bare `""`) matches only by exact name.  Note this is NOT "drop all
-/// empties": three or more bare entries (e.g. `["","",""]`) fall
-/// through to the `any` arm and match nothing, exactly like HS.
-pub(crate) fn lemma_matches(filter: &[String], lemma_name: &str) -> bool {
-    match filter.len() {
-        0 => return true,
-        1 if filter[0].is_empty() => return true,
-        2 if filter[0].is_empty() && filter[1].is_empty() => return true,
-        _ => {}
-    }
-    filter.iter().any(|pat| {
-        if let Some(prefix) = pat.strip_suffix('*') {
-            lemma_name.starts_with(prefix)
-        } else {
-            pat == lemma_name
-        }
-    })
 }
 
 // =============================================================================

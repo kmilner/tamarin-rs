@@ -13,10 +13,6 @@
 //! structurally identical systems compare equal across HS/Rust index
 //! drift.  The env var is read once through `env_gate!`, so the check
 //! costs nothing when the trace is off.
-//!
-//! The op-label thread-local below serves the `[rs-aes]` trace in
-//! `tools::equation_store`, which attributes each `apply_eq_store` call
-//! to the Reduction operation that made it.
 
 use std::cell::RefCell;
 
@@ -29,115 +25,6 @@ thread_local! {
     /// branch-interleaving problem where the same goal-shape appears
     /// at many proof positions.
     static CASE_PATH: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
-
-    /// Current operation label, set by callers of apply_eq_store/add_eqs.
-    /// RS-only.  Used by [rs-aes]
-    /// trace to attribute each apply_eq_store call to the originating
-    /// Reduction operation (solveTermEqs, solveFactEqs, chain_extend,
-    /// ENU.kuActions, etc.) so HS↔RS apply_eq_store call counts can
-    /// be diffed per-label rather than per-line-number.
-    static CURRENT_OP_LABEL: RefCell<String> =
-        RefCell::new(String::from("unlabeled"));
-}
-
-/// Cached: `true` iff a trace that *consumes* the op-label is enabled.
-///
-/// The op-label is only ever read into output by the `[rs-aes]` trace,
-/// which is gated on `TAM_RS_DBG_APPLY_EQ_STORE` (see `equation_store.rs`,
-/// `aes_dbg()` — the only output consumer of `current_op_label()`).  When
-/// that flag is unset the entire label machinery (`set_op_label` /
-/// `current_op_label` / `OpLabelGuard`) is pure overhead — each guard
-/// clones a thread-local `String` and runs `label.to_string()` — so the
-/// operations below early-return as no-ops.  Byte-safe: when the consuming
-/// flag IS set the label machinery runs in full; when it is unset the
-/// label is never observed, so skipping the clones changes nothing.
-pub fn op_label_enabled() -> bool {
-    tamarin_utils::env_gate!("TAM_RS_DBG_APPLY_EQ_STORE")
-}
-
-/// Set the current operation label.  Callers wrap their apply_eq_store
-/// / add_eqs call sites with `set_op_label` to associate the call with
-/// a semantic name.  Use `OpLabelGuard::new(...)` for scope-based
-/// management so the label restores on drop.
-pub fn set_op_label(label: &str) -> String {
-    if !op_label_enabled() {
-        return String::new();
-    }
-    CURRENT_OP_LABEL.with(|l| {
-        let prev = l.borrow().clone();
-        *l.borrow_mut() = label.to_string();
-        prev
-    })
-}
-
-/// Get the current operation label.  Used by apply_eq_store's [rs-aes]
-/// trace to print the site label.
-pub fn current_op_label() -> String {
-    if !op_label_enabled() {
-        return String::new();
-    }
-    CURRENT_OP_LABEL.with(|l| l.borrow().clone())
-}
-
-/// RAII guard for op label: sets label on creation, restores previous
-/// on drop.  Use as `let _g = OpLabelGuard::new("solveTermEqs");` at
-/// the start of a scope.
-///
-/// **Default semantics**: if an outer label is already set (anything
-/// other than "unlabeled"), the outer label is PRESERVED — this lets
-/// chain-extend/ENU.kuActions/etc. flow through solve_term_eqs without
-/// being overwritten, matching HS's `addEqsLabeled` semantics where
-/// the OUTERMOST caller's label sticks.  Use `OpLabelGuard::force`
-/// for cases where you want to override even an outer label
-/// (e.g. simp passes adding their own prefix).
-#[must_use = "dropping this guard immediately ends the scope it protects"]
-pub struct OpLabelGuard {
-    prev: String,
-}
-
-impl OpLabelGuard {
-    pub fn new(label: &str) -> Self {
-        // No consuming trace => the label is never read; skip the
-        // thread-local clone + `to_string` entirely (Drop also no-ops).
-        if !op_label_enabled() {
-            return Self {
-                prev: String::new(),
-            };
-        }
-        let outer = current_op_label();
-        if outer == "unlabeled" {
-            let prev = set_op_label(label);
-            Self { prev }
-        } else {
-            // Outer label sticks; we don't change anything but still
-            // return a guard so the call-site doesn't need to special-case.
-            Self { prev: outer }
-        }
-    }
-
-    /// Force override the label (used by simp passes that prepend to
-    /// the outer label, e.g. `simpAbstractFun@<outer>`).
-    pub fn force(label: &str) -> Self {
-        if !op_label_enabled() {
-            return Self {
-                prev: String::new(),
-            };
-        }
-        let prev = set_op_label(label);
-        Self { prev }
-    }
-}
-
-impl Drop for OpLabelGuard {
-    fn drop(&mut self) {
-        if !op_label_enabled() {
-            return;
-        }
-        let prev = std::mem::take(&mut self.prev);
-        CURRENT_OP_LABEL.with(|l| {
-            *l.borrow_mut() = prev;
-        });
-    }
 }
 
 pub(crate) fn case_path_string() -> String {
@@ -258,8 +145,8 @@ pub fn trace_state_at_path(sys: &crate::constraint::system::System, path: &[Stri
 fn goal_digest(g: &crate::constraint::constraints::Goal) -> String {
     use crate::constraint::constraints::Goal;
     match g {
-        Goal::Action(_, fa) => format!("Action({}/{})", fact_tag_short(&fa.tag), fa.terms.len()),
-        Goal::Premise(_, fa) => format!("Premise({}/{})", fact_tag_short(&fa.tag), fa.terms.len()),
+        Goal::Action(_, fa) => format!("Action({}/{})", fact_tag_short(&fa.tag), fa.arity()),
+        Goal::Premise(_, fa) => format!("Premise({}/{})", fact_tag_short(&fa.tag), fa.arity()),
         Goal::Chain(_, _) => "Chain".to_string(),
         Goal::Split(_) => "Split".to_string(),
         Goal::Disj(d) => format!("Disj[{}]", disj_heads(d)),

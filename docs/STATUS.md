@@ -42,10 +42,9 @@ the verification policy.
 ## Proof reverification
 
 Use `./setup.sh testing` to build the pristine pinned Haskell prover used for
-internal testing. Haskell 1.12.0 lacks fixes required to replay some proofs;
-these are now merged upstream, so builds from upstream's `develop` branch
-should replay all Rust proofs. Please report output differences even if the
-proofs cross-verify.
+internal testing. The pinned build replays the Rust proofs for all eight benchmark
+theories. Tamarin 1.12.0 cannot replay four of them. Please report output
+differences even if the proofs cross-verify. See the [replay results](PERFORMANCE.md).
 
 ## Implemented
 
@@ -67,8 +66,8 @@ proofs cross-verify.
 - **`--auto-sources`:** automatic sources-lemma generation
   (HS `addAutoSourcesLemma`) in batch and interactive mode, also enabled by
   an in-file `configuration: "--auto-sources"` block.
-- **SAPiC `process:`** — the process-calculus frontend, byte-identical to HS
-  `Sapic.translate`: core constructs, mutable state, locks, `let`
+- **SAPiC `process:`** — the process-calculus frontend follows HS
+  `Sapic.translate` for core constructs, mutable state, locks, `let`
   bindings/destructors, secret/private channels, progress and
   reliable-channel translations, `report()`, and the pure-state path the
   in-file `options: translation-state-optimisation` opts into.
@@ -116,9 +115,24 @@ The condition must stay on the `#ifdef` line. Active code parses comments and
 quoted text normally. In inactive branches, every conditional line is structural;
 all other text is ignored, including incomplete declarations, quotes, and brackets.
 
+## Known differences
+
+- **Variable indices.** Explicit suffixes such as `x.1` accept values from
+  0 to 4294967295. Haskell accepts larger indices.
+- **Unicode character classes.** Identifiers, whitespace, fact-name
+  capitalisation and case-insensitive comparisons use Rust's `char`
+  methods (`is_alphanumeric`, `is_whitespace`, `is_uppercase`,
+  `to_lowercase`, ...), where Haskell uses GHC's `Data.Char`. The two
+  disagree on some non-ASCII characters: Rust follows a newer Unicode
+  version, counts combining marks and some symbols as alphabetic (U+1885,
+  U+24D0), treats U+0085 and U+2028/2029 as whitespace, and uses full rather
+  than single-character case mappings (`İ` lowercases to `i` plus U+0307).
+  ASCII input is unaffected.
+
 ## Not yet ported
 
-- **`diff(...)` / `--diff`** — observational-equivalence mode.
+- **Observational equivalence.** The parser library can read diff theories.
+  The CLI and proof engine do not support proving them with `--diff`.
 - Export modules: `-m proverif`/`proverifequiv`/`deepsec` and their
   satellite flags (`--replication-bound`, the `--proverif-no-*`
   family) — the HS `Export.hs` backend. The three values parse; a run

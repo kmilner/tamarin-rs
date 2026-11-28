@@ -1,0 +1,14 @@
+theory DuplicateCount
+begin
+
+/*
+ * The same rule declared twice: the overview counts the protocol rules of the
+ * deduplicated cache, as upstream does.
+ */
+
+rule R: [In(x)] --[A(x)]-> [Out(x)]
+rule R: [In(x)] --[A(x)]-> [Out(x)]
+
+lemma witness: exists-trace "Ex x #i. A(x)@i"
+
+end

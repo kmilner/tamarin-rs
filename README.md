@@ -1,6 +1,6 @@
 # tamarin-prover (Rust port)
 
-A Rust port of the [Tamarin Prover](https://tamarin-prover.github.io/), a tool
+A Rust port of the [Tamarin Prover](https://tamarin-prover.com/), a tool
 for analysing security protocols. It aims to reproduce the Haskell prover's
 output exactly, with faster proof search and lower memory use.
 
@@ -16,7 +16,7 @@ tamarin-prover.
 
 ## Quick start
 
-Build prerequisites: Rust, Node.js (22.12+ or 24+), npm, Git, Bash, and Make.
+Build prerequisites: Rust 1.96 or later, Node.js (22.12+ or 24+), npm, Git, Bash, and Make.
 You will also need Maude to run the prover and Graphviz for server-rendered graphs,
 see the [Tamarin manual installation instructions](https://tamarin-prover.com/manual/master/book/002_installation.html).
 
@@ -61,8 +61,8 @@ Rust and rechecks the result with Haskell:
 ./prove_and_reverify.sh theory.spthy > proof.spthy
 ```
 
-Replay needs a Haskell build from upstream's `develop` branch; see
-[compatibility notes](docs/STATUS.md#proof-reverification).
+Use the pinned Haskell build for replay. Tamarin 1.12.0 cannot replay some
+proofs produced by this port. See the [compatibility notes](docs/STATUS.md#proof-reverification).
 
 ## Status and performance
 
@@ -70,9 +70,9 @@ Replay needs a Haskell build from upstream's `develop` branch; see
   with stored-proof replay checked by focused regressions. See
   [coverage and remaining differences](docs/STATUS.md).
 - **Performance:** The eight-theory x86_64 Linux benchmark measured a
-  6.1–141× speedup over Tamarin 1.12.0 (median 35×) at 1, 4, and 16 cores. On one core,
-  Rust used 58–96% less peak memory, with a median reduction of 93%. See
-  [results and methodology](docs/PERFORMANCE.md).
+  3.3–71× speedup (median 17×) over the pinned upstream Tamarin build at 1, 4,
+  and 16 cores. On one core, Rust used 45–94% less peak memory, with a median
+  reduction of 88%. See [results and methodology](docs/PERFORMANCE.md).
 - **Development:** `make check` runs formatting and Clippy; `make test` runs
   the Rust tests. See [TESTING.md](TESTING.md) for parity and browser tests,
   and the [script reference](scripts/README.md) for individual tools.

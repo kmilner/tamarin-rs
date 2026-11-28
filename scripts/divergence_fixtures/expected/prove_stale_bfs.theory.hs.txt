@@ -1,0 +1,44 @@
+theory StaleBfs
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) Emit1:
+   [ Fr( ~x ) ] --[ A( ~x ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) Emit2:
+   [ Fr( ~x ) ] --[ A( ~x ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+lemma witness:
+  exists-trace "∃ x #i. A( x ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ x #i. (A( x ) @ #i)"
+*/
+simplify
+  case 
+  solve( A( x ) @ #i )
+    case Emit1
+    SOLVED // trace found
+  next
+    case Emit2
+    SOLVED // trace found
+  qed
+next
+  case stale
+  simplify /* unannotated */
+  simplify /* unannotated */
+  by sorry /* unannotated */
+qed
+
+
+
+end

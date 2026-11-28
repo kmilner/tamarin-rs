@@ -14,17 +14,16 @@
 //!
 //! An instance reads a substitution only through [`LeafSubst`] — the image of
 //! one variable — so the same instance runs against a [`Subst`], against its
-//! raw map, and against the hashed [`SubstView`] a whole-system pass builds
-//! over one.
+//! raw map, and against the hashed view a whole-system pass builds over one
+//! (`SystemSubst` in `tamarin-theory`).
 
 use std::collections::BTreeMap;
 
 use tamarin_utils::cow::{cow_map_vec, cow_pair};
 
-use crate::function_symbols::FunSym;
 use crate::lterm::LVar;
-use crate::subst::{Subst, SubstView};
-use crate::term::{f_app_ac, f_app_c, f_app_list, f_app_no_eq, Term};
+use crate::subst::Subst;
+use crate::term::{f_app, Term};
 use crate::vterm::{Lit, VTerm};
 
 /// What an [`Apply`] instance reads from a substitution: HS's `imageOf`
@@ -67,19 +66,6 @@ impl<C: Ord + Clone, V: Ord + Clone> LeafSubst for Subst<C, V> {
 
     fn is_empty(&self) -> bool {
         Subst::is_empty(self)
-    }
-}
-
-impl<C: Ord + Clone, V: Ord + Clone + std::hash::Hash> LeafSubst for SubstView<'_, C, V> {
-    type Const = C;
-    type Var = V;
-
-    fn image_of(&self, v: &V) -> Option<&VTerm<C, V>> {
-        SubstView::image_of(self, v)
-    }
-
-    fn is_empty(&self) -> bool {
-        SubstView::is_empty(self)
     }
 }
 
@@ -148,12 +134,7 @@ where
         Term::Lit(Lit::Var(v)) => subst.image_of(v).cloned(),
         Term::Lit(Lit::Con(_)) => None,
         Term::App(fsym, args) => {
-            cow_map_vec(&args[..], |a| apply_term(a, subst)).map(|mapped| match fsym {
-                FunSym::Ac(o) => f_app_ac(*o, mapped),
-                FunSym::C(o) => f_app_c(*o, mapped),
-                FunSym::NoEq(o) => f_app_no_eq(*o, mapped),
-                FunSym::List => f_app_list(mapped),
-            })
+            cow_map_vec(&args[..], |a| apply_term(a, subst)).map(|mapped| f_app(*fsym, mapped))
         }
     }
 }

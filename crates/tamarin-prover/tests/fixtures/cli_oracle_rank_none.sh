@@ -1,5 +1,5 @@
 #!/bin/sh
-# Deterministic test oracle for the `--oracle-only` pin in tests/cli_e2e.rs:
+# Deterministic test oracle for the `--oracle-only` pin in tests/fixtures/cli_refs/cases.tsv:
 # it ranks NOTHING.
 #
 # That is the exact input `--oracle-only` reacts to — HS `oracleRanking`

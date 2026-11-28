@@ -1726,12 +1726,13 @@ printf '%s\n' \
   '#else' \
   '#include /* gap */ "live.spthy"' \
   '#endif' \
-  '#include "diff-item.spthy"' \
   '#include "acc-item.spthy"' \
   'lemma x [heuristic=o   "rank"]: "T"' \
   'end' \
   '#include "trailing-missing.spthy"' > "$t/corpus/t.spthy"
 : > "$t/corpus/live.spthy"
+printf '%s\n' 'theory D begin' '#include "diff-item.spthy"' 'end' \
+    > "$t/corpus/diff.spthy"
 printf '%s\n' 'diffLemma observational [heuristic=o "diff-rank"]:' \
     > "$t/corpus/diff-item.spthy"
 printf '%s\n' \
@@ -1742,28 +1743,26 @@ for rank in rank diff-rank acc-rank; do
     printf '#!/bin/sh\n' > "$t/corpus/$rank"
 done
 
-# This scenario targets parser provenance rather than the conservative fallback.
-parser_input_manifest "$t/corpus/t.spthy" '--diff' > "$t/exact.tsv"
-manifest=$(input_manifest "$t/corpus/t.spthy" '--diff')
-sources= oracles= staged_oracles=
-while IFS=$'\t' read -r tag source_field staged_field; do
-    manifest_decode_into "$source_field" source
-    manifest_decode_into "$staged_field" staged
-    case "$tag" in
-      S) sources+="$source"$'\n' ;;
-      O) oracles+="$source"$'\n'; staged_oracles+="$staged"$'\n' ;;
-    esac
-done <<< "$manifest"
-for include in live.spthy diff-item.spthy acc-item.spthy; do
-    grep -F "$t/corpus/$include" <<< "$sources"
+check_manifest() {
+    local reader=$1 theory=$2 flags=$3 manifest tag source_field staged_field source staged
+    shift 3
+    manifest=$("$reader" "$t/corpus/$theory" "$flags")
+    while IFS=$'\t' read -r tag source_field staged_field; do
+        case "$tag" in S|O) ;; *) continue ;; esac
+        manifest_decode_into "$source_field" source
+        manifest_decode_into "$staged_field" staged
+        test "$source" = "$t/corpus/$staged"
+        printf '%s %s\n' "$tag" "$staged"
+    done <<< "$manifest" > "$t/actual"
+    diff -u <(printf '%s\n' "$@" | sort) <(sort "$t/actual")
+}
+# Check the parser's own dependencies, then the manifest consumed by the gates.
+for reader in parser_input_manifest input_manifest; do
+    check_manifest "$reader" t.spthy '' 'S t.spthy' 'S live.spthy' 'S acc-item.spthy' \
+        'O rank' 'O acc-rank'
+    check_manifest "$reader" diff.spthy --diff 'S diff.spthy' 'S diff-item.spthy' 'O diff-rank'
 done
-for rank in rank diff-rank acc-rank; do
-    grep -F "$t/corpus/$rank" <<< "$oracles"
-    grep -F "$rank" <<< "$staged_oracles"
-done
-! grep -F 'commented-missing' <<< "$sources"
-! grep -F 'trailing-missing' <<< "$sources"
-if input_manifest "$t/corpus/t.spthy" '-D=ACTIVE --diff' 2>"$t/error"; then
+if input_manifest "$t/corpus/t.spthy" '-D=ACTIVE' 2>"$t/error"; then
     echo 'expected input_manifest to reject active-missing.spthy, but it succeeded' >&2
     exit 1
 fi

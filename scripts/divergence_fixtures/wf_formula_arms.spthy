@@ -1,0 +1,70 @@
+// Category: the formula arms of the wellformedness report — which topics one
+// formula trips, and in which order their entries come out.
+//
+// HS `formulaReports` (Theory/Tools/Wellformedness.hs) runs `msum
+// [checkQuantifiers, checkTerms, checkGuarded]` on every annotated formula,
+// in `annFormulas` order (every lemma, then every restriction), and
+// `prettyWfErrorReport` merges only CONSECUTIVE entries of one topic.  The
+// probes:
+//   - L1 trips the terms AND the guardedness arm, so the terms group splits
+//     around it; L2/L3/L4 show xor/multiset/pair offenders in `Show` form;
+//   - q1/q2/r1 are a run of quantifier-sort entries (a restriction joins the
+//     lemmas' run only because it is last);
+//   - manybad trips all three arms (its offender list wraps), idx drops the
+//     binder index, suff reads the sort suffix;
+//   - rA/lB/rC/lD interleave restrictions and lemmas in the source, and the
+//     report still lists every lemma first;
+//   - fresh_pattern/public_pattern/nested/existential: a name sort is allowed
+//     only inside an equality pattern exclusion (`patternExclusion`);
+//   - lm reports a macro call as its expansion, lp checks a predicate's body
+//     at its inlined De Bruijn depth;
+//   - last_l / last_r trip the "Last atom usage" arm, after guardedness, for
+//     a lemma and for a restriction.
+// Only the wf block is compared: the oracle dies printing an unguardable
+// restriction in the echo (see guarded_freshened_names), not in this block.
+// No corpus wf block has a Quantifier sorts, Formula guardedness or Last
+// atom usage header.
+
+theory WfFormulaArms
+begin
+
+builtins: xor, multiset, diffie-hellman
+
+macros: sq(x) = x^x
+
+predicates: P(x) <=> (Ex ~s #k. A(x^x) @ k & A(~s) @ k)
+
+rule R: [ In(x) ] --[ A(x) ]-> [ Out(x) ]
+
+lemma L1: "All #j. K('c') @ i ==> F"
+lemma L2: "All #i. Test('b' XOR 'a') @ #i ==> F"
+lemma L3: "All #i. Test(('b' ++ 'a') ++ ('c' XOR 'd')) @ #i ==> F"
+lemma L4: "All x #i. Test(<x, 'b', ~'n'>) @ #i ==> F"
+
+lemma q1: "All ~n #i. A(~n) @ i ==> F"
+lemma q2: "All $a #i. A($a) @ i ==> F"
+
+lemma manybad: "All ~aaaaaaaaaaaa $bbbbbbbbbbbb ~cccccccccccc $dddddddddddd ~eeeeeeeeeeee $ffffffffffff #i. A(x) @ i ==> F"
+lemma idx: "All ~n.1 #i. A(~n.1) @ i ==> F"
+lemma suff: "All m:fresh #i. A(m:fresh) @ i ==> F"
+
+restriction rA: "All x #i. A(x^x) @ i ==> F"
+lemma lB: "All y #j. A(y^y) @ j ==> F"
+restriction rC: "All ~q #i. A(~q) @ i ==> F"
+lemma lD: "All ~r #j. A(~r) @ j ==> F"
+
+lemma fresh_pattern: "All ~n. ~n = 'a' ==> F"
+lemma public_pattern: "All $a. $a = 'a' ==> F"
+lemma nested: "All ~outer. (All ~inner. ~inner = 'a' ==> F)"
+lemma existential: "Ex ~n. ~n = 'a' ==> F"
+
+lemma lm: "All x #i. A(sq(x)) @ i ==> F"
+lemma lp: "All x #i. A(x) @ i ==> P(x)"
+
+lemma last_l: "not (Ex #i. last(#i))"
+
+restriction r1: "All ~m #i. A(~m) @ i ==> F"
+
+restriction last_r: "All #i. last(#i) ==> F"
+
+end

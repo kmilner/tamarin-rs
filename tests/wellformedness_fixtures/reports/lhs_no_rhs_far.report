@@ -1,0 +1,15 @@
+# source: oracle a75fec7f, --derivcheck-timeout=0
+/*
+WARNING: the following wellformedness checks failed!
+
+Unbound variables
+=================
+
+  rule `B' has unbound variables: 
+    x
+
+Facts occur in the left-hand-side but not in any right-hand-side 
+=================================================================
+
+  1. in rule "A":  factName `Abc' arity: 1 multiplicity: Linear
+*/

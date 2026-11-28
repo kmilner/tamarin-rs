@@ -19,8 +19,8 @@ use crate::formula::{from_parser, sapic_from_parser, to_lnformula};
 use crate::pretty_sapic::render_sapic;
 use crate::sapic::to_lformula;
 use crate::test_corpus::{
-    beyond_budget, corpus_root, elaborate_file, parse_file, rel, spthy_files, EXPECTED_LOAD_SKIPS,
-    SKIP_ELAB, SKIP_LISTED, SKIP_PARSE,
+    beyond_budget, elaborate_file, parse_file, rel, spthy_files, EXPECTED_LOAD_SKIPS, SKIP_ELAB,
+    SKIP_LISTED, SKIP_PARSE,
 };
 use rayon::prelude::*;
 use std::path::{Path, PathBuf};
@@ -181,17 +181,7 @@ fn deep_pool() -> rayon::ThreadPool {
 /// Parse, lift, elaborate and collect the whole tree.  `None` when the
 /// root is missing and `TAM_ALLOW_NO_CORPUS=1` allows the skip.
 fn corpus_phase() -> Option<Corpus> {
-    let root = corpus_root();
-    if !root.is_dir() {
-        if std::env::var("TAM_ALLOW_NO_CORPUS").as_deref() == Ok("1") {
-            eprintln!("corpus: root {} missing, skipped", root.display());
-            return None;
-        }
-        panic!(
-            "corpus root {} missing; set TAM_ALLOW_NO_CORPUS=1 to skip",
-            root.display()
-        );
-    }
+    let root = crate::test_corpus::corpus_root_or_skip("corpus")?;
     let files = spthy_files(&root);
     let reports: Vec<FileReport> = deep_pool().install(|| {
         files
@@ -402,7 +392,6 @@ fn collect_term<'a>(t: &'a p::Term, out: &mut Shapes<'a>) {
         p::Term::PubLit(_)
         | p::Term::FreshLit(_)
         | p::Term::NatLit(_)
-        | p::Term::Number(_)
         | p::Term::NumberOne
         | p::Term::NatOne
         | p::Term::DhNeutral => {}

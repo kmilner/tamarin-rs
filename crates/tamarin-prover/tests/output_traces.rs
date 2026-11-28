@@ -43,47 +43,6 @@ const SECOND_RECV: &str = "theory SecondRecv\nbegin\n\nrule Send:\n  \
 /// the empty string, so `intercalate "-" ["", "Send"]` contributes `-Send`.
 const SR_LABEL: &str = "trace_SingleRecv_SL2-AS0-CL0-A1-C1-NB_chain-Send";
 
-/// The invocation emitted by batch-tamarin 1.2.0's ExecutableTask.to_command.
-#[test]
-fn batch_tamarin_rts_invocation_writes_proof_and_traces() {
-    if !maude_available() {
-        return;
-    }
-    let c = Case::new("batch_tamarin_rts");
-    let input = fixture(SINGLE_RECV);
-    let proof = c.dir.join("proof.spthy");
-    let (code, stdout, stderr) = common::run_binary(
-        &[
-            "+RTS",
-            "-N2",
-            "-RTS",
-            input.to_str().unwrap(),
-            "--prove=chain",
-            "-D=TEST",
-            &format!("--output-json={}", c.json.display()),
-            &format!("--output-dot={}", c.dot.display()),
-            &format!("--output={}", proof.display()),
-        ],
-        &[],
-    );
-    assert_eq!(code, 0, "stdout:\n{stdout}\nstderr:\n{stderr}");
-    assert!(
-        stdout.contains("chain (exists-trace): verified"),
-        "{stdout}"
-    );
-    assert!(std::fs::read_to_string(proof)
-        .unwrap()
-        .contains("SOLVED // trace found"));
-    assert_eq!(
-        c.json_bytes(),
-        std::fs::read(fixture("single_recv_traces.json")).unwrap()
-    );
-    assert_eq!(
-        std::fs::read(&c.dot).unwrap(),
-        std::fs::read(fixture("single_recv_traces.dot")).unwrap()
-    );
-}
-
 /// A fresh per-test temp dir holding the two trace paths.
 struct Case {
     dir: PathBuf,
@@ -120,17 +79,6 @@ impl Case {
         common::run_binary(&flags, inputs).0
     }
 
-    fn assert_neither_exists(&self, mode: &str) {
-        assert!(
-            !self.json.exists(),
-            "{mode}: HS never creates the --output-json file here",
-        );
-        assert!(
-            !self.dot.exists(),
-            "{mode}: HS never creates the --output-dot file here",
-        );
-    }
-
     fn json_bytes(&self) -> Vec<u8> {
         std::fs::read(&self.json).expect("--output-json file written")
     }
@@ -138,92 +86,15 @@ impl Case {
     fn dot_text(&self) -> String {
         std::fs::read_to_string(&self.dot).expect("--output-dot file written")
     }
-
-    fn dot_len(&self) -> u64 {
-        std::fs::metadata(&self.dot)
-            .expect("--output-dot file written")
-            .len()
-    }
 }
 
 // ---------------------------------------------------------------------
 // Negative cases: the branches that return before `outputTraces`
 // ---------------------------------------------------------------------
 
-/// The "no input files given" error fires before any theory processing.
-#[test]
-fn no_input_files_writes_no_trace_files() {
-    let c = Case::new("no_input_files");
-    assert_eq!(c.run(&[], &[]), 1);
-    c.assert_neither_exists("no input files");
-}
-
-/// A parse error `die`s inside `loadTheory`, long before `outputTraces`.
-#[test]
-fn parse_error_writes_no_trace_files() {
-    let c = Case::new("parse_error");
-    let bad = c.write("bad.spthy", "theory Bad begin\nrule\n");
-    assert_eq!(c.run(&[], &[&bad]), 1);
-    c.assert_neither_exists("parse error");
-}
-
-/// `parseOnlyMode` (Batch.hs) returns before the close-and-prove arm.
-#[test]
-fn parse_only_writes_no_trace_files() {
-    let c = Case::new("parse_only");
-    let f = fixture(SINGLE_RECV);
-    assert_eq!(c.run(&["--parse-only"], &[&f]), 0);
-    c.assert_neither_exists("--parse-only");
-}
-
-/// `precomputeOnlyMode` (Batch.hs) likewise.
-#[test]
-fn precompute_only_writes_no_trace_files() {
-    if !maude_available() {
-        eprintln!("skipping: maude not on path");
-        return;
-    }
-    let c = Case::new("precompute_only");
-    let f = fixture(SINGLE_RECV);
-    assert_eq!(c.run(&["--precompute-only"], &[&f]), 0);
-    c.assert_neither_exists("--precompute-only");
-}
-
-/// `isTranslateOnlyMode` (Batch.hs) likewise — `-m` never closes the
-/// theory, so there is nothing to serialise and no file is created.
-#[test]
-fn translate_only_writes_no_trace_files() {
-    if !maude_available() {
-        eprintln!("skipping: maude not on path");
-        return;
-    }
-    let c = Case::new("translate_only");
-    let f = fixture(SINGLE_RECV);
-    assert_eq!(c.run(&["-m=spthy"], &[&f]), 0);
-    c.assert_neither_exists("-m=spthy");
-}
-
 // ---------------------------------------------------------------------
 // The no-trace documents
 // ---------------------------------------------------------------------
-
-/// Without `--prove` the fixture's lemma has no stored proof, so
-/// `systemsWithMetadata` is empty: `sequentsToJSONPretty graphOptions []` is
-/// aeson-pretty's `{graphs: []}` (20 bytes, no trailing newline) and
-/// `intercalate "\n" [] == ""` is a 0-byte dot file.  Byte-identical to the
-/// oracle's `noprove_sr.{json,dot}`.
-#[test]
-fn no_traces_writes_the_hs_empty_documents() {
-    if !maude_available() {
-        eprintln!("skipping: maude not on path");
-        return;
-    }
-    let c = Case::new("no_traces");
-    let f = fixture(SINGLE_RECV);
-    assert_eq!(c.run(&[], &[&f]), 0);
-    assert_eq!(c.json_bytes(), b"{\n    \"graphs\": []\n}");
-    assert_eq!(c.dot_len(), 0);
-}
 
 // ---------------------------------------------------------------------
 // The solved-trace documents

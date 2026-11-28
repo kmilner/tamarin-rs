@@ -1,0 +1,45 @@
+theory ChannelsTestOne
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+let  P (c.1) = new a.1;
+               event Secret( a.1 );
+               out(c.1,a.1)
+
+let  Q (c.1) = in(c.1,x.1);
+               event Received( x.1 )
+
+process:
+  new c.1;
+   (P() | Q())
+
+lemma secret:
+  all-traces "∀ x #i. (Secret( x ) @ #i) ⇒ (¬(∃ #j. K( x ) @ #j))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ x #i. (Secret( x ) @ #i) ∧ ∃ #j. (K( x ) @ #j)"
+*/
+by sorry
+
+lemma received:
+  exists-trace "∃ x #i. Received( x ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ x #i. (Received( x ) @ #i)"
+*/
+by sorry
+
+/* All wellformedness checks were successful. */
+
+/*
+Generated from:
+Tamarin version 1.13.0
+Maude version 3.5.1
+*/
+
+end

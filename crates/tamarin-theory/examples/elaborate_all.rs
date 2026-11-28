@@ -10,7 +10,8 @@ use std::fs;
 use std::path::PathBuf;
 
 use tamarin_parser::parse_theory;
-use tamarin_theory::elaborate::elaborate_with_diagnostics;
+use tamarin_theory::elaborate::elaborate;
+use tamarin_theory::guarded::formula_to_guarded;
 
 mod common;
 use common::{collect_spthy, corpus_root};
@@ -48,8 +49,20 @@ fn main() {
             }
             Err(_) => continue,
         };
-        match elaborate_with_diagnostics(&p) {
-            Ok((t, diags)) => {
+        match elaborate(&p) {
+            Ok(t) => {
+                // The guardedness scan of the formula reports, as
+                // (item, message) pairs.
+                let lemmas = t
+                    .lemmas()
+                    .map(|l| (format!("Lemma `{}'", l.name), &l.formula));
+                let restrictions = t
+                    .restrictions()
+                    .map(|r| (format!("Restriction `{}'", r.name), &r.formula));
+                let diags: Vec<(String, String)> = lemmas
+                    .chain(restrictions)
+                    .filter_map(|(item, f)| formula_to_guarded(f).err().map(|e| (item, e.message)))
+                    .collect();
                 elab_ok += 1;
                 let n_lem = t.lemmas().count() as u64;
                 let n_res = t.restrictions().count() as u64;
@@ -57,8 +70,8 @@ fn main() {
                 total_restrictions += n_res;
                 let mut bad_lem = 0u64;
                 let mut bad_res = 0u64;
-                for d in &diags {
-                    if d.item.starts_with("Lemma") {
+                for (item, _) in &diags {
+                    if item.starts_with("Lemma") {
                         bad_lem += 1;
                     } else {
                         bad_res += 1;
@@ -70,13 +83,8 @@ fn main() {
                     files_with_no_guard_diags += 1;
                 }
                 if verbose && !diags.is_empty() && sample_diags.len() < 30 {
-                    for d in &diags {
-                        sample_diags.push(format!(
-                            "{}: {} → {}",
-                            path.display(),
-                            d.item,
-                            d.message
-                        ));
+                    for (item, message) in &diags {
+                        sample_diags.push(format!("{}: {} → {}", path.display(), item, message));
                     }
                 }
             }

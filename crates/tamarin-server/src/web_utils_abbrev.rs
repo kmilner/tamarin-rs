@@ -46,7 +46,7 @@ fn get_terms(sys: &System) -> impl Iterator<Item = &LNTerm> {
         ru.conclusions
             .iter()
             .chain(ru.premises.iter())
-            .flat_map(|f| f.terms.iter())
+            .flat_map(|f| f.terms().iter())
     })
 }
 
@@ -103,7 +103,7 @@ fn update_system(legend: &Legend, sys: &mut System) {
     sys.for_each_node_rule_mut(|ru| {
         for facts in [&mut ru.premises, &mut ru.conclusions] {
             for f in facts.iter_mut() {
-                if f.terms.iter().any(|t| legend.contains_key(t)) {
+                if f.terms().iter().any(|t| legend.contains_key(t)) {
                     *f = f.map_ref(|t| legend.get(t).unwrap_or(t).clone());
                 }
             }
@@ -204,7 +204,7 @@ mod tests {
     }
 
     fn conclusion_terms(sys: &System) -> Vec<LNTerm> {
-        sys.nodes[0].1.conclusions[0].terms.to_vec()
+        sys.nodes[0].1.conclusions[0].terms().to_vec()
     }
 
     /// The conclusion terms of the node stored under `#i.idx`.
@@ -214,7 +214,7 @@ mod tests {
             .iter()
             .find(|(id, _)| id.idx == idx)
             .expect("node present");
-        ru.conclusions[0].terms.to_vec()
+        ru.conclusions[0].terms().to_vec()
     }
 
     // A small term never reaches the size threshold, so the system comes back

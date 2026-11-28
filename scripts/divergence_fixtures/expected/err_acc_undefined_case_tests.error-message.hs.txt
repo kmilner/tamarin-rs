@@ -1,0 +1,3 @@
+rc 1
+tamarin-prover: The following case tests are undefined but are required in a lemma:
+  'b', 'c', 'c' required by lemma 'acc'

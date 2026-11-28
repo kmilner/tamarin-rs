@@ -40,8 +40,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use tamarin_term::function_symbols::{AcSym, FunSym};
-use tamarin_term::lterm::{sort_of_lnterm, HasFrees, LNTerm, LSort, LVar};
-use tamarin_term::pretty::pretty_nterm;
+use tamarin_term::lterm::{frees, sort_of_lnterm, LNTerm, LSort, LVar};
 use tamarin_term::term::{f_app, Term};
 use tamarin_term::vterm::Lit;
 
@@ -50,7 +49,7 @@ use crate::pretty_hpj::{self as hpj, Doc};
 use crate::rule::{pretty_proto_rule_e, ProtoRuleE};
 use crate::theory::Theory;
 
-use super::{WfError, WF_LINE_LENGTH, WF_RIBBON};
+use super::{pretty_lnterm_list, pretty_var_list, WfError};
 
 /// HS `underlineTopic "Multiplication restriction of rules"`
 /// (Wellformedness.hs) — stored bare here because
@@ -78,7 +77,7 @@ pub fn mult_restricted_report(elab: &Theory) -> Vec<WfError> {
         let mults: Vec<LNTerm> = ru
             .conclusions
             .iter()
-            .flat_map(|f| f.terms.iter())
+            .flat_map(|f| f.terms().iter())
             .flat_map(mult_terms)
             .collect();
         // HS `unbound ruAbstr \\ unbound ru`: both operands are `frees`
@@ -94,7 +93,8 @@ pub fn mult_restricted_report(elab: &Theory) -> Vec<WfError> {
         }
         out.push(WfError::new(
             TOPIC,
-            entry_doc(ru, &abstracted, &mults, &unbounds).render_with(WF_LINE_LENGTH, WF_RIBBON),
+            entry_doc(ru, &abstracted, &mults, &unbounds)
+                .render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON),
         ));
     }
     out.extend(unsupported_products_report(
@@ -112,10 +112,7 @@ pub(crate) fn unsupported_products_report<'a>(
     for rule in rules {
         let mults = crate::rule::rule_products_outside_exponents(rule);
         if !mults.is_empty() {
-            let list = hpj::fsep(hpj::punctuate(
-                Doc::text(","),
-                mults.iter().map(pretty_nterm).collect(),
-            ));
+            let list = pretty_lnterm_list(&mults);
             out.push(WfError::underlined_block(
                 "Unsupported multiplication outside exponents",
                 Doc::text(format!(
@@ -154,25 +151,11 @@ fn mult_terms(t: &LNTerm) -> Vec<LNTerm> {
 /// `sortednub . freesList` (Term/LTerm.hs), which a `BTreeSet` ordered by
 /// `Ord LVar` reproduces exactly.
 fn unbound(ru: &ProtoRuleE) -> BTreeSet<LVar> {
-    let concs = fact_frees(&ru.conclusions);
-    let prems = fact_frees(&ru.premises);
-    concs
-        .difference(&prems)
-        .copied()
-        .filter(|v| v.sort != LSort::Pub)
+    let prems: BTreeSet<LVar> = frees(&ru.premises).into_iter().collect();
+    frees(&ru.conclusions)
+        .into_iter()
+        .filter(|v| !prems.contains(v) && v.sort != LSort::Pub)
         .collect()
-}
-
-fn fact_frees(facts: &[LNFact]) -> BTreeSet<LVar> {
-    let mut out = BTreeSet::new();
-    for f in facts {
-        for t in f.terms.iter() {
-            t.for_each_free(&mut |v| {
-                out.insert(*v);
-            });
-        }
-    }
-    out
 }
 
 // =============================================================================
@@ -200,7 +183,8 @@ fn abstract_rule(ru: &ProtoRuleE, irreducible: &BTreeSet<FunSym>) -> ProtoRuleE 
     // counter at `avoid ru = maybe 0 (succ . snd) (boundsVarIdx ru)`
     // (Term/LTerm.hs) — one past the largest variable index in the rule,
     // or 0 when the rule has no variables at all.
-    let mut next_idx = avoid(ru);
+    let mut next_idx =
+        tamarin_term::lterm::bounds_var_idx(ru).map_or(0, |(_, max_idx)| max_idx + 1);
     // HS `BindT` state: `M.Map LNTerm LVar`, so one binding per distinct
     // abstracted term, reused on every later occurrence.
     let mut bindings: BTreeMap<LNTerm, LVar> = BTreeMap::new();
@@ -208,7 +192,7 @@ fn abstract_rule(ru: &ProtoRuleE, irreducible: &BTreeSet<FunSym>) -> ProtoRuleE 
     let mut premises = Vec::with_capacity(ru.premises.len());
     for f in &ru.premises {
         let terms = f
-            .terms
+            .terms()
             .iter()
             .map(|t| abstract_term(t, irreducible, &mut bindings, &mut next_idx))
             .collect();
@@ -219,7 +203,7 @@ fn abstract_rule(ru: &ProtoRuleE, irreducible: &BTreeSet<FunSym>) -> ProtoRuleE 
             .iter()
             .map(|f| {
                 let terms = f
-                    .terms
+                    .terms()
                     .iter()
                     .map(|t| replace_abstracted(t, bindings))
                     .collect();
@@ -241,30 +225,6 @@ fn abstract_rule(ru: &ProtoRuleE, irreducible: &BTreeSet<FunSym>) -> ProtoRuleE 
         actions,
         new_vars,
     }
-}
-
-/// HS `avoid` (Term/LTerm.hs) over a rule's `frees`: `succ` of the largest
-/// variable index, `0` for a variable-free rule.  The rule's info contributes
-/// no variables (`HasFrees RuleAttributes` folds to `mempty`,
-/// Theory/Model/Rule.hs, and RS lifts `_restrict` formulas out of the
-/// rule before elaboration), so premises, conclusions, actions and new
-/// variables are the whole domain.
-fn avoid(ru: &ProtoRuleE) -> u64 {
-    let mut max_idx: Option<u64> = None;
-    let mut visit = |v: &LVar| {
-        max_idx = Some(max_idx.map_or(v.idx, |m: u64| m.max(v.idx)));
-    };
-    for facts in [&ru.premises, &ru.conclusions, &ru.actions] {
-        for f in facts {
-            for t in f.terms.iter() {
-                t.for_each_free(&mut visit);
-            }
-        }
-    }
-    for t in &ru.new_vars {
-        t.for_each_free(&mut visit);
-    }
-    max_idx.map_or(0, |m| m + 1)
 }
 
 /// HS `abstractTerm` (Wellformedness.hs):
@@ -356,30 +316,18 @@ fn entry_doc(ru: &ProtoRuleE, abstracted: &ProtoRuleE, mults: &[LNTerm], unbound
         .above_g(pretty_proto_rule_e(abstracted).nest(2))
         .above_g(Doc::text_hs(""));
     if !mults.is_empty() {
-        // HS `prettyLNTermList = fsep . punctuate comma . map prettyLNTerm`
-        // (Wellformedness.hs).  `<->` is one space, and the text
-        // already ends in one — hence the doubled space before the list.
-        let list = hpj::fsep(hpj::punctuate(
-            Doc::text(","),
-            mults.iter().map(pretty_nterm).collect(),
-        ));
+        // `<->` is one space, and the text already ends in one — hence the
+        // doubled space before the list.
         d = d.above_g(
             Doc::text("Terms with multiplication: ")
-                .beside_sp(list)
+                .beside_sp(pretty_lnterm_list(mults))
                 .nest(2),
         );
     }
     if !unbounds.is_empty() {
-        // HS `prettyVarList = fsep . punctuate comma . map prettyLVar`
-        // (TheoryObject.hs), and `prettyLVar = text . show`
-        // (LTerm.hs).
-        let list = hpj::fsep(hpj::punctuate(
-            Doc::text(","),
-            unbounds.iter().map(|v| Doc::text(v.to_string())).collect(),
-        ));
         d = d.above_g(
             Doc::text("Variables that occur only in rhs: ")
-                .beside_sp(list)
+                .beside_sp(pretty_var_list(unbounds))
                 .nest(2),
         );
     }

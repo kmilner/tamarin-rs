@@ -1,0 +1,14 @@
+// Category: the --parse-only open-theory printer (`prettyOpenTheory`),
+// which no corpus gate runs: the gates load and close every theory.
+//
+// Reparsable branching-process layout and insert/lock/unlock/lookup actions.
+
+theory IfElse
+begin
+
+builtins: symmetric-encryption
+
+process:
+in(x); if x = 'a' then (event Yes(); out('y')) else event No(); insert 'st', x; lock 'st'; unlock 'st'; lookup 'st' as z in event Got(z) else 0
+
+end

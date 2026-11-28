@@ -1,0 +1,28 @@
+// Category: the --parse-only open-theory printer (`prettyOpenTheory`),
+// which no corpus gate runs: the gates load and close every theory.
+//
+// The open theory's lemma and restriction carry the formula as the source
+// wrote it: HS's `_lOriginalFormula` / `_rstrOriginalFormula` are `Nothing`
+// before `applyMacroInLemma` / `applyMacroInRestriction` run at close time
+// (lib/theory/src/Lemma.hs, Theory/Model/Restriction.hs), so
+// `prettyLemma`'s quoted line and guarded block (lib/theory/src/Lemma.hs) and `prettyRestriction`'s body (TheoryObject.hs) all show
+// the macro CALL, and the `expanded formula:` block that block's `Just _`
+// guard controls is not written.
+
+theory MacroView
+begin
+
+functions: h/1
+macros: m1(x) = h(x), m2(x, y) = <m1(x), y>
+
+rule A:
+  [ ] --[ A(m2('a', 'b')) ]-> [ ]
+
+restriction rst:
+  "All z #i #j. A(z) @ i & A(m2('a', 'b')) @ j ==> #i = #j"
+
+lemma lem:
+  all-traces
+  "All z #i. A(z) @ i ==> z = m2('a', 'b')"
+
+end

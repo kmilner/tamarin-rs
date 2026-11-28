@@ -1,0 +1,19 @@
+// Category: proof corners no corpus proof reaches — `--auto-sources`.
+//
+// An existential `[sources]` lemma must not be used as an assumption when
+// auto-sources builds its typing lemma; the theory loads and echoes.  No
+// corpus theory has an existential sources lemma.
+
+theory GuardedSource
+begin
+
+rule A:
+  [] --[ A() ]-> []
+
+lemma typing [sources]: exists-trace
+  "All x #i. A() @ #i ==> x = x"
+
+lemma ok: exists-trace
+  "Ex #i. A() @ #i"
+
+end

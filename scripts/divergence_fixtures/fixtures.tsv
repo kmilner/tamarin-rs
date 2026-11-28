@@ -1,10 +1,21 @@
 # Divergence-visibility fixtures.  Consumed by capture.sh and check.sh.
 #
-# name    the <name>.spthy in this directory
+# name    the <name>.spthy in this directory.  A row named <fixture>@<variant>
+#         loads <fixture>.spthy under another set of flags; its captures are
+#         named after the whole row name.  A fixture may bring sibling files
+#         it reads itself: an `#include`d <fixture>.inc, an oracle script
+#         <fixture>.oracle, a directory <fixture>.d/.
 # slice   comma-separated list of blocks cut from ONE theory load:
 #           wf      the wellformedness report block (wf_gate.sh's slice)
 #           theory  the `theory … end` echo (pretty_gate.sh's slice)
 #           summary the run summary, which carries the wellformedness count
+#           stdout  the whole stdout (`--parse-only` and `-m` documents,
+#                   fatal reports printed before the exit)
+#           error   exit code and normalized error kind for a fatal run
+#           error-message  exit code and full diagnostic for a fatal run
+#                          with a stable `tamarin-prover:` message
+#           traces  the --output-dot and --output-json files, which the
+#                   scripts add to the row's flags
 # mode    match    the port must reproduce the captured oracle bytes
 #         diverge  the port must reproduce <name>.<slice>.rs.txt, which must
 #                  still differ from the captured oracle bytes.  mode is per
@@ -12,8 +23,12 @@
 #                  its own — a slice the two engines agree on reads as the
 #                  divergence having been fixed.
 # flags   extra prover flags, passed to BOTH engines
+# input   optional theory path relative to this directory, overriding <fixture>.spthy
 #
-# name<TAB>slice<TAB>mode<TAB>flags
+# Local fixture headers explain the regression. For an upstream input, the
+# comment on its row explains which invocation exercises it.
+#
+# name<TAB>slice<TAB>mode<TAB>flags[<TAB>input]
 mixed_ac_wf	wf,theory	match	--derivcheck-timeout=0 --output-module=msr
 pair_echo_order	wf,theory	match	--derivcheck-timeout=0
 wf_user_ac_report	wf,theory	match	--derivcheck-timeout=0
@@ -69,3 +84,131 @@ s8_sapic_generated_rule_wf	wf	match	--derivcheck-timeout=0
 s8_acc_generated_lemma	wf	match	--lemma=acc_verif_empty --derivcheck-timeout=0
 s8_msr_lemma_filter	wf	match	-m=msr --prove=keep --derivcheck-timeout=0
 s8_lemma_arg_order	wf	match	--prove=p1 --lemma=l1 --prove=p2 --lemma=l2 --derivcheck-timeout=0
+sapic_call_swap	wf,summary	match	--prove --derivcheck-timeout=0
+dual_typed_ac_symbol	theory	match	--derivcheck-timeout=0
+annotated_ku_goals	theory	match	--prove --derivcheck-timeout=0
+saturation_kd_loop_breaker	theory	match	--prove --derivcheck-timeout=0
+formal_comment_end	theory	match	--derivcheck-timeout=0
+wf_report_layout	wf	match	--derivcheck-timeout=0
+wf_formula_arms	wf	match	--derivcheck-timeout=0
+wf_formula_terms_shapes	wf	match	--derivcheck-timeout=0
+wf_formula_terms_user_em	wf	match	--derivcheck-timeout=0
+wf_fact_reports	wf	match	--derivcheck-timeout=0 -m=msr
+wf_nat_sorts	wf	match	--derivcheck-timeout=0 -m=msr
+wf_unbound_names	wf	match	--derivcheck-timeout=0
+wf_sapic_names	wf	match	--derivcheck-timeout=0
+wf_guardedness	wf,theory	match	--derivcheck-timeout=0
+wf_mult_restricted	wf,theory	match	--derivcheck-timeout=0 -m=msr
+wf_rule_variants	wf,theory	match	--derivcheck-timeout=0
+wf_manual_variants	wf,theory	match	--derivcheck-timeout=0 -m=msr
+wf_convergent_last_regular	wf	match	--derivcheck-timeout=0
+wf_convergent_last_convergent	wf	match	--derivcheck-timeout=0
+wf_derivcheck	wf	match	--derivcheck-timeout=60
+wf_lemma_flags@prefix	wf	match	--derivcheck-timeout=0 --prove=go*
+wf_lemma_flags@bare	wf	match	--derivcheck-timeout=0 --prove --lemma=good
+sig_declarations	wf,theory	match	--derivcheck-timeout=0
+sig_redecl_projections	wf,theory	match	--derivcheck-timeout=0
+sig_redecl_dest_pairing	theory	match	--derivcheck-timeout=0
+sig_redecl_dest_pairing_after	theory	match	--derivcheck-timeout=0
+sig_convergent_then_functions	theory	match	--derivcheck-timeout=0
+sig_convergent_then_macros	theory	match	--derivcheck-timeout=0
+elaboration_echo	theory	match	--derivcheck-timeout=0
+tactic_render	theory	match	--derivcheck-timeout=0
+module_replication@spthy	stdout	match	--derivcheck-timeout=0 -m=spthy
+module_replication@spthytyped	stdout	match	--derivcheck-timeout=0 -m=spthytyped
+module_replication@msr	stdout	match	--derivcheck-timeout=0 -m=msr
+module_patterns@spthy	stdout	match	--derivcheck-timeout=0 -m=spthy
+module_patterns@spthytyped	stdout	match	--derivcheck-timeout=0 -m=spthytyped
+module_patterns@msr	stdout	match	--derivcheck-timeout=0 -m=msr
+module_fst_snd_attrs	stdout	match	--derivcheck-timeout=0 -m=spthy
+module_typing4@spthytyped	stdout	match	--derivcheck-timeout=0 -m=spthytyped
+module_typing4@msr	stdout	match	--derivcheck-timeout=0 -m=msr
+module_channels4	stdout	match	--derivcheck-timeout=0 -m=spthytyped
+module_typed_lets	stdout	match	--derivcheck-timeout=0 -m=spthytyped
+sapic_translation_items@spthy	stdout	match	--derivcheck-timeout=0 -m=spthy
+sapic_translation_items@msr	stdout	match	--derivcheck-timeout=0 -m=msr
+sapic_process_corners	wf,theory	match	--derivcheck-timeout=0
+sapic_lets_plain	wf,theory	match	--derivcheck-timeout=60
+sapic_lets_progress	wf,theory	match	--derivcheck-timeout=60
+sapic_lets_reliable_plain	wf,theory	match	--derivcheck-timeout=60
+sapic_lets_reliable_progress	wf,theory	match	--derivcheck-timeout=60
+sapic_nullary_binders	wf,theory	match	--derivcheck-timeout=0
+sapic_typed_patterns	wf,theory	match	--derivcheck-timeout=0
+sapic_restrict_unbound	wf,theory	match	--derivcheck-timeout=0
+sapic_restrict_unbound_order	wf,theory	match	--derivcheck-timeout=0
+sapic_unbound_before_variants	wf,theory	match	--derivcheck-timeout=0
+restrict_binder_identity	wf,theory	match	--derivcheck-timeout=0
+pe_shapes	theory	match	--derivcheck-timeout=0 --partial-evaluation=summary
+pe_shapes@prove	theory,summary	match	--derivcheck-timeout=0 --partial-evaluation=summary --quit-on-warning --prove
+ndc_xorr	theory	match	--derivcheck-timeout=0
+ndc_xorr@no_ndc	theory	match	--derivcheck-timeout=0 --no-ndc
+po_sig_builtins_functions_macros	stdout	match	--parse-only
+po_rules_restrict_lemmas	stdout	match	--parse-only
+po_sapic_process_untranslated	stdout	match	--parse-only
+po_config_heuristic_predicate_comment	stdout	match	--parse-only
+po_accountability_lemma_and_test	stdout	match	--parse-only
+po_proof_skeleton_cases_sorted	stdout	match	--parse-only
+po_tactic_export_ac_function	stdout	match	--parse-only
+po_sapic_if_else_state_actions	stdout	match	--parse-only
+po_macro_restriction_unexpanded	stdout	match	--parse-only
+po_macro_lemma_guarded_unexpanded	stdout	match	--parse-only
+po_export_multiline_body	stdout	match	--parse-only
+po_restrict_abstracts_the_timepoint_first	stdout	match	--parse-only
+po_predicates_and_smaller_echo	stdout	match	--parse-only
+po_macro_lemma_and_restriction_quote_the_unexpanded_formula	stdout	match	--parse-only
+po_manual_rule_variants_block_round_trips	stdout	match	--parse-only
+po_include_splices_items	stdout	match	--parse-only
+po_sapic_location_wraps_in_place	stdout	match	--parse-only
+prove_last_tautology	theory,summary	match	--prove --derivcheck-timeout=0
+prove_injective_auto_sources	theory,summary	match	--prove --auto-sources --no-ndc --derivcheck-timeout=0 --quit-on-warning
+prove_auto_sources_covered_product	summary	match	--auto-sources --prove=witness --bound=8 --no-ndc --derivcheck-timeout=0
+prove_auto_sources_identity_member	theory,summary	match	--prove --auto-sources --no-ndc --derivcheck-timeout=0 --quit-on-warning
+prove_replay_chain_goal_identity	summary	match	--derivcheck-timeout=0
+prove_existential_source	theory	match	--auto-sources --derivcheck-timeout=0
+prove_stale_bfs	theory,summary	match	--prove --stop-on-trace=bfs --derivcheck-timeout=0
+precompute_auto_sources@plain	stdout	match	--precompute-only --derivcheck-timeout=0
+precompute_auto_sources@auto	stdout	match	--precompute-only --derivcheck-timeout=0 --auto-sources
+precompute_manual_sources@plain	stdout	match	--precompute-only --derivcheck-timeout=0
+precompute_manual_sources@auto	stdout	match	--precompute-only --derivcheck-timeout=0 --auto-sources
+precompute_duplicate_rules	stdout	match	--precompute-only --derivcheck-timeout=0
+# The pinned 5G model reaches the forbidden-chain regression with this heuristic.
+prove_forbidden_chain	summary	match	--prove=executability_desync --heuristic=s --derivcheck-timeout=0	../../tamarin-prover/examples/ccs18-5G/5G-AKA-bindingChannel/5G_AKA_fix.spthy
+err_ac_empty_args	error	match	--derivcheck-timeout=0
+err_ac_empty_args@no_ndc	error	match	--no-ndc --derivcheck-timeout=0
+err_acc_closed_case_test	error	match	--derivcheck-timeout=0
+err_acc_duplicate_predicate	error-message	match	--derivcheck-timeout=0
+err_acc_undefined_case_tests	error-message	match	--derivcheck-timeout=0
+err_equation_literal_lhs	error	match	--derivcheck-timeout=0
+err_guarded_restriction	error	match	--precompute-only --derivcheck-timeout=0
+err_guarded_source	error	match	--precompute-only --derivcheck-timeout=0
+err_heuristic_duplicate	error	match	--derivcheck-timeout=0
+err_malformed_sources	error	match	--prove --derivcheck-timeout=0
+err_manual_variant_alignment	stdout,error	match	-D=LATE_CONFLICT --derivcheck-timeout=0
+err_missing_tactic@prove	error	match	--prove --derivcheck-timeout=0
+err_missing_tactic@bound	error	match	--prove -b=1 --derivcheck-timeout=0
+err_process_call_too_few	error	match	--derivcheck-timeout=0
+err_process_duplicate	error	match	--derivcheck-timeout=0
+err_process_forward_call	error	match	--derivcheck-timeout=0
+err_process_recursive	error	match	--derivcheck-timeout=0
+err_process_undefined_call	error	match	--derivcheck-timeout=0
+err_quit_on_warning	stdout,error	match	-m=spthy --quit-on-warning --derivcheck-timeout=0
+err_rule_duplicate_attributes	error	match	--derivcheck-timeout=0
+err_rule_duplicate_body	error	match	--derivcheck-timeout=0
+err_rule_duplicate_include	error	match	--derivcheck-timeout=0
+err_rule_duplicate_restrict	error	match	--derivcheck-timeout=0
+err_sapic_ac_destructor	error	match	--derivcheck-timeout=0
+err_sapic_condeq_unbound	error	match	--derivcheck-timeout=0
+err_sapic_lock_parallel	error	match	--derivcheck-timeout=0
+err_sapic_lock_replication	error	match	--derivcheck-timeout=0
+err_sapic_restriction_name_generated	error	match	--derivcheck-timeout=0
+err_sapic_restriction_name_session	error	match	--derivcheck-timeout=0
+err_sapic_rule_name_clash	error	match	--derivcheck-timeout=0
+err_sapic_unannotated_unlock	error	match	--derivcheck-timeout=0
+err_sapic_undefined_predicate	error	match	--derivcheck-timeout=0
+err_stored_unguardable_disjunct	error	match	--derivcheck-timeout=0
+err_unsupported_products@prove	stdout,error	match	--prove --derivcheck-timeout=0
+err_unsupported_products@quit_on_warning	stdout,error	match	--prove --quit-on-warning --derivcheck-timeout=0
+err_unsupported_products@precompute	stdout,error	match	--precompute-only --derivcheck-timeout=0
+err_unsupported_products@msr	wf	match	--output-module=msr --derivcheck-timeout=0
+module_replication@empty_output	error	match	-m=spthy -o --derivcheck-timeout=0
+traces_wide_facts	traces,summary	match	--prove --derivcheck-timeout=0

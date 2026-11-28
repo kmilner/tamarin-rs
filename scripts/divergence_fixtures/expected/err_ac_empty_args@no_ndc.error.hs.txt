@@ -1,0 +1,2 @@
+rc 1
+kind Term.fAppAC

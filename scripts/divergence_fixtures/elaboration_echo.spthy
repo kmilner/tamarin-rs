@@ -1,0 +1,77 @@
+// Category: what elaboration does to rules, predicates and stored proofs,
+// as the theory echo shows it.
+//
+//   - A: a macro call bound by `let` reaches the rule expanded;
+//   - Konst: a bare nullary macro name expands like `konst()`;
+//   - NatDigit: `%12` is a nat variable, not `%1` followed by `2`;
+//   - LetBinder: a `let` binder shadows the nullary function `c`;
+//   - Between: a predicate's formula wraps at the default 100/67 style;
+//   - Dup (twice) and DupLet (once spelled with a `let`): identical rules
+//     under one name load, and the echo prints both;
+//   - Equal (twice, around a `functions:` block): a declaration between
+//     two equal rules leaves them equal;
+//   - stored: the stored proof's goals convert to internal goals — a
+//     nullary user symbol, a wrapped user-AC infix term and a chain goal —
+//     and the echo prints each from its parsed value.
+// No corpus theory binds a macro call in a `let`, writes a bare nullary
+// macro name, repeats a rule, or stores goals over user AC or nullary
+// symbols.
+
+theory ElaborationEcho
+begin
+
+builtins: hashing, natural-numbers
+
+functions: c/0, zero/0, add/2 [AC], f/1
+
+macros: m(x) = h(x), konst() = h('seed')
+
+rule A:
+  let y = m(~k) in
+  [ Fr(~k) ] --[ A( y ) ]-> [ Out( y ) ]
+
+rule Konst:
+  [ In( konst ) ] --[ M( konst() ) ]-> [ ]
+
+rule NatDigit:
+  [ In(%12) ] --> [ Out(%1) ]
+
+rule LetBinder:
+  let c = 'lit'
+  in
+  [ ] --[ E(c) ]-> [ ]
+
+predicate: Between(x, y, z) <=> (Ex #i #j #k. Ev(x) @ #i & Ev(y) @ #j & Ev(z) @ #k & #i < #j & #j < #k)
+
+rule Ev: [ In( x ) ] --[ Ev( x ) ]-> [ ]
+
+rule Dup: [ ] --> [ ]
+rule Dup: [ ] --> [ ]
+
+rule DupLet: [ Fr(~k) ] --> [ Out(<~k, ~k>) ]
+rule DupLet: let x = ~k in [ Fr(~k) ] --> [ Out(pair(x, ~k)) ]
+
+rule Equal: [ In(x) ] --> [ Out(f(x)) ]
+
+functions: g/1 [private]
+
+rule Equal: [ In(x) ] --> [ Out(f(x)) ]
+
+rule S: [ ] --[ S( ) ]-> [ ]
+
+lemma stored:
+  exists-trace
+  "∃ #i. S( ) @ #i"
+simplify
+solve( !KU( zero ) @ #vk.3 )
+  solve( F( (z add h(y)) ) @ #i )
+    solve( (#i.2, 0) ~~> (#j, 1) )
+      by sorry
+
+lemma wrapped: exists-trace "T"
+simplify
+solve( !KU( (x add
+         y) ) @ #i )
+  by sorry
+
+end

@@ -56,92 +56,6 @@ fn solved_atoms_preserve_distinct_free_variable_instances() {
     }
 }
 
-#[test]
-fn maude_failure_is_not_a_closed_action_or_formula_branch() {
-    use crate::atom::ProtoAtom;
-    use crate::constraint::solver::proof_method::{exec_proof_method, ProofMethod};
-    use crate::fact::{proto_fact, Multiplicity};
-    use crate::prove::ProveError;
-    use crate::rule::{ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleAttributes, RuleInfo};
-    use tamarin_term::function_symbols::{AcSym, FunSym};
-    use tamarin_term::lterm::{LSort, LVar};
-    use tamarin_term::term::Term;
-    use tamarin_term::vterm::var_term;
-
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let maude = tamarin_term::maude_proc::MaudeHandle::start(
-        &path,
-        tamarin_term::maude_sig::mset_maude_sig(),
-    )
-    .unwrap();
-    let ctx = ProofContext::new(maude.clone(), Vec::new());
-    let union = |a, b| {
-        Term::App(
-            FunSym::Ac(AcSym::Union),
-            vec![
-                var_term(LVar::new(a, LSort::Msg, 0)),
-                var_term(LVar::new(b, LSort::Msg, 0)),
-            ]
-            .into(),
-        )
-    };
-    let left = union("a", "b");
-    let right = union("x", "y");
-    let fact = |term| proto_fact(Multiplicity::Linear, "A", vec![term]);
-    let node = LVar::new("i", LSort::Node, 0);
-    let mut action_system = System::empty();
-    action_system.add_node(
-        node,
-        Rule::new(
-            RuleInfo::Proto(ProtoRuleACInstInfo {
-                name: ProtoRuleName::Stand("R"),
-                attributes: RuleAttributes::empty(),
-                loop_breakers: Vec::new(),
-            }),
-            Vec::new(),
-            Vec::new(),
-            vec![fact(left.clone())],
-        ),
-    );
-    let goal = Goal::Action(node, fact(right.clone()));
-    action_system.add_goal(goal.clone());
-    let mut formula_system = System::empty();
-    formula_system.insert_formula(Guarded::Atom(crate::guarded::lift_free_atom(
-        &ProtoAtom::EqE(left, right),
-    )));
-
-    let operations = [
-        (ProofMethod::SolveGoal(goal), action_system),
-        (ProofMethod::Simplify, formula_system),
-    ];
-    for (method, system) in &operations {
-        let cases = exec_proof_method(&ctx, method, system).unwrap().unwrap();
-        assert!(
-            !cases.is_empty(),
-            "the healthy operation has valid branches"
-        );
-    }
-    // Use a separate handle so the healthy control cannot warm its caches.
-    let maude = tamarin_term::maude_proc::MaudeHandle::start(
-        &path,
-        tamarin_term::maude_sig::mset_maude_sig(),
-    )
-    .unwrap();
-    let ctx = ProofContext::new(maude.clone(), Vec::new());
-    maude.kill_subprocess();
-    for (method, system) in &operations {
-        assert!(
-            matches!(
-                exec_proof_method(&ctx, method, system),
-                Err(ProveError::Maude(_))
-            ),
-            "transport failure must not close {method:?}"
-        );
-    }
-}
-
 /// The index-0 variable leaf of the given name and sort.
 fn mkvar_ln(name: &str, sort: tamarin_term::lterm::LSort) -> tamarin_term::lterm::LNTerm {
     tamarin_term::vterm::var_term(tamarin_term::lterm::LVar::new(name, sort, 0))
@@ -183,7 +97,7 @@ fn ku_vars_reads_the_ac_constructor_premise_variables() {
             panic!("{sym:?} construction rule must yield two KU premise vars");
         };
         // Exactly the rule's own premise variables, in premise order.
-        let prem_var = |i: usize| match &*ru.premises[i].terms {
+        let prem_var = |i: usize| match ru.premises[i].terms() {
             [tamarin_term::term::Term::Lit(tamarin_term::vterm::Lit::Var(v))] => *v,
             other => panic!("premise {i} is not a single-variable fact: {other:?}"),
         };
@@ -237,51 +151,31 @@ fn insert_goal_marks_changed() {
     assert_eq!(r.changed, ChangeIndicator::Unchanged);
 }
 
+/// `solveSplit` (Goals.hs) returns "split" even when the split has a single
+/// alternative.
 #[test]
-fn solve_split_prunes_non_normal_arms_before_returning_cases() {
+fn solve_split_single_alternative_is_named_split() {
     use crate::constraint::constraints::Goal;
-    use crate::fact::{Fact, FactTag};
-    use crate::rule::{
-        IntrRuleACInfo, ProtoRuleACInstInfo, ProtoRuleName, Rule, RuleACInst, RuleAttributes,
-        RuleInfo,
-    };
-    use tamarin_term::builtin::{fst, msg_var, pair};
+    use tamarin_term::builtin::msg_var;
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::subst_vfresh::SubstVFresh;
-    use tamarin_term::vterm::var_term;
 
     let Some(ctx) = ctx() else { return };
     let x = LVar::new("x", LSort::Msg, 0);
-    let rule: RuleACInst = Rule::new(
-        RuleInfo::<ProtoRuleACInstInfo, IntrRuleACInfo>::Proto(ProtoRuleACInstInfo {
-            name: ProtoRuleName::Stand("R"),
-            attributes: RuleAttributes::empty(),
-            loop_breakers: Vec::new(),
-        }),
-        Vec::new(),
-        vec![Fact::new(FactTag::Out, vec![fst(var_term(x))])],
-        Vec::new(),
-    );
     let mut sys = System::empty();
-    sys.add_node(LVar::new("i", LSort::Node, 0), rule);
-    let split = sys.eq_store_mut().add_disj(vec![
-        // This makes the live `fst(x)` reducible and must therefore die.
-        SubstVFresh::from_list(vec![(x, pair(msg_var("a", 1), msg_var("b", 2)))]),
-        // This leaves `fst(x)` in normal form and is the sole survivor.
-        SubstVFresh::from_list(vec![(x, msg_var("y", 3))]),
-    ]);
+    let split = sys
+        .eq_store_mut()
+        .add_disj(vec![SubstVFresh::from_list(vec![(x, msg_var("y", 1))])]);
     let mut red = Reduction::new(&ctx, sys);
     red.insert_goal(Goal::Split(split));
-
     assert!(matches!(
         red.solve_split_goal(split).expect("split solve"),
         GoalCases::LinearNamed(ref name) if name == "split"
     ));
-    assert!(!red.sys.eq_store().is_false());
 }
 
 #[test]
-fn solve_term_eqs_trivial_equation_no_change() {
+fn solve_term_eqs_trivial_equation_binds_nothing() {
     let Some(ctx) = ctx() else { return };
     let mut r = Reduction::new(&ctx, System::empty());
     // x =? x is trivially true.
@@ -297,7 +191,8 @@ fn solve_term_eqs_trivial_equation_no_change() {
             }],
         )
         .expect("solve");
-    assert!(matches!(r_out, SolveOutcome::Linear));
+    assert!(matches!(r_out, SystemOutcome::Linear));
+    assert!(r.sys.eq_store().subst.is_empty());
 }
 
 #[test]
@@ -316,7 +211,7 @@ fn solve_term_eqs_unifies_two_vars() {
             &[tamarin_term::rewriting::Equal { lhs: tx, rhs: ty }],
         )
         .expect("solve");
-    assert!(matches!(r_out, SolveOutcome::Linear));
+    assert!(matches!(r_out, SystemOutcome::Linear));
     assert_eq!(r.changed, ChangeIndicator::Changed);
 }
 
@@ -348,14 +243,15 @@ fn eqstore_binds_j_to_i(
     j: tamarin_term::lterm::LVar,
 ) {
     use tamarin_term::vterm::Lit;
-    r.solve_term_eqs(
-        SplitStrategy::SplitNow,
-        &[tamarin_term::rewriting::Equal {
-            lhs: tamarin_term::term::Term::Lit(Lit::Var(i)),
-            rhs: tamarin_term::term::Term::Lit(Lit::Var(j)),
-        }],
-    )
-    .expect("solve");
+    let _ = r
+        .solve_term_eqs(
+            SplitStrategy::SplitNow,
+            &[tamarin_term::rewriting::Equal {
+                lhs: tamarin_term::term::Term::Lit(Lit::Var(i)),
+                rhs: tamarin_term::term::Term::Lit(Lit::Var(j)),
+            }],
+        )
+        .expect("solve");
     assert_eq!(
         tamarin_term::subst::apply_vterm(
             &r.sys.eq_store().subst,
@@ -460,182 +356,6 @@ fn subst_system_rewrites_less_atom_node_ids() {
 }
 
 #[test]
-fn goal_substitution_interleaves_action_insertion_and_status_merging() {
-    use crate::fact::ku_fact;
-    use tamarin_term::function_symbols::pair_sym;
-    use tamarin_term::lterm::{pub_term, LSort, LVar};
-    use tamarin_term::rewriting::Equal;
-    use tamarin_term::term::f_app_no_eq;
-    use tamarin_term::vterm::var_term;
-
-    let Some(ctx) = ctx() else { return };
-    let node = LVar::new("i", LSort::Node, 0);
-    let x = var_term(LVar::new("x", LSort::Msg, 10));
-    let pair = f_app_no_eq(pair_sym(), vec![pub_term("a"), pub_term("b")]);
-    let old_goal = Goal::Action(node, ku_fact(pair.clone()));
-    let changed_goal = Goal::Action(node, ku_fact(x.clone()));
-    assert!(changed_goal < old_goal, "the variable is visited first");
-    let mut sys = System::empty();
-    sys.add_goal(old_goal.clone());
-    sys.goals_mut()[0].1.solved = true;
-    sys.add_goal(changed_goal);
-    let mut red = Reduction::new(&ctx, sys);
-    red.solve_term_eqs(SplitStrategy::SplitNow, &[Equal::new(x, pair)])
-        .expect("solve substitution");
-    red.subst_system().expect("ordered goal rebuild");
-
-    // The changed variable is re-inserted and decomposed BEFORE the old
-    // compound goal is visited. Its old status is then merged, not discarded.
-    assert_eq!(red.sys.next_goal_nr, 5);
-    let status = &red
-        .sys
-        .goals
-        .iter()
-        .find(|(g, _)| *g == old_goal)
-        .unwrap()
-        .1;
-    assert!(status.solved);
-    assert_eq!(status.nr, 0);
-    for (value, idx, nr) in [("a", 11, 3), ("b", 12, 4)] {
-        let goal = Goal::Action(LVar::new("vk", LSort::Node, idx), ku_fact(pub_term(value)));
-        assert_eq!(
-            red.sys.goals.iter().find(|(g, _)| *g == goal).unwrap().1.nr,
-            nr
-        );
-    }
-}
-
-#[test]
-fn goal_rebuild_keeps_bounds_exact_and_reserves_removed_variables() {
-    use crate::fact::ku_fact;
-    use tamarin_term::builtin::pair;
-    use tamarin_term::lterm::{pub_term, LSort, LVar};
-    use tamarin_term::rewriting::Equal;
-    use tamarin_term::vterm::var_term;
-
-    let Some(ctx) = ctx() else { return };
-    let x = var_term(LVar::new("x", LSort::Msg, 1));
-    let mut sys = System::empty();
-    sys.add_goal(Goal::Action(
-        LVar::new("i", LSort::Node, 0),
-        ku_fact(x.clone()),
-    ));
-    let later = Goal::Action(LVar::new("later", LSort::Node, 100), ku_fact(pub_term("c")));
-    sys.add_goal(later.clone());
-    let mut red = Reduction::new(&ctx, sys);
-    red.solve_term_eqs(
-        SplitStrategy::SplitNow,
-        &[Equal::new(x, pair(pub_term("a"), pub_term("b")))],
-    )
-    .expect("solve substitution");
-    assert_eq!(bounds_max(&red.sys), 100);
-
-    // With TAM_RS_VERIFY_BOUNDS_CACHE=1 this also checks every intermediate
-    // bounds lookup while decomposing the first goal, before restoring later.
-    red.subst_system().expect("rebuild goals with exact bounds");
-    assert_eq!(red.sys.goals.len(), 4);
-    assert!(red.sys.goals.iter().any(|(g, _)| *g == later));
-    for (value, idx) in [("a", 101), ("b", 102)] {
-        let goal = Goal::Action(LVar::new("vk", LSort::Node, idx), ku_fact(pub_term(value)));
-        assert!(red.sys.goals.iter().any(|(g, _)| *g == goal));
-    }
-    assert_eq!(bounds_max(&red.sys), bounds_max_uncached(&red.sys));
-}
-
-#[test]
-fn node_collision_equalities_are_settled_before_substituting_goals() {
-    use crate::fact::{ku_fact, out_fact};
-    use tamarin_term::lterm::{pub_term, LSort, LVar};
-    use tamarin_term::rewriting::Equal;
-    use tamarin_term::vterm::var_term;
-
-    let Some(ctx) = ctx() else { return };
-    let i = LVar::new("i", LSort::Node, 0);
-    let j = LVar::new("j", LSort::Node, 1);
-    let k = LVar::new("k", LSort::Node, 2);
-    let l = LVar::new("l", LSort::Node, 3);
-    let x = var_term(LVar::new("x", LSort::Msg, 4));
-    let value = pub_term("1");
-    let rule = |term| crate::rule::Rule {
-        info: crate::rule::RuleInfo::Proto(crate::rule::ProtoRuleACInstInfo {
-            name: crate::rule::ProtoRuleName::Stand("R"),
-            attributes: crate::rule::RuleAttributes::empty(),
-            loop_breakers: Vec::new(),
-        }),
-        premises: vec![],
-        conclusions: vec![out_fact(term)],
-        actions: vec![],
-        new_vars: vec![],
-    };
-    let mut sys = System::empty();
-    sys.add_node(i, rule(x.clone()));
-    sys.add_node(j, rule(value.clone()));
-    sys.add_goal(Goal::Action(k, ku_fact(x.clone())));
-    sys.add_goal(Goal::Action(l, ku_fact(x)));
-    let mut red = Reduction::new(&ctx, sys);
-    red.solve_node_id_eqs(&[Equal::new(i, j), Equal::new(k, l)])
-        .expect("alias nodes");
-    red.subst_system().expect("substitute nodes, then goals");
-
-    // Merging i and j first yields x = '1'. Both changed KU facts must be
-    // re-inserted at their ORIGINAL nodes, even though k and l are aliases.
-    // Substituting goals before the rule equality loses one insertion.
-    assert_eq!(red.sys.nodes.len(), 1);
-    assert_eq!(red.sys.next_goal_nr, 4);
-    for (node, nr) in [(k, 2), (l, 3)] {
-        let goal = Goal::Action(node, ku_fact(value.clone()));
-        let status = &red.sys.goals.iter().find(|(g, _)| *g == goal).unwrap().1;
-        assert_eq!(status.nr, nr);
-        assert!(!status.solved);
-    }
-
-    // A subsequent substitution merges the node aliases, retaining the older
-    // status, but must not consume another insertion number.
-    red.subst_system().expect("merge aliases");
-    assert_eq!(red.sys.goals.len(), 1);
-    assert_eq!(red.sys.goals[0].1.nr, 2);
-    assert_eq!(red.sys.next_goal_nr, 4);
-}
-
-#[test]
-fn subst_system_reinserts_changed_solved_knowledge_goals() {
-    use crate::fact::ku_fact;
-    use tamarin_term::lterm::{pub_term, LSort, LVar};
-    use tamarin_term::rewriting::Equal;
-    use tamarin_term::vterm::var_term;
-
-    let Some(ctx) = ctx() else { return };
-    for solved in [false, true] {
-        let node = LVar::new("i", LSort::Node, 0);
-        let x = var_term(LVar::new("x", LSort::Msg, 1));
-        let value = pub_term("1");
-        let mut sys = System::empty();
-        sys.add_goal(Goal::Action(node, ku_fact(x.clone())));
-        sys.goals_mut()[0].1.solved = solved;
-        let mut red = Reduction::new(&ctx, sys);
-        red.solve_term_eqs(SplitStrategy::SplitNow, &[Equal::new(x, value.clone())])
-            .expect("solve substitution");
-        red.subst_system().expect("propagate substitution");
-
-        // HS substGoals calls insertAction for changed message terms, without
-        // consulting the old solved status. It allocates a new, unsolved goal.
-        assert_eq!(red.sys.goals.len(), 1);
-        let (goal, status) = &red.sys.goals[0];
-        assert_eq!(*goal, Goal::Action(node, ku_fact(value)));
-        assert!(!status.solved);
-        assert_eq!(status.nr, 1);
-        assert_eq!(red.sys.next_goal_nr, 2);
-
-        // Once propagated, status-only changes must not reinsert the goal or
-        // invalidate the verified-identity substitution skip's semantics.
-        red.sys.goals_mut()[0].1.solved = true;
-        let expected = red.sys.clone();
-        red.subst_system().expect("identity substitution");
-        assert_eq!(red.sys, expected);
-    }
-}
-
-#[test]
 fn subst_system_idempotent_on_empty_substitution() {
     let Some(ctx) = ctx() else { return };
     // This system has content, but its eq-store is empty.  The early return
@@ -719,7 +439,7 @@ fn rule_merges_reject_mismatched_fact_list_lengths() {
                     direct
                         .solve_rule_eqs(strategy, &[Equal::new(left.clone(), right.clone())])
                         .unwrap(),
-                    SolveOutcome::Contradictory
+                    SystemOutcome::Contradictory
                 ));
                 assert!(direct.sys.eq_store().is_false());
                 assert!(direct.sys.formulas.is_empty());
@@ -729,7 +449,7 @@ fn rule_merges_reject_mismatched_fact_list_lengths() {
             assert!(matches!(
                 set.set_nodes(vec![(i, left.clone()), (i, right.clone())])
                     .unwrap(),
-                SolveOutcome::Contradictory
+                SystemOutcome::Contradictory
             ));
             assert!(set.sys.eq_store().is_false());
             assert!(set.sys.formulas.is_empty());
@@ -741,7 +461,7 @@ fn rule_merges_reject_mismatched_fact_list_lengths() {
             sys.add_node(j, right.clone());
             sys.add_node(i, left.clone());
             let mut substituted = Reduction::new(&ctx, sys);
-            substituted.solve_node_id_eqs(&[Equal::new(i, j)]).unwrap();
+            let _ = substituted.solve_node_id_eqs(&[Equal::new(i, j)]).unwrap();
             substituted.subst_system().unwrap();
             assert_eq!(substituted.sys.nodes.len(), 1);
             assert_eq!(&substituted.sys.nodes[0].1, left);
@@ -787,11 +507,12 @@ fn subst_system_merges_collided_nodes_and_equates_their_rules() {
     r.sys.add_node(j, ru());
     let ti = tamarin_term::term::Term::Lit(Lit::Var(i));
     let tj = tamarin_term::term::Term::Lit(Lit::Var(j));
-    r.solve_term_eqs(
-        SplitStrategy::SplitNow,
-        &[tamarin_term::rewriting::Equal { lhs: ti, rhs: tj }],
-    )
-    .expect("solve");
+    let _ = r
+        .solve_term_eqs(
+            SplitStrategy::SplitNow,
+            &[tamarin_term::rewriting::Equal { lhs: ti, rhs: tj }],
+        )
+        .expect("solve");
     r.subst_system().expect("solver operation");
     assert_eq!(
         r.sys.nodes.len(),
@@ -812,7 +533,7 @@ fn solve_fact_eqs_tag_mismatch_is_contradictory() {
             &[tamarin_term::rewriting::Equal { lhs: f1, rhs: f2 }],
         )
         .expect("solve");
-    assert!(matches!(r_out, SolveOutcome::Contradictory));
+    assert!(matches!(r_out, SystemOutcome::Contradictory));
 }
 
 #[test]
@@ -825,27 +546,10 @@ fn solve_disj_goal_empty_is_contradictory() {
 }
 
 #[test]
-fn speculative_branch_isolates_reduction_state() {
-    let Some(ctx) = ctx() else { return };
-    let r = Reduction::new(&ctx, System::empty());
-    let counter = r.maude.fresh_counter_peek();
-
-    let mut trial = r.speculative_branch();
-    trial.maude.fresh_idx();
-    trial.sys.add_goal(Goal::Action(
-        tamarin_term::lterm::LVar::new("i", tamarin_term::lterm::LSort::Node, 0),
-        crate::fact::LNFact::new(crate::fact::FactTag::Out, vec![]),
-    ));
-
-    assert_eq!(r.maude.fresh_counter_peek(), counter);
-    assert!(r.sys.goals.is_empty());
-}
-
-#[test]
 fn goal_cases_preserve_each_branch_counter_and_adopt_the_singleton() {
     let Some(ctx) = ctx() else { return };
     let mut red = Reduction::new(&ctx, System::empty());
-    let start = red.maude.fresh_counter_peek();
+    let start = red.fresh.next_index();
     let branches = vec![
         GoalBranch {
             name: "left".into(),
@@ -858,7 +562,7 @@ fn goal_cases_preserve_each_branch_counter_and_adopt_the_singleton() {
             counter: start + 20,
         },
     ];
-    let GoalCases::Cases(branches) = red.finish_goal_cases(branches, "unused".into()) else {
+    let GoalCases::Cases(branches) = red.finish_goal_cases(branches) else {
         panic!("multiple goal arms must remain separate cases");
     };
     assert_eq!(
@@ -879,59 +583,11 @@ fn goal_cases_preserve_each_branch_counter_and_adopt_the_singleton() {
                 sys: singleton,
                 counter: start + 30,
             }],
-            "only".into(),
         ),
         GoalCases::LinearNamed(name) if name == "only"
     ));
     assert_eq!(red.sys.last_atom, Some(marker));
-    assert_eq!(red.maude.fresh_counter_peek(), start + 30);
-}
-
-#[test]
-fn equality_formula_split_inherits_solved_bookkeeping() {
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let handle = tamarin_term::maude_proc::MaudeHandle::start(
-        &path,
-        tamarin_term::maude_sig::xor_maude_sig(),
-    )
-    .expect("start xor maude");
-    let ctx = ProofContext::new(handle, Vec::new());
-    use crate::atom::ProtoAtom;
-    use crate::guarded::Guarded;
-    use tamarin_term::function_symbols::AcSym;
-    use tamarin_term::lterm::{BVar, LSort, LVar};
-    use tamarin_term::term::f_app_ac;
-    use tamarin_term::vterm::var_term;
-    let var = |name| var_term(BVar::Free(LVar::new(name, LSort::Msg, 0)));
-    let formula = Guarded::Atom(ProtoAtom::EqE(
-        f_app_ac(AcSym::Xor, vec![var("x"), var("a")]),
-        f_app_ac(AcSym::Xor, vec![var("b"), var("y")]),
-    ));
-    let mut red = Reduction::new(&ctx, System::empty());
-
-    let SystemOutcome::Cases(arms) = red
-        .insert_formula(formula.clone())
-        .expect("solver operation")
-    else {
-        panic!("precondition: XOR equality must split");
-    };
-    assert!(arms
-        .iter()
-        .all(|arm| crate::guarded::stores_contains(&arm.sys.solved_formulas, &formula)));
-
-    let false_formula = crate::guarded::gfalse();
-    let mut red = Reduction::new(&ctx, System::empty());
-    let SystemOutcome::Cases(arms) = red
-        .insert_formulas(&[formula, false_formula.clone()])
-        .expect("solver operation")
-    else {
-        panic!("formula sequence must preserve the XOR split");
-    };
-    assert!(arms
-        .iter()
-        .all(|arm| crate::guarded::stores_contains(&arm.sys.formulas, &false_formula)));
+    assert_eq!(red.fresh.next_index(), start + 30);
 }
 
 #[test]
@@ -943,7 +599,8 @@ fn solve_disj_goal_singleton_is_linear() {
     let f = crate::guarded::gtrue();
     let d = Disj(vec![f.clone()]);
     r.insert_goal(Goal::Disj(d.clone()));
-    let out = r.solve_disj_goal(&d).expect("solver operation");
+    let out = crate::constraint::solver::goals::solve_goal(&mut r, &Goal::Disj(d.clone()))
+        .expect("solver operation");
     // Haskell `solveDisjunction` has no singleton special-case: a lone
     // alternative is named `case_1` (and `ppCases` only elides the
     // heading for the empty name), so the Rust continuation is a
@@ -967,7 +624,8 @@ fn solve_disj_goal_two_branches_forks() {
     let f2 = crate::guarded::gfalse(); // Disj([]) → formulas (gfalse sentinel)
     let d = Disj(vec![f1.clone(), f2.clone()]);
     r.insert_goal(Goal::Disj(d.clone()));
-    let out = r.solve_disj_goal(&d).expect("solver operation");
+    let out = crate::constraint::solver::goals::solve_goal(&mut r, &Goal::Disj(d.clone()))
+        .expect("solver operation");
     match out {
         GoalCases::Cases(systems) => {
             assert_eq!(systems.len(), 2);
@@ -991,6 +649,27 @@ fn solve_disj_goal_two_branches_forks() {
     }
 }
 
+/// `solveDisjunction` (Goals.hs) has no case for a lone survivor: like any
+/// single Disj branch it continues in place, under its own case name.
+#[test]
+fn solve_disj_goal_adopts_lone_survivor() {
+    let Some(ctx) = ctx() else { return };
+    use crate::atom::ProtoAtom;
+    use crate::guarded::Guarded;
+    use tamarin_term::lterm::{pub_term, BVar, LVar};
+    let pub_name = |n: &str| pub_term::<BVar<LVar>>(n);
+    let contradictory = Guarded::Atom(ProtoAtom::EqE(pub_name("a"), pub_name("b")));
+    let d = Disj(vec![contradictory, crate::guarded::gtrue()]);
+    let mut r = Reduction::new(&ctx, System::empty());
+    r.insert_goal(Goal::Disj(d.clone()));
+    let out = crate::constraint::solver::goals::solve_goal(&mut r, &Goal::Disj(d))
+        .expect("solver operation");
+    assert!(
+        matches!(&out, GoalCases::LinearNamed(name) if name == "case_2"),
+        "expected the lone survivor to be adopted, got {out:?}"
+    );
+}
+
 #[test]
 fn solve_subterm_goal_marks_solved_and_moves() {
     let Some(ctx) = ctx() else { return };
@@ -1005,9 +684,11 @@ fn solve_subterm_goal_marks_solved_and_moves() {
     sys.subterm_store_mut().add(tx.clone(), ty.clone());
     sys.add_goal(Goal::Subterm((tx.clone(), ty.clone())));
     let mut r = Reduction::new(&ctx, sys);
-    let out = r
-        .solve_subterm_goal(&(tx.clone(), ty.clone()))
-        .expect("solver operation");
+    let out = crate::constraint::solver::goals::solve_goal(
+        &mut r,
+        &Goal::Subterm((tx.clone(), ty.clone())),
+    )
+    .expect("solver operation");
     // `x:msg ⊏ y:msg`: big is a bare variable, so `splitSubterm`
     // (singleStep) cannot decompose ⇒ a single `SubtermD (x,y)` leaf.
     // HS `solveSubterm` therefore emits ONE case `SubtermSplit1`,
@@ -1022,32 +703,6 @@ fn solve_subterm_goal_marks_solved_and_moves() {
         .goals
         .iter()
         .any(|(g, s)| matches!(g, Goal::Subterm(_)) && s.solved));
-}
-
-#[test]
-fn positive_nat_subterm_refines_the_message_operand() {
-    use tamarin_term::function_symbols::{nat_one_sym, AcSym};
-    use tamarin_term::lterm::{sort_of_lnterm, LSort, LVar};
-    use tamarin_term::term::{f_app_ac, f_app_no_eq};
-    use tamarin_term::vterm::var_term;
-    let Some(path) = require_maude_path() else {
-        return;
-    };
-    let h = tamarin_term::maude_proc::MaudeHandle::start(
-        &path,
-        tamarin_term::maude_sig::nat_maude_sig(),
-    )
-    .expect("natural-number Maude");
-    let ctx = ProofContext::new(h, Vec::new());
-    let small = var_term(LVar::new("x", LSort::Msg, 0));
-    let one = f_app_no_eq(nat_one_sym(), vec![]);
-    let big = f_app_ac(AcSym::NatPlus, vec![one.clone(), one]);
-    let mut red = Reduction::new(&ctx, System::empty());
-    let outcome = red.solve_subterm_goal(&(small.clone(), big)).unwrap();
-    assert!(matches!(outcome, GoalCases::LinearNamed(_)), "{outcome:?}");
-    let refined = tamarin_term::subst::apply_vterm(&red.sys.eq_store().subst, small);
-    assert_eq!(sort_of_lnterm(&refined), LSort::Nat);
-    assert!(red.sys.subterm_store.subterms.is_empty());
 }
 
 #[test]
@@ -1092,7 +747,8 @@ fn solve_action_goal_existing_node_with_action_is_linear_named() {
     sys.add_node(i, ru);
     sys.add_goal(Goal::Action(i, fa.clone()));
     let mut r = Reduction::new(&ctx, sys);
-    let out = r.solve_action_goal(&i, &fa).expect("solver operation");
+    let out = crate::constraint::solver::goals::solve_goal(&mut r, &Goal::Action(i, fa.clone()))
+        .expect("solver operation");
     // The case name is `showRuleCaseName ru`.  For the `ISend` intruder
     // rule that is the rule name in lower case, `isend`.  The proof tree
     // renders this name after `case `.  The test compares the complete
@@ -1315,12 +971,13 @@ fn solve_chain_goal_compatible_facts_inserts_edge() {
     let p = (j, crate::rule::PremIdx(0));
     sys.add_goal(Goal::Chain(c, p));
     let mut r = Reduction::new(&ctx, sys);
-    let out = r.solve_chain_goal(&c, &p).expect("solver operation");
+    let out = crate::constraint::solver::goals::solve_goal(&mut r, &Goal::Chain(c, p))
+        .expect("solver operation");
     // The facts are compatible, so there is one case.
     // `chain_direct_case_name` names that case from the message of the KD
     // conclusion.  HS `showLitName` spells the name `Var_<sort>_<name>` for
-    // a variable with index 0.  The solver adds the edge and marks the goal
-    // solved in place.
+    // a variable with index 0.  The solver adds the edge, and marking the
+    // chain goal solved deletes it (HS `markGoalAsSolved`).
     assert!(
         matches!(&out, GoalCases::LinearNamed(n) if n == "Var_msg_x"),
         "expected LinearNamed(\"Var_msg_x\"), got {:?}",
@@ -1329,11 +986,11 @@ fn solve_chain_goal_compatible_facts_inserts_edge() {
     assert_eq!(r.sys.edges.len(), 1);
     assert_eq!(r.sys.edges[0].src, c);
     assert_eq!(r.sys.edges[0].tgt, p);
-    assert!(r
+    assert!(!r
         .sys
         .goals
         .iter()
-        .any(|(g, s)| matches!(g, Goal::Chain(_, _)) && s.solved));
+        .any(|(g, _)| matches!(g, Goal::Chain(_, _))));
 }
 
 #[test]

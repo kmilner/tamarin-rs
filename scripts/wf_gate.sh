@@ -65,20 +65,9 @@ export RS_PATH HS_PATH MAUDE HS_CACHE CORPUS_ROOT FLAGS_MAP FILE_TIMEOUT GATE_CO
        HS_FILL_TIMEOUT DERIVCHECK_TIMEOUT HS_FP HS_FP_SALT \
        EXEC_FP EXEC_FP_SALT MAUDE_FP MAUDE_FP_PATH HS_FP_PATH
 
-# strip_env (gate_common.sh): DELETE the four volatile header lines.
-# Isolate the wf report: either the success line, or the WARNING block that
-# opens the leading theory comment (up to its closing `*/`).
-wf_block() {
-    awk '
-        /^\/\* All wellformedness checks were successful\. \*\/$/ { print; next }
-        /^WARNING: the following wellformedness checks failed!$/  { f=1 }
-        f { print }
-        f && /^\*\/$/ { f=0 }
-    '
-}
 # flags_for / ckey come from gate_common.sh — one key format for this gate,
 # pretty_gate.sh (whose cache this gate READS) and corpus_file_diff.sh.
-export -f file_sha256 strip_env wf_block flags_for parser_input_manifest manifest_encode manifest_normalize \
+export -f file_sha256 strip_env wf_block slice_gate_one flags_for parser_input_manifest manifest_encode manifest_normalize \
     manifest_decode_into input_manifest \
     _include_shas_from_manifest _oracle_shas_from_manifest input_content_key ckey \
     cache_entry_lock cache_entry_unlock cache_publish_gzip cache_gzip_valid \
@@ -104,31 +93,9 @@ hs_fill_one() {
 }
 export -f hs_fill_one
 
-one() {
-    local rel="$1" f="$CORPUS_ROOT/$1" key checked_key fl hs rs d rrc
-    [ -f "$f" ] || { printf '%s\tSKIP_NO_HS\t0\n' "$rel"; return 0; }
-    if ! key=$(ckey "$rel" "$f"); then
-        printf '%s\tSKIP_INPUT_MANIFEST\t0\n' "$rel"
-        return 0
-    fi
-    fl=$(flags_for "$rel")
-    case " $fl " in *" --diff "*) printf '%s\tSKIP_UNSUPPORTED_DIFF\t0\n' "$rel"; return 0;; esac
-    cache_gzip_valid "$HS_CACHE/$key.load.gz" || { printf '%s\tSKIP_NO_HS\t0\n' "$rel"; return 0; }
-    hs=$(zcat "$HS_CACHE/$key.load.gz" | strip_env | wf_block)
-    # RS: theory-load only (NO --prove) so the wf block prints fast.
-    local tmp; tmp=$(mktemp)
-    timeout "$FILE_TIMEOUT" "$RS_PATH" --with-maude="$MAUDE" $fl --derivcheck-timeout="$DERIVCHECK_TIMEOUT" "$f" >"$tmp" 2>/dev/null
-    rrc=$?
-    if [ "$rrc" = 124 ]; then rm -f "$tmp"; printf '%s\tSKIP_RS_TIMEOUT\t0\n' "$rel"; return 0; fi
-    if [ "$rrc" -ne 0 ]; then rm -f "$tmp"; printf '%s\tSKIP_RS_ERROR\t0\n' "$rel"; return 0; fi
-    rs=$(strip_env < "$tmp" | wf_block); rm -f "$tmp"
-    if ! checked_key=$(ckey "$rel" "$f") || [ "$checked_key" != "$key" ] \
-            || ! comparison_identity_unchanged; then
-        printf '%s\tSKIP_INPUT_CHANGED\t0\n' "$rel"; return 0
-    fi
-    d=$(diff <(printf '%s\n' "$hs") <(printf '%s\n' "$rs") | grep -c '^[<>]')
-    if [ "$d" = 0 ]; then printf '%s\tMATCH\t0\n' "$rel"; else printf '%s\tDIFF\t%s\n' "$rel" "$d"; fi
-}
+# --- PHASE 1: RS no-prove + diff vs the wf block of the cached HS load.
+# <key>.load.gz holds stripped stdout, so strip_env is not reapplied.
+one() { slice_gate_one "$1" wf_block; }
 export -f one
 
 # gate_common's filelist: ALLOWLIST > parity_corpus.txt > this gate's

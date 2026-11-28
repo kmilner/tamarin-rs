@@ -1,0 +1,68 @@
+theory SigDeclarations
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: diffie-hellman
+functions: f/2, fst/1, g/2 [private,destructor], h/2 [NDC-diff], pair/2,
+           snd/1, exp/2 [private,AC], f/2 [destructor,AC,NDC], g/2 [AC], h/2 [AC],
+           k/2 [private,AC], k/2 [AC], myac/2 [AC]
+equations:
+    f(x, y) = x,
+    fst(<x.1, x.2>) = x.1,
+    g(x, y) = x,
+    snd(<x.1, x.2>) = x.2
+
+rule (modulo E) PEqvar:
+   [ In( z ) ] --[ A( f(z, 'b') ), B( ('a' f z) ) ]-> [ Out( f('c', z) ) ]
+
+  /*
+  rule (modulo AC) PEqvar:
+     [ In( z ) ] --[ A( z ), B( ('a' f z) ) ]-> [ Out( 'c' ) ]
+  */
+
+rule (modulo E) PPrivNoEq:
+   [ In( z ) ] --[ A( g(z, 'b') ), B( ('a' g z) ) ]-> [ Out( g('c', z) ) ]
+
+  /*
+  rule (modulo AC) PPrivNoEq:
+     [ In( z ) ] --[ A( z ), B( ('a' g z) ) ]-> [ Out( 'c' ) ]
+  */
+
+rule (modulo E) ONdcDiff:
+   [ ] --[ A( h('a', 'b') ), B( ('a' h 'b') ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) PExpAC:
+   [ ] --[ A( 'a'^'b' ), B( ('a' exp 'b') ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) PDupAC:
+   [ ] --[ A( ('a' k 'b') ), B( ('a' k 'b') ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) AlgApp:
+   [ ] --[ A( ('a' myac 'b') ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+rule (modulo E) UserAC:
+   [ ] --[ A( ('a' myac 'b') ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+lemma UserAC:
+  exists-trace "∃ #i. A( ('a' myac 'b') ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ #i. (A( ('a' myac 'b') ) @ #i)"
+*/
+by sorry
+
+
+
+end

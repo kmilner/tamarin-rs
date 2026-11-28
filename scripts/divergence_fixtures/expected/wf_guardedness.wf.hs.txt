@@ -1,0 +1,124 @@
+WARNING: the following wellformedness checks failed!
+
+Formula terms
+=============
+
+  Lemma `L4' uses terms of the wrong form: `Free #i', `Free x.3'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+
+Formula guardedness
+===================
+
+  Lemma `L4' cannot be converted to a guarded formula:
+    unguarded variable(s) 'x.4', 'z' in the subformula
+      "∀ x z. (<x, z> = x) ⇒ (⊥)"
+    in the formula
+      "(Foo( x.3 ) @ #i) ⇒ (∀ x.4 z. (<x.4, z> = x.4) ⇒ (⊥))"
+
+Formula terms
+=============
+
+  Lemma `L5' uses terms of the wrong form: `Free #x.2', `Free y'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+
+Formula guardedness
+===================
+
+  Lemma `L5' cannot be converted to a guarded formula:
+    unguarded variable(s) 'x.3', 'z' in the subformula
+      "∀ x z. (<x, z> = x) ⇒ (⊥)"
+    in the formula
+      "(Foo( y ) @ #x.2) ⇒ (∀ x.3 z. (<x.3, z> = x.3) ⇒ (⊥))"
+
+Formula terms
+=============
+
+  Lemma `L6' uses terms of the wrong form: `Free x.1'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+
+Formula guardedness
+===================
+
+  Lemma `L6' cannot be converted to a guarded formula:
+    unguarded variable(s) 'x.3', 'z' in the subformula
+      "∀ x z. (<x, z> = x) ⇒ (⊥)"
+    in the formula
+      "(∀ x.2 #i. (Foo( x.2 ) @ #i) ⇒ (Bar( x.1 ) @ #i)) ∧
+       (∀ x.2 z. (<x.2, z> = x.2) ⇒ (⊥))"
+
+Formula terms
+=============
+
+  Lemma `L8' uses terms of the wrong form: `Free #x'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+
+Formula guardedness
+===================
+
+  Lemma `L8' cannot be converted to a guarded formula:
+    unguarded variable(s) 'x.2', 'z' in the subformula
+      "∀ x z. (<x, z> = x) ⇒ (⊥)"
+    in the formula
+      "(∀ x.1. (Foo( x.1 ) @ #x) ⇒ (⊥)) ∧
+       (∀ x.1 z. (<x.1, z> = x.1) ⇒ (⊥))"
+  
+  Lemma `with_predicate' cannot be converted to a guarded formula:
+    unguarded variable(s) 'zz' in the subformula
+      "∀ xx yy zz #i.
+        (AA( xx, yy ) @ #i) ⇒
+        ((∃ #ii #jj.
+           ((AA( xx, yy ) @ #ii) ∧ (BB( zz ) @ #jj)) ∧ (#ii < #jj)) ∧
+         (∃ #ii #jj.
+           ((AA( zz, yy ) @ #ii) ∧ (BB( xx ) @ #jj)) ∧ (#ii < #jj)))"
+    in the formula
+      "∀ xx yy zz #i.
+        (AA( xx, yy ) @ #i) ⇒
+        ((∃ #ii #jj.
+           ((AA( xx, yy ) @ #ii) ∧ (BB( zz ) @ #jj)) ∧ (#ii < #jj)) ∧
+         (∃ #ii #jj.
+           ((AA( zz, yy ) @ #ii) ∧ (BB( xx ) @ #jj)) ∧ (#ii < #jj)))"
+  
+  Lemma `many' cannot be converted to a guarded formula:
+    unguarded variable(s) 'x2', 'x3', 'x4', 'x5', 'x6', 'x7', 'x8',
+    'x9', 'x10', 'x11', 'x12', 'x13', 'x14', 'x15', 'x16', 'x17',
+    'x18', 'x19', 'x20', 'x21', 'x22', 'x23', 'x24', 'x25' in the
+    subformula
+      "∀ x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18
+         x19 x20 x21 x22 x23 x24 x25 #i.
+        (AA( x1, x1 ) @ #i) ⇒ (⊥)"
+    in the formula
+      "∀ x1 x2 x3 x4 x5 x6 x7 x8 x9 x10 x11 x12 x13 x14 x15 x16 x17 x18
+         x19 x20 x21 x22 x23 x24 x25 #i.
+        (AA( x1, x1 ) @ #i) ⇒ (⊥)"
+
+Formula terms
+=============
+
+  Restriction `FreeVar' uses terms of the wrong form: `Free x'
+  
+  The only allowed terms are public constants and bound node and
+  message variables. If you encounter free message variables, then
+  you might have forgotten a #-prefix. Sort prefixes can only be
+  dropped where this is unambiguous. Moreover, reducible function
+  symbols are disallowed.
+*/

@@ -1,0 +1,127 @@
+theory TrivialSource
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, sdec/2, senc/2, snd/1
+equations:
+    fst(<x.1, x.2>) = x.1,
+    sdec(senc(x.1, x.2), x.2) = x.1,
+    snd(<x.1, x.2>) = x.2
+
+rule (modulo E) Start:
+   [ Fr( ~k ), Fr( ~v ) ]
+  --[ Sent( ~v ) ]->
+   [ !Key( ~k ), Out( senc(<'tag', ~v>, ~k) ) ]
+ variants
+  rule (modulo AC) Start___VARIANT_1:
+     [ Fr( ~k ), Fr( ~v ) ]
+    --[
+    AUTO_OUT_TERM_1_0_0_1__Consume___VARIANT_3( senc(<'tag', ~v>, ~k) ),
+    Sent( ~v )
+    ]->
+     [ !Key( ~k ), Out( senc(<'tag', ~v>, ~k) ) ]
+
+rule (modulo E) Consume:
+   [ !Key( k ), In( c ) ]
+  --[ Got( snd(sdec(c, k)) ) ]->
+   [ Out( snd(sdec(c, k)) ) ]
+ variants
+  rule (modulo AC) Consume___VARIANT_1:
+     [ !Key( k.2 ), In( c.1 ) ]
+    --[ Got( snd(sdec(c.1, k.2)) ) ]->
+     [ Out( snd(sdec(c.1, k.2)) ) ]
+  ,
+  rule (modulo AC) Consume___VARIANT_2:
+     [ !Key( k.1 ), In( senc(x.2, k.1) ) ]
+    --[ Got( snd(x.2) ) ]->
+     [ Out( snd(x.2) ) ]
+  ,
+  rule (modulo AC) Consume___VARIANT_3:
+     [ !Key( k.1 ), In( senc(<x.3, z.2>, k.1) ) ]
+    --[
+    AUTO_IN_TERM_1_0_0_1__Consume___VARIANT_3( senc(<x.3, z.2>, k.1), z.2 ),
+    Got( z.2 )
+    ]->
+     [ Out( z.2 ) ]
+
+lemma witness:
+  exists-trace "∃ x #i. Got( x ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ x #i. (Got( x ) @ #i)"
+*/
+simplify
+solve( Got( x ) @ #i )
+  case Consume___VARIANT_1
+  solve( !Key( k ) ▶₀ #i )
+    case Start___VARIANT_1
+    SOLVED // trace found
+  qed
+qed
+
+lemma AUTO_typing [sources]:
+  all-traces
+  "(⊤) ∧
+   (∀ x m #i.
+     (AUTO_IN_TERM_1_0_0_1__Consume___VARIANT_3( m, x ) @ #i) ⇒
+     ((∃ #j. (!KU( x ) @ #j) ∧ (#j < #i)) ∨
+      (∃ #j.
+        (AUTO_OUT_TERM_1_0_0_1__Consume___VARIANT_3( m ) @ #j) ∧ (#j < #i))))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ x m #i.
+  (AUTO_IN_TERM_1_0_0_1__Consume___VARIANT_3( m, x ) @ #i)
+ ∧
+  (∀ #j. (!KU( x ) @ #j) ⇒ ¬(#j < #i)) ∧
+  (∀ #j.
+    (AUTO_OUT_TERM_1_0_0_1__Consume___VARIANT_3( m ) @ #j) ⇒ ¬(#j < #i))"
+*/
+induction
+  case empty_trace
+  by contradiction /* from formulas */
+next
+  case non_empty_trace
+  solve( (last(#i))  ∥
+         (∃ #j. (!KU( x.1 ) @ #j) ∧ (¬(last(#j))) ∧ (#j < #i))  ∥
+         (∃ #j.
+           (AUTO_OUT_TERM_1_0_0_1__Consume___VARIANT_3( senc(<x, x.1>, k) ) @ #j)
+          ∧
+           (¬(last(#j))) ∧ (#j < #i)) )
+    case case_1
+    solve( !Key( k ) ▶₀ #i )
+      case Start___VARIANT_1
+      solve( !KU( senc(<x, x.1>, ~k) ) @ #vk )
+        case Consume___VARIANT_3
+        solve( (∃ #j. (!KU( t ) @ #j) ∧ (¬(last(#j))) ∧ (#j < #vr.1))  ∥
+               (∃ #j.
+                 (AUTO_OUT_TERM_1_0_0_1__Consume___VARIANT_3( senc(<x.2, t>, ~k.1) ) @ #j)
+                ∧
+                 (¬(last(#j))) ∧ (#j < #vr.1)) )
+          case case_1
+          by contradiction /* cyclic */
+        next
+          case case_2
+          by contradiction /* impossible chain */
+        qed
+      next
+        case Start___VARIANT_1
+        by contradiction /* from formulas */
+      next
+        case c_senc
+        by contradiction /* from formulas */
+      qed
+    qed
+  next
+    case case_2
+    by contradiction /* from formulas */
+  next
+    case case_3
+    by contradiction /* from formulas */
+  qed
+qed
+
+
+
+end

@@ -1,0 +1,22 @@
+// Category: the --parse-only open-theory printer (`prettyOpenTheory`),
+// which no corpus gate runs: the gates load and close every theory.
+//
+// Accountability: `test <name>:` case tests and `lemma acc:` with
+// `<idents> accounts for` — rendered raw (no translation).
+
+theory AccTest
+begin
+
+builtins: symmetric-encryption
+
+test evid:
+  "Ex #i. Evid() @ i"
+
+lemma acc:
+  evid accounts for
+  "All #i. Bad() @ i ==> F"
+
+process:
+event Evid(); event Bad()
+
+end

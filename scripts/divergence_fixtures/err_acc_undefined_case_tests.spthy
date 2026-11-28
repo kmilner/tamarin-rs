@@ -1,0 +1,12 @@
+// Missing case tests retain their order and repeats. Only declarations
+// preceding the accountability lemma count.
+
+theory AccUndefined begin
+rule L:
+  [ ] --[ Log( $p ) ]-> [ ]
+test a:
+  "Ex #i. Log($p)@i"
+lemma acc: a, b, a, c, c account for "All #i p. Log(p)@i ==> F"
+test c:
+  "Ex #i. Log($p)@i"
+end

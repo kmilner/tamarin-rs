@@ -1,0 +1,26 @@
+theory LastTautology
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+rule (modulo E) Emit:
+   [ ] --[ A( ) ]-> [ ]
+
+  /* has exactly the trivial AC variant */
+
+lemma nested:
+  all-traces "∀ #i. (A( ) @ #i) ⇒ ((¬(last(#i))) ∨ (last(#i)))"
+/*
+guarded formula characterizing all counter-examples:
+"∃ #i. (A( ) @ #i) ∧ (last(#i)) ∧ (¬(last(#i)))"
+*/
+simplify
+by contradiction /* cyclic */
+
+
+
+end

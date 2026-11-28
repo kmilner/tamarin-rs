@@ -1,0 +1,21 @@
+// Category: the unbound-variable report over SAPIC-generated rules.
+//
+// The generated rules' unbound group still sorts at HS check index 2, ahead
+// of the fact reports' entries (see sapic_restrict_unbound).  No corpus
+// process carries an embedded restriction with a free variable.
+
+theory SapicRestrictUnboundOrder
+begin
+
+rule ArityR:
+  [ Fr(~x) ] --[ A(~x) ]-> [ St(~x) ]
+
+rule ArityR2:
+  [ St(~x, ~y) ] --[ B(~y) ]-> [ ]
+
+process:
+  in(m);
+  [ ] --[ Ev(m), _restrict(k.5 = 'b') ]-> [ ];
+  in(k); out(k)
+
+end

@@ -1,0 +1,10 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// An equation whose left-hand side is a variable is not a correct
+// equation.
+// No corpus theory fails this way.
+
+theory EquationLiteralLhs begin
+functions: c/0
+equations: x = c
+end

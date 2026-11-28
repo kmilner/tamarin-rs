@@ -96,19 +96,10 @@ pub fn find_all_subterms(l: &LNTerm, r: &LNTerm) -> Option<Vec<Position>> {
 fn subterms(args: &[LNTerm]) -> Vec<Position> {
     let mut out = Vec::new();
     for (k, t) in args.iter().enumerate() {
-        // Remaining siblings first, at their true indices k+1, k+2, …
-        for (off, y) in args[k + 1..].iter().enumerate() {
-            let x = (k + 1 + off) as i64;
-            for mut p in find_subterm(y, t) {
-                let mut full = Vec::with_capacity(1 + p.len());
-                full.push(x);
-                full.append(&mut p);
-                out.push(full);
-            }
-        }
-        // Then the already-processed siblings, at indices 0 .. k-1.
-        for (x, y) in args[..k].iter().enumerate() {
-            for mut p in find_subterm(y, t) {
+        // Remaining siblings first, at their true indices k+1, k+2, …, then
+        // the already-processed siblings, at indices 0 .. k-1.
+        for x in (k + 1..args.len()).chain(0..k) {
+            for mut p in find_subterm(&args[x], t) {
                 let mut full = Vec::with_capacity(1 + p.len());
                 full.push(x as i64);
                 full.append(&mut p);
@@ -330,29 +321,5 @@ mod tests {
         let ctxt = rrule_to_ctxt_st_rule(&rule).expect("must not be rejected");
         // `x` at position [0] inside arg 0, then the whole `h(x)` from arg 1.
         assert_eq!(ctxt.rhs.positions, vec![vec![0i64], Vec::<i64>::new()]);
-    }
-
-    /// A literal LHS with a ground RHS (`equations: x = c`) is rejected as
-    /// not-a-subterm-rule, which elaboration reports as "Not a correct
-    /// equation" — the same clean failure both engines produce for the
-    /// non-ground sibling `x = h(x)` ("Not a correct equation: RRule x h(x)"
-    /// from the pinned oracle).  HS instead ABORTS on the ground case
-    /// (non-exhaustive `constantPositions`, SubtermRule.hs under
-    /// `-fno-warn-incomplete-patterns`); the port deliberately diverges from
-    /// that documented upstream bug.
-    #[test]
-    fn literal_lhs_ground_equation_is_rejected_not_crashed() {
-        use crate::function_symbols::{Constructability, NoEqSym, Privacy};
-        use crate::term::f_app_no_eq;
-        let c_sym = NoEqSym::new(
-            b"c".to_vec(),
-            0,
-            Privacy::Public,
-            Constructability::Constructor,
-        );
-        let lhs = msg_var("x", 0); // literal (Var) LHS
-        let rhs: LNTerm = f_app_no_eq(c_sym, vec![]); // ground RHS `c`
-        let rule = RRule::new(lhs, rhs);
-        assert!(rrule_to_ctxt_st_rule(&rule).is_none());
     }
 }

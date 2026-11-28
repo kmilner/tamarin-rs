@@ -1,0 +1,17 @@
+// Category: SAPIC pattern matching with typed variables.
+//
+// A `let` pattern and a channel-input pattern that both match a typed
+// variable (`=x:ty`) twice: the matched leaves leave the bound term, and the
+// duplicate typed match collapses into one match variable.  No corpus
+// process matches a typed variable inside a pattern.
+
+theory SapicTypedPatterns
+begin
+
+process:
+  in(x:ty);
+  let <=x:ty, <y, =x:ty>> = <x, <'v', x>> in
+  in('c', <=x:ty, <z, =x:ty>>);
+  event E(y, z)
+
+end

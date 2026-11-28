@@ -1,0 +1,77 @@
+theory Typing
+
+begin
+
+// Function signature and definition of the equational theory E
+
+builtins: multiset
+functions: f/1, fst/1, g/1, h/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+heuristic: p
+
+lemma sanity:
+  exists-trace "∃ x y #i. (Run( x, y ) @ #i) ∧ (¬(x = y))"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ x y #i. (Run( x, y ) @ #i) ∧ ¬(x = y)"
+*/
+by sorry
+
+rule (modulo E) Init[color=#ffffff, process="|", issapicrule,
+                     role='Process']:
+   [ ] --[ Init( ) ]-> [ State_( ) ]
+
+rule (modulo E) p_0_[color=#ffffff, process="|", issapicrule,
+                     role='Process']:
+   [ State_( ) ] --> [ State_1( ), State_2( ) ]
+
+rule (modulo E) newxlol_0_1[color=#ffffff, process="new x.2:lol;",
+                            issapicrule, role='Process']:
+   [ State_1( ), Fr( x.2 ) ] --> [ State_11( x.2 ) ]
+
+rule (modulo E) outxlol_0_11[color=#ffffff, process="out(x.2:lol);",
+                             issapicrule, role='Process']:
+   [ State_11( x.2 ) ] --> [ State_111( x.2 ), Out( x.2 ) ]
+
+rule (modulo E) p_0_111[color=#ffffff, process="0", issapicrule,
+                        role='Process']:
+   [ State_111( x.2 ) ] --> [ ]
+
+rule (modulo E) newxlol_0_2[color=#ffffff, process="new x.3:lol;",
+                            issapicrule, role='Process']:
+   [ State_2( ), Fr( x.3 ) ] --> [ State_21( x.3 ) ]
+
+rule (modulo E) newxlol_0_21[color=#ffffff, process="new x.4:lol;",
+                             issapicrule, role='Process']:
+   [ State_21( x.3 ), Fr( x.4 ) ] --> [ State_211( x.3, x.4 ) ]
+
+rule (modulo E) eventRunxlolxlol_0_211[color=#ffffff,
+                                       process="event Run( x.3:lol, x.4:lol );", issapicrule, role='Process']:
+   [ State_211( x.3, x.4 ) ]
+  --[ Run( x.3, x.4 ) ]->
+   [ State_2111( x.3, x.4 ) ]
+
+rule (modulo E) outxlolxlol_0_2111[color=#ffffff,
+                                   process="out(<x.3:lol, x.4:lol>);", issapicrule, role='Process']:
+   [ State_2111( x.3, x.4 ) ]
+  -->
+   [ State_21111( x.3, x.4 ), Out( <x.3, x.4> ) ]
+
+rule (modulo E) p_0_21111[color=#ffffff, process="0", issapicrule,
+                          role='Process']:
+   [ State_21111( x.3, x.4 ) ] --> [ ]
+
+restriction single_session:
+  "∀ #i #j. ((Init( ) @ #i) ∧ (Init( ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+/* All wellformedness checks were successful. */
+
+/*
+Generated from:
+Tamarin version 1.13.0
+Maude version 3.5.1
+*/
+
+end

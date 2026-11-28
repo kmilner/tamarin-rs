@@ -1,0 +1,11 @@
+// Fixture: triggers `Fact arity issues` with a nullary fact.
+// `A( )` and `A( x )` clash on arity; the nullary fact keeps only the
+// space `sep` puts between its parentheses.
+theory FactArityNullary
+begin
+
+rule R1: [ A( ) ] --[ ]-> [ ]
+
+rule R2: [ A( x ) ] --[ ]-> [ ]
+
+end

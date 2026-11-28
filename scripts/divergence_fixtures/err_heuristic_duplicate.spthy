@@ -1,0 +1,9 @@
+// Category: fatal errors — the run's outcome (exit code and error kind).
+//
+// Two `heuristic:` headers: `default heuristic already defined`.
+// No corpus theory fails this way.
+
+theory HeuristicDuplicate begin
+heuristic: s
+heuristic: c
+end

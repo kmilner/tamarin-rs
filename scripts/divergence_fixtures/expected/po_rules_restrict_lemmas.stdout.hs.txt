@@ -1,0 +1,39 @@
+theory RulesAttrs
+
+begin
+
+// Function signature and definition of the equational theory E
+
+functions: fst/1, pair/2, snd/1
+equations: fst(<x.1, x.2>) = x.1, snd(<x.1, x.2>) = x.2
+
+restriction Restr_A_1:
+  "∀ #NOW. (Restr_A_1( ) @ #NOW) ⇒ (∃ #i. B( ) @ #i)"
+
+rule (modulo E) A[color=#123456]:
+   [ Fr( ~k ) ] --[ S( ~k ), Restr_A_1( ) ]-> [ Out( ~k ) ]
+
+rule (modulo E) B[issapicrule]:
+   [ ] --[ B( ) ]-> [ ]
+
+restriction unique:
+  "∀ x #i #j. ((S( x ) @ #i) ∧ (S( x ) @ #j)) ⇒ (#i = #j)"
+  // safety formula
+
+lemma foo [sources, reuse]:
+  all-traces "∀ k #i. (S( k ) @ #i) ⇒ (∃ #j. B( ) @ #j)"
+/*
+guarded formula characterizing all counter-examples:
+"∃ k #i. (S( k ) @ #i) ∧ ∀ #j. (B( ) @ #j) ⇒ ⊥"
+*/
+by sorry
+
+lemma bar:
+  exists-trace "∃ k #i. S( k ) @ #i"
+/*
+guarded formula characterizing all satisfying traces:
+"∃ k #i. (S( k ) @ #i)"
+*/
+by sorry
+
+end

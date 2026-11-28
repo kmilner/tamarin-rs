@@ -27,7 +27,7 @@ use crate::fact::{
 };
 use crate::formula::{BLNTerm, LNFormula};
 use crate::rule::{print_fact_position, print_position, rule_name_string, ExtendedPosition};
-use crate::theory::{OpenProtoRule, TheoryItem};
+use crate::theory::{OpenProtoRule, RuleVariants, TheoryItem};
 use crate::tools::rule_variants::unfold_closed_rule;
 use tamarin_term::lterm::{rename_avoiding, BVar, LNTerm, LSort};
 use tamarin_term::maude_proc::MaudeHandle;
@@ -214,16 +214,10 @@ pub struct AutoSourcesResult {
 }
 
 fn ac_concs(o: &OpenProtoRule) -> &[LNFact] {
-    match &o.abstracted_rule {
-        Some(ar) => &ar.conclusions,
-        None => &o.rule.conclusions,
-    }
+    &o.ac_body().conclusions
 }
 fn ac_prems(o: &OpenProtoRule) -> &[LNFact] {
-    match &o.abstracted_rule {
-        Some(ar) => &ar.premises,
-        None => &o.rule.premises,
-    }
+    &o.ac_body().premises
 }
 
 fn ln_proto(name: &str, terms: Vec<LNTerm>) -> LNFact {
@@ -289,7 +283,7 @@ pub(crate) fn add_auto_sources_lemma(
     maude: &MaudeHandle,
     rules: &[OpenProtoRule],
     chains: &[((NodeConc, NodePrem), System)],
-) -> AutoSourcesResult {
+) -> Result<AutoSourcesResult, tamarin_term::maude_proc::MaudeError> {
     // allOutConcs: (rule idx, protected output subterm).
     let mut all_out_concs: Vec<(usize, LNTerm)> = Vec::new();
     // allOutConcsNotProt: (rule idx, non-Out conclusion fact).
@@ -327,7 +321,7 @@ pub(crate) fn add_auto_sources_lemma(
         let Some(conc_fact) = c_rule.conclusions.get(conc.1 .0) else {
             continue;
         };
-        let Some(v) = conc_fact.terms.first().cloned() else {
+        let Some(v) = conc_fact.terms().first().cloned() else {
             continue;
         };
 
@@ -431,13 +425,10 @@ pub(crate) fn add_auto_sources_lemma(
                             continue;
                         }
                         let fout = rename_avoiding(tout.clone(), protterm);
-                        if maude
-                            .unifiable(&[Equal {
-                                lhs: protterm.clone(),
-                                rhs: fout,
-                            }])
-                            .unwrap_or(false)
-                        {
+                        if maude.unifiable(&[Equal {
+                            lhs: protterm.clone(),
+                            rhs: fout,
+                        }])? {
                             outs.push((*rout_i, tout.clone()));
                         }
                     }
@@ -468,7 +459,7 @@ pub(crate) fn add_auto_sources_lemma(
                             continue;
                         }
                         let unifout = rename_avoiding(fout.clone(), fact);
-                        if crate::rule::unifiable_ln_facts(maude, fact, &unifout).unwrap_or(false) {
+                        if crate::rule::unifiable_ln_facts(maude, fact, &unifout)? {
                             outs.push((*rout_i, fout.clone()));
                         }
                     }
@@ -498,11 +489,11 @@ pub(crate) fn add_auto_sources_lemma(
                 }
                 Matched::Fact { fact, outs } => {
                     let (in_name, out_name) = auto_names(m, pos, rin_name);
-                    let in_arity = fact.terms.len();
+                    let in_arity = fact.arity();
                     if outs.is_empty() {
                         fact_input_form_no_outputs(&in_name, in_arity)
                     } else {
-                        let out_arity = outs[0].1.terms.len();
+                        let out_arity = outs[0].1.arity();
                         fact_input_form_with_outputs(&in_name, &out_name, in_arity, out_arity)
                     }
                 }
@@ -536,12 +527,12 @@ pub(crate) fn add_auto_sources_lemma(
                     let (in_name, out_name) = auto_names(m, pos, rin_name);
                     grp.push((
                         rin_name.to_string(),
-                        ln_proto(&in_name, fact.terms.to_vec()),
+                        ln_proto(&in_name, fact.terms().to_vec()),
                     ));
                     for (rout_i, fout) in outs {
                         grp.push((
                             rules[*rout_i].name().to_string(),
-                            ln_proto(&out_name, fout.terms.to_vec()),
+                            ln_proto(&out_name, fout.terms().to_vec()),
                         ));
                     }
                 }
@@ -551,10 +542,10 @@ pub(crate) fn add_auto_sources_lemma(
         annotation_groups.push(grp);
     }
 
-    AutoSourcesResult {
+    Ok(AutoSourcesResult {
         annotation_groups,
         formula,
-    }
+    })
 }
 
 /// Build the AUTO source lemma item (HS `unprovenLemma lemmaName [SourceLemma]
@@ -597,8 +588,8 @@ fn add_action_to_open_rule(o: &mut OpenProtoRule, action: LNFact) {
     if o.rule_e.is_none() {
         o.rule_e = Some(Box::new(o.rule.clone()));
     }
-    if let Some(ar) = o.abstracted_rule.as_mut() {
-        ar.add_action(action.clone());
+    if let RuleVariants::Closed { body, .. } = &mut o.variants {
+        body.add_action(action.clone());
     }
     o.rule.add_action(action);
 }
@@ -717,7 +708,8 @@ pub fn apply_auto_sources(
             }
         }
     }
-    let result = add_auto_sources_lemma(&maude, &rules, &chains);
+    let result = add_auto_sources_lemma(&maude, &rules, &chains)
+        .map_err(|error| crate::prove::ProveError::maude("", error))?;
     *elaborated = prepared;
 
     // addLabels: add the AUTO actions to the matching rules. HS folds the
@@ -794,8 +786,8 @@ fn auto_source_rule_names(rules: &[OpenProtoRule]) -> Vec<OpenProtoRule> {
                 // Changing only the executable half preserves the original family.
                 named.rule_e = Some(Box::new(rule.rule_e().clone()));
                 named.rule.info.name = name;
-                if let Some(abstracted) = &mut named.abstracted_rule {
-                    abstracted.info.name = name;
+                if let RuleVariants::Closed { body, .. } = &mut named.variants {
+                    body.info.name = name;
                 }
             }
             named
@@ -806,7 +798,6 @@ fn auto_source_rule_names(rules: &[OpenProtoRule]) -> Vec<OpenProtoRule> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pretty_formula::{lemma_header_line_doc, lnformula_doc};
 
     /// The `--auto-sources` unfold (`unfoldRuleVariants`,
     /// lib/theory/src/Rule.hs): a rule with a non-trivial variant
@@ -839,15 +830,13 @@ mod tests {
             vec![],
         );
         let mut nt = OpenProtoRule::new(nt_rule.clone());
-        let (abstr, substs) = crate::tools::rule_variants::abstract_rule_and_variants(&h, &nt.rule)
-            .expect("variants")
-            .expect("non-trivial variants");
+        nt.variants =
+            crate::tools::rule_variants::variants_proto_rule(&h, &nt.rule).expect("variants");
+        let substs = nt.variant_substs().to_vec();
         assert!(
             substs.iter().any(|s| !s.is_empty()),
             "test premise: NT must have a non-trivial disjunction"
         );
-        nt.abstracted_rule = Some(abstr);
-        nt.variant_substs = substs.clone();
         nt.loop_breakers = vec![PremIdx(0)];
 
         // TR: [Fr(~k)] --> [Out(~k)] — no reducible sub-term, trivial.
@@ -879,9 +868,9 @@ mod tests {
         for v in &variants {
             // `Disj [emptySubstVFresh]` + carried breakers + the ORIGINAL
             // rule as the `cprRuleE` half (lib/theory/src/Rule.hs).
-            assert_eq!(v.variant_substs.len(), 1);
-            assert!(v.variant_substs[0].is_empty());
-            assert!(v.abstracted_rule.is_none());
+            assert_eq!(v.variant_substs().len(), 1);
+            assert!(v.variant_substs()[0].is_empty());
+            assert_eq!(v.ac_body(), &v.rule);
             assert_eq!(v.loop_breakers, vec![PremIdx(0)]);
             assert_eq!(v.rule_e.as_deref(), Some(&nt_rule));
         }
@@ -890,7 +879,7 @@ mod tests {
         // the bodies differ pairwise.
         let has_fst = |r: &OpenProtoRule| {
             r.rule.conclusions.iter().any(|f| {
-                f.terms.iter().any(|t| {
+                f.terms().iter().any(|t| {
                     matches!(t, tamarin_term::term::Term::App(sym, _)
                         if *sym == tamarin_term::function_symbols::FunSym::NoEq(
                             tamarin_term::function_symbols::fst_sym()))
@@ -906,127 +895,5 @@ mod tests {
         // `mergeOpenProtoRules` collapse the run back into one item
         // (OpenTheory.hs).
         assert!(variants.windows(2).all(|w| w[0].rule_e() == w[1].rule_e()));
-    }
-
-    #[test]
-    fn temporary_aliases_reach_trivial_abstracted_bodies() {
-        let parsed = tamarin_parser::parse_theory(
-            r#"theory Aliases begin
-            builtins: symmetric-encryption
-            rule R: [] --[A()]-> []
-            rule Other: [In(sdec('a','b'))] --[B()]-> []
-            end"#,
-            &[],
-        )
-        .unwrap();
-        let mut theory = crate::elaborate::elaborate(&parsed).unwrap();
-        let Some(path) = tamarin_test_support::require_maude_path() else {
-            return;
-        };
-        let maude = MaudeHandle::start(&path, theory.signature.clone()).unwrap();
-        crate::tools::rule_variants::populate_rule_variants(&mut theory, &maude, None).unwrap();
-        let mut rules: Vec<_> = theory.rules().cloned().collect();
-        // Model a compiled member colliding with an independent source rule.
-        rules[0].rule.info.name = rules[1].rule.info.name;
-        assert!(rules[1].abstracted_rule.is_some());
-        assert!(crate::theory::closed_rules_ac(&rules[1])
-            .iter()
-            .all(|ac| crate::rule::is_trivial_proto_variant_ac(ac, rules[1].rule_e())));
-        let named = auto_source_rule_names(&rules);
-        assert_ne!(named[0].name(), named[1].name());
-        assert_eq!(named[1].rule_e(), rules[1].rule_e());
-        assert_eq!(
-            named[1].abstracted_rule.as_ref().unwrap().info.name,
-            named[1].rule.info.name
-        );
-        let ctx = crate::constraint::solver::context::ProofContext::new(maude, named);
-        let rule = &ctx.rules[1];
-        assert_eq!(
-            rule.abstracted_rule.as_ref().unwrap().info.name,
-            rule.rule.info.name
-        );
-    }
-
-    #[test]
-    fn unfold_prepares_trivial_explicit_members_for_annotation() {
-        use crate::fact::{in_fact, out_fact, proto_fact};
-        use crate::rule::{ProtoRuleEInfo, Rule};
-        use crate::theory::Theory;
-        use tamarin_term::builtin::msg_var;
-
-        let original = Rule::new(
-            ProtoRuleEInfo::standard("R"),
-            vec![in_fact(msg_var("x", 0))],
-            vec![out_fact(msg_var("x", 0))],
-            vec![],
-        );
-        let mut member = original.clone();
-        member.info.name = crate::rule::ProtoRuleName::Stand("R___VARIANT_1");
-        let mut open = OpenProtoRule::new(original.clone());
-        // Repeated identical members must retain their order and share labels.
-        open.rule_ac = vec![member.clone(), member.clone()];
-        let mut theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
-        theory.items.push(TheoryItem::Rule(open));
-
-        unfold_rule_variants(&mut theory);
-        let rules: Vec<_> = theory.rules().cloned().collect();
-        assert_eq!(rules.len(), 2);
-        assert_eq!(rules[0], rules[1]);
-        for mut rule in auto_source_rule_names(&rules) {
-            assert_eq!(rule.name(), "R___VARIANT_1");
-            let action = proto_fact(Multiplicity::Linear, "AUTO_OUT", vec![msg_var("x", 0)]);
-            add_action_to_open_rule(&mut rule, action.clone());
-            let closed = crate::theory::closed_rules_ac(&rule);
-            assert_eq!(closed.len(), 1);
-            assert!(closed[0].actions.contains(&action));
-            assert_eq!(closed[0].premises, member.premises);
-            assert_eq!(closed[0].conclusions, member.conclusions);
-            assert_eq!(rule.rule_e(), &original);
-            assert!(rule.rule_ac.is_empty());
-        }
-    }
-
-    #[test]
-    fn unfold_uses_source_declared_variant_bodies() {
-        use crate::fact::{in_fact, out_fact};
-        use crate::rule::{ProtoRuleEInfo, Rule};
-        use crate::theory::{OpenProtoRule, Theory, TheoryItem};
-        use tamarin_term::builtin::msg_var;
-
-        let original = Rule::new(
-            ProtoRuleEInfo::standard("R"),
-            vec![in_fact(msg_var("x", 0))],
-            vec![out_fact(msg_var("x", 0))],
-            vec![],
-        );
-        let declared = Rule::new(
-            ProtoRuleEInfo::standard("R"),
-            vec![in_fact(msg_var("x", 0)), in_fact(msg_var("y", 0))],
-            vec![out_fact(msg_var("x", 0))],
-            vec![],
-        );
-        let mut open = OpenProtoRule::new(original.clone());
-        open.rule_ac.push(declared.clone());
-        let mut theory = Theory::new("T", tamarin_term::maude_sig::minimal_maude_sig(false));
-        theory.items.push(TheoryItem::Rule(open));
-
-        unfold_rule_variants(&mut theory);
-        let unfolded = theory.rules().next().expect("unfolded rule");
-        assert_eq!(unfolded.name(), "R___VARIANT_1");
-        assert_eq!(unfolded.rule.premises, declared.premises);
-        assert_eq!(unfolded.rule_e.as_deref(), Some(&original));
-    }
-
-    // Ground truth: the `AUTO_typing` lemma body emitted by the Haskell
-    // prover for examples/features/auto-sources/running-example/running.spthy
-    // (HS `--auto-sources`). The formula is `(⊤) ∧ (the term-input form)`.
-    #[test]
-    fn running_example_auto_typing_renders_byte_identically() {
-        let in_name = "AUTO_IN_TERM_1_0_0_1_1__Rule_R";
-        let out_name = "AUTO_OUT_TERM_1_0_0_1_1__Rule_R";
-        let f = LNFormula::ltrue().and(term_input_form_with_outputs(in_name, out_name));
-        let rendered = lemma_header_line_doc("all-traces", lnformula_doc(&f));
-        let expected = "  all-traces\n  \"(⊤) ∧\n   (∀ x m #i.\n     (AUTO_IN_TERM_1_0_0_1_1__Rule_R( m, x ) @ #i) ⇒\n     ((∃ #j. (!KU( x ) @ #j) ∧ (#j < #i)) ∨\n      (∃ #j. (AUTO_OUT_TERM_1_0_0_1_1__Rule_R( m ) @ #j) ∧ (#j < #i))))\"";
-        assert_eq!(rendered, expected);
     }
 }

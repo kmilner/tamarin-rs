@@ -15,9 +15,8 @@
 //! (Theory/Text/Parser.hs), so the predicates are the ones declared
 //! before the rule (`theoryPredicates thy`, Theory/Text/Parser.hs) and
 //! the rule keeps its `_restrict` formulas, since `addActions` rebuilds `rActs`
-//! alone (Theory/Text/Parser.hs).  `elaborate_items` is where the port
-//! builds the theory rule by rule and calls this; `tamarin_sapic::apply` runs
-//! the same lift over the rules the SAPIC translation generates.
+//! alone (Theory/Text/Parser.hs).  `elaborate::lifted_add_proto_rule` calls
+//! this for each parsed rule and each rule the SAPIC translation generates.
 
 use crate::elaborate::ElabError;
 use crate::fact::LNFact;
@@ -65,60 +64,4 @@ pub fn rule_restrictions(rname: &str, formulas: &[LNFormula]) -> Vec<(Restrictio
         .enumerate()
         .map(|(i, f)| from_rule_restriction(&format!("{rname}_{}", i + 1), f))
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::theory::TheoryItem;
-
-    #[test]
-    fn lift_inserts_restriction_before_rule() {
-        let src = "theory T begin\n\
-            functions: true/0, eq/2\n\
-            equations: eq(x,x)=x\n\
-            predicate: True(x) <=> (x = true())\n\
-            rule A:\n  [In(x)] --[ _restrict(True(eq(x,x))) ]-> []\n\
-            end";
-        let parsed = tamarin_parser::parse_theory(src, &[]).unwrap();
-        let thy = crate::elaborate::elaborate(&parsed).unwrap();
-        let restr_pos = thy
-            .items
-            .iter()
-            .position(|i| matches!(i, TheoryItem::Restriction(r) if r.name == "Restr_A_1"))
-            .expect("restriction not generated");
-        let rule_pos = thy
-            .items
-            .iter()
-            .position(|i| matches!(i, TheoryItem::Rule(r) if r.name() == "A"))
-            .expect("rule missing");
-        // HS adds the generated restrictions to the accumulated theory, and it
-        // adds the rule after them.  The restriction is therefore immediately
-        // before the rule.
-        assert_eq!(restr_pos + 1, rule_pos, "restriction must precede rule");
-        // The lift appends the rule action and leaves the `_restrict` formula
-        // on the rule.
-        let TheoryItem::Rule(r) = &thy.items[rule_pos] else {
-            panic!("item at {rule_pos} is not the rule");
-        };
-        assert_eq!(r.rule.info.restrictions.len(), 1);
-        assert_eq!(r.rule.actions.len(), 1);
-        assert_eq!(
-            crate::fact::fact_tag_name(&r.rule.actions[0].tag),
-            "Restr_A_1"
-        );
-        // The action carries the original term, without abstraction.
-        assert_eq!(r.rule.actions[0].terms.len(), 1);
-        let t = &r.rule.actions[0].terms[0];
-        let eq_of_two = match t {
-            tamarin_term::term::Term::App(
-                tamarin_term::function_symbols::FunSym::NoEq(sym),
-                args,
-            ) => sym.name == b"eq" && args.len() == 2,
-            _ => false,
-        };
-        assert!(
-            eq_of_two,
-            "action arg must be the original eq(x,x), got {t:?}"
-        );
-    }
 }

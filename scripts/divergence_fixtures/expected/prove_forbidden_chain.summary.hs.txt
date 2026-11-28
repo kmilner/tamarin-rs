@@ -1,0 +1,19 @@
+summary of summaries:
+
+
+  
+  dummy (all-traces): analysis incomplete (1 steps)
+  rand_autn_src (all-traces): analysis incomplete (1 steps)
+  sqn_ue_invariance (all-traces): analysis incomplete (1 steps)
+  sqn_hss_invariance (all-traces): analysis incomplete (1 steps)
+  sqn_ue_src (all-traces): analysis incomplete (1 steps)
+  sqn_hss_src (all-traces): analysis incomplete (1 steps)
+  sqn_ue_nodecrease (all-traces): analysis incomplete (1 steps)
+  sqn_ue_unique (all-traces): analysis incomplete (1 steps)
+  executability_honest (exists-trace): analysis incomplete (1 steps)
+  executability_keyConf_honest (exists-trace): analysis incomplete (1 steps)
+  executability_desync (exists-trace): verified (28 steps)
+  executability_resync (exists-trace): analysis incomplete (1 steps)
+  anonymous_injectiveagreement_ue_seaf_kseaf_noKeyRev_noChanRev (all-traces): analysis incomplete (1 steps)
+
+==============================================================================

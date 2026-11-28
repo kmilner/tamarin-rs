@@ -1,0 +1,14 @@
+// Fixture: triggers `Facts occur in the left-hand-side but not in any
+// right-hand-side`.  The suggestion is the rhs fact at the SMALLEST edit
+// distance (`Session`, distance 1), not the first one in source order
+// (`Section`, distance 2).
+theory LhsNoRhsNearest
+begin
+
+rule A: [ Sesion(x) ] --[ ]-> [ ]
+
+rule B: [ ] --[ ]-> [ Section(x) ]
+
+rule C: [ ] --[ ]-> [ Session(x) ]
+
+end

@@ -14,7 +14,8 @@
 //! inner `render` is `Text.PrettyPrint.Class.render = P.render`
 //! (`lib/utils/src/Text/PrettyPrint/Class.hs`), i.e. the HughesPJ
 //! DEFAULT `style = Style { lineLength = 100, ribbonsPerLine = 1.5 }`, giving
-//! ribbon `round(100 / 1.5) = 67`.  This is DIFFERENT from the theory display
+//! ribbon `round(100 / 1.5) = 67` (`pretty_hpj::{DEFAULT_LINE_LENGTH,DEFAULT_RIBBON}`).
+//! This is DIFFERENT from the theory display
 //! width (110 / 73) used everywhere else (`pretty_hpj::{LINE_LENGTH,RIBBON}`).
 //! A long term such as `<aenc(shared_key.1, pk(skV.1)),
 //! report(aenc(shared_key.1, pk(skV.1)))>` (70 cols > 67) therefore wraps
@@ -40,8 +41,8 @@
 //!
 //! Scope: every `SapicAction` and `ProcessCombinator` variant, but only the
 //! TOP node of a process — `prettySapic'`'s recursive `$-$`/`nest` layout
-//! (Theory/Sapic/Process.hs) is not ported here; `pretty_theory::open_process_doc`
-//! walks the tree and calls [`pretty_sapic_top_level`] per node.
+//! (Theory/Sapic/Process.hs) is [`open_process_doc`], which walks the tree and
+//! calls [`pretty_sapic_top_level`] per node.
 
 use std::collections::BTreeSet;
 
@@ -52,25 +53,17 @@ use tamarin_term::vterm::Lit;
 use crate::fact::pretty_fact;
 use crate::pretty_hpj::{self as hpj, Doc};
 use crate::sapic::{
-    PlainProcess, Process, ProcessCombinator, SapicAction, SapicLNFact, SapicLVar, SapicTerm,
+    PlainProcess, Process, ProcessCombinator, ProcessParsedAnnotation, SapicAction, SapicLNFact,
+    SapicLVar, SapicTerm,
 };
-
-/// HughesPJ DEFAULT `lineLength` (`Text.PrettyPrint.HughesPJ.style`,
-/// pretty-1.1.3.6 HughesPJ.hs).  The inner `render` calls in
-/// `prettySapicAction'` use the bare `P.render` (Text/PrettyPrint/Class.hs), so they
-/// render at this width, NOT the tamarin theory width (110).
-const SAPIC_LINE_LENGTH: usize = 100;
-/// HughesPJ DEFAULT ribbon = `round(lineLength / ribbonsPerLine)` =
-/// `round(100 / 1.5) = 67`.
-const SAPIC_RIBBON: usize = 67;
 
 /// Render a SAPIC sub-Doc the way HS's inner `render` does: standalone,
 /// starting at column 0, at the HughesPJ default width 100 / ribbon 67.
 /// Continuation lines carry the `nest`-driven indent verbatim — matching
 /// HS, which then string-concatenates the result with the surrounding action
 /// literals.
-pub(crate) fn render_sapic(d: Doc) -> String {
-    d.render_with(SAPIC_LINE_LENGTH, SAPIC_RIBBON)
+pub fn render_sapic(d: Doc) -> String {
+    d.render_with(hpj::DEFAULT_LINE_LENGTH, hpj::DEFAULT_RIBBON)
 }
 
 /// `render (prettySapicTerm t)` over a `SapicTerm` — HS `prettyTerm (text .
@@ -334,24 +327,22 @@ fn pretty_sapic_comb(c: &ProcessCombinator<SapicLVar>) -> String {
 /// a `Doc::text`, which is where `Document (HtmlDoc d)` (Html.hs)
 /// escapes it — once.
 fn pretty_sapic_top_level_with(p: &PlainProcess, printer: MsrPrinter) -> String {
-    let _plain = hpj::HtmlDocGuard::disable();
+    let text = node_text(p, printer);
     match p {
-        Process::Null(_) => "0".to_string(),
-        Process::Comb(c, _, _, _) => pretty_sapic_comb(c),
-        Process::Action(SapicAction::Rep, _, _) => pretty_sapic_action(&SapicAction::Rep, printer),
-        Process::Action(a, _, _) => format!("{};", pretty_sapic_action(a, printer)),
+        Process::Action(a, _, _) if !matches!(a, SapicAction::Rep) => format!("{text};"),
+        _ => text,
     }
 }
 
-/// The action/combinator text consumed by the reparsable open-process
-/// printer. Unlike [`pretty_sapic_top_level`], actions carry no sequencing
-/// semicolon because that printer decides whether a continuation needs one.
-pub(crate) fn pretty_sapic_open_node(p: &PlainProcess) -> String {
+/// The top node's action/combinator text without the sequencing semicolon,
+/// which [`pretty_sapic_top_level_with`] adds and [`open_process_doc`] adds
+/// only where a continuation follows.
+fn node_text<Ann>(p: &Process<Ann, SapicLVar>, printer: MsrPrinter) -> String {
     let _plain = hpj::HtmlDocGuard::disable();
     match p {
         Process::Null(_) => "0".to_string(),
         Process::Comb(c, _, _, _) => pretty_sapic_comb(c),
-        Process::Action(a, _, _) => pretty_sapic_action(a, MsrPrinter::Sapic),
+        Process::Action(a, _, _) => pretty_sapic_action(a, printer),
     }
 }
 
@@ -368,320 +359,153 @@ pub fn pretty_sapic_top_level_attr(p: &PlainProcess) -> String {
     pretty_sapic_top_level_with(p, MsrPrinter::Attribute)
 }
 
+/// HS `prettySapic` (Theory/Sapic/Print.hs): `prettySapic'` with each
+/// annotation's parsed location.
+///
+/// `prettyProcess = prettySapic = prettySapic' rulePrinter`
+/// (TheoryObject.hs, Print.hs), so an embedded MSR renders its
+/// premises through `unextractMatchingVariables mv` — every pattern-match
+/// variable keeps its `=` marker.  This is the printer that
+/// [`pretty_sapic_top_level`] selects; the
+/// `process="..."` rule attribute uses the other one.
+pub(crate) fn open_process_doc(pr: &PlainProcess) -> Doc {
+    ProcessDoc::<ProcessParsedAnnotation> {
+        location: |a| a.location.as_ref(),
+    }
+    .pp(pr)
+}
+
+/// HS `prettySapicNoLoc = prettySapic' rulePrinter (const Nothing)`
+/// (Theory/Sapic/Print.hs): [`open_process_doc`] at any annotation type, with
+/// no location annotation printed.
+pub fn pretty_sapic_no_loc<Ann>(p: &Process<Ann, SapicLVar>) -> Doc {
+    ProcessDoc { location: |_| None }.pp(p)
+}
+
+/// HS `prettySapic' rulePrinter ppLoc` (Theory/Sapic/Process.hs), with
+/// `location` as `ppLoc`. Parentheses encode the parser's precedence and right
+/// extent, branch combinators regain their `then`/`in` keywords, and a located
+/// process prints as `(process)@term`.
+///
+/// Each node's action/combinator text is [`node_text`], the same renderer
+/// [`pretty_sapic_top_level`] uses.
+struct ProcessDoc<Ann> {
+    location: fn(&Ann) -> Option<&SapicTerm>,
+}
+
+impl<Ann> ProcessDoc<Ann> {
+    fn location<'p>(&self, pr: &'p Process<Ann, SapicLVar>) -> Option<&'p SapicTerm> {
+        (self.location)(pr.annotation())
+    }
+
+    /// A `|` or `+` node without a location: only these print as a bare chain.
+    fn is_chain(&self, pr: &Process<Ann, SapicLVar>) -> bool {
+        matches!(
+            pr,
+            Process::Comb(ProcessCombinator::Parallel | ProcessCombinator::Ndc, ..)
+        ) && self.location(pr).is_none()
+    }
+
+    fn is_delimited(pr: &Process<Ann, SapicLVar>) -> bool {
+        match pr {
+            Process::Null(_) | Process::Action(SapicAction::ProcessCall(_, _), _, _) => true,
+            Process::Action(action, _, body) if matches!(body.as_ref(), Process::Null(_)) => {
+                matches!(
+                    action,
+                    SapicAction::New(_)
+                        | SapicAction::ChIn { .. }
+                        | SapicAction::ChOut { .. }
+                        | SapicAction::Event(_)
+                )
+            }
+            _ => false,
+        }
+    }
+
+    fn located(&self, pr: &Process<Ann, SapicLVar>, loc: &SapicTerm) -> Doc {
+        hpj::parens(self.form(pr))
+            .beside(Doc::text("@"))
+            .beside(pretty_nterm(loc))
+    }
+
+    fn pp(&self, pr: &Process<Ann, SapicLVar>) -> Doc {
+        match self.location(pr) {
+            Some(loc) => self.located(pr, loc),
+            None => self.form(pr),
+        }
+    }
+
+    fn delimited(&self, pr: &Process<Ann, SapicLVar>) -> Doc {
+        match self.location(pr) {
+            Some(loc) => hpj::parens(self.located(pr, loc)),
+            None if Self::is_delimited(pr) => self.form(pr),
+            None => hpj::parens(self.form(pr)),
+        }
+    }
+
+    fn left_op(&self, pr: &Process<Ann, SapicLVar>) -> Doc {
+        if self.is_chain(pr) {
+            self.form(pr)
+        } else {
+            self.delimited(pr)
+        }
+    }
+
+    fn form(&self, pr: &Process<Ann, SapicLVar>) -> Doc {
+        match pr {
+            Process::Null(_) => Doc::text("0"),
+            Process::Comb(ProcessCombinator::Parallel | ProcessCombinator::Ndc, _, left, right) => {
+                self.left_op(left)
+                    .beside_sp(Doc::text(node_text(pr, MsrPrinter::Sapic)))
+                    .beside_sp(self.delimited(right))
+            }
+            Process::Comb(comb, _, left, right) => {
+                let keyword = match comb {
+                    ProcessCombinator::Cond(_) | ProcessCombinator::CondEq(_, _) => "then",
+                    ProcessCombinator::Lookup(_, _) | ProcessCombinator::Let { .. } => "in",
+                    ProcessCombinator::Parallel | ProcessCombinator::Ndc => unreachable!(),
+                };
+                let header =
+                    Doc::text(node_text(pr, MsrPrinter::Sapic)).beside_sp(Doc::text(keyword));
+                if matches!(right.as_ref(), Process::Null(_)) {
+                    header.above_g(self.pp(left).nest(4))
+                } else {
+                    header
+                        .above_g(self.delimited(left).nest(4))
+                        .above_g(Doc::text("else"))
+                        .above_g(self.pp(right).nest(4))
+                }
+            }
+            Process::Action(SapicAction::Rep, _, body) => {
+                Doc::text("!").beside(hpj::parens(self.pp(body)))
+            }
+            Process::Action(SapicAction::ProcessCall(_, _), _, _) => {
+                Doc::text(node_text(pr, MsrPrinter::Sapic))
+            }
+            Process::Action(_, _, body) if matches!(body.as_ref(), Process::Null(_)) => {
+                Doc::text(node_text(pr, MsrPrinter::Sapic))
+            }
+            Process::Action(_, _, body) => {
+                let next = if self.is_chain(body) {
+                    hpj::parens(self.form(body)).nest(1)
+                } else {
+                    self.pp(body)
+                };
+                Doc::text(format!("{};", node_text(pr, MsrPrinter::Sapic))).above_g(next)
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sapic::ProcessParsedAnnotation;
-    use tamarin_term::function_symbols::{Constructability, FunSym, NoEqSym, Privacy};
     use tamarin_term::lterm::{LSort, LVar};
     use tamarin_term::term::f_app_no_eq;
     use tamarin_term::vterm::VTerm;
 
     fn sv(name: &str, idx: u64, ty: Option<&str>) -> SapicLVar {
         SapicLVar::new(LVar::new(name, LSort::Msg, idx), ty.map(String::from))
-    }
-
-    #[test]
-    fn new_top_level() {
-        let p = Process::Action(
-            SapicAction::New(sv("x", 1, Some("lol"))),
-            ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-        );
-        assert_eq!(pretty_sapic_top_level(&p), "new x.1:lol;");
-    }
-
-    #[test]
-    fn out_ffx_top_level() {
-        let f = NoEqSym::new(
-            b"f".to_vec(),
-            1,
-            Privacy::Public,
-            Constructability::Constructor,
-        );
-        let x = VTerm::Lit(Lit::Var(sv("x", 1, Some("lol"))));
-        let ffx = f_app_no_eq(f, vec![f_app_no_eq(f, vec![x])]);
-        let p = Process::Action(
-            SapicAction::ChOut {
-                chan: None,
-                msg: ffx,
-            },
-            ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-        );
-        assert_eq!(pretty_sapic_top_level(&p), "out(f(f(x.1:lol)));");
-    }
-
-    #[test]
-    fn event_top_level_has_spaces() {
-        let x = VTerm::Lit(Lit::Var(sv("x", 1, Some("lol"))));
-        let fact = crate::fact::Fact::new(
-            crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "Test", 1),
-            vec![x],
-        );
-        let p = Process::Action(
-            SapicAction::Event(fact),
-            ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-        );
-        assert_eq!(pretty_sapic_top_level(&p), "event Test( x.1:lol );");
-    }
-
-    #[test]
-    fn user_ac_term_infix_and_nullary() {
-        use tamarin_term::function_symbols::{AcFctSym, AcSym, NdcState};
-        let f = AcFctSym::new(
-            b"f".to_vec(),
-            Privacy::Public,
-            Constructability::Constructor,
-            NdcState::NotNdc,
-        );
-        let x = VTerm::Lit(Lit::Var(sv("x", 1, None)));
-        let y = VTerm::Lit(Lit::Var(sv("y", 1, None)));
-        let applied = tamarin_term::term::f_app_ac(AcSym::AcFct(f), vec![x, y]);
-        assert_eq!(pretty_sapic_term(&applied), "(x.1 f y.1)");
-        // HS `FApp (AC (ACfct (f, _))) [] -> text (BC.unpack f)` (Term/Term.hs):
-        // the bare name, no parens.  `f_app_ac` rejects an empty argument list
-        // (HS `fAppAC` errors likewise, Raw.hs), so no theory text reaches
-        // this arm — it is here to keep the printer the shape of `prettyTerm`.
-        let nullary: SapicTerm = VTerm::App(FunSym::Ac(AcSym::AcFct(f)), vec![].into());
-        assert_eq!(pretty_sapic_term(&nullary), "f");
-    }
-
-    #[test]
-    fn null_top_level() {
-        let p: PlainProcess = Process::Null(ProcessParsedAnnotation::empty());
-        assert_eq!(pretty_sapic_top_level(&p), "0");
-    }
-
-    /// The Maude signature of a one-line theory, for building a condition
-    /// from source text the way the SAPIC parser does.
-    fn sig_of(decl: &str) -> tamarin_term::maude_sig::MaudeSig {
-        let thy =
-            tamarin_parser::parse_theory(&format!("theory T begin\n{decl}\nend"), &[]).unwrap();
-        crate::elaborate::elaborate(&thy).unwrap().signature
-    }
-
-    /// `if <formula>` as the process printer renders it, with `formula` read
-    /// against the signature `decl` declares.
-    fn cond_render(src: &str, decl: &str) -> String {
-        let sig = sig_of(decl);
-        let f = tamarin_parser::parser::parse_formula_str(src, &sig).unwrap();
-        let proc: PlainProcess = Process::Comb(
-            ProcessCombinator::Cond(crate::formula::sapic_from_parser(&f, &sig).unwrap()),
-            ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-        );
-        pretty_sapic_top_level(&proc)
-    }
-
-    /// A conditional renders its formula STANDALONE, so a conjunction wider
-    /// than the HughesPJ default page breaks and the second conjunct starts a
-    /// new line at column 0.
-    ///
-    /// Oracle bytes (pinned build, Git revision ef3f0468) for
-    /// `functions: aaaaaaaaaa/1, bbbbbbbbbb/1, cccccccccc/1` +
-    /// `predicates: Longer(xxxxxxxxxx, yyyyyyyyyy) <=> xxxxxxxxxx = yyyyyyyyyy` +
-    /// `in(<xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz>); if Longer(aaaaaaaaaa(xxxxxxxxxx), bbbbbbbbbb(yyyyyyyyyy)) & Longer(cccccccccc(zzzzzzzzzz), aaaaaaaaaa(yyyyyyyyyy)) then …`
-    /// (fixture `sapic_cond_wrap`).
-    #[test]
-    fn cond_wraps_at_the_hughespj_default_width() {
-        let got = cond_render(
-            "Longer(aaaaaaaaaa(xxxxxxxxxx.1), bbbbbbbbbb(yyyyyyyyyy.1)) \
-             & Longer(cccccccccc(zzzzzzzzzz.1), aaaaaaaaaa(yyyyyyyyyy.1))",
-            "functions: aaaaaaaaaa/1, bbbbbbbbbb/1, cccccccccc/1",
-        );
-        assert_eq!(
-            got,
-            "if (Longer( aaaaaaaaaa(xxxxxxxxxx.1), bbbbbbbbbb(yyyyyyyyyy.1) )) ∧\n\
-             (Longer( cccccccccc(zzzzzzzzzz.1), aaaaaaaaaa(yyyyyyyyyy.1) ))"
-        );
-        // The derived rule name is `filter isAlpha` over the same string
-        // (Sapic/Facts.hs#stripNonAlphanumerical), so the break leaves it
-        // untouched.
-        let name: String = got.chars().filter(|c| c.is_alphabetic()).collect();
-        assert_eq!(
-            name,
-            "ifLongeraaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyyLongercccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy"
-        );
-    }
-
-    /// `if <formula>` renders its user-`[AC]` applications the way HS's
-    /// signature-built `SapicTerm`s do: flattened, sorted, infix.
-    ///
-    /// Oracle bytes (pinned build, Git revision ef3f0468) for
-    /// `functions: add/2 [AC]` + `predicates: Eq(a, b) <=> a = b` +
-    /// `in(k); if Eq(<'g'^k, add(k,'a')>, k) then out('yes') else out('no')`:
-    ///   `process="if Eq( <'g'^k.1, ('a' add k.1)>, k.1 )"`
-    /// and for `if Eq(add(k, add('a','b')), k)`:
-    ///   `process="if Eq( ('a' add 'b' add k.1), k.1 )"`.
-    #[test]
-    fn cond_renders_user_ac_flattened_sorted_and_infix() {
-        // `^` is a term operator only under `builtins: diffie-hellman`
-        // (Theory/Text/Parser/Term.hs).
-        // With `add` an ordinary function symbol the application stays
-        // prefix, which is what makes the AC assertions below discriminating.
-        assert_eq!(
-            cond_render(
-                "Eq(<'g'^k.1, add(k.1,'a')>, k.1)",
-                "builtins: diffie-hellman\nfunctions: add/2"
-            ),
-            "if Eq( <'g'^k.1, add(k.1, 'a')>, k.1 )"
-        );
-        assert_eq!(
-            cond_render(
-                "Eq(<'g'^k.1, add(k.1,'a')>, k.1)",
-                "builtins: diffie-hellman\nfunctions: add/2 [AC]"
-            ),
-            "if Eq( <'g'^k.1, ('a' add k.1)>, k.1 )"
-        );
-        // A nested chain flattens to three operands under one AC node.
-        assert_eq!(
-            cond_render("Eq(add(k.1, add('a','b')), k.1)", "functions: add/2 [AC]"),
-            "if Eq( ('a' add 'b' add k.1), k.1 )"
-        );
-    }
-
-    /// An embedded MSR as the process printer renders it: one `Ev(<arg>)`
-    /// action and one `_restrict(<restr>)`, both read against the signature
-    /// `decl` declares.
-    fn msr_render(arg: &str, restr: &str, decl: &str) -> String {
-        use tamarin_parser::ast::{Atom, Formula};
-
-        let sig = sig_of(decl);
-        // The action's argument comes back out of an action atom, the formula
-        // entry point's way of reading one term with `sig`'s symbols.
-        let action =
-            tamarin_parser::parser::parse_formula_str(&format!("Ev({arg}) @ #i"), &sig).unwrap();
-        let t = match &action {
-            Formula::Atom(Atom::Action(fact, _)) => fact.args[0].clone(),
-            other => panic!("expected an action atom, got {other:?}"),
-        };
-        let f = tamarin_parser::parser::parse_formula_str(restr, &sig).unwrap();
-        let ev = crate::fact::Fact::new(
-            crate::fact::FactTag::Proto(crate::fact::Multiplicity::Linear, "Ev", 1),
-            vec![crate::elaborate::term_to_sapic_term(&t, &sig).unwrap()],
-        );
-        let proc: PlainProcess = Process::Action(
-            SapicAction::Msr {
-                prems: Vec::new(),
-                acts: vec![ev],
-                concs: Vec::new(),
-                rest: vec![crate::formula::sapic_from_parser(&f, &sig).unwrap()],
-                match_vars: std::collections::BTreeSet::new(),
-            },
-            ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-        );
-        pretty_sapic_top_level(&proc)
-    }
-
-    /// An MSR's embedded `_restrict(...)` renders its user-`[AC]` applications
-    /// the way HS's signature-built `SapicTerm`s do: flattened, sorted, infix.
-    /// The render feeds both the `process="..."` attribute and the
-    /// SAPIC-derived rule/restriction names.
-    ///
-    /// Oracle bytes (pinned build, Git revision ef3f0468) for
-    /// `in(k); [ ] --[ Ev(add(k,'a')), _restrict(add(k,'a') = k) ]-> [ ]; out('y')`
-    /// with `functions: add/2 [AC]`:
-    ///   `process=" [ ] --[ Ev( ('a' add k.1) ), _restrict(('a' add k.1) = k.1) ]-> [ ];"`
-    /// and with `functions: add/2`:
-    ///   `process=" [ ] --[ Ev( add(k.1, 'a') ), _restrict(add(k.1, 'a') = k.1) ]-> [ ];"`
-    #[test]
-    fn msr_restriction_renders_user_ac_flattened_sorted_and_infix() {
-        // With `add` an ordinary function symbol the application stays
-        // prefix, which is what makes the AC assertion below discriminating.
-        assert_eq!(
-            msr_render("add(k.1,'a')", "add(k.1,'a') = k.1", "functions: add/2"),
-            " [ ] --[ Ev( add(k.1, 'a') ), _restrict(add(k.1, 'a') = k.1) ]-> [ ];"
-        );
-        assert_eq!(
-            msr_render(
-                "add(k.1,'a')",
-                "add(k.1,'a') = k.1",
-                "functions: add/2 [AC]"
-            ),
-            " [ ] --[ Ev( ('a' add k.1) ), _restrict(('a' add k.1) = k.1) ]-> [ ];"
-        );
-    }
-
-    /// `prettyFact`'s annotation suffix (Theory/Model/Fact.hs) reaches
-    /// the embedded MSR through `rulePrinter`'s `ppFact = prettyFact $
-    /// prettyTerm $ text . show` (Print.hs), so an annotated fact carries
-    /// its `[…]` into the `process="…"` attribute — and, through
-    /// `filter isAlpha` (Sapic/Facts.hs#stripNonAlphanumerical), into the
-    /// derived rule name.
-    ///
-    /// Oracle bytes (pinned build, Git revision ef3f0468) for
-    /// `in('c', x); [ St(x)[+] ] --[ Ev(x)[no_precomp] ]-> [ Out(x) ]`:
-    ///   `rule (modulo E) StxEvxnoprecompOutx_0_1[…, process=" [ St( x.2 )[+] ] --[ Ev( x.2 )[no_precomp] ]-> [ Out( x.2 ) ];", …]`
-    #[test]
-    fn msr_facts_carry_their_annotations() {
-        use crate::fact::{Fact, FactAnnotation, FactTag, Multiplicity};
-
-        let x: SapicTerm = VTerm::Lit(Lit::Var(sv("x", 2, None)));
-        let annotated = |name: &'static str, a: FactAnnotation| {
-            Fact::new(
-                FactTag::Proto(Multiplicity::Linear, name, 1),
-                vec![x.clone()],
-            )
-            .annotate(a)
-        };
-        let proc: PlainProcess = Process::Action(
-            SapicAction::Msr {
-                prems: vec![annotated("St", FactAnnotation::SolveFirst)],
-                acts: vec![annotated("Ev", FactAnnotation::NoSources)],
-                concs: vec![Fact::new(FactTag::Out, vec![x])],
-                rest: Vec::new(),
-                match_vars: std::collections::BTreeSet::new(),
-            },
-            ProcessParsedAnnotation::empty(),
-            Box::new(Process::Null(ProcessParsedAnnotation::empty())),
-        );
-        let got = pretty_sapic_top_level(&proc);
-        assert_eq!(
-            got,
-            " [ St( x.2 )[+] ] --[ Ev( x.2 )[no_precomp] ]-> [ Out( x.2 ) ];"
-        );
-        let name: String = got.chars().filter(|c| c.is_alphabetic()).collect();
-        assert_eq!(name, "StxEvxnoprecompOutx");
-    }
-
-    /// The restriction item is the Doc composition `_restrict(` <> formula <>
-    /// `)`, so a break the formula takes indents by the ten columns of the
-    /// opening operator and the whole item lays out inside the rule.
-    ///
-    /// Oracle bytes (pinned build, Git revision ef3f0468) for
-    /// `functions: aaaaaaaaaa/1, bbbbbbbbbb/1, cccccccccc/1` +
-    /// `in(<xxxxxxxxxx, yyyyyyyyyy, zzzzzzzzzz>); [ ] --[ Ev(xxxxxxxxxx), _restrict( aaaaaaaaaa(xxxxxxxxxx) = bbbbbbbbbb(yyyyyyyyyy) & cccccccccc(zzzzzzzzzz) = aaaaaaaaaa(yyyyyyyyyy) ) ]-> [ ]; out('a')`
-    /// (fixture `sapic_msr_restrict_wrap`).
-    #[test]
-    fn msr_restrict_wraps_under_the_restrict_paren() {
-        let got = msr_render(
-            "xxxxxxxxxx.1",
-            "aaaaaaaaaa(xxxxxxxxxx.1) = bbbbbbbbbb(yyyyyyyyyy.1) \
-             & cccccccccc(zzzzzzzzzz.1) = aaaaaaaaaa(yyyyyyyyyy.1)",
-            "functions: aaaaaaaaaa/1, bbbbbbbbbb/1, cccccccccc/1",
-        );
-        assert_eq!(
-            got,
-            " [ ]\n\
-             --[\n\
-             Ev( xxxxxxxxxx.1 ),\n\
-             _restrict((aaaaaaaaaa(xxxxxxxxxx.1) = bbbbbbbbbb(yyyyyyyyyy.1)) \u{2227}\n\
-             \x20         (cccccccccc(zzzzzzzzzz.1) = aaaaaaaaaa(yyyyyyyyyy.1)))\n\
-             ]->\n\
-             \x20[ ];"
-        );
-        // The derived rule name is `filter isAlpha` over the same string
-        // (Sapic/Facts.hs#stripNonAlphanumerical), so the breaks leave it
-        // untouched.
-        let name: String = got.chars().filter(|c| c.is_alphabetic()).collect();
-        assert_eq!(
-            name,
-            "Evxxxxxxxxxxrestrictaaaaaaaaaaxxxxxxxxxxbbbbbbbbbbyyyyyyyyyycccccccccczzzzzzzzzzaaaaaaaaaayyyyyyyyyy"
-        );
     }
 
     /// The `process="..."` rule attribute and the `process:` block are plain

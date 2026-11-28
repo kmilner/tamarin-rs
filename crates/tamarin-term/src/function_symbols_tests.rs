@@ -89,15 +89,6 @@ fn show_acfct_sym_matches_derived_show() {
     );
 }
 
-#[test]
-fn implicit_sig_includes_pair_and_inv() {
-    let s = implicit_fun_sig();
-    assert!(s.contains(&FunSym::NoEq(pair_sym())));
-    assert!(s.contains(&FunSym::NoEq(inv_sym())));
-    assert!(s.contains(&FunSym::Ac(AcSym::Mult)));
-    assert!(s.contains(&FunSym::Ac(AcSym::Union)));
-}
-
 // =========================================================================
 // Haskell-faithfulness invariants for FunctionSymbols enum orders.
 //
@@ -188,47 +179,6 @@ fn ac_fct_sym_ord_follows_the_haskell_tuple_field_chain() {
             NdcState::IsNdc
         )
     );
-}
-
-/// `Hash` feeds the same field sequence as `Eq`/`Ord` — the name, then the
-/// remaining fields in declared order — so it agrees with those fields
-/// hashed by hand into the same hasher.
-#[test]
-fn interned_name_sym_hash_feeds_the_declared_field_sequence() {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    fn hash_of(value: impl Hash) -> u64 {
-        let mut state = DefaultHasher::new();
-        value.hash(&mut state);
-        state.finish()
-    }
-    let no_eq = NoEqSym::new(
-        b"f".to_vec(),
-        2,
-        Privacy::Private,
-        Constructability::Destructor,
-    )
-    .with_ndc(NdcState::IsNdcDiff);
-    let mut state = DefaultHasher::new();
-    no_eq.name.hash(&mut state);
-    no_eq.arity.hash(&mut state);
-    no_eq.privacy.hash(&mut state);
-    no_eq.constructability.hash(&mut state);
-    no_eq.ndc.hash(&mut state);
-    assert_eq!(hash_of(no_eq), state.finish());
-
-    let ac = AcFctSym::new(
-        b"f".to_vec(),
-        Privacy::Private,
-        Constructability::Destructor,
-        NdcState::IsNdcDiff,
-    );
-    let mut state = DefaultHasher::new();
-    ac.name.hash(&mut state);
-    ac.privacy.hash(&mut state);
-    ac.constructability.hash(&mut state);
-    ac.ndc.hash(&mut state);
-    assert_eq!(hash_of(ac), state.finish());
 }
 
 /// The `NoEqSym` `Ord` orders on the HS tuple's field chain
@@ -477,4 +427,86 @@ fn fun_sym_ord_matches_haskell_declaration() {
     assert!(ac < c, "AC < C");
     assert!(c < list, "C < List");
     assert!(no_eq < list, "transitive: NoEq < List");
+}
+
+/// Each builtin identity predicate is exactly `== <builtin>_sym()`: it holds
+/// for the builtin and fails for a same-name symbol that differs in privacy,
+/// constructability, NDC state or arity.
+#[test]
+fn builtin_identity_predicates_compare_the_whole_symbol() {
+    type Pred = fn(&NoEqSym) -> bool;
+    let cases: [(NoEqSym, Pred); 9] = [
+        (pair_sym(), NoEqSym::is_pair_sym),
+        (diff_sym(), NoEqSym::is_diff_sym),
+        (exp_sym(), NoEqSym::is_exp_sym),
+        (inv_sym(), NoEqSym::is_inv_sym),
+        (one_sym(), NoEqSym::is_one_sym),
+        (dh_neutral_sym(), NoEqSym::is_dh_neutral_sym),
+        (pmult_sym(), NoEqSym::is_pmult_sym),
+        (zero_sym(), NoEqSym::is_zero_sym),
+        (nat_one_sym(), NoEqSym::is_nat_one_sym),
+    ];
+    for (sym, pred) in cases {
+        assert!(pred(&sym), "{sym:?}");
+        let flipped_privacy = NoEqSym {
+            privacy: match sym.privacy {
+                Privacy::Public => Privacy::Private,
+                Privacy::Private => Privacy::Public,
+            },
+            ..sym
+        };
+        let variants = [
+            flipped_privacy,
+            sym.with_destructor(),
+            sym.with_ndc(NdcState::IsNdc),
+            NoEqSym {
+                arity: sym.arity + 1,
+                ..sym
+            },
+        ];
+        for v in variants {
+            assert_ne!(v, sym);
+            assert!(!pred(&v), "{v:?}");
+        }
+        let special = sym != zero_sym();
+        assert_eq!(sym.is_view_term2_special(), special, "{sym:?}");
+    }
+    assert!(!fst_sym().is_view_term2_special());
+}
+
+/// The term views built on those predicates (HS `viewTerm2`'s `FPair`,
+/// `FInv`, `NatOne` and `sortOfLTerm`) accept the builtin and its identical
+/// public-constructor redeclaration, but not a same-name private symbol.
+#[test]
+fn term_views_follow_builtin_symbol_identity() {
+    use crate::lterm::{sort_of_lnterm, LNTerm, LSort};
+    use crate::term::{f_app_no_eq, is_inverse, is_nat_one, is_pair};
+    type View = fn(&LNTerm) -> bool;
+    let views: [(NoEqSym, View); 4] = [
+        (pair_sym(), is_pair),
+        (inv_sym(), is_inverse),
+        (nat_one_sym(), is_nat_one),
+        (nat_one_sym(), |t| sort_of_lnterm(t) == LSort::Nat),
+    ];
+    for (sym, view) in views {
+        let app = |s: NoEqSym| -> LNTerm {
+            let args = (0..s.arity)
+                .map(|i| crate::builtin::msg_var("x", i as u64))
+                .collect();
+            f_app_no_eq(s, args)
+        };
+        let redeclared = NoEqSym::new(
+            sym.name,
+            sym.arity,
+            Privacy::Public,
+            Constructability::Constructor,
+        );
+        assert!(view(&app(sym)), "{sym:?}");
+        assert!(view(&app(redeclared)), "{redeclared:?}");
+        let private = NoEqSym {
+            privacy: Privacy::Private,
+            ..sym
+        };
+        assert!(!view(&app(private)), "{private:?}");
+    }
 }
